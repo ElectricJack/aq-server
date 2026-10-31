@@ -1,0 +1,50 @@
+{
+  "source_revision": "53024c807316a8793e48d12670326cc16c3c91b5",
+  "base_revision": "ce1214f1e4f42508d23982687332616648e464b3",
+  "branch": "test/aq08-artifact-active-fetch",
+  "worktree": "/tmp/aq08-artifact-active-fetch",
+  "scope": "Tests only: native artifact HTTP Preparing/Granted phase fences; no production changes",
+  "source_sha256": {
+    "crates/aq-server/tests/profiled_artifact_phases.rs": "3eb3125f72688276370b277911dae8f24aacca6cc3117a64534f7568e52a659c",
+    "crates/aq-server/tests/profiled_artifacts.rs": "56448a59856fbd6e013d2bd4664fb9636413e5d9885db4cf064b51d29909fc9a",
+    "crates/aq-server/tests/common/profiled.rs": "74a65088c2d104da9cbf6d38760a5a2f7363dfebc9b25bcceaf5e23a00718e2e",
+    "crates/aq-server/src/profiled_execution/artifact_api.rs": "c1037d4ee28e231b2d75f98e27fcb8f22b49f6b817e7980113c06312818ea6ae",
+    "crates/aq-server/src/profiled_execution/artifacts.rs": "198cfcb02b53ea4e2323dfd01aaf9b4e2357d3bd00c55a92a5d6e4f207ab801a",
+    "crates/aq-server/migrations/0020_inline_artifact_owner.sql": "c746e191fe65ab731a0527491b2d5175f5849c86e47380e7ad127444178eddd5"
+  },
+  "retained_logs_sha256": {
+    "aq08-artifact-phases-tests.log": "571c126e959f791f1255dbbb30d1fbd81182d624ddba6a9b10fbb7171819fb73",
+    "aq08-artifact-phases-clippy.log": "2bc683fb4e4f4f21ee9ee39e2b8ecce2efe20d3b1be57bda5316aa519ab3d30a",
+    "aq08-artifact-phases-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "commands": {
+    "tests": "DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target cargo test -p aq-server --test profiled_artifacts --test profiled_artifact_phases --locked --offline",
+    "clippy": "CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target cargo clippy -p aq-server --test profiled_artifact_phases --all-features --locked --offline -- -D warnings",
+    "format": "cargo fmt --package aq-server --check"
+  },
+  "results": {
+    "new_phase_tests_passed": 4,
+    "existing_artifact_tests_passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "strict_target_clippy": "passed",
+    "package_format": "passed",
+    "cargo_reported_test_binary_seconds": [
+      1.17,
+      1.9
+    ]
+  },
+  "claims": [
+    "Preparing fetch remains valid after original offer expiry only through its exact stored accepted PreparationPlan; plan expiry refuses.",
+    "Granted fetch returns exact retained bytes under current live grant and refuses at grant expiry while the preparation plan and artifact remain live.",
+    "Successful fetch leaves complete hot row/revisions unchanged and never changes Stop::Unknown into Started/Running.",
+    "Cancellation refuses in both Preparing and Granted while their deadlines remain live.",
+    "Missing current accept receipt refuses despite live offer/artifact and retained older accepted plan.",
+    "Refusals return conflict JSON without retention header or artifact bytes."
+  ],
+  "limitations": [
+    "Runtime/qualification/material/guardian fixtures are explicitly synthetic SQL records, not a real worker/host/provider launch.",
+    "No grant producer or token-counting/model-capacity qualification is claimed.",
+    "Only the two targeted artifact test binaries were run; root owns the separate ce1214f full-workspace qualification."
+  ]
+}
