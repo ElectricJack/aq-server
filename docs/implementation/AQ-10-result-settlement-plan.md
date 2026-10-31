@@ -136,7 +136,7 @@ establish eligibility. This is an expectation, not a result or approval.
 
 Fields are project ID/revision, existing TaskRevision (workspace, task, graph CAS
 version and content revision), source repository/binding generation/base object
-and retained base artifact, authorized task observation/context artifacts, up to
+and retained source-admission observation artifact, authorized task observation/context artifacts, up to
 64 additional input artifact references, and1–32 acceptance criteria. Each criterion
 has a unique <=512-byte ID and <=8192-byte UTF8 text drawn from the authorized task
 projection. Preserve text and provenance; reject oversized input rather than

@@ -1,4 +1,4 @@
-# AQ admission contracts 0.1.5
+# AQ admission contracts 0.1.6 (candidate)
 
 Pure versioned preparation contracts and bounded placement proposals. This crate
 contains no daemon, database, network client, provider call or secret delivery.
@@ -148,3 +148,17 @@ and content revisions; unknown kinds and review shortcuts refuse. This pure API
 does not execute checks, authenticate a reviewer, accept a result, release source
 or complete a graph task. Those require the daemon's actual evidence owners and
 current revision-bound policy evaluation.0.1.4 stopped archives remain unchanged.
+
+## Immutable report recording (0.1.6 candidate)
+
+`result_record` reuses the unchanged ResultReport transport and adds a separate
+historical receipt whose only disposition is `recorded`. It binds report bytes,
+operation/report IDs, exact launch binding, expected-outcome artifact and actual
+stopped-owner reference. Decoding a reference does not verify its owner's data.
+The daemon must resolve those records before issuing an acknowledgment.
+
+This receipt never means accepted, eligible, released or completed. Corrections
+use a new report and explicit predecessor; evidence-policy evaluation remains a
+separate immutable operation. The initial profile records only post-Started
+stopped work. Version0.1.6 remains unpublished until the joint native startup
+artifact descriptor is integrated and independently qualified.
