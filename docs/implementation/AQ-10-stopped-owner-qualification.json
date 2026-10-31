@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "source_revision": "6da51c8e6cf8ff6dd5197affc00d2491a784a35c",
+  "supplemental_test_revision": "d0f5884ac9d21ad4f6f4ea22702c7037a3b36ad3",
+  "state_format": 21,
+  "captured_at": "2026-10-31T19:21:56.040436+00:00",
+  "package": {
+    "name": "aq-admission",
+    "version": "0.1.4",
+    "sha256": "4cf2395d8e50e6beaf92ee4fd1e3ea2116a54937dab9520ad681e7f3c4acc50e"
+  },
+  "qualification": {
+    "workspace_default_features": {
+      "passed": 618,
+      "ignored": 6
+    },
+    "workspace_all_features": {
+      "passed": 694,
+      "ignored": 6
+    },
+    "strict_workspace_all_targets_all_features_clippy": "passed",
+    "strict_target_clippy": "passed",
+    "extracted_package_tests": 28,
+    "extracted_strict_clippy": "passed",
+    "supplemental_observed_lock_tests": 8,
+    "supplemental_strict_clippy": "passed",
+    "format": "passed"
+  },
+  "host_wire_compatibility": {
+    "host_source": "14354e7cf852f3696bfbc3e7ca4f26036e1e1de9",
+    "pair_sha256": "5243730b2d148128267f52c30f6d420ee4c4449baf222c5f2ceb469357da8514",
+    "result": "Actual synthetic tmux Running observation/opaque StoppedProof decoded and fully linked through exact extracted0.1.4;2605 request bytes",
+    "limits": "SERIALIZATION COMPATIBILITY ONLY. Host output candidate is UNQUALIFIED: sole SIGSTOPped control observer can block PTY; independent read-client lease work pending. No live provider/journal integration or output acceptance implied."
+  },
+  "review": {
+    "reviewer": "session_api Sol subagent",
+    "finding": "No Stage A blocker; future release/re-registration needs explicit authenticated old-boot historical receipt lookup; original Stage A POST remains conservative."
+  },
+  "commands": [
+    "cargo test --workspace --all-features --locked --offline (disposable PG, RUST_TEST_THREADS=4,CARGO_INCREMENTAL=0)",
+    "cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo test -p aq-server --test profiled_stopped --locked --offline (supplemental actual lock observations)",
+    "cargo test -p aq-admission --offline --manifest-path <extracted workspace>/Cargo.toml",
+    "cargo run -p stopped-host-compat --locked --offline --manifest-path <extracted workspace>/Cargo.toml"
+  ],
+  "source_sha256": {
+    "Cargo.lock": "74e9cfbcba32caee0817affe96cf9fb853690088ad5a2a7b396ef9218386cbb3",
+    "Dockerfile": "c3b2e7cb52c86a531dd4d44e1793c63fc939754cd3ab893e960960ced7203c86",
+    "crates/aq-admission/Cargo.toml": "7e345680cc649c6a0248644c7cbc60be1e9157b2e4fcd274c69d6aa5c0876afe",
+    "crates/aq-admission/README.md": "df670ed0ad63cbd090a05576d9abfbab3c60fd19383b0c278f3d43e722f47e0d",
+    "crates/aq-admission/artifacts/stopped.fixture.json": "ae036e04c59704e83bc2455fc6b5e96a176d3c5d994041495ce0b46d60c62965",
+    "crates/aq-admission/artifacts/stopped.python-vectors.json": "31414785697582d2905047546d58ee5ffd95ab4300be2df8fc266ea3cb6065ea",
+    "crates/aq-admission/artifacts/stopped.schema.json": "d69c6f9c6fc9ca77bf7161da21d4611e13ff3520328055e1462fc4d0d092117a",
+    "crates/aq-admission/examples/export_stopped.rs": "d0ddec89f054c91e2a0c035473e7878e95ce43cb7353c6f5fbf153aca81b2c68",
+    "crates/aq-admission/src/lib.rs": "b26987dadfa9acb7f706b795be4ae7fb5b4eac23d97c8cdae8de39c19963007b",
+    "crates/aq-admission/src/stopped.rs": "df1b771e981632f475a4d0dfd85db1dad0d9c974cc42d4f41906ad26d0a07395",
+    "crates/aq-admission/tests/stopped.rs": "c569ab2497ada3ad2eb0ee9b334ccf61bd95dadbd491fdcb2f9b56dab4f39081",
+    "crates/aq-server/Cargo.toml": "5f8b6ba56eb5db7fb2df860261586c21c9ee1f440a8a48151b5853d12f6f2225",
+    "crates/aq-server/migrations/0021_profiled_stopped.sql": "05b3692151d1750cc9d032b3de8103d717df2e7db396ff23c0b1351ce16ad20d",
+    "crates/aq-server/src/admission.rs": "a85acbe27b44b1cb9550b5b427b05c760834034847afce797e6dabf7723b72d3",
+    "crates/aq-server/src/lib.rs": "af2826e25a20c225c312a8b864e2763f0dea0f03d0ee3cf17d90279a20b7e162",
+    "crates/aq-server/src/profiled_execution.rs": "eb4fa07ee514d697171bc6a441ce446839f3317a4a341950283a2af4024c332d",
+    "crates/aq-server/src/profiled_execution/journal.rs": "1865ab282063d85ccaf2fccecd2a90f47c9cf13fcc6c90f190240b586f9b6ce6",
+    "crates/aq-server/src/profiled_execution/registration.rs": "cfbdef37eefc46ab1dae923161604abb5f3462aa512173d3c5692785ff0ea60a",
+    "crates/aq-server/src/profiled_execution/stopped.rs": "e7a208e4b2cfddf313cc87acc01ff632e2c9bf8c6fa38e319375ea32ff4cdb81",
+    "crates/aq-server/src/store.rs": "263350e3c267aed0f65fb8186ab1f57b90fd34b036bfd0cf837fd0ece321c5b9",
+    "crates/aq-server/tests/common/mod.rs": "57bef6c9d6c09674874f9945a0c6567ea54bc2e67ade2785fedfbfb1446390d1",
+    "crates/aq-server/tests/common/native_started.rs": "97b562f7465287d72072908dab4e95c853e4452f4d12c395ec3925494bb0eecb",
+    "crates/aq-server/tests/profiled_started.rs": "dd8ea6d5e4fe4699151da5d24610d1ee3e2820a55de36e31ac1165ed1a3034af",
+    "crates/aq-server/tests/profiled_stopped.rs": "cb017cf16ca2741d1f56ad517f72a9dbd35e406c5ed1a7a42b28698754908140",
+    "docs/implementation/AQ-10-result-settlement-plan.md": "9c4a0cd7e7f5c1d926e8ebf4f0874b2cd61c5e2165f7d7d10550b3732589d47e"
+  },
+  "evidence": {
+    "docs/implementation/evidence/aq10-stopped-6da51c8/all-features-tests.log": "ea50d6a8fc6184fd2a9c2aee6470ae1ea6405192e3ff9a296c8c918c1715b7fc",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/aq-admission-0.1.4.crate": "4cf2395d8e50e6beaf92ee4fd1e3ea2116a54937dab9520ad681e7f3c4acc50e",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/aq-lifecycle-protocol-0.1.0.crate": "945b03a99701035eb7cf6679bd9baa9ad2b50a7cb6329b9ca8de2cf8bd58b92b",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/aq-session-protocol-0.1.0.crate": "479778d8ea76f0605b9a20460e0bd3fda73b699337b1e80783ada0d291a68090",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/clippy.log": "07b24a7da586cdebf5f4f286a9583ffcd1d636db991627f96fd95ce6e1145c1e",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/consumer/Cargo.lock": "47aa2a637c989b00916ad006ff287a05fc5206807be20f08f589f7974a63d642",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/consumer/Cargo.toml": "b93aa9970ffb7ed5105061c298229c97c2ead61189b617a4ced4c2f78c752716",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/consumer/compat/Cargo.toml": "ab3384fdeb899e93f0e69a989ea294e2e9ef860c9a952b80c639d5348bdada38",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/consumer/compat/host-proof-pair.json": "5243730b2d148128267f52c30f6d420ee4c4449baf222c5f2ceb469357da8514",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/consumer/compat/src/main.rs": "8c7c39e9695c3125f2adca1f09a14f601c00e5ed7d7a41fd9642bde29f7192cb",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/full-tests.log": "41075cb17f34db6e17559fc3063fa4429bd2af1e35e7db7a1f12e02e2de64a49",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/host-proof-production.log": "99f8ef1d25f74ad9d149bb4bdc4bc4b4c5079f98e1448b03edf968267834eaa7",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/host-wire-compat.log": "e68ec6fa9a2907ad6ff46031789ec765568ddfa779efea0001058833999b7b0d",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/observed-lock-clippy.log": "e5f2cda172eb717a3c719561d76454a3ac19d09948c43c18c5304533b71466e3",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/observed-lock-tests.log": "781ee076ce6d34367412801c5ea71ee1d1ee66c170b33a7579d08a95453373d0",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/package.log": "e064cf2c686c974cbc7007791eedca75e7d8749c27b9224e58616cae7a6f0105",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/public-clippy.log": "6f662978cc52169fd4819685c6d446f0b5167201bb9dff3d2a1e9c98d64e84ec",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/public-tests.log": "a7694970e3f2721bb4eeff2bcda638bd24ac2536bf1d99497ae80fb03ad47845",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/targeted-tests.log": "eb37ed8f4a39f2e82964cbc7997b6d0ccabb9b3cc6e3e78c89fffe68ddff34c6",
+    "docs/implementation/evidence/aq10-stopped-6da51c8/workspace-clippy.log": "59611892ff04944f4d76ef3b56ddaa9e4fc3412c4f40e70ca27ea9f867f23fd1"
+  },
+  "limits": [
+    "Stop closes execution authority only; holds_task/source/effects remain unchanged.",
+    "Initial path requires actual recorded Started and current authenticated original node/boot/runtime; no pre-start or changed-boot recovery claim.",
+    "Outcome policy, native result ledger, resource release and graph completion remain separate.",
+    "All default and all-feature counts are separate runs and must not be added together."
+  ]
+}

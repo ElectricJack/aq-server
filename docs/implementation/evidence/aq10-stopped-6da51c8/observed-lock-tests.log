@@ -1,0 +1,16 @@
+   Compiling aq-server v0.1.0 (/tmp/aq10-stopped-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.42s
+     Running tests/profiled_stopped.rs (/tmp/aq22-observations/target/debug/deps/profiled_stopped-d7c6956f10cf5cf6)
+
+running 8 tests
+test missing_started_or_foreign_physical_owner_cannot_settle ... ok
+test credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation ... ok
+test journal_failure_rolls_back_receipt_and_stop_then_retry_succeeds ... ok
+test expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority ... ok
+test renewed_shorter_permit_is_valid_but_rotated_owner_cannot_replay ... ok
+test stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock ... ok
+test sql_rejects_digest_only_physical_substitution_and_receipt_without_atomic_projection ... ok
+test worker_http_stop_is_bounded_authenticated_and_historical_only ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+

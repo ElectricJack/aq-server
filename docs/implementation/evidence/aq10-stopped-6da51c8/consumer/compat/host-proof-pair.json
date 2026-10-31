@@ -1,0 +1,94 @@
+{
+  "host_version": "0.1.2",
+  "running": {
+    "guardian": {
+      "intent": {
+        "configuration_digest": "eb17dbf84592e4f022084dd81f7104462feaaf670bedc418c4133541cab6cb94",
+        "launch_id": "00000000-0000-0000-0000-000000000002",
+        "manifest_digest": "db76f47b7dfd95a9415db6f0753511e27d0a39dde1e27d79226aaa9ad9a7b69e",
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "machine_boot_id": "f3e781b8-148b-4429-8d81-7c59c60223c8",
+      "nonce": "acf19b84-9571-4918-9271-2bcc0c8ba8bd",
+      "pid_namespace": "pid:[4026532219]",
+      "process": {
+        "pid": 3909084,
+        "start_ticks": 13203462
+      }
+    },
+    "kernel_wait_echild": false,
+    "observed_boot_ms": 132034664,
+    "pane": {
+      "pane": {
+        "pid": 3909088,
+        "start_ticks": 13203467
+      },
+      "pane_id": "%0",
+      "server": {
+        "pid": 3909085,
+        "start_ticks": 13203465
+      },
+      "session_name": "aq"
+    },
+    "permit_deadline_boot_ms": 132042611,
+    "permit_sequence": 1,
+    "phase": "running",
+    "reaped_count": 0,
+    "root_status": null,
+    "stop_reason": null
+  },
+  "stopped_proof": {
+    "observation": {
+      "guardian": {
+        "intent": {
+          "configuration_digest": "eb17dbf84592e4f022084dd81f7104462feaaf670bedc418c4133541cab6cb94",
+          "launch_id": "00000000-0000-0000-0000-000000000002",
+          "manifest_digest": "db76f47b7dfd95a9415db6f0753511e27d0a39dde1e27d79226aaa9ad9a7b69e",
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "machine_boot_id": "f3e781b8-148b-4429-8d81-7c59c60223c8",
+        "nonce": "acf19b84-9571-4918-9271-2bcc0c8ba8bd",
+        "pid_namespace": "pid:[4026532219]",
+        "process": {
+          "pid": 3909084,
+          "start_ticks": 13203462
+        }
+      },
+      "kernel_wait_echild": true,
+      "observed_boot_ms": 132034816,
+      "pane": {
+        "pane": {
+          "pid": 3909088,
+          "start_ticks": 13203467
+        },
+        "pane_id": "%0",
+        "server": {
+          "pid": 3909085,
+          "start_ticks": 13203465
+        },
+        "session_name": "aq"
+      },
+      "permit_deadline_boot_ms": 132042611,
+      "permit_sequence": 1,
+      "phase": "stopped",
+      "reaped_count": 2,
+      "root_status": 0,
+      "stop_reason": "cancelled"
+    }
+  },
+  "synthetic": true
+}

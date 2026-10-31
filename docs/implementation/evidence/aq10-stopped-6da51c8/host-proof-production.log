@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/local_tmux.rs (target/debug/deps/local_tmux-bdbb8405525bfbda)
+
+running 1 test
+test read_only_output_preserves_unicode_alternate_bytes_and_does_not_resize_or_restart ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.22s
+

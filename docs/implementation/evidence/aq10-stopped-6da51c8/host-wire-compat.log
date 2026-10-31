@@ -1,0 +1,4 @@
+   Compiling stopped-host-compat v0.0.0 (/tmp/aq10-stopped-public-check/compat)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running `/tmp/aq10-public-target/debug/stopped-host-compat`
+actual host Running/StoppedProof compatibility PASS; pair_sha256=5243730b2d148128267f52c30f6d420ee4c4449baf222c5f2ceb469357da8514; stopped_request_bytes=2605

@@ -1,0 +1,59 @@
+   Compiling aq-admission v0.1.4 (/tmp/aq10-stopped-owner/crates/aq-admission)
+   Compiling aq-server v0.1.0 (/tmp/aq10-stopped-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.55s
+     Running tests/native_registration.rs (/tmp/aq22-observations/target/debug/deps/native_registration-c81c96d365467177)
+
+running 4 tests
+test native_semantics_ignore_only_operation_id_not_runtime_or_capability_change ... ok
+test startup_installs_policy_anchor_and_refuses_stale_configuration ... ok
+test configured_allowlist_does_not_synthesize_registration_and_admitted_identity_is_exact ... ok
+test native_writer_replays_without_reinstall_and_fences_held_claims_and_credentials ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/profiled_started.rs (/tmp/aq22-observations/target/debug/deps/profiled_started-66294640db40037d)
+
+running 6 tests
+test grant_expiring_while_waiting_for_owner_lock_cannot_become_running ... ok
+test journal_heads_preserve_exact_phase_scope_and_require_original_start_record ... ok
+test original_started_is_atomic_and_historical_replay_never_revives_stopped_host ... ok
+test receipt_journal_and_running_rollback_together_and_rotated_auth_cannot_replay ... ok
+test worker_http_start_report_uses_current_node_auth_and_returns_only_historical_ack ... ok
+test missing_prepared_head_foreign_owner_and_unregistered_allowlist_never_make_running ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+     Running tests/profiled_stopped.rs (/tmp/aq22-observations/target/debug/deps/profiled_stopped-d7c6956f10cf5cf6)
+
+running 8 tests
+test missing_started_or_foreign_physical_owner_cannot_settle ... ok
+test credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation ... ok
+test journal_failure_rolls_back_receipt_and_stop_then_retry_succeeds ... ok
+test expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority ... ok
+test renewed_shorter_permit_is_valid_but_rotated_owner_cannot_replay ... ok
+test sql_rejects_digest_only_physical_substitution_and_receipt_without_atomic_projection ... ok
+test worker_http_stop_is_bounded_authenticated_and_historical_only ... ok
+test stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+     Running tests/store.rs (/tmp/aq22-observations/target/debug/deps/store-d077bbe9f0023a8f)
+
+running 14 tests
+test concurrent_redeem_yields_one_node ... ok
+test email_unique_case_insensitive ... ok
+test bootstrap_owner_only_once ... ok
+test enrollment_code_expires ... ok
+test invited_user_binds_once ... ok
+test enrollment_code_single_use ... ok
+test migrations_are_idempotent ... ok
+test exact_schema_two_upgrades_preserving_node_and_result_receipt ... ok
+test refuses_newer_state_format ... ok
+test node_lifecycle ... ok
+test tokens_have_prefixes_and_are_unique ... ok
+test verifier_is_deterministic_and_hex64 ... ok
+test reconnect_preserves_state ... ok
+test refuses_unknown_future_migration ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+
