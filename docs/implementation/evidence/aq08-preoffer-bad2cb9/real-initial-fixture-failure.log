@@ -1,0 +1,27 @@
+   Compiling aq-server v0.1.0 (/tmp/aq08-profiled-base-io/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.27s
+     Running unittests src/lib.rs (/tmp/aq22-observations/target/debug/deps/aq_server-c85d75e8417cbd21)
+
+running 6 tests
+test source_retention::profiled_base::tests::retention_requires_exact_active_transfer_and_finite_observation ... ok
+test source_retention::profiled_base::tests::historical_fact_is_canonical_bound_and_cannot_refresh_itself ... ok
+test source_retention::profiled_base::tests::socket_replies_are_bounded_and_correlated_without_inventing_success ... ok
+test source_retention::profiled_base::tests::nofollow_applies_to_every_artifact_component_and_special_files_do_not_block ... ok
+test source_retention::profiled_base::tests::verification_refuses_corrupt_size_digest_manifest_and_installation ... ok
+test source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact ... FAILED
+
+failures:
+
+---- source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact stdout ----
+
+thread 'source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact' (3949001) panicked at crates/aq-server/src/source_retention/profiled_base.rs:790:272:
+called `Result::unwrap()` on an `Err` value: UpdatesUnavailable("source export remains owned; reconcile original operation")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.26s
+
+error: test failed, to rerun pass `-p aq-server --lib`

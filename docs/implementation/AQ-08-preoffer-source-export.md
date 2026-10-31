@@ -57,3 +57,28 @@ missing/changed manifest or bundle, digest/size mismatch, symlink/nonregular and
 concurrent file replacement, inactive/released retention, bounded reads, current
 observation time, quota/token boundaries, and actual disposable aq-git export.
 Synthetic socket/filesystem fixtures do not substitute for actual Git qualification.
+
+## I/O checkpoint
+
+Source `bad2cb9` has seven passing focused tests, including one disposable actual
+Git export/retry/retention/corruption test against the previously retained M4
+binaries. Server all-target/all-feature strict Clippy and formatting pass. See
+[AQ-08-preoffer-io-qualification.json](AQ-08-preoffer-io-qualification.json).
+The actual Git case uses a synthetic reservation capability: SQL ownership,
+native offers and worker consumption are separate qualification work.
+
+Native downloads use `read_chunk` with fixed Manifest/Bundle members, a limit of
+1..262144 bytes, checked offsets and exactly the bounded remaining bytes. Each
+call reopens through no-follow descriptors and matches the original manifest.
+Bundle chunks do not rehash the whole file; the worker must verify the assembled
+artifact digest before hydration. Route owners fence current credentials, attempt,
+retention and phase before I/O and recheck after reacquiring locks before response.
+A file descriptor observes its opened inode, not a pathname snapshot across
+requests. Same-size replacement is ultimately caught by the assembled digest;
+concurrent trusted-operator filesystem mutation is not qualified away.
+
+Export verification and chunk reads share two blocking file-I/O slots. A timed-out
+or cancelled async caller cannot abandon an unbounded number of hashing threads:
+the slot remains with the blocking task until its OS call actually returns. This
+is bounded outstanding work, not a guarantee that the operating system will
+interrupt a stalled filesystem read. Download tasks use a five-second async wait.

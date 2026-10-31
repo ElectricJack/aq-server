@@ -1,0 +1,15 @@
+   Compiling aq-server v0.1.0 (/tmp/aq08-profiled-base-io/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.76s
+     Running unittests src/lib.rs (/tmp/aq22-observations/target/debug/deps/aq_server-c85d75e8417cbd21)
+
+running 7 tests
+test source_retention::profiled_base::tests::chunk_reads_are_bounded_exact_and_refuse_changed_members ... ok
+test source_retention::profiled_base::tests::historical_fact_is_canonical_bound_and_cannot_refresh_itself ... ok
+test source_retention::profiled_base::tests::retention_requires_exact_active_transfer_and_finite_observation ... ok
+test source_retention::profiled_base::tests::nofollow_applies_to_every_artifact_component_and_special_files_do_not_block ... ok
+test source_retention::profiled_base::tests::socket_replies_are_bounded_and_correlated_without_inventing_success ... ok
+test source_retention::profiled_base::tests::verification_refuses_corrupt_size_digest_manifest_and_installation ... ok
+test source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.74s
+

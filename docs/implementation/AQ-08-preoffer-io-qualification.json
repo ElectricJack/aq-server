@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "task": "AQ-08",
+  "source_revision": "bad2cb9c2e05df6c323453c67619f892b2de02ab",
+  "status": "Qualified fixed pre-offer export and bounded file I/O; durable reservation/finalization and native routes remain separate",
+  "captured_at": "2026-10-31T19:35:41.561960+00:00",
+  "qualification": {
+    "tests": 7,
+    "actual_git_tests": 1,
+    "strict_server_all_targets_all_features_clippy": "passed",
+    "format": "passed",
+    "initial_failure": "Test fixture omitted repo.sync before workspace.create; corrected setup only, retained negative log."
+  },
+  "commands": [
+    "DATABASE_URL=<disposable PG> AQ_TEST_GIT_CANDIDATE=<exact binary> AQ_TEST_GIT_EXECUTABLE=<exact Git> RUST_TEST_THREADS=4 cargo test -p aq-server --lib source_retention::profiled_base --locked --offline -- --include-ignored",
+    "cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo fmt -p aq-server -- --check"
+  ],
+  "binary_evidence": {
+    "prior_record": "docs/evidence/m4-git-package.json",
+    "aq_git_sha256": "9de33fd4e79d68a9cb8c72532ee03825dca3a3dbaf979bcd8770a53ef8fe9d3a",
+    "git_sha256": "7c0d4454dd24953ae608b461312b0db1c021644df3c074262b147d7ab0327241",
+    "git_version": "2.56.0"
+  },
+  "source_sha256": {
+    "crates/aq-server/src/source_retention.rs": "1c62f0dedf19b5ae7ca7e5f563e7c1e336a249907203b82270caf91445b05b95",
+    "crates/aq-server/src/source_retention/profiled_base.rs": "0be095d16c28aa839262811d55451af5470e391260ed79f6b2c37d1878aa72f4",
+    "crates/aq-server/src/profiled_execution/source_exports.rs": "b88e249fe8bc3757a88f66a1e7338daf266c5d358c36e0e508d236089f6b243e"
+  },
+  "evidence": {
+    "docs/implementation/evidence/aq08-preoffer-bad2cb9/final-clippy.log": {
+      "sha256": "54655be58240b6d1636ae2071821b384b53484fd85a0c6ac95d583fcf9a93963",
+      "bytes": 149
+    },
+    "docs/implementation/evidence/aq08-preoffer-bad2cb9/final-fmt.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "docs/implementation/evidence/aq08-preoffer-bad2cb9/final-tests.log": {
+      "sha256": "21e93f9847faf767e15e1bb9ee9aebfe1d19b4b79e94dd735c03c09de5214c9f",
+      "bytes": 1203
+    },
+    "docs/implementation/evidence/aq08-preoffer-bad2cb9/real-initial-fixture-failure.log": {
+      "sha256": "1e2a3514207ec34397d25fe22f749b6c40992d526923daa58966bccb84a27ec7",
+      "bytes": 1855
+    }
+  },
+  "limits": [
+    "Actual Git test deliberately uses synthetic reservation and source-observation fixture; not durable SQL authorization.",
+    "No native offer, worker download/hydration, grant or provider execution qualification.",
+    "Chunks enforce exact manifest and file size with nofollow descriptors, bounded seek/read, metadata checks. Worker must verify complete assembled digest; same-size bundle replacement between requests is not certified away.",
+    "Timeout does not kill a blocked OS file read. Two shared blocking slots remain held until actual return, bounding outstanding work while subsequent calls refuse.",
+    "No host power-loss, physical ENOSPC, concurrent trusted-operator mutation or filesystem snapshot guarantee."
+  ]
+}
