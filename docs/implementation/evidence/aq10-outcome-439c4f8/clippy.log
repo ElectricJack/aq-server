@@ -1,0 +1,4 @@
+    Checking aq-session-protocol v0.1.0 (/tmp/aq10-outcome-contract/vendor/aq-session-protocol-0.1.0)
+    Checking aq-lifecycle-protocol v0.1.0 (/tmp/aq10-outcome-contract/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking aq-admission v0.1.5 (/tmp/aq10-outcome-contract/crates/aq-admission)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.95s

@@ -1,0 +1,114 @@
+   Compiling aq-admission v0.1.5 (/tmp/aq10-outcome-contract/crates/aq-admission)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.37s
+     Running unittests src/lib.rs (/tmp/aq10-public-target/debug/deps/aq_admission-02b5afd6fb37afdf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/common.rs (/tmp/aq10-public-target/debug/deps/common-418fd07af0cff11c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (/tmp/aq10-public-target/debug/deps/contracts-13de4c88461c4f1a)
+
+running 7 tests
+test material_bytes_and_receipts_are_exact_attempt_binding_not_presence_claims ... ok
+test source_requires_explicit_safe_ref_or_matching_immutable_object_and_freshness ... ok
+test artifact_requires_real_matching_bytes_and_current_retention_metadata ... ok
+test shipped_shared_offer_uses_exact_existing_launch_binding_bridge ... ok
+test mutations_reject_unknown_duplicate_nil_unbounded_and_wrong_versions ... ok
+test retained_role_and_byte_coverage_validates_against_resealed_public_offer ... ok
+test published_schema_and_fixtures_drift_test_packaged_artifacts ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/execution_spec.rs (/tmp/aq10-public-target/debug/deps/execution_spec-477496d5d1ec7ce3)
+
+running 3 tests
+test publication_is_independent_and_decode_rejects_caller_secret_unknown_duplicate_fields ... ok
+test typed_worker_artifact_is_digest_bound_without_a_manifest_cycle ... ok
+test spec_observation_context_and_canonical_bytes_must_all_be_retained ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/outcome.rs (/tmp/aq10-public-target/debug/deps/outcome-cbd50daae0d4ec99)
+
+running 6 tests
+test unknown_policy_shapes_and_approval_shortcuts_cannot_decode ... ok
+test requirements_have_unique_ids_and_preserve_nonempty_bounded_text ... ok
+test fixture_matches_independent_python_canonical_vectors_and_public_schema ... ok
+test changed_review_requirements_change_the_pinned_definition ... ok
+test byte_limit_covers_canonical_definition_and_raw_input ... ok
+test resealing_does_not_allow_different_task_source_or_context ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/placement.rs (/tmp/aq10-public-target/debug/deps/placement-cea99c3408f151f7)
+
+running 5 tests
+test bounded_project_round_robin_preserves_priority_then_advances_cursor ... ok
+test stale_boot_capacity_candidate_and_duplicate_subjects_never_become_authority ... ok
+test warmth_is_only_after_eligibility_and_cold_nodes_can_prepare ... ok
+test stable_ties_and_snapshot_bounds_are_explicit ... ok
+test oversized_head_does_not_hide_later_fit_and_resources_are_reserved_in_proposal ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/spec_common.rs (/tmp/aq10-public-target/debug/deps/spec_common-af2cbf12ad770b8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/started.rs (/tmp/aq10-public-target/debug/deps/started-88316c9d5e3c874c)
+
+running 3 tests
+test receipt_is_exact_historical_ack_and_strict_boundaries_refuse_unsupported_input ... ok
+test public_artifacts_and_independent_python_canonical_vectors_match ... ok
+test started_identity_is_original_owner_bound_not_a_renewal_or_physical_stop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/started_common.rs (/tmp/aq10-public-target/debug/deps/started_common-bebd97e1a8b3c341)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stopped.rs (/tmp/aq10-public-target/debug/deps/stopped-2e479b81a1f7804d)
+
+running 4 tests
+test acknowledgement_is_historical_and_bound_to_the_original_request ... ok
+test expired_stop_is_valid_but_unknown_or_digest_only_is_not_proof ... ok
+test public_schema_and_independent_canonical_vectors_match ... ok
+test exact_physical_owner_cannot_be_substituted_or_regressed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/task_lineage.rs (/tmp/aq10-public-target/debug/deps/task_lineage-8c7fd38c674e1985)
+
+running 2 tests
+test namespace_cannot_be_reset_by_attempt_and_nil_scope_refuses ... ok
+test independent_python_raw_uuid_vectors_are_stable ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transport.rs (/tmp/aq10-public-target/debug/deps/transport-198416c60134df16)
+
+running 4 tests
+test roundtrip_budget_is_charged_and_replay_cannot_restart_ttl ... ok
+test stop_journal_requires_durable_closed_reservation_and_unknown_never_releases ... ok
+test exact_stop_replay_is_immutable_and_journal_order_is_launch_scoped ... ok
+test published_transport_replays_and_mutations_reject_duplicate_unknown_and_scope ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests aq_admission
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

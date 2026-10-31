@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "task": "AQ-10",
+  "source_revision": "439c4f803c221baae27bdfb5dbfb7dcea6e6ae87",
+  "captured_at": "2026-10-31T19:00:35.825196+00:00",
+  "status": "Qualified pure expected-outcome contract; no result acceptance or graph settlement",
+  "package": {
+    "name": "aq-admission",
+    "version": "0.1.5",
+    "sha256": "be618d1e4541b277274b615eb22013b3ce54fcc692acb8cda575351bbfbadc95"
+  },
+  "qualification": {
+    "workspace_package_tests": 34,
+    "extracted_package_tests": 34,
+    "strict_package_clippy": "passed",
+    "strict_extracted_package_clippy": "passed",
+    "format": "passed",
+    "prior_contract_bytes": "all0.1.4 preexisting source except lib module declaration, schemas, fixtures and tests unchanged"
+  },
+  "commands": [
+    "cargo test -p aq-admission --locked --offline",
+    "cargo clippy -p aq-admission --all-targets --locked --offline -- -D warnings",
+    "cargo fmt -p aq-admission -- --check",
+    "cargo package -p aq-admission --exclude-lockfile --no-verify --offline (exact public dependency patches)",
+    "cargo test -p aq-admission --offline --manifest-path <extracted workspace>/Cargo.toml",
+    "cargo clippy -p aq-admission --all-targets --locked --offline --manifest-path <extracted workspace>/Cargo.toml -- -D warnings"
+  ],
+  "source_sha256": {
+    "Cargo.lock": "f2b65a47cf4919cd263ac1600f311b48af65d82bf76f334bf0fe1191f019b1e6",
+    "crates/aq-admission/Cargo.toml": "0206a9a7af2d6bf0e9ae6f3e7529d4cb0240d405114031dfd8f188641d5f7a22",
+    "crates/aq-admission/README.md": "ca876e350bb9c9c94a1c21fb08834513ae5e9283fd876b760bd71a349c6da033",
+    "crates/aq-admission/artifacts/outcome.fixture.json": "6db72d816b024813d139feffda00978648430916cd24939824c08783e7f2b0f1",
+    "crates/aq-admission/artifacts/outcome.python-vectors.json": "a1640bbbc5b47981a07f119a46b2f00e26387212d826b767dfc24fde67c9734a",
+    "crates/aq-admission/artifacts/outcome.schema.json": "f363167669672a3c7aa051bd748d9938d18285cb3b8b6a12744747c675d75b7c",
+    "crates/aq-admission/examples/export_outcome.rs": "bd71ebe65ea08bd86220a04cde001b58cfdcc7b043504ee0f1dd47b868a3f596",
+    "crates/aq-admission/src/lib.rs": "3e6f3945b05117e575240af7434a74a8941e858ccb9c5751e5c86bfb864b7169",
+    "crates/aq-admission/src/outcome.rs": "3ef2b3ecae7ba552cda91cc5604b04a49844fc1aa1f0111228f564d9ccde8fee",
+    "crates/aq-admission/tests/outcome.rs": "476f6d8d33c881759948079c83fff4b71a6a45d3d2553be9c04e502a5d332107",
+    "crates/aq-server/Cargo.toml": "cc419da1b4972334e4bc9816768e78e898499a69160247e8c2646967a9fbb539"
+  },
+  "evidence": {
+    "docs/implementation/evidence/aq10-outcome-439c4f8/aq-admission-0.1.5.crate": {
+      "sha256": "be618d1e4541b277274b615eb22013b3ce54fcc692acb8cda575351bbfbadc95",
+      "bytes": 48683
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/clippy.log": {
+      "sha256": "7c140078ba62e82ccd1bfc17b77b45ec9ea2b8deba92e81cd81816cb5476cf7c",
+      "bytes": 362
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/consumer-Cargo.lock": {
+      "sha256": "60a333598821a6c268570703c93ea2febb1f3523c8b9a26c1a49a29c77338278",
+      "bytes": 10521
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/consumer-Cargo.toml": {
+      "sha256": "1a29c4626005cfef740008d1140a1a84dc8a606482524613e74e176f9df6815a",
+      "bytes": 275
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/format.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/package.log": {
+      "sha256": "38af3c699c983aeb4fd1f61c7aa25ad12b06a069c8672bfd7ec7c514fd814786",
+      "bytes": 326
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/public-clippy.log": {
+      "sha256": "1921114447cec48c706f93287c07b10449cd9a922c600d6c038e7c79c50b0c92",
+      "bytes": 157
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/public-tests.log": {
+      "sha256": "d1bd82ab558b62cadc87af26375e1a33042ade9591520aa29a768f053dd9486a",
+      "bytes": 5505
+    },
+    "docs/implementation/evidence/aq10-outcome-439c4f8/tests.log": {
+      "sha256": "06962cc4acfa5b382bdf0c8004ad1a8813de99117b8c5dde2cd3877efaa044c0",
+      "bytes": 5447
+    }
+  },
+  "limits": [
+    "Definition/pinned requirements only, not evidence",
+    "No daemon report ledger/evaluator/review/check owner/claim release/graph completion implemented by this slice",
+    "No actual agent or provider qualification",
+    "Existing0.1.4 source archive preserved"
+  ]
+}

@@ -1,0 +1,5 @@
+warning: manifest has no license, license-file, documentation, homepage or repository
+  |
+  = note: see https://doc.rust-lang.org/cargo/reference/manifest.html#package-metadata for more info
+   Packaging aq-admission v0.1.5 (/tmp/aq10-outcome-contract/crates/aq-admission)
+    Packaged 45 files, 302.0KiB (47.5KiB compressed)
