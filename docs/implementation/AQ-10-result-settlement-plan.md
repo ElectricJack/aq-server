@@ -125,3 +125,52 @@ version-checked completion. Add lost-result and lost-graph-response recovery,
 cancellation-before/after-eligibility races, stale revisions, uncertain writers
 and source survival after stopped-worker data retirement. Stop-owner qualification
 alone cannot close AQ-10 or GATE-04.
+
+## Stage B contract decision: expected outcome, before result admission
+
+The next additive public package is `aq-admission`0.1.5. Preserve0.1.4 archives
+and every prior wire/schema. Add `outcome::ExpectedOutcomeDefinition`, a retained
+nonsecret definition created before the execution spec. It has schema1 and one
+initial finite kind, `source_change_reviewed`; unrecognized kinds/versions cannot
+establish eligibility. This is an expectation, not a result or approval.
+
+Fields are project ID/revision, existing TaskRevision (workspace, task, graph CAS
+version and content revision), source repository/binding generation/base object
+and retained base artifact, authorized task observation/context artifacts, up to
+64 additional input artifact references, and1–32 acceptance criteria. Each criterion
+has a unique <=512-byte ID and <=8192-byte UTF8 text drawn from the authorized task
+projection. Preserve text and provenance; reject oversized input rather than
+silently dropping requirements. The entire canonical definition is <=65536 bytes.
+There is no attempt ID, manifest hash or execution-spec hash in this definition,
+so the composition graph remains acyclic.
+
+A pinned validation-policy ArtifactRef names the exact centrally selected policy.
+The finite review requirement is either `human_owner` or `policy_actor`; both
+require an explicit revision-bound decision from an authorized central owner.
+There is no `none`, agent-self-approval or process-success shortcut. Zero to32
+uniquely named required checks pin exact validator artifacts. These are evidence
+requirements, not executable strings, shell commands, plugin discovery or proof
+that a check ran. Initial native assignment must choose a configured policy and
+supported validator set; this contract does not fabricate their implementations.
+
+`validate_against(ProfiledExecutionSpec)` checks the exact project/task/source/base,
+observation/context references and the content-derived outcome ArtifactRef in the
+spec. The producer retains the canonical bytes through the existing Outcome
+artifact owner and pins that same reference in the manifest. Result admission
+loads the original definition and actual retained evidence; it cannot replace
+requirements with fields supplied in a final worker report.
+
+Review/check evidence will bind the original outcome digest, report ID/digest,
+exact retained resulting source object/artifact and current expected task/input
+revisions. AQ validates the decision's authenticated owner and immutable evidence
+record, then rechecks applicability under current authority. Agent text or a
+reference to an unknown validator is retained only as a claim. Cancellation,
+changed task/input revisions, unresolved effects and unknown policy/validators
+prevent automatic eligibility. New evidence evaluation uses a new operation;
+historical report acknowledgments never silently change disposition.
+
+This slice publishes only the shared expectation contract and pure validation.
+The bounded immutable report ledger, finite evidence-policy evaluator, explicit
+review/check owners, source/effect-quiescence queries and graph completion delivery
+are subsequent Stage B/C work. No outcome definition or public DTO authorizes
+release, accepts a result or performs a graph mutation.
