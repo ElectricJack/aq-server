@@ -1,0 +1,23 @@
+   Compiling aq-server v0.1.0 (/tmp/aq24-notifications/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.12s
+     Running tests/notification_store.rs (target/debug/deps/notification_store-3d091d3fd3eb053d)
+
+running 15 tests
+test absent_route_preserves_dashboard_message_and_identical_logical_replay_never_sends_later ... ok
+test missing_routes_work_with_development_http_origin ... ok
+test config_rotation_is_monotonic_and_missing_destinations_do_not_break_inspection ... ok
+test atomic_enqueue_route_cas_and_scope_rechecks_preserve_delivery_identity ... ok
+test destination_backoff_does_not_block_an_independent_destination ... ok
+test interrupted_dispatch_is_unknown_after_takeover_and_explicit_retry_is_idempotent ... ok
+test late_provider_acceptance_cannot_be_written_by_a_fenced_dispatcher ... ok
+test actual_server_startup_dispatches_and_shutdown_leaves_no_repeating_sender ... ok
+test quota_refusal_rolls_back_all_message_intent_and_receipt_rows ... ok
+test transport_acceptance_is_neither_human_ack_nor_decision_and_no_tick_replays_it ... ok
+test unavailable_destination_stops_future_sends_and_route_revocation_suppresses_queued_work ... ok
+test actual_human_routes_enforce_csrf_current_roles_scope_and_machine_separation ... ok
+test global_rate_limit_is_durable_across_dispatcher_restart ... ok
+test simultaneous_duplicate_enqueue_and_project_revocation_are_bounded ... ok
+test notification_connections_do_not_consume_execution_control_pool ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+

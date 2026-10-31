@@ -155,5 +155,28 @@
     "crates/aq-server/tests/store.rs": "a02c49f7bf5a8827c9dbb5386dd79e7df696a3672d2b1d49cd8b77b381501e41",
     "crates/aq-server/tests/updates.rs": "d0bad97752f7363828cae4f8d22da565e2e101f46bbfac664a8c6ef5e037da70",
     "crates/aq-server/tests/worker_api.rs": "041a7e97caf15797c28433098172aea20fd44a18964049085b43b25bf6a08698"
-  }
+  },
+  "qualified_followups": [
+    {
+      "source_commit": "9827ba3c73cfec78d00f75f6d196583f6fde4727",
+      "change": "15-second whole-dispatch deadline; existing SQL and HTTP individual bounds retained",
+      "checks": {
+        "postgres_api_runtime": {
+          "passed": 15,
+          "failed": 0
+        },
+        "strict_server_all_targets_all_features_clippy": "passed"
+      },
+      "logs": {
+        "tests": {
+          "path": "docs/implementation/evidence/aq24-dispatch-deadline/tests.log",
+          "sha256": "54195e992d7c3e27251883bf051d51dfc66b90de0fe11cfc0c2e1bdae365b3ca"
+        },
+        "clippy": {
+          "path": "docs/implementation/evidence/aq24-dispatch-deadline/clippy.log",
+          "sha256": "fad749f73e4f9df7aa0db96a6e532c3441cfa3b36b610bfb55419d2dbab05666"
+        }
+      }
+    }
+  ]
 }
