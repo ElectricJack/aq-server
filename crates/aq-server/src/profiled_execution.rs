@@ -29,3 +29,5 @@ pub mod definitions;
 pub mod preparation;
 
 pub mod control_api;
+
+pub mod native_offer;
