@@ -174,3 +174,59 @@ The bounded immutable report ledger, finite evidence-policy evaluator, explicit
 review/check owners, source/effect-quiescence queries and graph completion delivery
 are subsequent Stage B/C work. No outcome definition or public DTO authorizes
 release, accepts a result or performs a graph mutation.
+
+## Stage B1: immutable report recording, before eligibility evaluation
+
+Use the existing bounded `transport::ResultReport` unchanged. Add a separate
+`aq-admission`0.1.6 result-recording response and schema, preserving all earlier
+archives. A report is <=65536 UTF8 JSON bytes, has one stable report ID and operation
+ID, and references the exact Stage A stop evidence. Canonical bytes determine its
+digest. Initial scope is the post-Started/source-change path; unknown/no-start stop
+claims require their own recovery owner. Reported process outcome and conclusion
+remain worker claims, independent of the host wait status and graph task state.
+
+The immutable receipt identifies the original operation/report/binding, report
+digest, pinned expected-outcome artifact, actual stopped receipt and recording
+time. Its only disposition is `recorded`. It acknowledges retention of the
+report, not acceptance of its conclusions, source sufficiency, effect quiescence,
+resource release or task completion. Later immutable evaluation operations have
+separate IDs and dispositions; repeated report POSTs never reevaluate evidence or
+silently turn an old receipt into an acceptance. Source receipt IDs and pending
+operation IDs in the report are claims to resolve through their existing owners,
+not a new database copy of source/effect truth.
+
+Daemon ownership (migration024, after native022 and playbook023; no placeholder
+migrations): authenticate and lock current node, then exact attempt/hot identity,
+original admitted runtime and original Started/Stopped records. Resolve the
+immutable manifest's outcome reference and typed definition through the existing
+inline artifact owner, binding it to the original execution spec. Do not require
+live execution authority or current launch eligibility to record stopped work.
+Under the same attempt lock, require a first report with no predecessor or a
+correction that supersedes the current report head. A report ID is immutable;
+changed operation/report reuse or competing corrections conflict. Bound each
+attempt to64 retained reports and4MiB of canonical report bytes; refuse new work
+at capacity and retain existing exact replays. Do not overwrite prior reports.
+
+Insert the canonical report and receipt and advance its report head atomically.
+The report table has immutable-body guards, unique operation/report identities,
+a source stop-owner foreign key and binding/digest checks. Admission does not
+change hot authority, task claims, source retention, effects or graph state.
+Cancelled and now-stale attempts may retain reports; their later eligibility is
+independently evaluated. Heavy evidence resolution runs outside reserved control
+capacity. The initial ledger does not claim that recording a reference proves
+that its source/check/review evidence exists.
+
+Before Stage C permits release/re-registration, add an authenticated historical
+receipt lookup: a current machine credential may read its own exact old receipt
+without gaining old-boot execution authority. The current Stage A POST checks the
+original admitted boot/runtime before replay; after future incarnation replacement
+that POST can refuse an old acknowledgment. Preserve that conservative behavior
+until the explicit historical-recovery path is qualified; do not call a lookup a
+new stop report or fresh authority grant.
+
+Required ledger tests cover unchanged public ResultReport bytes, exact replay,
+changed IDs/bodies, correction races, quota/replay, actual Stop/Outcome owners,
+wrong physical/logical binding, expired/cancelled recording, credential rotation
+while blocked, atomic rollback, and unchanged held task/source/effect/graph state.
+Only the recorded-receipt pure contract can be qualified before migration024 and
+actual owner integration. Stage B evaluation and Stage C release remain open.
