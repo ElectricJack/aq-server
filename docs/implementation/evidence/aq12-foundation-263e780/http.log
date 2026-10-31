@@ -1,0 +1,30 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-agent-api)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-playbooks-42f9449/crates/aq-playbooks-model)
+   Compiling aq-release v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-release)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq12-foundation-clean/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-protocol v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-protocol-0.1.0)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-session-api)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-terminal-relay-protocol)
+   Compiling aq-playbooks-runner v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-playbooks-42f9449/crates/aq-playbooks-runner)
+   Compiling aq-profiles v0.1.1 (/tmp/aq12-foundation-clean/crates/aq-profiles)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-terminal-relay)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-lifecycle-api)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-observation-admission)
+   Compiling aq-accounting v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-accounting)
+   Compiling aq-admission v0.1.3 (/tmp/aq12-foundation-clean/crates/aq-admission)
+   Compiling aq-selection v0.1.2 (/tmp/aq12-foundation-clean/crates/aq-selection)
+   Compiling aq-playbooks-postgres v0.1.0 (/tmp/aq12-foundation-clean/vendor/aq-playbooks-42f9449/crates/aq-playbooks-postgres)
+   Compiling aq-notifications v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-notifications)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-observation-api)
+   Compiling aq-playbook-host v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-playbook-host)
+   Compiling aq-server v0.1.0 (/tmp/aq12-foundation-clean/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.04s
+     Running tests/playbook_isolation.rs (/tmp/aq12-playbook-host/target/debug/deps/playbook_isolation-f02ac24423ff4924)
+
+running 1 test
+test actual_control_renew_cancel_and_readiness_progress_during_playbook_storage_stall ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
