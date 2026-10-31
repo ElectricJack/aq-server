@@ -54,7 +54,7 @@ ARG AQ_VERSION=unknown
 # them from the source (STATE_FORMAT_VERSION, SUPPORTED_WORKER_PROTOCOLS) and
 # checks the pushed labels against the manifest; the updater refuses a
 # server image whose state-format label disagrees with its manifest.
-ARG AQ_STATE_FORMAT=11
+ARG AQ_STATE_FORMAT=12
 ARG AQ_PROTOCOL_MAX=1
 LABEL org.opencontainers.image.title="agent-q-server" \
       org.opencontainers.image.revision="${AQ_SOURCE_REVISION}" \

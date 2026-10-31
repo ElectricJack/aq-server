@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "task": "AQ-21",
+  "stage": "migration12_and_shared_inspection_only",
+  "base_commit": "d177695",
+  "status": "qualified_runtime_still_pending",
+  "source": {
+    "Dockerfile": "e8682e05f8131121d39c5389219ef23ce77c9f39d28d0f516f632add49ee2a5b",
+    "crates/aq-server/src/lib.rs": "4eec05bd4a906b76a33f54a7b370d43fa31df632e8f32120607311162d941131",
+    "crates/aq-server/src/store.rs": "dbb98c4fda6927c7f95c467ff92e12abd96315c5bf553be8f45a7eda26cf1599",
+    "crates/aq-server/src/session_access.rs": "abe964b2bae572b8894c1dc6f4b2bf812b7c4fa12cafe39ed974dca943ee448a",
+    "crates/aq-server/migrations/0012_terminal_relay.sql": "848ffaba3034e30cc2d9f6716150f4b079d341b39f028411ced986b8c1249dc7",
+    "crates/aq-server/tests/session_inspection.rs": "214d3ad6ad7631a77a27813c9d8abf0bee729602aab5ab2b59b2bf8de2670a35"
+  },
+  "tests": {
+    "actual_postgres": 4,
+    "state_format_unit": 1,
+    "strict_focused_clippy": true,
+    "format": true
+  },
+  "artifact_root": "/home/jkern/dev/.aq-qualification/aq21-migration12-2026-10-31",
+  "limits": [
+    "No runtime routes/capability/controller/input enabled",
+    "No process/provider/renderer qualification",
+    "No production database or product pin changed",
+    "Shared build cache; source is separate migration-only worktree"
+  ]
+}
