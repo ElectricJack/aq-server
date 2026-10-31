@@ -3,6 +3,7 @@
 pub mod execution_spec;
 mod placement;
 pub mod started;
+pub mod stopped;
 pub mod transport;
 use aq_session_protocol::Validate;
 pub use aq_session_protocol::{

@@ -41,6 +41,38 @@ pub async fn current_runtime_locked(
     node: Uuid,
     boot: Uuid,
 ) -> Result<RegisteredRuntime, AppError> {
+    let metadata = admitted_runtime_locked(tx, node, boot).await?;
+    let config = state
+        .config
+        .profiled_execution
+        .as_deref()
+        .ok_or_else(|| AppError::Conflict("native policy is not configured".into()))?;
+    super::policies::fence_configuration_locked(tx, config).await?;
+    let qualified = config
+        .qualified(&metadata.request)
+        .map_err(|_| AppError::Conflict("native runtime qualification unavailable".into()))?;
+    if metadata.configuration_revision > config.revision
+        || metadata.qualification != qualified.qualification
+    {
+        return Err(AppError::Conflict(
+            "native runtime qualification changed".into(),
+        ));
+    }
+    Ok(RegisteredRuntime {
+        runtime: metadata.request.runtime,
+        qualification: metadata.qualification,
+        boot_id: boot,
+    })
+}
+
+/// Recover the originally admitted runtime without granting new launch rights.
+/// Caller must hold the current authenticated node lock; retirement of a launch
+/// allowlist must not prevent recording this same owner's actual stop evidence.
+pub(super) async fn admitted_runtime_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    boot: Uuid,
+) -> Result<NativeRegistration, AppError> {
     let record: serde_json::Value =
         sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1 FOR SHARE")
             .bind(node)
@@ -71,27 +103,7 @@ pub async fn current_runtime_locked(
             "native registration scope mismatch".into(),
         ));
     }
-    let config = state
-        .config
-        .profiled_execution
-        .as_deref()
-        .ok_or_else(|| AppError::Conflict("native policy is not configured".into()))?;
-    super::policies::fence_configuration_locked(tx, config).await?;
-    let qualified = config
-        .qualified(&metadata.request)
-        .map_err(|_| AppError::Conflict("native runtime qualification unavailable".into()))?;
-    if metadata.configuration_revision > config.revision
-        || metadata.qualification != qualified.qualification
-    {
-        return Err(AppError::Conflict(
-            "native runtime qualification changed".into(),
-        ));
-    }
-    Ok(RegisteredRuntime {
-        runtime: metadata.request.runtime,
-        qualification: metadata.qualification,
-        boot_id: boot,
-    })
+    Ok(metadata)
 }
 
 /// Admit an exact qualified runtime under the authenticated machine's current

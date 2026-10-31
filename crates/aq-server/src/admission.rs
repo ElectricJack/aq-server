@@ -76,7 +76,9 @@ pub fn classify(path: &str) -> Class {
     }
     if matches!(
         path,
-        "/v1/worker/profiled/register" | "/v1/worker/profiled/started"
+        "/v1/worker/profiled/register"
+            | "/v1/worker/profiled/started"
+            | "/v1/worker/profiled/stopped"
     ) {
         return Class::Control;
     }

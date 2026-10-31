@@ -1,6 +1,7 @@
 # AQ-10 native stop, result disposition and graph settlement
 
-Status: implementation plan reconciled with daemon state20, 2026-10-31.
+Status: Stage A implemented as a state21 candidate, under qualification, 2026-10-31.
+Stages B/C remain planned and do not follow automatically from a stopped receipt.
 Root owns this lane; AQ-08 owns native assignment/preparation/grants, and aq-worker
 owns actual journal/host/source producers. The shared
 [execution contract](../architecture/0002-execution-and-recovery.md) is normative.
@@ -32,8 +33,9 @@ receipt digest without proof are not accepted as stopped.
 
 Initial scope is a host with a previously recorded Started owner. Match the
 physical guardian nonce/process/machine boot/PID namespace, complete LaunchIntent
-and exact pane identity to the stored Started request. Stop observation time and
-permit/reaped counters cannot regress. A physically new guardian cannot close an
+and exact pane identity to the stored Started request. Stop observation time, permit sequence and
+reaped counters cannot regress. An unchanged permit sequence preserves its exact
+deadline; a newer sequence may legitimately shorten the execution deadline. A physically new guardian cannot close an
 old launch. A grant that never started or a host lost before Started needs its
 separately qualified no-start/recovery producer; do not invent its proof here.
 
@@ -55,7 +57,7 @@ the stopped projection. SQL guards independently bind the receipt, journal and
 hot transition; missing either side rolls back. Sample recording time after the
 last lock, but never compare a worker boot clock with central wall time.
 
-Migration021 is reserved for this owner. Record `Finished` execution authority
+Migration021 implements this owner. Record `Finished` execution authority
 with known stopped evidence; this is not task success or accepted result. Keep
 the original grant/deadlines and cancellation identity unchanged. Do not set
 retention/effects complete, clear `holds_task`, release disk, or emit graph

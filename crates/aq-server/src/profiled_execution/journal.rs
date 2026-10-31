@@ -59,6 +59,26 @@ pub(super) async fn record_started(
     )
     .await
 }
+pub(super) async fn record_stopped(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &aq_admission::stopped::Request,
+) -> Result<(), AppError> {
+    let (revision, digest) = request.journal().map_err(|_| conflict())?;
+    record(
+        tx,
+        &request.evidence.binding,
+        &LaunchOwner {
+            guardian_id: request.evidence.guardian_id,
+            launch_id: request.evidence.launch_id,
+            reservation_id: request.reservation_id,
+        },
+        Some(request.grant_id().map_err(|_| conflict())?),
+        "stopped",
+        revision,
+        digest,
+    )
+    .await
+}
 async fn record(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,
@@ -101,7 +121,7 @@ async fn record(
         }
         if !matches!(
             (previous.as_str(), phase),
-            ("reserved", "prepared") | ("prepared", "started")
+            ("reserved", "prepared") | ("prepared", "started") | ("started", "stopped")
         ) || revision as i64 <= old.get::<i64, _>("revision")
         {
             return Err(conflict());

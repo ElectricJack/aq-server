@@ -15,7 +15,7 @@ zeroize = "1"
 aq-accounting = { path = "../aq-accounting", version = "=0.1.0" }
 aq-notifications = { path = "../aq-notifications", version = "=0.1.0" }
 aq-lifecycle-api = { path = "../aq-lifecycle-api", version = "=0.1.0" }
-aq-admission = { path = "../aq-admission", version = "=0.1.3" }
+aq-admission = { path = "../aq-admission", version = "=0.1.4" }
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 aq-selection = { path = "../aq-selection", version = "=0.1.2" }

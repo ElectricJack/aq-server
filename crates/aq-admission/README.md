@@ -1,4 +1,4 @@
-# AQ admission contracts 0.1.3
+# AQ admission contracts 0.1.4
 
 Pure versioned preparation contracts and bounded placement proposals. This crate
 contains no daemon, database, network client, provider call or secret delivery.
@@ -114,3 +114,22 @@ qualified worker owner. Deserializing a report is never execution authority.
 renew permission, extend a deadline, revive a stopped host or authorize terminal
 input. Worker integration must persist the original operation and genuine host
 observation before sending; renew counters and parser events are not start proof.
+
+## Additive post-Started stop contract (0.1.4)
+
+`stopped::Request` carries the existing worker stop envelope plus the exact
+serialized host StoppedProof, runtime qualification and reservation. Its separate
+schema preserves every earlier transport/Started artifact. The bounded request
+requires a stopped phase, ECHILD, retained pane identity, root wait status and a
+positive reaped count. `validate_after` binds the full physical guardian, launch
+configuration and pane to the immutable original Started report. A newer permit
+sequence may have a shorter deadline; the same sequence cannot change it.
+
+Decoding is structural validation, not kernel attestation. The authenticated,
+qualified worker must obtain the actual opaque host proof and durably journal it.
+The daemon authenticates the original owner and records the receipt/journal/hot
+transition atomically. Expired execution can report stop; stop does not release
+the task claim, source or effects, nor does it establish task success. Historical
+receipts cannot renew execution. Pre-start loss and changed-boot recovery remain
+separate protocols. Independent Python canonical vectors cover the fixture and
+Unicode values; actual tmux serialization qualification is recorded separately.

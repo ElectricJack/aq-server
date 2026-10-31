@@ -14,3 +14,5 @@ pub mod policies;
 pub mod registration;
 pub mod source;
 pub mod started;
+
+pub mod stopped;

@@ -43,10 +43,10 @@ use std::sync::Arc;
 /// every migration is a state-format change (`store` tests enforce it). The
 /// updater restores the pre-update backup on rollback only when the format
 /// changes, so a migration without a bump would strand the old release.
-pub const STATE_FORMAT_VERSION: u32 = 20;
+pub const STATE_FORMAT_VERSION: u32 = 21;
 /// State formats this binary can read; always contains `STATE_FORMAT_VERSION`.
 pub const READABLE_STATE_FORMATS: &[u32] = &[
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
 ];
 /// Versions that may be upgraded to this release.
 pub const UPGRADE_FROM: &str = ">=0.1.0";
@@ -173,6 +173,7 @@ pub fn build_worker_router(state: AppState) -> Router {
         .merge(worker_api::worker_routes(state.clone()))
         .merge(profiled_execution::api::routes(state.clone()))
         .merge(profiled_execution::started::routes(state.clone()))
+        .merge(profiled_execution::stopped::routes(state.clone()))
         .merge(profiled_execution::material_api::routes(state.clone()))
         .merge(profiled_execution::artifact_api::routes(state.clone()))
         .merge(observations::api::routes(state.clone()))
