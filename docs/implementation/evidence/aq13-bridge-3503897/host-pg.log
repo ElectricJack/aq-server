@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/postgres.rs (/tmp/aq12-playbook-host/target/debug/deps/postgres-234b7718c3fa8e8f)
+
+running 1 test
+test protected_actual_engine_exclusive_owner_restart_and_key_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+

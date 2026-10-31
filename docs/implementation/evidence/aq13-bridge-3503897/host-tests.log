@@ -1,0 +1,50 @@
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-model)
+   Compiling aq-playbooks-runner v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner)
+   Compiling aq-playbooks-postgres v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres)
+   Compiling aq-playbook-host v0.1.1 (/tmp/aq13-bridge-clean/crates/aq-playbook-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.10s
+     Running unittests src/lib.rs (/tmp/aq12-playbook-host/target/debug/deps/aq_playbook_host-5ca786dfec109689)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/owner.rs (/tmp/aq12-playbook-host/target/debug/deps/owner-532cd54f188bfd4e)
+
+running 5 tests
+test unsupported_contracts_and_bounds_refused_before_install ... ok
+test actual_engine_install_admit_tick_inspect_and_explicit_stop ... ok
+test changed_artifact_bytes_and_large_request_never_enter_namespace ... ok
+test dropping_last_handle_never_joins_stalled_owner_on_async_thread ... ok
+test blocked_storage_does_not_block_async_control_and_control_queue_is_reserved ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/postgres.rs (/tmp/aq12-playbook-host/target/debug/deps/postgres-234b7718c3fa8e8f)
+
+running 1 test
+test protected_actual_engine_exclusive_owner_restart_and_key_failure ... ignored, requires scripts/test-db disposable PostgreSQL
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protection.rs (/tmp/aq12-playbook-host/target/debug/deps/protection-da6773b526056b66)
+
+running 1 test
+test private_key_file_rejects_public_symlink_malformed_oversized_and_missing_active ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/registered.rs (/tmp/aq12-playbook-host/target/debug/deps/registered-402014070428c514)
+
+running 2 tests
+test generic_command_and_unsafe_recovery_catalogs_refuse_before_factory ... ok
+test explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests aq_playbook_host
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

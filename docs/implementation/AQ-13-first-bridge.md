@@ -84,3 +84,27 @@ human eligibility. A model output or notification delivery is not human approval
 a posted passed:true is not executed check evidence. AQ14's ledger/adapters must
 coordinate with the owning result evaluator rather than duplicate it. Full
 hibernation/continuation and AQ27 wait/GATE05 remain outside this checkpoint.
+
+## Exact clean component qualification
+
+Source3503897232092f02a2ae93e54a0a8794548db1c2 passed94 selected daemon
+regression executions (including11 bridge PG/API and2 contract cases),8 host
+component tests and1 explicit protected-PG host test. Both strict lint profiles,
+formatting,477-file source drift and clean checkout status passed.
+[Machine evidence](AQ-13-first-bridge.json) pins commands/hashes and
+[retained logs](evidence/aq13-bridge-3503897).
+
+The initial default-parallelism regression attempt failed10 execution fixture
+initializations with PostgreSQL SQLSTATE53200/out-of-shared-memory, suggesting
+max_locks_per_transaction during concurrent per-test migrations. Its failed log
+is retained, not counted as a code pass. The unchanged exact source then passed
+all94 selected executions with explicit --test-threads=2. No database server
+configuration or source assertions were relaxed. Separate internal concurrency
+and actual HTTP saturation tests still execute their intended races.
+
+Test-only supplement8fd3b0f separates candidate mode from later ordered
+integration: if the compiled state version is>=23, the fixture requires the
+normal migration to have created bridge tables; it never repairs them. Earlier
+candidate mode explicitly applies the table definition and asserts meta version
+did not change. Normal ordered migration qualification belongs to root's final
+022/023/024 source union and is not inferred from these component fixtures.

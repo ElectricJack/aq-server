@@ -1,0 +1,1455 @@
+{
+  "schema_version": 1,
+  "task": "AQ-13",
+  "status": "qualified first bridge/message adapter candidate; not full AQ13 completion",
+  "source_revision": "3503897232092f02a2ae93e54a0a8794548db1c2",
+  "source_repository": "agent-q",
+  "fixture_compat_supplement": "8fd3b0f27d42148cca8fcf55fc0bc779bf9e8365; root ordered union must qualify normal registered tables separately",
+  "captured_at_utc": "2026-10-31T19:55:37.621195+00:00",
+  "clean_worktree": "/tmp/aq13-bridge-clean",
+  "CARGO_TARGET_DIR": "/tmp/aq12-playbook-host/target",
+  "CARGO_INCREMENTAL": "0",
+  "migration": "0023 candidate explicitly applied in component fixtures; registered meta21 unchanged; no ordered migration-gap acceptance",
+  "published_engine_source": "a463e5918f914c8365a04dfe1b6778831cfebb95",
+  "published_engine_archive_sha256": "48f19b80fc0734c403ef04e7181d570b9fe675597f35caf08f0b94571ca8cc70",
+  "commands": [
+    {
+      "command": "DATABASE_URL=<scripts/test-db disposable> cargo test -p aq-server --features recovery-test-support --test playbook_bridge --test playbook_contract --test messaging --test execution --test updates --test authz --test readiness --locked --offline -- --test-threads=2",
+      "result": "94 passed;11 bridgePG/API +2 publiccontract included"
+    },
+    {
+      "command": "cargo test -p aq-playbook-host --locked --offline",
+      "result": "8 passed;1 explicitly ignored PG test"
+    },
+    {
+      "command": "AQ_PLAYBOOK_TEST_DATABASE_URL=<scripts/test-db disposable> cargo test -p aq-playbook-host --test postgres --locked --offline -- --ignored",
+      "result": "1 passed"
+    },
+    {
+      "command": "cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo clippy -p aq-playbook-host --all-targets --locked --offline -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo fmt --package aq-server --package aq-playbook-host --check",
+      "result": "passed"
+    },
+    {
+      "command": "python3 scripts/check-playbook-source.py",
+      "result": "242new +235original exact files passed"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "b5a10ee5d3580909a7e86db42781cb4b141feb5d214cb65838c527c53ea85f0c",
+      "bytes": 88291
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "3aed0ffcf076e2dcc9e5cadcb74573174d4d07be85c02b64690e153f58d21563",
+      "bytes": 2514
+    },
+    {
+      "path": "crates/aq-playbook-host/Cargo.toml",
+      "sha256": "c990e4756e11622cfbfe5ac44a43e04765c201f5e037d9bfb3954362c10807d3",
+      "bytes": 713
+    },
+    {
+      "path": "crates/aq-playbook-host/README.md",
+      "sha256": "fa40ea6095e9576819846a0f7547a1f03210a3b8b87adfbe28769ef6ab764de8",
+      "bytes": 4751
+    },
+    {
+      "path": "crates/aq-playbook-host/src/lib.rs",
+      "sha256": "6c2f1666a90b2b6cfe3a6f510809877b2d231c6aa88fcf173e9bccfd5ba76a5e",
+      "bytes": 22497
+    },
+    {
+      "path": "crates/aq-playbook-host/tests/registered.rs",
+      "sha256": "3460a6a10fec3d5ae1ecc2d4344ae7ff685c9be0a56dc5431ffab76664bfe182",
+      "bytes": 7387
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "sha256": "d6da1bb4966299dbb06cf5b2eda4806024a734963258d3ea238329ea6591ff01",
+      "bytes": 2209
+    },
+    {
+      "path": "crates/aq-server/examples/playbook_contract.rs",
+      "sha256": "37039e8458e5d1deee9e2e704b42a94107a905aeb0dcbac747597f2376c304a9",
+      "bytes": 555
+    },
+    {
+      "path": "crates/aq-server/migrations/0023_playbook_bridge.sql",
+      "sha256": "9e870b1a58ba2668b6772a209440a7d69d9a8c2303e1c460363e943c64b93372",
+      "bytes": 5989
+    },
+    {
+      "path": "crates/aq-server/src/admission.rs",
+      "sha256": "63a5a6eedbc492df47a8db888eacd66493474b54d0aa96d36efe9db3b09406c1",
+      "bytes": 7226
+    },
+    {
+      "path": "crates/aq-server/src/agent_access.rs",
+      "sha256": "8e7028225a11ddcbc9f0d201b445181fd72b8a786b0a672bb38219b77f807a5d",
+      "bytes": 28186
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/messaging.rs",
+      "sha256": "bb584adf5749625fd143f8edd53a311510ab62944704805fb70055b8a4660765",
+      "bytes": 27260
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "sha256": "c19f4a4ba8a85ed2ddb42dc8e29f859d53d584639b4b9c9eef84f67bc2dc9d92",
+      "bytes": 11093
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/api.rs",
+      "sha256": "c8a35d2823d5b8027ae7ae0c01ad9a8c5927be11c135b54d5d86cbf23c009446",
+      "bytes": 7657
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/domain.rs",
+      "sha256": "75722067329fedaca171f62151b3205a7c0dbdc2966a880e0f0e589f9567b333",
+      "bytes": 9885
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/driver.rs",
+      "sha256": "51a3ced870f28ee31c01ea2656911fbbf746b6f5fc7d38a08eebc6dc9d160590",
+      "bytes": 15271
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/mod.rs",
+      "sha256": "63e9f8a6be829f5bfde57901798b05c4db7e3924dd13c806d3305e5a9caeb794",
+      "bytes": 223
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/service.rs",
+      "sha256": "9272e84f747871573bded5752583946d5c7c95d6970653ca84783cb696b55ef8",
+      "bytes": 38854
+    },
+    {
+      "path": "crates/aq-server/src/updates.rs",
+      "sha256": "ec68ce0b0eb1cd0d4ca32d450ea4abf56fb24bfecf27d3b3a659c5a4fd29b142",
+      "bytes": 13053
+    },
+    {
+      "path": "crates/aq-server/tests/playbook_bridge.rs",
+      "sha256": "aeaa82f6c122d91c57524a66f7ef9679d6a9d8e1492bf67c67c1d21c3d6572a1",
+      "bytes": 39603
+    },
+    {
+      "path": "crates/aq-server/tests/playbook_contract.rs",
+      "sha256": "adbb7c833937a207156d3b5b6d9a77daa83c3418c0461fd9817a6a48830177e3",
+      "bytes": 2512
+    },
+    {
+      "path": "docs/implementation/AQ-13-durable-bridge-design.md",
+      "sha256": "178472b329008d5c50faf2a2da30b9bdf993277943fc5684d82ba05f5b89961b",
+      "bytes": 10493
+    },
+    {
+      "path": "docs/implementation/AQ-13-first-bridge.md",
+      "sha256": "d2f5f64a11b40cb80eb6f3fd940c8bec63561b9634d7f76476bc9d792f283bbb",
+      "bytes": 5722
+    },
+    {
+      "path": "protocol/playbook-host/v1/README.md",
+      "sha256": "68a335c28552f00942d84248a504263ff3b41443692d851c4244d142320f8cfc",
+      "bytes": 1641
+    },
+    {
+      "path": "protocol/playbook-host/v1/fixtures/message-send.json",
+      "sha256": "c712bba9cf52aeb0ecae76d7f1705754f0b2a8aa18dc38317f8cfa0e0676f82c",
+      "bytes": 347
+    },
+    {
+      "path": "protocol/playbook-host/v1/fixtures/queued.json",
+      "sha256": "8d828c930c6b1146602253f33ce292aa8980d91a5427810994f8a460d4ada48f",
+      "bytes": 569
+    },
+    {
+      "path": "protocol/playbook-host/v1/registry.json",
+      "sha256": "8a029cd973bd3eda17344b85beba4d55841751c91137bccb4dc67bb692452835",
+      "bytes": 10470
+    },
+    {
+      "path": "scripts/check-playbook-source.py",
+      "sha256": "a67309cd7a1b822c8f95b6eb8436dbf680fe153be7d525761c286024d033902d",
+      "bytes": 1118
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/.gitignore",
+      "sha256": "98b08a2cf6f85e68f35ba6ae055fd61c4f9240fc751ef4a84f128375e2fa4604",
+      "bytes": 31
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/Cargo.lock",
+      "sha256": "aea2d6f1a789912d77a687722b779c778aaec0202bb0b370305fcd6cfcc260ef",
+      "bytes": 29670
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/Cargo.toml",
+      "sha256": "9768bc441dca167857102803089b3432164eb9f45f57177c6db9d6a9c3accb1a",
+      "bytes": 849
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/README.md",
+      "sha256": "d843d1a3b8d7a15b380bb21776e804f8c5798c64b5b437c7488ff268a4673fde",
+      "bytes": 5829
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/Cargo.toml",
+      "sha256": "da8bb2afeca763bf37f343ea13ac3f65828d91f772682b419baa072ec45db1a7",
+      "bytes": 441
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/examples/measure.rs",
+      "sha256": "b39ef7e33c415802d9df191363b6e8d9adf7218f833cd602b9d6898ce1f94a36",
+      "bytes": 1749
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/catalog.rs",
+      "sha256": "7409bb6622d5920f9d185a47a3328c7964fe9df7162a082eb794d2abf3b38243",
+      "bytes": 11445
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/configuration.rs",
+      "sha256": "5a3c0d8d509cce48d714ed3c54d2f2404b0e3ae0838221aef16aa3e57a7879ad",
+      "bytes": 3681
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/fake_host.rs",
+      "sha256": "c83587e738aad6be2e8a2a545ab5b003ed314c11291be4953d6d1928bcb2f47e",
+      "bytes": 61297
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/lib.rs",
+      "sha256": "eb0eaa6169a11c16dcb74441b13ac87eaafc70bd0d401a123de1e34caea5c1af",
+      "bytes": 96
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/main.rs",
+      "sha256": "0f260f6614290b5677c0d6626e2f6fcce0c1ec3da3769f7fed91022d7c9b0cb2",
+      "bytes": 17812
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/pilots.rs",
+      "sha256": "09b996751279dc38d2a63e5ae3404f81e745d78bd82a75bf1b218dca97183b42",
+      "bytes": 29619
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/src/simulation.rs",
+      "sha256": "14fbe13d0eb813f8bee61df25af12da849e90abc601eba393db7f4fec2a5d689",
+      "bytes": 6035
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/tests/admin_cli.rs",
+      "sha256": "9fad52bb3109689aa67cd50b215e37bcdee708fd241870800bb0371260fca75d",
+      "bytes": 7208
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/tests/cli.rs",
+      "sha256": "29569b4020c505990f874ea0af95f1c9df98b24208edbb216819da2f8f178501",
+      "bytes": 2855
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-cli/tests/host_pilots.rs",
+      "sha256": "d7863a0e771bca4892c6d657ecd560e51aaf173a6f9186f954a32dcc7d9300f3",
+      "bytes": 13880
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-compiler/Cargo.toml",
+      "sha256": "4bab98de3d251da268079e2a224543814e995a71fc1db10b17e168d843bce68a",
+      "bytes": 220
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-compiler/src/lib.rs",
+      "sha256": "ef98e3e17b632921058f1ffd823343b46f939d3d16c7796f19823e552a9035e6",
+      "bytes": 34099
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-model/Cargo.toml",
+      "sha256": "538837919e4326f062c0516b49b55d5659113c95d94c3433acb2218b401d00e5",
+      "bytes": 203
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-model/FORMAT.md",
+      "sha256": "3240592cbab00a51f554fe28edf7b4b596198e936841eb8b3889d43d39864c45",
+      "bytes": 4229
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-model/src/lib.rs",
+      "sha256": "f8a3bbafc113d1b96ba73d39b23ac4ece0aeece77a02c3b9ef014bbf0702150d",
+      "bytes": 108411
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-model/src/schedules.rs",
+      "sha256": "f29cfd23d9d8157a2e634610467986f7c2db00a17a5270ecb3598a8f46a059a3",
+      "bytes": 10570
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/Cargo.toml",
+      "sha256": "d0f3b08ffffefd3bbedb43de3cfa6cfa7128e8fb58354b02c22c7acc11b4bd76",
+      "bytes": 346
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/README.md",
+      "sha256": "9643c6fa0dda7a131bd9f3a6b8caf9f5a433081518f995a224e32a49fc6d68f1",
+      "bytes": 8358
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/admission_benchmark.rs",
+      "sha256": "a624a65b138d00f456d1976b38f0281ce1b69dcad74d543d18cc3f6c88360938",
+      "bytes": 3750
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/keyed_receipt_probe.rs",
+      "sha256": "2407ec3f6e8c1305328c0d7e2dbb6f9a9f6753c3690cfd02526f1e92b1453ea3",
+      "bytes": 1289
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/operating_envelope.rs",
+      "sha256": "db17d65f14b73d44923522ce6ff537abff978823d50591a866a4a0259e16b049",
+      "bytes": 27856
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/rooted/admission.rs",
+      "sha256": "354b7db996116bd28576cc8c2dc043d02e634dc755a41adafbc37c3c5f1fddd0",
+      "bytes": 10352
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/rooted/checks.rs",
+      "sha256": "e28ab47922432bf190eb8be57ddcdcf9ab03b57b81ba2933085674e50158d433",
+      "bytes": 12332
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/rooted/fixture.rs",
+      "sha256": "1715f86430dffae30cf9ffe6b449bd4d235db5d4c525bdf70a67ce3ee8ccbfa1",
+      "bytes": 8756
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/rooted/tree.rs",
+      "sha256": "dcabd9f7b546aa450182f770da187eb8f21acf56f561e5a0309440ae54667bd3",
+      "bytes": 21467
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/examples/rooted_admission_prototype.rs",
+      "sha256": "eec7afecb97c0dd0eef9a05fbba84f375dc636f49747cdb6648c075221a89ecf",
+      "bytes": 8058
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/migrations/0001_initial.sql",
+      "sha256": "da9232069be4d0093d468bab740a9cee64915e80f648c37762d38a86ae1cbf33",
+      "bytes": 1384
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/migrations/0002_indexes_and_protection.sql",
+      "sha256": "7d9c0217f74b0c321d5ccabf07be178838cd4bb1ca6a83026aba12cd74e0afcc",
+      "bytes": 4220
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/migrations/0003_keyed_admission_writer.sql",
+      "sha256": "ab683d7a617cc99cee3af34c24e520c31e3857769daff1e8844fe9beec4003ed",
+      "bytes": 1401
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/scripts/benchmark-envelope.sh",
+      "sha256": "bf5ec1b52e58ec9bc19bb63d493ab67931c29969e0887c5d1543d58b1106d986",
+      "bytes": 5230
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/scripts/benchmark-rooted-prototype.sh",
+      "sha256": "3fde7372352203da48cdc78621aab19f8702544d310365d65e1c1b0fd6aaebf4",
+      "bytes": 5121
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/scripts/test-postgres.sh",
+      "sha256": "0654f4a71e99b4c75a81926ca7284c3cfbfe53e3df2c7e349b05f7a330a4abba",
+      "bytes": 1306
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/indexes.rs",
+      "sha256": "de2c79b08f6fe321e516c8cfb1f8a7fcaf306246b04dbc8dc8b3ac7720c8233d",
+      "bytes": 21566
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/lib.rs",
+      "sha256": "29f12093abd0477292d673a38526af6c8ff991cfff0693b9eedba0b1d5db54bb",
+      "bytes": 27114
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/profiling.rs",
+      "sha256": "9ba794011a3f83983a993cf79dc2499b490ea4766ff1b5d52ef65e755b933274",
+      "bytes": 7094
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/projection.rs",
+      "sha256": "1bd6cf5a58d668fbfb91a10b2a678e4fef64be2d08c30d5a9fae866672e07805",
+      "bytes": 10818
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/protection.rs",
+      "sha256": "96560a8693801ecbc349ef8674f5ffbb6f9df2370880a9e1895679423ff3a782",
+      "bytes": 6988
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/src/retention.rs",
+      "sha256": "75e3a4ec575c0aefaa3d7031efdd902212813d3d143ee155ad955c23cb2efd40",
+      "bytes": 9520
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/tests/keyed_admission.rs",
+      "sha256": "78fd307809f70847dbe8c2620f6d219de69aa25d67ec33437af1ec12e67ad305",
+      "bytes": 4665
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/tests/persistence.rs",
+      "sha256": "a4bb5f7d0ebeff92f90aea005eba601381c9ae7bcb60fd108cdf09acd76aa753",
+      "bytes": 9627
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/tests/protected_indexes.rs",
+      "sha256": "86bfbcf88259342f1f421a3991955f0d049d92231209826be9f100b8e451f688",
+      "bytes": 45110
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres/tests/support/mod.rs",
+      "sha256": "d819fdff6be61d9903c9278e5efb9bbf57962b1bc2e3e8ab2da711811f8e8b44",
+      "bytes": 6898
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/Cargo.toml",
+      "sha256": "713acfae0372a5b3858f9bf83c9f42b0aeca6b0172c604bfb2535d3f5bad9632",
+      "bytes": 254
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/README.md",
+      "sha256": "f0735ebf4ef7b2f98b8a9ea03e29fb0488605ac2946a76a6038517bb65e824ea",
+      "bytes": 6791
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/admission.rs",
+      "sha256": "5c84eb075c78c9f4ccc6b1ceb875ee708e9f8c4adc242e869a8eea1f7429d9ff",
+      "bytes": 7477
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/indexes.rs",
+      "sha256": "182cca1e9d757d0ba5846e15f18ca2bc030bc4a56cf581a6e600e8a606f40f2a",
+      "bytes": 29538
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/inspection.rs",
+      "sha256": "f218d99328db6feacfb50c22084beb6b122a50a4ff9a53a379b7ffb6cabaf3ae",
+      "bytes": 7685
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/lib.rs",
+      "sha256": "bed68b90c480300138b58e07b792177290e974a40c5d5388709238ef3269ccaf",
+      "bytes": 116612
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/metrics.rs",
+      "sha256": "b8d661be04c4b9a7069eb358b2686fc413940b096c5902c1455bced06fff8f9c",
+      "bytes": 10035
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/retention.rs",
+      "sha256": "5bffa1317bce4c80511747713d82d845c0738298d3fbeeb887640c292817ef2a",
+      "bytes": 16527
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/src/storage.rs",
+      "sha256": "a6963b575192c75d9caf161d9dfa91c9cf4b52aa79b50bc92b7121535da19e53",
+      "bytes": 4767
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/tests/keyed_admission.rs",
+      "sha256": "3179f9ff4216898d21bef2051c6f0fab7efae59dae0377ff0c38f39095619bdc",
+      "bytes": 11848
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/tests/review_regressions.rs",
+      "sha256": "84796370502973175891504e6b04e4a0626af0b994b8fbc8275cce3929085ccd",
+      "bytes": 47636
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner/tests/semantics.rs",
+      "sha256": "aea2525b3499f96add4edbcd29f5c92b737a6094d0b02c8d7471f5cca0ccc215",
+      "bytes": 55420
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/acceptance.md",
+      "sha256": "83af3049b4cc7954c0fe2dc80b55a26ca931d6aff3ff0297e209007787fcffa6",
+      "bytes": 8922
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/aq-host-integration.md",
+      "sha256": "19d8f069e75939c003f46527ade5f759529932f39f9ee9592cf76d5804595c6c",
+      "bytes": 8368
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-02.json",
+      "sha256": "6124fcad4f293dc0660a94d19cb3acf4acd9014425542ed1b234e5f582c97ab4",
+      "bytes": 8209
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-02.md",
+      "sha256": "cbdaac3923a0dff0f3b424bfc70a1ea5b3e903b714265406d16468903c58052e",
+      "bytes": 10717
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-02.optimizations.md",
+      "sha256": "20b462497e6e2a628e51713ae1f5136c2c186687676cdbfefa5806d4f91b6243",
+      "bytes": 4209
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-02.results.json",
+      "sha256": "ffc42f9bf6fa38c1f6f39fe336668030875be1fcc940f6aa15aac30749dd31ec",
+      "bytes": 369699
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-02.source-reconciliation.json",
+      "sha256": "b4f08cc31f304e2d743a83ad40681b1fb843d24e6b27e9e79acc7057bb38857b",
+      "bytes": 6525
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-03.json",
+      "sha256": "8d740140c8c1e9b278d00485a6a56f5c41326dae76f2ba697c3b6f301f222e4d",
+      "bytes": 8686
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-03.md",
+      "sha256": "1667c0f9a3af0a83b3ddb406738631d650cc89751b00e3b0eaa48ef52e4716e8",
+      "bytes": 8541
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-03.results.json",
+      "sha256": "23aa2475ff4796a9dac88e3a2f9291c42d9ece5fa7be731ac0e535e9d611cc98",
+      "bytes": 711274
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.lookahead.json",
+      "sha256": "8d275791396d273847daff11a782d92ddfa63125c22860689a95803e89f03047",
+      "bytes": 31460
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.lookahead.md",
+      "sha256": "29b0d0221c1b3771152dde3f3596e1a4fdb45cf5ee2f8b0f1aa9a16fbc306940",
+      "bytes": 3037
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.proposal.md",
+      "sha256": "674d285234bd1e247317e090023b5767139e4b6f7de99aef292e30527d8c4c94",
+      "bytes": 9658
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.prototype.json",
+      "sha256": "8ef14a8bd109fef328a9538ffa914c4b5156184bf46020c940ea89480db5bf16",
+      "bytes": 16198
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.prototype.md",
+      "sha256": "8b776a85fd7c627c3e7cfce4f36e7df5c0dc69d5efb682529b36a0531ca47be9",
+      "bytes": 14157
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.stage-a.json",
+      "sha256": "11f15974d6dd204a53bcf312394b4d83509e7105ac9fce03eb4fc32c3fab0b56",
+      "bytes": 11936
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-04.stage-a.md",
+      "sha256": "4b11faa497755df828e063ce924557a54e431ac442d6d6e494eecfedd1fc1e65",
+      "bytes": 4698
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/PB-keyed-admission.md",
+      "sha256": "ae101105bc6684f5aa2955d274ece3aaa30221b0e0312d379a5d06939d01950b",
+      "bytes": 4646
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/SHA256SUMS",
+      "sha256": "55dea4227ab8a1c0592d3f785da44f5cc32eab031fe7eb7ab7f49b5feaac6beb",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/binary.sha256",
+      "sha256": "fd76a70ad04c0eaacb7a35f6d7d5dad7c19be48b9e6af0a754b5ef43fd6b2c6d",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/build.log",
+      "sha256": "64d0cbd4b7e4c6329fde55978dd3d261407b55f34c21add0feebf7e0575ee531",
+      "bytes": 62
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/container.id",
+      "sha256": "564083ac86821ac11591e0dd818c14eac0c54460c8e9445d8522c785e1789248",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/database-cost.json",
+      "sha256": "40bd665f03b9cfdae61522071d6d95ccc3a679094cdd6f2370b7b84a2aab0276",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/database-resources.json",
+      "sha256": "ef98e4b3ced360c369a8a7d7aa2801fbc533feeabca8a76004909a8218a02b4e",
+      "bytes": 244
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/database.log",
+      "sha256": "dca632bae89b0a802576d5d763a7d428b6407e5e0346758e2ee20947efe4e38b",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/environment.txt",
+      "sha256": "346670720d0988b3d678c85b842efabf469b47a9f0eed3c4d6b8079eb2cb159f",
+      "bytes": 511
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/loadavg-after.txt",
+      "sha256": "2845ed43bc9b681f5721f34753e477a665c3fc18c094f1fa33cf500e435ba8f0",
+      "bytes": 31
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/process-time.txt",
+      "sha256": "b2e24fc2dcf7ef829d191f57d0f76684a715f54ee1f83e7f6c672e3e7a62b685",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/results.jsonl",
+      "sha256": "1e1f45ed177813f5f6b9f3d5366be47925d84d07f027130161f227c221e72365",
+      "bytes": 36345
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/batch/source-inventory.json",
+      "sha256": "f0a3154346413650b40fe44f81790cf11a924f145aa6745c9e2241a3a3418fa1",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/clippy.log",
+      "sha256": "e2bc94f4587e11158b3ddb56f0962b4c4d70100e68e6c3bc8319cbdcd302fc42",
+      "bytes": 167
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/SHA256SUMS",
+      "sha256": "521e7e031ecb1511411d4771a5adfe052e3aa8f9b1c6f1147c16d1a928764c7d",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/binary.sha256",
+      "sha256": "60f5a082efe316bba54260f151d799ec98c3a5afe54c9a91216263758df21045",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/build.log",
+      "sha256": "765f1396d07f30f3a451cd3f9d9cad4e83c92c8e0aecf955ffc09061a6cf1e02",
+      "bytes": 62
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/container.id",
+      "sha256": "c0943e21fec89c7ebfbd772f284147c4ab35a74984346e500b160cecb0533459",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/database-cost.json",
+      "sha256": "f32f7dc8494c3000ba5645fb1f9d62a7a7a07c6cc580cc811b9bad5b30f4ff0a",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/database-resources.json",
+      "sha256": "df0b28955901cc8db44f280b60fc2cb9f427b4de58c39927ac0b1a7a047feeaf",
+      "bytes": 247
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/database.log",
+      "sha256": "51bb2959f53178900ac4e6dc187cef3c21106989ec8ad2dbbb1e48a15bb42321",
+      "bytes": 3233
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/environment.txt",
+      "sha256": "2bf3200135c4ac2d1c6ad778e25c156c4e82502bcdb538cf79fc5933b9bca231",
+      "bytes": 510
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/loadavg-after.txt",
+      "sha256": "7cbb194585b0bb4f689ddaa47edddce22631cb2185d18e9496fe1980dd30258f",
+      "bytes": 32
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/process-time.txt",
+      "sha256": "44775b1087f16f02d4cc72a6c0a23a2550f4f70c7eaf1d8b4e3cff9e02bea133",
+      "bytes": 790
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/results.jsonl",
+      "sha256": "36fefedd501108315dd28dab7d00db1ab600ee66ffeb41dcc0f30527b17f0147",
+      "bytes": 36396
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-batched-6090be7/source-inventory.json",
+      "sha256": "d5d76ec1245789c113e13ede14a059a98038b22ffab4d9774b08f7956d5089fb",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/SHA256SUMS",
+      "sha256": "5120e49c5c96c90ab5411505e29dd936c49c84517322d25dd213f8f915fab176",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/binary.sha256",
+      "sha256": "60f5a082efe316bba54260f151d799ec98c3a5afe54c9a91216263758df21045",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/build.log",
+      "sha256": "8cd2ad3832d5576f6c55874351a425fcd584d307e9286d33d732de755bdc26f9",
+      "bytes": 158
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/container.id",
+      "sha256": "ece36c88b548700ad319921c2b5f361ba3aaee517762d157b72bcc4475e3b862",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/database-cost.json",
+      "sha256": "718cc91310b841c9c3c50961f30cb2dc0fbb3a1d6da4d66f07cfb654d852f7aa",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/database-resources.json",
+      "sha256": "744c4903f6cfcf86a3c234b54ffb64cf35ac09f2003317aeb00182591ce8ae5a",
+      "bytes": 247
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/database.log",
+      "sha256": "d26a9fa42e8844c8ed12cee21310fbfceae9f30e6afa48de4d1872399964f848",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/environment.txt",
+      "sha256": "f2bbf94b8c1c6ded8cb33a77b51223091a25f84d4959be6dce205ab5cd295717",
+      "bytes": 510
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/loadavg-after.txt",
+      "sha256": "44f4e198bda1a6fff7e0907499ad73474c06170dff252f747984c7b4db793e6b",
+      "bytes": 30
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/process-time.txt",
+      "sha256": "f873608bb5c59a6dc77137ecde51283a1545c92dbc7727c82d08a5d2bb7b74ff",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/results.jsonl",
+      "sha256": "672574888ea90fd63828c311758331128552295e339c3f8f56d16b2d7018c8b2",
+      "bytes": 36418
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-6090be7/source-inventory.json",
+      "sha256": "d5d76ec1245789c113e13ede14a059a98038b22ffab4d9774b08f7956d5089fb",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/SHA256SUMS",
+      "sha256": "4abb552aee98ba5ba29af27e6b9bb7c9ef34a93e249285e44221a493ac08efa6",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/binary.sha256",
+      "sha256": "fc567161dbb21a7fe30d024ef9df49c37d9e169463f7125e8ca842c0d3a1079b",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/build.log",
+      "sha256": "6483160f6f23e1f4e2bf10055f69faa413b9a4d040e8c472c824b08f91a58565",
+      "bytes": 158
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/container.id",
+      "sha256": "014b9dceee4c21ac5670e695b14b1eef88712a55f796548136edf8cad08d5a49",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/database-cost.json",
+      "sha256": "71749897b52ce246ca807c792ecf7560ebfe30bac1d16c3e9e1f84f5f1ace38e",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/database-resources.json",
+      "sha256": "2a940a648b62928d2813c77a9d6f7c4334711b519957cd9afc12d0bff6298a92",
+      "bytes": 246
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/database.log",
+      "sha256": "728e4aed3eeb8749d21ba0109137e96e43a407b4eae9f4b4aaf45c8ff6b8d961",
+      "bytes": 3233
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/environment.txt",
+      "sha256": "632e7509b6950c85ee35ed8aaad06882f8ba543b7188f06cccb7c52e04e32bbb",
+      "bytes": 637
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/loadavg-after.txt",
+      "sha256": "ab62be4b670397d42d043a91195a02ee90c0e88b9505d35f42a2a1ec429b4c89",
+      "bytes": 30
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/process-time.txt",
+      "sha256": "cfac8fdc575626fbb4b72b4cffd72637e0e4e565b9d15857252d6e59affb6954",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/results.jsonl",
+      "sha256": "c318670f6e7de4935f65ea1bb9542e77dea6acff130391da41f37cb7d687913b",
+      "bytes": 36292
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development-2/source-inventory.json",
+      "sha256": "eb15672a3463adedddeb567ff50c3ecdbd2f925db37758ac0c37c63ff8d027a9",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/SHA256SUMS",
+      "sha256": "53d7da5f5522804b9ee2e1e5d5a3f3331afd18210ec63f352b99a4fb1c5cfa45",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/benchmark.stderr",
+      "sha256": "cfe67d06356a79e6dd6ef714c6540f66ee9c2fedd9eb4e70f672f25c2e0c4f17",
+      "bytes": 34
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/binary.sha256",
+      "sha256": "ad55db8b809197eef9f54db6699bf8ecec190437b3d1db95b0ecc7eb8039d6b0",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/build.log",
+      "sha256": "0420ecadfed7b8ac81d7bbbf7db45a40f0e73140c191b178e57b55a6ee8c2669",
+      "bytes": 2973
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/container.id",
+      "sha256": "51fbee1629167e8b5dc333d1eba95efe489aab672c638546ebe59682eb96b3e4",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/database-cost.json",
+      "sha256": "b803b4280f504ede3d042342990cfabf9e8a345220a8c3f36ad8a4046220ebb5",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/database-resources.json",
+      "sha256": "db4df2b23fd8f44b99b0462563fad4d87aeae0f189414f4801e3222193265046",
+      "bytes": 245
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/database.log",
+      "sha256": "12d182375a1e6e4863a3de89ff8968b977229cc1f1701bd04c4025ddea8b21d7",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/environment.txt",
+      "sha256": "60bcfcb9148f510d9537d8922f336d9ec847b34ef4f7b380fea6c9f142ff2c58",
+      "bytes": 567
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/exit-code.txt",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/loadavg-after.txt",
+      "sha256": "a0bf05a0a9cba719f0ce8ae8c66d889af0e463eb4599542f03691c930a22d7b0",
+      "bytes": 30
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/process-time.txt",
+      "sha256": "acffb431986ea300c72ea601186840d716c8205f8ce993cd388487092edfb600",
+      "bytes": 825
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/results.jsonl",
+      "sha256": "82efea84ca566f69ff00a58594c34ef6531c311217b1e016aee8ac0c40422aa1",
+      "bytes": 35734
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-lookahead-development/source-inventory.json",
+      "sha256": "f8a1986441632d8ce9e99ab05683f3ee9841286cd6b07056e76c0645672500a8",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/SHA256SUMS",
+      "sha256": "defbd6fbdabb2545df6353dbbcf65754149cd4cc5289ba6b2ac49e46887f607f",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/binary.sha256",
+      "sha256": "fd76a70ad04c0eaacb7a35f6d7d5dad7c19be48b9e6af0a754b5ef43fd6b2c6d",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/build.log",
+      "sha256": "9fd6bb8daeb50fb34f41c39083317c95e16d07ad64e3918bc3d75198ad0022ec",
+      "bytes": 158
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/container.id",
+      "sha256": "a162bbcf1e663afe857f3cd814652f914a077dedbd001b660fc5b4f27dfec532",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/database-cost.json",
+      "sha256": "264472b4d2be1107496ebba364257b878119bc07fe9b26ad8501eec6725c4955",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/database-resources.json",
+      "sha256": "adad61e85fdd9d844fd5c9a52b5b0034a38a449fca1cd31dd4650b9f86c6aed3",
+      "bytes": 242
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/database.log",
+      "sha256": "e493099b3acc143ac9fa6b539726dbf109f007a5a50d6c6731d48eb4a1c11e46",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/environment.txt",
+      "sha256": "cdd8653047af4eae5274c092dddccc7a00fb0d61ad6b52b79dbb2be6a9e8e361",
+      "bytes": 512
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/loadavg-after.txt",
+      "sha256": "9b622fae92a6332485326d76600383202dabe047fce68874c6a78e6b94a0bd35",
+      "bytes": 31
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/process-time.txt",
+      "sha256": "afc02e0b53b2e908ee82e2895268dc9c1c5ffc8356a0b2fb779c75747a58a126",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/results.jsonl",
+      "sha256": "f8bfc690904b7f342d4aaa9c5cd37c7b8d7748a6fa1fa9001b0ec0250b69c2a2",
+      "bytes": 36370
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/development/pb04-map-lookahead-frozen/source-inventory.json",
+      "sha256": "f0a3154346413650b40fe44f81790cf11a924f145aa6745c9e2241a3a3418fa1",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/SHA256SUMS",
+      "sha256": "15804689ddca753f74004e647b1a57ddd671672bc15691b91f7060e5ab261274",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/binary.sha256",
+      "sha256": "fd76a70ad04c0eaacb7a35f6d7d5dad7c19be48b9e6af0a754b5ef43fd6b2c6d",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/build.log",
+      "sha256": "0b5fe2277fd2b29cc111b76604c482f8ec516047dbc0954657203c5614f4e4db",
+      "bytes": 62
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/container.id",
+      "sha256": "ae7ae56738524d436a1610a41c55c4a37f245e3427f052e790103076622fda1e",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/database-cost.json",
+      "sha256": "a43ed7126574002661a124c056a802d64f12228a0736c5d21e1101d30496d2cc",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/database-resources.json",
+      "sha256": "08f7d296ece0b7f9c21598da115084b0f4a63fa3b0939ad97eedc97068f4cc5d",
+      "bytes": 244
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/database.log",
+      "sha256": "b98608c15f46b1f637a1b36c2ba74156894a588ec3a054e4919252ebc3ceac75",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/environment.txt",
+      "sha256": "06884c9a00ca7fe4caad5d22a73bbbf9d087ff0f566c3c4533113ec647ef2438",
+      "bytes": 511
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/loadavg-after.txt",
+      "sha256": "3a9dbb3397c2d486d83c8b75083329c416fb5265c0876ff734bc5ee17b0cbc33",
+      "bytes": 30
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/process-time.txt",
+      "sha256": "32eddd1993e6e856159a4ee186c9d9352b94d4f0ef19be9ffa4a36bbe00fac86",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/results.jsonl",
+      "sha256": "ceedbb93b46639f1b3ea70e4c31c6f117b9d521e80c3c921a8b6cf8332b04898",
+      "bytes": 36370
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/map/source-inventory.json",
+      "sha256": "f0a3154346413650b40fe44f81790cf11a924f145aa6745c9e2241a3a3418fa1",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/SHA256SUMS",
+      "sha256": "9f083c5ea82425afd6c6ad743b67819a6c1654dfe2705ac54ba970b5cf0803ca",
+      "bytes": 1521
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/benchmark.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/binary.sha256",
+      "sha256": "fd76a70ad04c0eaacb7a35f6d7d5dad7c19be48b9e6af0a754b5ef43fd6b2c6d",
+      "bytes": 117
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/build.log",
+      "sha256": "92434e198f27984c035c376ec77a7cf9e6ebdde782f8ccb1336ae3329b66ddb7",
+      "bytes": 62
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/container-host-config.json",
+      "sha256": "0f16539e922574ea0e64b2640db717895804e07327aefc9a7a1cf62722d88eea",
+      "bytes": 1555
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/container.id",
+      "sha256": "0d160a115feae5d756d9042687eec93b167dedf3ac310a6383f1729bc71777b5",
+      "bytes": 65
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/database-cost.json",
+      "sha256": "2a87589ab60c9308988c0a977892918c7608984b38b1dd3a66f12b65340503db",
+      "bytes": 170
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/database-resources.json",
+      "sha256": "4d502e122fe32bb0c4baf964eee0a1636da140bfed792e52ce5bd0f4796dc48a",
+      "bytes": 246
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/database.log",
+      "sha256": "d093b59cd35dfe42f08913ed719e3b10724c5c3dfef4c64f28512ad6a1369b32",
+      "bytes": 3232
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/disposable-marker.log",
+      "sha256": "eb3311c0cbc42f7b8476f60032ae6e8f71b1bb33e5d448eaa0c79fb8d41dfd41",
+      "bytes": 24
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/environment.txt",
+      "sha256": "697303546000d1c9950e369216574c61ab830898417a477288e6fc4b5cff2311",
+      "bytes": 510
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/loadavg-after.txt",
+      "sha256": "2cbd383298042e592e458aa01258d65b04a8ca9481e5225dd40bf34a0c17ef32",
+      "bytes": 30
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/lscpu.json",
+      "sha256": "76c525659ba3c454e0e4a472b3dff196274ba3fe926e06123f71203f59ddf32d",
+      "bytes": 4409
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/postgres.json",
+      "sha256": "15efb4d8a0eac47d31d49d187fac9b6ba53a6aab30d118df3acb3cd7ea2d69ed",
+      "bytes": 231
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/process-time.txt",
+      "sha256": "5787238cd29935e45e61bf96d40c693e93b738c9c7af040c267944683c7acba1",
+      "bytes": 786
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/profile.txt",
+      "sha256": "0e716a5fef4e6dc1bcfff22ad52f73ca4eee3f4ea8292f4a1918daa32592889f",
+      "bytes": 5
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/results.jsonl",
+      "sha256": "1e3f18b18c19fcf8ac8373e1842f9c8b835fde24ca2551ff2dc608b975655c57",
+      "bytes": 36416
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/implementation/evidence/pb04-lookahead-082881d/values/source-inventory.json",
+      "sha256": "f0a3154346413650b40fe44f81790cf11a924f145aa6745c9e2241a3a3418fa1",
+      "bytes": 6444
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/research/0001-v1-to-v2-capability-selection.md",
+      "sha256": "9b5028cf62731dcadab3bdfaa578d3abfb038fd5e4413b92a7d980979a3210a2",
+      "bytes": 22369
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/research/2026-10-30-sdlc-policy-exploration.md",
+      "sha256": "23dc5415679fd8eec6fde3323d9c0d960b212e0596543a3061ee6dba5e7cf786",
+      "bytes": 38982
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/research/v1-command-catalog.json",
+      "sha256": "64da6e681b3a019d01af827778eade6d3824682340d585a8324d70b687a22562",
+      "bytes": 2515306
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/research/v1-command-migration.csv",
+      "sha256": "2d664ca7dcee2398a7f82dbcd2496a01d7827e268dba8dbbec1f577c65505d00",
+      "bytes": 206498
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/research/v1-playbook-inventory.json",
+      "sha256": "7b6e26002cd3a453f933b74cc6bfb1df60682e18cf64d08dfadacae8ba9291ff",
+      "bytes": 247530
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/scenario-dispositions.csv",
+      "sha256": "411c5b77b91d8b0f4bd4539141691e51838f7db28598ea463fad1f27f2988af8",
+      "bytes": 18968
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/specs/0001-aq-playbooks.md",
+      "sha256": "ce2ec230271ca5de963a82b18e01c92c05f6fdee0497c7bec9b6759deba17fcd",
+      "bytes": 68192
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/docs/specs/0002-implementation.md",
+      "sha256": "fe54c1e9ae73645474146ef268ad49caf01aeaee4d0329b5569ed650eb550a25",
+      "bytes": 9253
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/scripts/test-keyed-old-writer.py",
+      "sha256": "397b568d4d610dab154659518a1db68e1413a2806e4d1b060f5c74610cae5f89",
+      "bytes": 3703
+    },
+    {
+      "path": "vendor/aq-playbooks-a463e59/skills/aq-playbook-author/SKILL.md",
+      "sha256": "ff98977f625e34ed5e2c8b096a04b333b794245837324042d754005ae83e70d0",
+      "bytes": 2746
+    },
+    {
+      "path": "vendor/aq-playbooks-source-0.1.1.json",
+      "sha256": "b253cc1ce2116e3dba69bc67464142ddb34454d2a94a390b2725f59af5c62606",
+      "bytes": 56806
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/regressions-threads2.log",
+      "sha256": "ea1b8b53dac393c91d2a5a4528e974778dd9e5161a7d18164d7609b07ef5ee39"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/host-tests.log",
+      "sha256": "cd356b20592870d7640235d87589946738b78d50f4d1ee2c519e0b5b112bfc7d"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/host-pg.log",
+      "sha256": "20b1296e39df073a3d3033be9b2bbaf84c83e72712060da0a17fa1fb1b5df8be"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/clippy.log",
+      "sha256": "d0f733e126f694ee539c6ca1b6ea52496eef061a0973b2453446f170c1dd0926"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/host-clippy.log",
+      "sha256": "045184569aa4efcc7d491aebe86ba903f745bf370a7f7b26ea667431cf18d352"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/drift.log",
+      "sha256": "f9b1bf8c2dfaffaf0a6981007fee76410f72324ec6c23e6a36d0e1a82c4ad067"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/status.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/implementation/evidence/aq13-bridge-3503897/tests.log",
+      "sha256": "24ee5aeb39601723624f4627e2fc19e5c2afd77cdd5c78db8afa150d1446c7c4"
+    }
+  ],
+  "initial_failed_attempt": {
+    "log": "docs/implementation/evidence/aq13-bridge-3503897/tests.log",
+    "result": "execution21pass/10fixture-init failures; SQLSTATE53200 max_locks_per_transaction during concurrent disposable database migrations",
+    "disposition": "retained as infrastructure failure; unchanged source rerun with explicit2-thread fixture parallelism; no PG config/source relaxation"
+  },
+  "not_qualified": [
+    "ordered022/023/024 migration union",
+    "automatic daemon startup configuration/background driving",
+    "full context/work/operation adapters or central supervisors",
+    "B2 eligibility, human approval or executed checks",
+    "corrupt-outbox quarantine/retention/physical disk capacity",
+    "25ms PB04 budget",
+    "native harness/provider/Discord delivery",
+    "full workspace regression suite"
+  ]
+}

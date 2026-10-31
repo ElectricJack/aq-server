@@ -1,0 +1,138 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/authz.rs (/tmp/aq12-playbook-host/target/debug/deps/authz-5e97f610fa71e811)
+
+running 13 tests
+test bootstrap_disabled_blocks_owner_creation ... ok
+test bootstrap_happens_once ... ok
+test concurrent_first_logins_bootstrap_owner ... ok
+test concurrent_first_logins_invited_viewer ... ok
+test first_visitor_is_not_owner ... ok
+test configured_email_bootstraps_owner ... ok
+test mutation_with_foreign_origin_rejected ... ok
+test invited_viewer_binds_on_first_login ... ok
+test mutation_without_csrf_header_rejected ... ok
+test mutation_with_header_and_matching_origin_allowed ... ok
+test unauthenticated_without_token ... ok
+test no_cors_headers_emitted ... ok
+test viewer_cannot_call_owner_route ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.60s
+
+     Running tests/execution.rs (/tmp/aq12-playbook-host/target/debug/deps/execution-a25cacd74ac1806d)
+
+running 31 tests
+test accepted_result_cannot_be_retroactively_cancelled ... ok
+test acceptance_replay_is_durable_and_does_not_extend_authority ... ok
+test boot_replacement_requires_stop_and_old_results_never_settle_new_authority ... ok
+test cancellation_wins_before_result_and_retains_late_output ... ok
+test cancelled_unaccepted_offer_never_queues_an_unknown_process_directive ... ok
+test authority_decisions_use_time_after_database_lock_wait ... ok
+test concurrent_claims_for_one_task_leave_one_unsettled_attempt ... ok
+test conflicting_task_claims_on_different_nodes_share_one_central_fence ... ok
+test control_auth_and_operations_survive_full_general_pool_and_bulk_saturation ... ok
+test corrected_reports_preserve_original_immutable_body_and_admission ... ok
+test decline_racing_acceptance_either_fences_launch_or_requires_result ... ok
+test execution_http_authenticates_node_binding_and_keeps_routes_separate ... ok
+test expired_unaccepted_offer_and_explicit_decline_release_task_claim ... ok
+test expired_execution_remains_held_until_stopped_and_reported ... ok
+test fixture_assignment_requires_owner_dev_mode_and_sealed_inputs ... ok
+test explicit_recovery_permits_only_exact_boot_after_all_writers_stop ... ok
+test legacy_report_history_prevents_nonstart_release_after_projection_downgrade ... ok
+test launch_uncertain_evidence_cannot_be_downgraded_to_nonstart_release ... ok
+test no_start_decline_can_reconcile_terminal_unaccepted_old_boot_offers ... ok
+test maintenance_preserves_authorized_cancellation_but_blocks_new_fixture_work ... ok
+test observation_replay_cannot_regress_or_resurrect_stopped_processes ... ok
+test reconciliation_does_not_extend_grants_or_take_over_old_incarnations ... ok
+test recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance ... ok
+test recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_production ... ok
+test renewal_replay_preserves_expiry_and_rejects_stale_sequence ... ok
+test released_report_correction_cannot_reacquire_a_successors_task_claim ... ok
+test source_nonstart_exception_requires_no_prior_execution_evidence ... ok
+test repeated_cancellations_coalesce_one_worker_directive ... ok
+test source_pending_operations_hold_claim_even_if_report_omits_them ... ok
+test source_results_require_owned_retained_receipts_and_cannot_erase_launch_evidence ... ok
+test unresolved_external_operations_prevent_replacement_even_after_stop ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.83s
+
+     Running tests/messaging.rs (/tmp/aq12-playbook-host/target/debug/deps/messaging-505468c132edb057)
+
+running 11 tests
+test bounded_inputs_auth_capabilities_and_online_expiry_cancellation ... ok
+test cancellation_and_revocation_serialize_before_new_admission ... ok
+test concurrent_sends_have_gapless_durable_mailbox_order ... ok
+test credential_expiring_while_waiting_for_operation_lock_admits_nothing ... ok
+test durable_identity_scope_cursors_receipts_and_restart ... ok
+test node_delivery_replay_unknown_stale_and_harness_handoff_are_distinct ... ok
+test inbox_and_body_refuse_expiry_during_database_read_lock_wait ... ok
+test node_poll_requires_read_capability_but_known_delivery_ack_can_finish ... ok
+test owner_route_checks_role_csrf_and_known_task_identity ... ok
+test small_profile_reads_non_ascii_body_in_bounded_utf8_chunks ... ok
+test successor_reads_task_mail_but_cannot_consume_predecessor_session_mail ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.52s
+
+     Running tests/playbook_bridge.rs (/tmp/aq12-playbook-host/target/debug/deps/playbook_bridge-d8c4d4158e953849)
+
+running 11 tests
+test actual_engine_commit_lost_aq_ack_recovers_same_run_after_owner_restart_and_revocation ... ok
+test actual_http_renew_cancel_progress_while_real_mail_host_exhausts_bridge_work_permits ... ok
+test cancel_before_owner_admission_prevents_effect_and_after_queue_is_too_late ... ok
+test actual_protected_engine_host_queues_one_message_and_replays_fixed_event_outbox ... ok
+test expired_admission_page_is_held_without_starving_later_current_grant ... ok
+test expiry_after_mailbox_lock_wait_rolls_back_new_message_and_outbox ... ok
+test mailbox_and_outbox_commit_once_and_reconcile_after_revocation ... ok
+test optional_http_mount_requires_owner_csrf_and_only_finite_controls_survive_maintenance ... ok
+test protected_admission_conflicts_and_engine_receipt_ack_are_separate ... ok
+test quota_refusal_rolls_back_mailbox_and_event_but_retained_exact_replay_works ... ok
+test runtime_adoption_fences_old_sender_and_delayed_old_initializer ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.73s
+
+     Running tests/playbook_contract.rs (/tmp/aq12-playbook-host/target/debug/deps/playbook_contract-b27d054b1704e803)
+
+running 2 tests
+test graph_read_capability_does_not_authorize_mail_and_exact_session_scope_does_not_retarget ... ok
+test registry_and_public_mailbox_dispositions_match_generated_profile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/readiness.rs (/tmp/aq12-playbook-host/target/debug/deps/readiness-ad39c3c1bf729deb)
+
+running 4 tests
+test ping_times_out_instead_of_hanging ... ok
+test readyz_answers_loopback_over_real_listener ... ok
+test readyz_reports_database_error ... ok
+test readyz_loopback_only ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/updates.rs (/tmp/aq12-playbook-host/target/debug/deps/updates-500d07ee05a14ebd)
+
+running 22 tests
+test dotfile_in_requests_does_not_block ... ok
+test invalid_version_rejected ... ok
+test maintenance_allows_heartbeat ... ok
+test maintenance_allows_probe ... ok
+test manifest_rejects_unpinned_image ... ok
+test manifest_rejects_version_mismatch ... ok
+test manifest_stdout_is_exact_under_trace_logging ... ok
+test manifest_subcommand_uses_binary_constants ... ok
+test maintenance_blocks_admin_mutations_and_enroll ... ok
+test missing_status_file_reads_unavailable ... ok
+test no_spool_config_means_nothing_gated ... ok
+test owner_request_without_version_omits_it ... ok
+test owner_request_writes_spool_file ... ok
+test prerelease_and_build_versions_rejected ... ok
+test request_body_rejects_image_field ... ok
+test request_rejected_while_in_progress ... ok
+test second_request_rejected_while_one_is_queued ... ok
+test status_maps_update_states ... ok
+test unknown_state_blocks_request ... ok
+test updates_unavailable_without_spool_config ... ok
+test viewer_cannot_request_update ... ok
+test viewer_reads_update_status ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.48s
+

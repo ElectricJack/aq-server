@@ -1,0 +1,5 @@
+    Checking aq-playbooks-model v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-model)
+    Checking aq-playbooks-runner v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner)
+    Checking aq-playbooks-postgres v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres)
+    Checking aq-playbook-host v0.1.1 (/tmp/aq13-bridge-clean/crates/aq-playbook-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.63s

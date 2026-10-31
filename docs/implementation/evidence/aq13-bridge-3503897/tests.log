@@ -1,0 +1,146 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-model)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-agent-api)
+   Compiling aq-release v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-release)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq13-bridge-clean/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-protocol v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-protocol-0.1.0)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq13-bridge-clean/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-session-api)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-terminal-relay-protocol)
+   Compiling aq-playbooks-runner v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-runner)
+   Compiling aq-profiles v0.1.1 (/tmp/aq13-bridge-clean/crates/aq-profiles)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-terminal-relay)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-lifecycle-api)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-observation-admission)
+   Compiling aq-admission v0.1.5 (/tmp/aq13-bridge-clean/crates/aq-admission)
+   Compiling aq-accounting v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-accounting)
+   Compiling aq-selection v0.1.2 (/tmp/aq13-bridge-clean/crates/aq-selection)
+   Compiling aq-playbooks-postgres v0.1.1 (/tmp/aq13-bridge-clean/vendor/aq-playbooks-a463e59/crates/aq-playbooks-postgres)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-observation-api)
+   Compiling aq-notifications v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-notifications)
+   Compiling aq-playbook-host v0.1.1 (/tmp/aq13-bridge-clean/crates/aq-playbook-host)
+   Compiling aq-server v0.1.0 (/tmp/aq13-bridge-clean/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.12s
+     Running tests/authz.rs (/tmp/aq12-playbook-host/target/debug/deps/authz-5e97f610fa71e811)
+
+running 13 tests
+test concurrent_first_logins_bootstrap_owner ... ok
+test bootstrap_happens_once ... ok
+test first_visitor_is_not_owner ... ok
+test no_cors_headers_emitted ... ok
+test bootstrap_disabled_blocks_owner_creation ... ok
+test concurrent_first_logins_invited_viewer ... ok
+test mutation_with_header_and_matching_origin_allowed ... ok
+test mutation_without_csrf_header_rejected ... ok
+test configured_email_bootstraps_owner ... ok
+test unauthenticated_without_token ... ok
+test mutation_with_foreign_origin_rejected ... ok
+test invited_viewer_binds_on_first_login ... ok
+test viewer_cannot_call_owner_route ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+
+     Running tests/execution.rs (/tmp/aq12-playbook-host/target/debug/deps/execution-a25cacd74ac1806d)
+
+running 31 tests
+test recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_production ... FAILED
+test observation_replay_cannot_regress_or_resurrect_stopped_processes ... FAILED
+test acceptance_replay_is_durable_and_does_not_extend_authority ... FAILED
+test explicit_recovery_permits_only_exact_boot_after_all_writers_stop ... FAILED
+test no_start_decline_can_reconcile_terminal_unaccepted_old_boot_offers ... FAILED
+test recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance ... FAILED
+test fixture_assignment_requires_owner_dev_mode_and_sealed_inputs ... FAILED
+test cancellation_wins_before_result_and_retains_late_output ... FAILED
+test boot_replacement_requires_stop_and_old_results_never_settle_new_authority ... FAILED
+test reconciliation_does_not_extend_grants_or_take_over_old_incarnations ... FAILED
+test accepted_result_cannot_be_retroactively_cancelled ... ok
+test expired_unaccepted_offer_and_explicit_decline_release_task_claim ... ok
+test execution_http_authenticates_node_binding_and_keeps_routes_separate ... ok
+test cancelled_unaccepted_offer_never_queues_an_unknown_process_directive ... ok
+test conflicting_task_claims_on_different_nodes_share_one_central_fence ... ok
+test expired_execution_remains_held_until_stopped_and_reported ... ok
+test concurrent_claims_for_one_task_leave_one_unsettled_attempt ... ok
+test launch_uncertain_evidence_cannot_be_downgraded_to_nonstart_release ... ok
+test maintenance_preserves_authorized_cancellation_but_blocks_new_fixture_work ... ok
+test corrected_reports_preserve_original_immutable_body_and_admission ... ok
+test control_auth_and_operations_survive_full_general_pool_and_bulk_saturation ... ok
+test legacy_report_history_prevents_nonstart_release_after_projection_downgrade ... ok
+test decline_racing_acceptance_either_fences_launch_or_requires_result ... ok
+test source_results_require_owned_retained_receipts_and_cannot_erase_launch_evidence ... ok
+test renewal_replay_preserves_expiry_and_rejects_stale_sequence ... ok
+test released_report_correction_cannot_reacquire_a_successors_task_claim ... ok
+test source_pending_operations_hold_claim_even_if_report_omits_them ... ok
+test unresolved_external_operations_prevent_replacement_even_after_stop ... ok
+test source_nonstart_exception_requires_no_prior_execution_evidence ... ok
+test repeated_cancellations_coalesce_one_worker_directive ... ok
+test authority_decisions_use_time_after_database_lock_wait ... ok
+
+failures:
+
+---- recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_production stdout ----
+
+thread 'recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_production' (3976409) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- observation_replay_cannot_regress_or_resurrect_stopped_processes stdout ----
+
+thread 'observation_replay_cannot_regress_or_resurrect_stopped_processes' (3976407) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- acceptance_replay_is_durable_and_does_not_extend_authority stdout ----
+
+thread 'acceptance_replay_is_durable_and_does_not_extend_authority' (3976387) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- explicit_recovery_permits_only_exact_boot_after_all_writers_stop stdout ----
+
+thread 'explicit_recovery_permits_only_exact_boot_after_all_writers_stop' (3976401) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- no_start_decline_can_reconcile_terminal_unaccepted_old_boot_offers stdout ----
+
+thread 'no_start_decline_can_reconcile_terminal_unaccepted_old_boot_offers' (3976406) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance stdout ----
+
+thread 'recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance' (3976410) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- fixture_assignment_requires_owner_dev_mode_and_sealed_inputs stdout ----
+
+thread 'fixture_assignment_requires_owner_dev_mode_and_sealed_inputs' (3976402) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- cancellation_wins_before_result_and_retains_late_output stdout ----
+
+thread 'cancellation_wins_before_result_and_retains_late_output' (3976391) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+---- boot_replacement_requires_stop_and_old_results_never_settle_new_authority stdout ----
+
+thread 'boot_replacement_requires_stop_and_old_results_never_settle_new_authority' (3976390) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- reconciliation_does_not_extend_grants_or_take_over_old_incarnations stdout ----
+
+thread 'reconciliation_does_not_extend_grants_or_take_over_old_incarnations' (3976408) panicked at crates/aq-server/src/test_support.rs:48:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "53200", message: "out of shared memory", detail: None, hint: Some("You might need to increase \"max_locks_per_transaction\"."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("lock.c"), line: Some(1020), routine: Some("LockAcquireExtended") }))
+
+
+failures:
+    acceptance_replay_is_durable_and_does_not_extend_authority
+    boot_replacement_requires_stop_and_old_results_never_settle_new_authority
+    cancellation_wins_before_result_and_retains_late_output
+    explicit_recovery_permits_only_exact_boot_after_all_writers_stop
+    fixture_assignment_requires_owner_dev_mode_and_sealed_inputs
+    no_start_decline_can_reconcile_terminal_unaccepted_old_boot_offers
+    observation_replay_cannot_regress_or_resurrect_stopped_processes
+    reconciliation_does_not_extend_grants_or_take_over_old_incarnations
+    recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_production
+    recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance
+
+test result: FAILED. 21 passed; 10 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+error: test failed, to rerun pass `-p aq-server --test execution`
