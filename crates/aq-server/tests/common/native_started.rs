@@ -22,7 +22,14 @@ pub async fn setup(prepared: bool) -> (Fixture, Request) {
     setup_native(prepared, true).await
 }
 pub async fn setup_native(prepared: bool, native_admitted: bool) -> (Fixture, Request) {
-    let mut f = fixture().await;
+    setup_fixture(fixture().await, prepared, native_admitted, None).await
+}
+pub async fn setup_fixture(
+    mut f: Fixture,
+    prepared: bool,
+    native_admitted: bool,
+    spec: Option<&aq_admission::execution_spec::ProfiledExecutionSpec>,
+) -> (Fixture, Request) {
     let mut request: Request = serde_json::from_str(include_str!(
         "../../../aq-admission/artifacts/started.fixture.json"
     ))
@@ -79,7 +86,11 @@ pub async fn setup_native(prepared: bool, native_admitted: bool) -> (Fixture, Re
         .await
         .unwrap();
     }
-    let attempt = insert(&f).await;
+    let attempt = if let Some(spec) = spec {
+        super::profiled::insert_typed(&f, spec).await
+    } else {
+        insert(&f).await
+    };
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")

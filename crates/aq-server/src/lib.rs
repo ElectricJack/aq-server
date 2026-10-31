@@ -174,6 +174,7 @@ pub fn build_worker_router(state: AppState) -> Router {
         .merge(profiled_execution::api::routes(state.clone()))
         .merge(profiled_execution::started::routes(state.clone()))
         .merge(profiled_execution::stopped::routes(state.clone()))
+        .merge(profiled_execution::results::routes(state.clone()))
         .merge(profiled_execution::material_api::routes(state.clone()))
         .merge(profiled_execution::artifact_api::routes(state.clone()))
         .merge(observations::api::routes(state.clone()))
