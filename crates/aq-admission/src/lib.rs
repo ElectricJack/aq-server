@@ -513,3 +513,5 @@ pub fn contract_schema() -> serde_json::Value {
     }
     value
 }
+
+pub mod outcome;

@@ -1,4 +1,4 @@
-# AQ admission contracts 0.1.4
+# AQ admission contracts 0.1.5
 
 Pure versioned preparation contracts and bounded placement proposals. This crate
 contains no daemon, database, network client, provider call or secret delivery.
@@ -133,3 +133,18 @@ the task claim, source or effects, nor does it establish task success. Historica
 receipts cannot renew execution. Pre-start loss and changed-boot recovery remain
 separate protocols. Independent Python canonical vectors cover the fixture and
 Unicode values; actual tmux serialization qualification is recorded separately.
+
+## Pinned reviewed source expectations (0.1.5)
+
+`outcome::ExpectedOutcomeDefinition` is the initial finite pre-execution outcome
+schema. It pins the exact project/task/source and authorized context references,
+bounded acceptance criteria, validation policy, mandatory human-owner or policy-
+actor review, and named validator requirements. It contains no attempt/spec hash
+and can be retained before composing `ProfiledExecutionSpec`.
+
+The definition's content digest is the spec's `outcome_artifact` and manifest's
+outcome binding. `validate_against` enforces exact linkage, including graph CAS
+and content revisions; unknown kinds and review shortcuts refuse. This pure API
+does not execute checks, authenticate a reviewer, accept a result, release source
+or complete a graph task. Those require the daemon's actual evidence owners and
+current revision-bound policy evaluation.0.1.4 stopped archives remain unchanged.

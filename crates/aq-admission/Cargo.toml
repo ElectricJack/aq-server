@@ -1,6 +1,6 @@
 [package]
 name = "aq-admission"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 publish = false
 description = "Pure bounded AQ graph placement and launch preparation contracts"
