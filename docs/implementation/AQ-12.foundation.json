@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "task": "AQ-12",
+  "status": "qualified internal foundation; not production mounted; durable domain bridge pending",
+  "source_repository": "agent-q",
+  "source_revision": "263e780c7def77f818cfb87d28cb05be39a55cd5",
+  "clean_worktree": "/tmp/aq12-foundation-clean",
+  "captured_at_utc": "2026-10-31T18:51:08.926264+00:00",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/aq12-playbook-host/target",
+    "CARGO_INCREMENTAL": "0",
+    "database": "scripts/test-db disposable PostgreSQL17, loopback55432; no production DB"
+  },
+  "playbook_source_pin": "vendor/aq-playbooks-source.json",
+  "commands": [
+    {
+      "command": "cargo test -p aq-playbook-host --locked --offline",
+      "result": "6 passed; 1 explicitly ignored disposable-PG test"
+    },
+    {
+      "command": "AQ_PLAYBOOK_TEST_DATABASE_URL=<scripts/test-db disposable> cargo test -p aq-playbook-host --test postgres --locked --offline -- --ignored",
+      "result": "1 passed"
+    },
+    {
+      "command": "DATABASE_URL=<scripts/test-db disposable> cargo test -p aq-server --test playbook_isolation --locked --offline",
+      "result": "1 passed"
+    },
+    {
+      "command": "cargo clippy -p aq-playbook-host --all-targets --locked --offline -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo clippy -p aq-server --test playbook_isolation --locked --offline -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "python3 scripts/check-playbook-source.py",
+      "result": "235 exact files passed"
+    },
+    {
+      "command": "cargo fmt --package aq-playbook-host --check; rustfmt --check --edition 2024 crates/aq-server/tests/playbook_isolation.rs",
+      "result": "passed"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "f9d9b358713f206f2999d569525d0d2d4e4cd1f26b7aee9719674e78448965cb",
+      "bytes": 88291
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "3cc292f4fa7555310a0d5a971c439eb94c5849175a4bbaffc0c8151855ef430e",
+      "bytes": 2483
+    },
+    {
+      "path": "crates/aq-playbook-host/Cargo.toml",
+      "sha256": "5b0342fe0a9ffc9eb8aae66df55ad80fd96450f539be9bf873b34a767ab7756a",
+      "bytes": 713
+    },
+    {
+      "path": "crates/aq-playbook-host/README.md",
+      "sha256": "2f923192e64c473615f4e1f425ee95133df03aa4bde6f5c4777fc678c2ce0f99",
+      "bytes": 3700
+    },
+    {
+      "path": "crates/aq-playbook-host/src/lib.rs",
+      "sha256": "3d4db2d83fa3fe950528cbca867054f769a8bbdc385ed802cf52e77a514c479f",
+      "bytes": 14574
+    },
+    {
+      "path": "crates/aq-playbook-host/src/protected.rs",
+      "sha256": "46ba2c2cf922e2344e2475497395fe34846ff37021b2ed3d63e430249b2cef1a",
+      "bytes": 3780
+    },
+    {
+      "path": "crates/aq-playbook-host/tests/common/mod.rs",
+      "sha256": "57e8f1758b817e3fc373d0f3784e800dff61db4ec46603cf866a60920167a52a",
+      "bytes": 2991
+    },
+    {
+      "path": "crates/aq-playbook-host/tests/owner.rs",
+      "sha256": "1976627ded49837cb3ae2333b9b7df3396c8859d56e8123cdc9d60b45f72bf20",
+      "bytes": 8750
+    },
+    {
+      "path": "crates/aq-playbook-host/tests/postgres.rs",
+      "sha256": "fae6e855bad36bb37b2d41b7f9bc34feb330cf237295ab320864ec95a22297c7",
+      "bytes": 3817
+    },
+    {
+      "path": "crates/aq-playbook-host/tests/protection.rs",
+      "sha256": "d0471814e15abf45d44737294d2a52dbbdffe69c8225c70a8718bcd57e69a74e",
+      "bytes": 1119
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "sha256": "83cc0eb63532b12e226f7066846d02bf299c7ccb3ea067347b52fca1b77c5529",
+      "bytes": 2189
+    },
+    {
+      "path": "crates/aq-server/tests/playbook_isolation.rs",
+      "sha256": "b400d0bb19861183843681bbaef717d5cf371b1618a38a2e101eb72a00b22652",
+      "bytes": 5679
+    },
+    {
+      "path": "scripts/check-playbook-source.py",
+      "sha256": "a42fb112ed85d1b09ac30eb1a290605a8c540e23f272247ed1562c3e95f411b9",
+      "bytes": 1023
+    },
+    {
+      "path": "vendor/aq-playbooks-source.json",
+      "sha256": "5a38a5a96268b3ea2cea218618a4fe8ad631b07501edd04fbd88c9c02f71d5ec",
+      "bytes": 56771
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/tests.log",
+      "sha256": "4dc267d1e8a340cefa27c60a1a2dea92fb9d6618e714d9b141ce2d995097d468"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/pg.log",
+      "sha256": "4f45aebc76ec9489640aae7c9971ee3337f0d9bea5d086b6b7628e19976fa97e"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/http.log",
+      "sha256": "f59f24a3b66ca3f92e26bcfecd753323d56556a2b6926809345aa70c9d784fe5"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/clippy.log",
+      "sha256": "c8bc8b37652fb5ee543f435c740528a2354b3ef3142b487365d1c5a9fde675d6"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/server-clippy.log",
+      "sha256": "fb5a77c61a443c788c6e2989dbd41104c905c1ffe22efd6042e146ac00ebff37"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/drift.log",
+      "sha256": "d36c5526af252150c1dec976ea0e477b6fe16da086f1f5c3c9f0c5d05980c0f7"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/implementation/evidence/aq12-foundation-263e780/status.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "not_qualified": [
+    "production startup/config mounting",
+    "registered AQ domain adapters/authority/outbox",
+    "held domain Host HTTP call (no domain Host registered)",
+    "native harness/provider/Discord integration",
+    "25ms PB04 performance budget",
+    "full workspace regression suite"
+  ]
+}
