@@ -1,0 +1,81 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "Process activity, task titles, and wait details are not connected yet",
+    "state": "partial"
+  },
+  "data": {
+    "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+    "authority": "remote",
+    "controller": {
+      "label": null,
+      "state": "unknown"
+    },
+    "execution_authority": "offered",
+    "id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4",
+    "label": "Remote session e63e39e7-c346-4ac0-9acc-ee6662e6d4b4",
+    "last_activity_at": null,
+    "observation": {
+      "fresh_until": "1970-01-01T00:16:40.000Z",
+      "observed_at": "1970-01-01T00:16:40.000Z",
+      "state": "unknown"
+    },
+    "permissions": [
+      "session.inspect"
+    ],
+    "profile": {
+      "harness": "codex",
+      "model": "model-a",
+      "provider": "fixture-a"
+    },
+    "profile_revisions": [
+      {
+        "name": "agent",
+        "revision": "1"
+      },
+      {
+        "name": "intelligence",
+        "revision": "1"
+      },
+      {
+        "name": "execution",
+        "revision": "1"
+      }
+    ],
+    "project": {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "label": "Synthetic authority fixture"
+    },
+    "record_revision": "1",
+    "session_identity": {
+      "assignment_generation": "1",
+      "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+      "boot_id": "1f64082a-2c00-45eb-ab7c-d0147a3ca441",
+      "kind": "remote",
+      "node_id": "dcf6b4c0-eb69-423d-8077-49f3e06c8ead",
+      "session_id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4"
+    },
+    "source_kind": "profiled_v1",
+    "task": {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "revision": "1",
+      "title": "00000000-0000-0000-0000-000000000003",
+      "type": "task"
+    },
+    "terminal": null,
+    "wait": null
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "54334ec9-39e7-4e60-b881-0beb16c27b7b",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

@@ -1,0 +1,34 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "state": "complete"
+  },
+  "data": {
+    "has_more": false,
+    "items": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "label": "Synthetic authority fixture"
+      }
+    ],
+    "next_cursor": null,
+    "snapshot_id": "34d54b14-98ce-45e7-89cd-35d396463e61",
+    "total": {
+      "accuracy": "exact",
+      "value": 1
+    }
+  },
+  "observation": {
+    "coverage": "complete",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "199e60a2-c735-4b8f-aae6-bdcdaeb549e7",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

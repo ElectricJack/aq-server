@@ -1,0 +1,59 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "Task readiness, decisions, and result summaries are not connected yet",
+    "state": "partial"
+  },
+  "data": {
+    "attention": [],
+    "counts": {
+      "needs_you": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "ready": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "recovering": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "running": {
+        "accuracy": "unknown",
+        "value": null
+      }
+    },
+    "in_motion": [
+      {
+        "last_progress_at": null,
+        "next_constraint": {
+          "explanation": "Task constraints are not connected yet",
+          "kind": "unknown"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "running": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      }
+    ],
+    "recent_outcomes": []
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "8e9bce10-b2f0-47b5-b28a-7db62fd9f8c6",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

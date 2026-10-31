@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+schemars = "1"
 aq-review-protocol = { path = "../aq-review-protocol", version = "=0.1.0" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.1" }
 aq-observation-admission = { path = "../aq-observation-admission", version = "=0.1.0" }

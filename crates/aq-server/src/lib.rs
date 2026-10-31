@@ -3,6 +3,7 @@ pub mod admission;
 pub mod agent_access;
 pub mod authz;
 pub mod config;
+pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod error;
 pub mod execution;
@@ -186,6 +187,7 @@ fn build_admin_router_with_optional_dashboard(
         .merge(policy_routes)
         .merge(review_routes)
         .merge(admin_api::admin_routes())
+        .merge(dashboard_api::routes(state.clone()))
         .merge(notifications::api::routes(state.clone()))
         .merge(observations::api::admin_routes(state.clone()))
         .merge(terminal::api::human_routes(state.clone()))

@@ -1,0 +1,138 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "state": "complete"
+  },
+  "data": {
+    "capabilities": [
+      {
+        "enabled": true,
+        "name": "dashboard.overview",
+        "version": "1"
+      },
+      {
+        "enabled": true,
+        "name": "sessions.read",
+        "version": "1"
+      },
+      {
+        "enabled": true,
+        "name": "projects.read",
+        "version": "1"
+      },
+      {
+        "enabled": true,
+        "name": "status.read",
+        "version": "1"
+      },
+      {
+        "enabled": true,
+        "name": "workers.read",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "tasks.read",
+        "reason": "Task inspection is not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "search.read",
+        "reason": "Search is not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "decisions.read",
+        "reason": "Decision inspection is not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "provider.quota",
+        "reason": "Provider account usage is unavailable",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "supervisor.conversation",
+        "reason": "The global supervisor is not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "terminal.watch",
+        "reason": "Terminal viewing is not connected to this dashboard yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "terminal.control",
+        "reason": "Terminal control is not connected to this dashboard yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "dashboard.actions",
+        "reason": "Dashboard actions are not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "results.read",
+        "reason": "Results are not connected yet",
+        "version": "1"
+      },
+      {
+        "enabled": false,
+        "name": "playbooks.inspect",
+        "reason": "Playbook inspection is not connected yet",
+        "version": "1"
+      }
+    ],
+    "contracts": [
+      {
+        "digest": "sha256:ceac05fc1648faa4ff884530da1c69360270bba3ae1b6073e6880f2f7385a5ba",
+        "name": "dashboard-read",
+        "version": "dashboard-read-1"
+      }
+    ],
+    "default_scope": {
+      "kind": "all_authorized"
+    },
+    "global_supervisor": {
+      "conversation_id": null,
+      "reason": "The global supervisor is not connected yet",
+      "status": "unconfigured"
+    },
+    "limits": {
+      "max_page_size": 100,
+      "page_size": 25,
+      "snapshot_members": 256,
+      "snapshot_ttl_ms": 30000
+    },
+    "principal": {
+      "authorization_revision": "282462697803667508442044028870264284114",
+      "display_name": "owner@localhost",
+      "id": "0d36007a-b179-452b-aa33-bc911e102c5a"
+    },
+    "product": {
+      "dashboard_digest": null,
+      "version": "0.1.0"
+    }
+  },
+  "observation": {
+    "coverage": "complete",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "969c3714-f0fc-4f47-8ed8-ffd06439b0b2",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}
