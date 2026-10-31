@@ -1,0 +1,4 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/tmp/aq-dashboard-backend/crates/aq-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 04s
+     Running `target/debug/examples/dashboard_contract --check`

@@ -1,0 +1,7 @@
+$ cargo fmt --package aq-server --check
+exit=0
+$ python3 protocol/dashboard-read/v1/check.py
+5 actual-route synthetic fixtures match dashboard-read-1 schema
+exit=0
+$ git diff --check
+exit=0

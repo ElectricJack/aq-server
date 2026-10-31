@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/tmp/aq-dashboard-backend/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.95s
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-c409764a1ad4607c)
+
+running 5 tests
+test acl_expiry_during_database_wait_refuses_read ... ok
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s
+

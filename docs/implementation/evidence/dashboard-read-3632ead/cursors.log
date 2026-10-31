@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/tmp/aq-dashboard-backend/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 46s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-b4d8958df7906f8e)
+
+running 2 tests
+test dashboard_api::runtime::tests::snapshot_caps_are_per_principal_and_global_without_cross_actor_eviction ... ok
+test dashboard_api::runtime::tests::cursor_authenticates_actor_partition_scope_resource_limit_expiry_and_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.00s
+

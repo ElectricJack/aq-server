@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "source_repository": "agent-q",
+  "source_revision": "3632eada81389f2dd9d0ab3a1f148c78746c9a42",
+  "base_revision": "1ea7e4d423e257aa9fb6200ac68c4b682bb78eed",
+  "recorded_at": "2026-10-31T22:06:02.877213+00:00",
+  "scope": "authenticated bounded dashboard-read-1 backend; no native process, provider, production deployment or browser qualification",
+  "qualification": {
+    "actual_postgresql_router_tests": 5,
+    "pure_cursor_tests": 2,
+    "ignored": 0,
+    "database": "scripts/test-db disposable PostgreSQL on localhost:55432; per-test temporary databases",
+    "commands": [
+      "DATABASE_URL=<disposable-test-db> CARGO_INCREMENTAL=0 cargo test -p aq-server --test dashboard_read --offline -- --test-threads=2",
+      "CARGO_INCREMENTAL=0 cargo test -p aq-server --lib dashboard_api::runtime --offline",
+      "CARGO_INCREMENTAL=0 cargo clippy -p aq-server --lib --test dashboard_read --example dashboard_contract --offline -- -D warnings",
+      "CARGO_INCREMENTAL=0 cargo run -p aq-server --example dashboard_contract --offline -- --check",
+      "cargo fmt --package aq-server --check",
+      "python3 protocol/dashboard-read/v1/check.py",
+      "git diff --check"
+    ]
+  },
+  "source_inventory": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "896006663abd415e798add8aefc431ff03fb6b19af04cded2bb6b77d3481f13a",
+      "bytes": 88490
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "sha256": "160f62eaa7c4b8cd9090a6623f9c246e018d485667e29e24d0d3044559f34415",
+      "bytes": 2300
+    },
+    {
+      "path": "crates/aq-server/examples/dashboard_contract.rs",
+      "sha256": "1e5edec8ab621d5910e699de4e3f0cf9654e15dc45a71079d6dde658f1249984",
+      "bytes": 545
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api.rs",
+      "sha256": "64d8b07fbd887eeee8b3164a4b24f766df1ec643b79a1149d9e2c4ae8c8c8d97",
+      "bytes": 8575
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/contract.rs",
+      "sha256": "41ad5dc2ed517f00b967d6ebb630c2e3787e62bc1bc418b54be23a575addd4e0",
+      "bytes": 9423
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/runtime.rs",
+      "sha256": "423ecd3fc3d4aa8990a70ab1c5c8adaa6381df2c199625e486b2bf10be42a15c",
+      "bytes": 10043
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/service.rs",
+      "sha256": "1b3efea5357b788c127ad09eb5e5eeb0b7ed438aa60589f09aa2fb044646d7cd",
+      "bytes": 23986
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "sha256": "4af380cf705b56f3b260fffd9c905e85329703a2f957f6211251640c50119e14",
+      "bytes": 13485
+    },
+    {
+      "path": "crates/aq-server/tests/dashboard_read.rs",
+      "sha256": "f714bd462bc21527a9e4a38d21e070ba5d787e8f35a253de533de75d4d5c1a56",
+      "bytes": 10286
+    },
+    {
+      "path": "docs/implementation/dashboard-read-1.md",
+      "sha256": "f6388b3b5160afac426220422c86c3ca43e7668e115185f51c883dbcc8e27c39",
+      "bytes": 3414
+    },
+    {
+      "path": "protocol/dashboard-read/v1/README.md",
+      "sha256": "d9ad1313c8fc26bc9f2385fcef42e917a6f2262ab8b7d86d5b4ee3eeed433a23",
+      "bytes": 1994
+    },
+    {
+      "path": "protocol/dashboard-read/v1/check.py",
+      "sha256": "ecdcf5f96a71ed42fdf3a01f10344cc4ddd421812f31917a9b16572e29802ff7",
+      "bytes": 791
+    },
+    {
+      "path": "protocol/dashboard-read/v1/fixtures/bootstrap.json",
+      "sha256": "4e599a5cd2e2f27fd4000396da15b57c5b2fd6043fbe06021b7ce4951fffc958",
+      "bytes": 3468
+    },
+    {
+      "path": "protocol/dashboard-read/v1/fixtures/overview.json",
+      "sha256": "ecf68ff0b67e47169ed22b1fd716729d47f935b3493d0a9231212040b7b90bb9",
+      "bytes": 1402
+    },
+    {
+      "path": "protocol/dashboard-read/v1/fixtures/projects.json",
+      "sha256": "730b0236aa495c5098e716ef458dd8868853792798f28c0780e84beb1f008b80",
+      "bytes": 796
+    },
+    {
+      "path": "protocol/dashboard-read/v1/fixtures/session.json",
+      "sha256": "996efc9fe3e2c9109166ce23e23fd3b5f4c4ef62aa3150098d630d9fe1d4008e",
+      "bytes": 2185
+    },
+    {
+      "path": "protocol/dashboard-read/v1/fixtures/sessions.json",
+      "sha256": "9f9c776fb120c337bac62d228156b68f0e433d118c41728c880f087e9a30d332",
+      "bytes": 2240
+    },
+    {
+      "path": "protocol/dashboard-read/v1/schema.json",
+      "sha256": "ceac05fc1648faa4ff884530da1c69360270bba3ae1b6073e6880f2f7385a5ba",
+      "bytes": 25073
+    }
+  ],
+  "logs": {
+    "routes": {
+      "path": "docs/implementation/evidence/dashboard-read-3632ead/routes.log",
+      "sha256": "aad3de7218703084117023f82dbad9fcb17f389e5578aba77f522502ab2c4a1c"
+    },
+    "cursors": {
+      "path": "docs/implementation/evidence/dashboard-read-3632ead/cursors.log",
+      "sha256": "cfc9f60c78ae163b3d87568cb825a19321e65d56170c977f3254a7f65e56b9d4"
+    },
+    "clippy": {
+      "path": "docs/implementation/evidence/dashboard-read-3632ead/clippy.log",
+      "sha256": "3da113e40e7f363a6892f6234ec366574b1fa1471f2f87ec4ec1d02034c1de08"
+    },
+    "drift": {
+      "path": "docs/implementation/evidence/dashboard-read-3632ead/drift.log",
+      "sha256": "e48151f837628c4d67e56b08158fdf457c840a8c49ecf6c316796ad706be901a"
+    },
+    "checks": {
+      "path": "docs/implementation/evidence/dashboard-read-3632ead/checks.log",
+      "sha256": "780230c73fe18a1324c6d67385772db92b29d61d4a75617e92fa6201bd9340fe"
+    }
+  },
+  "limitations": [
+    "Five retained positive response fixtures are synthetic owned SQL route responses, not native execution evidence.",
+    "No process activity, readiness, decision, accounting or supervisor projection is invented; capabilities and coverage expose omissions.",
+    "Snapshot/result bounds and SQL deadlines do not prove history-insensitive database scan cost.",
+    "Current human ACL is sampled/fenced; per-item observations are not one cross-owner atomic snapshot.",
+    "Combined actual daemon/browser and full assembled source qualification are parent-owned follow-up."
+  ]
+}
