@@ -1,0 +1,115 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-dashboard-serving/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 21s
+     Running unittests src/lib.rs (/home/jkern/dev/agent-q/target/debug/deps/aq_server-eef9245028bc7806)
+
+running 58 tests
+test agent_access::graph::tests::http_adapter_never_exposes_graph_errors_or_follows_redirects ... ok
+test agent_access::graph::tests::http_adapter_refuses_missing_or_changed_response_version ... ok
+test agent_access::graph::tests::projection_removes_metadata_and_enforces_workspace ... ok
+test agent_access::graph::tests::edge_projection_requires_both_endpoints_and_allowed_type ... ok
+test agent_access::mutations::tests::retained_admission_count_and_byte_boundaries_are_exact ... ok
+test agent_access::tests::canonical_digest_matches_published_profile_and_context ... ok
+test agent_access::mutations::dispatch::tests::native_draft_defaults_preserve_exact_plan_but_extra_meaning_is_refused ... ok
+test agent_access::mutations::tests::oversized_postadmission_status_reports_unknown_with_existing_identity ... ok
+test agent_access::tests::strict_json_rejects_duplicate_and_fractional_values ... ok
+test config::tests::other_deployments_accept_dev_vault ... ok
+test config::tests::production_deployment_accepts_production_vault ... ok
+test agent_access::tests::context_and_issuance_budgets_include_profile_binding_and_credentials ... ok
+test config::tests::production_deployment_rejects_dev_auth_in_production_env ... ok
+test config::tests::production_deployment_rejects_dev_vault ... ok
+test config::tests::production_deployment_rejects_development_env_with_access_auth ... ok
+test agent_access::tests::query_digest_omits_cursor_but_binds_authority ... ok
+test agent_access::tests::contract_enforces_unknown_fields_uuid_integer_and_conditional_rules ... ok
+test dashboard_assets::tests::verified_exact_manifest_digest_and_loaded_bytes_survive_backing_changes ... ok
+test notifications::config::tests::protected_configuration_refuses_unsafe_files_and_keeps_credentials_opaque ... ok
+test dashboard_assets::tests::manifest_and_total_quotas_and_exact_path_grammar_refuse ... ok
+test dashboard_assets::tests::member_symlink_hardlink_fifo_and_symlink_directory_refuse_without_blocking ... ok
+test dashboard_assets::tests::corrupt_length_versions_unknown_keys_and_duplicate_entries_refuse ... ok
+test profiled_execution::context_budget::tests::capacity_overflow_zero_unknown_and_ambiguous_definitions_refuse ... ok
+test profiled_execution::context_budget::tests::optional_config_defaults_preserve_old_digest_and_facts_require_owned_runtime ... ok
+test profiled_execution::context_projection::tests::expired_partial_forged_and_foreign_observations_refuse ... ok
+test profiled_execution::context_budget::tests::on_demand_content_is_not_claimed_as_zero_token_startup_and_tampering_refuses ... ok
+test profiled_execution::context_budget::tests::qualified_count_binds_actual_utf8_rendering_overhead_and_reserved_output ... ok
+test profiled_execution::context_projection::tests::mixed_context_never_expands_task_only_or_knowledge_only_permission ... ok
+test profiled_execution::context_projection::tests::only_authorized_api01_fields_enter_startup_and_original_age_is_preserved ... ok
+test profiled_execution::material_api::tests::valid_public_metadata_can_exceed_the_explicit_http_header_profile ... ok
+test profiled_execution::source::tests::reference_observation_requires_original_complete_fresh_exact_generation ... ok
+test profiled_execution::context_projection::tests::scoped_edges_require_exact_authorized_endpoints_and_pinned_revisions ... ok
+test profiled_execution::source::tests::retention_is_exact_active_complete_and_never_inferred_from_missing_fields ... ok
+test profiled_execution::source_exports::tests::export_identity_is_exact_and_no_execution_binding_is_fabricated ... ok
+test project_bindings::domain::tests::external_absence_staleness_forbidden_and_cross_identity_never_admit ... ok
+test project_bindings::domain::tests::pure_gate_freezes_exact_revision_and_never_rewrites_old_snapshots ... ok
+test project_bindings::domain::tests::operator_groups_and_environment_profile_ceilings_fail_closed ... ok
+test project_bindings::external::tests::repository_reply_rejects_duplicate_subject_and_envelope_fields ... ok
+test project_bindings::domain::tests::request_fields_cannot_install_urls_credentials_or_worker_claimed_groups ... ok
+test source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact ... ignored, requires selected immutable aq-git and Git executables; disposable PostgreSQL
+test protected_storage::tests::typed_domains_are_independent_and_aad_is_bounded ... ok
+test profiled_execution::material::tests::delivery_requires_exact_scope_and_current_bounded_file_bytes ... ok
+test profiled_execution::context_budget::tests::missing_expired_or_wrong_exact_subject_never_infers_model_facts_from_bytes ... ok
+test source_retention::profiled_base::tests::chunk_reads_are_bounded_exact_and_refuse_changed_members ... ok
+test source_retention::profiled_base::tests::historical_fact_is_canonical_bound_and_cannot_refresh_itself ... ok
+test source_retention::profiled_base::tests::retention_requires_exact_active_transfer_and_finite_observation ... ok
+test source_retention::result_retention::tests::current_result_inspection_requires_exact_active_handle_and_single_source_ref ... ok
+test source_retention::result_retention::tests::observed_confirmation_digest_changes_for_exact_manifest_receipt_and_ack_bytes ... ok
+test store::tests::state_format_is_the_latest_migration ... ok
+test terminal::protection::tests::ciphertext_is_randomized_and_bound_to_exact_row_purpose_revision_and_key ... ok
+test terminal::protection::tests::rotation_requires_retained_old_key_and_missing_keys_never_fall_back ... ok
+test terminal::protection::tests::unsafe_key_files_and_duplicate_ids_refuse_without_reading_fifo ... ok
+test updates::tests::stamped_binary_refuses_other_revision ... ok
+test updates::tests::unreadable_marker_dir_counts_as_maintenance ... ok
+test updates::tests::unstamped_binary_accepts_any_revision ... ok
+test source_retention::profiled_base::tests::socket_replies_are_bounded_and_correlated_without_inventing_success ... ok
+test source_retention::profiled_base::tests::nofollow_applies_to_every_artifact_component_and_special_files_do_not_block ... ok
+test source_retention::profiled_base::tests::verification_refuses_corrupt_size_digest_manifest_and_installation ... ok
+
+test result: ok. 57 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/authz.rs (/home/jkern/dev/agent-q/target/debug/deps/authz-42ec8a6e66063eb1)
+
+running 13 tests
+test concurrent_first_logins_invited_viewer ... ok
+test concurrent_first_logins_bootstrap_owner ... ok
+test bootstrap_disabled_blocks_owner_creation ... ok
+test bootstrap_happens_once ... ok
+test mutation_with_foreign_origin_rejected ... ok
+test invited_viewer_binds_on_first_login ... ok
+test configured_email_bootstraps_owner ... ok
+test first_visitor_is_not_owner ... ok
+test unauthenticated_without_token ... ok
+test mutation_with_header_and_matching_origin_allowed ... ok
+test no_cors_headers_emitted ... ok
+test mutation_without_csrf_header_rejected ... ok
+test viewer_cannot_call_owner_route ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.73s
+
+     Running tests/dashboard_assets.rs (/home/jkern/dev/agent-q/target/debug/deps/dashboard_assets-19cce7f1e6898936)
+
+running 3 tests
+test actual_local_human_http_serves_loaded_bytes_after_source_removal ... ok
+test exact_spa_paths_do_not_capture_api_machine_unknown_assets_or_traversal ... ok
+test current_owner_viewer_and_removed_user_authenticate_each_get_and_head ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/worker_api.rs (/home/jkern/dev/agent-q/target/debug/deps/worker_api-81369e653a958205)
+
+running 15 tests
+test enroll_validates_input ... ok
+test enroll_with_valid_code_returns_credential ... ok
+test admin_listener_has_no_worker_routes ... ok
+test expired_code_fails ... ok
+test heartbeat_checks_protocol_before_credential ... ok
+test oversized_body_rejected ... ok
+test heartbeat_updates_last_seen ... ok
+test healthz_on_both_and_hardening_headers ... ok
+test reused_code_fails ... ok
+test revoked_credential_rejected_with_reason ... ok
+test probe_echoes_nonce ... ok
+test unknown_code_gives_same_response_as_used ... ok
+test worker_listener_has_no_admin_routes ... ok
+test unknown_credential_rejected ... ok
+test unsupported_protocol_gets_426_diagnostic ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s
+

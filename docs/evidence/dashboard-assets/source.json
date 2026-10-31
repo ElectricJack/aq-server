@@ -1,0 +1,38 @@
+{
+  "revision": "14bd10840f4abf46148e905f9feb90fe2af7c7b4",
+  "base": "d24fc6343c30a4ece8a1292dc9dccf6f0036eb86",
+  "files": [
+    {
+      "path": "crates/aq-server/src/dashboard_assets.rs",
+      "bytes": 18930,
+      "sha256": "7d79dc560130cec199ade17a054d984430758182fdca244906e6fcd8de922e37"
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "bytes": 13409,
+      "sha256": "72275588e3f5e82532c704df8f66b7835c28f06eb288cf56ee80801a396d8b36"
+    },
+    {
+      "path": "crates/aq-server/tests/dashboard_assets.rs",
+      "bytes": 10550,
+      "sha256": "c8b42e3f556a7b1ff18914c6a0e82304e3325d133f5c69776ee28b285f483e9f"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 2543,
+      "sha256": "451571b428e4186550a1a71a20ab65580ef894295fb1d468f535edd2316105a6"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 88477,
+      "sha256": "a03b5eddc596b58d7ce59a024d359f19faf20b61d8b5b1307e1403c4b9527b9e"
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "bytes": 2285,
+      "sha256": "c9ddf727fe65c6820f5e140aab59849af8a6c30dde89d144db7f8e291482fc4a"
+    }
+  ],
+  "postgres_image_id": "sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+  "database_scope": "Disposable agent-q-test-db on127.0.0.1:55432; only randomly named TestDb databases created and dropped."
+}

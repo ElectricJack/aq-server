@@ -1,0 +1,10 @@
+{
+  "passed": 88,
+  "failed": 0,
+  "ignored": 1,
+  "test_processes": 4,
+  "summed_test_process_seconds": 6.56,
+  "build": [
+    "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 21s"
+  ]
+}

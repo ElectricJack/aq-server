@@ -1,0 +1,55 @@
+{
+  "source_revision": "14bd108",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 5262,
+      "sha256": "dd6514d80e4b1ee49aa48eca96efff07080c74c0b421b2d8950a2620ed60f64f"
+    },
+    {
+      "path": "dashboard-assets-clippy.log",
+      "bytes": 2234,
+      "sha256": "13530dc836100bdae5368c702b7b3b75b3675880405e552cec803b7d600375e4"
+    },
+    {
+      "path": "dashboard-assets-final-clippy.log",
+      "bytes": 202,
+      "sha256": "8ceeba4e25a64b71ba2b5b7d56524a16bd5f7dbf9a0d5ec7b06bf5d815a3574c"
+    },
+    {
+      "path": "dashboard-assets-final-tests.log",
+      "bytes": 8773,
+      "sha256": "0504993e53faca33eaa261424479e40fab08defa3f3a72512a328b725e278d76"
+    },
+    {
+      "path": "dashboard-assets-first-check.log",
+      "bytes": 2234,
+      "sha256": "184a3fbd545a7ff8a0d1b86117cf5e4a473ee57a47bc44fa15489ae8eab42aa5"
+    },
+    {
+      "path": "dashboard-assets-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "dashboard-assets-router-tests.log",
+      "bytes": 674,
+      "sha256": "83695980a60c5d2b41233d314746b2216711afbdee656b74533455ccaaf57980"
+    },
+    {
+      "path": "dashboard-assets-summary.json",
+      "bytes": 210,
+      "sha256": "416746812948aa5570c006d64a9e26dbdde8f493cfed74d4cfd54c1b32c8b748"
+    },
+    {
+      "path": "dashboard-assets-unit.log",
+      "bytes": 2871,
+      "sha256": "b48f5726d4675c4e4117cd38be94f555deea56945abf26b1699504eb138c1561"
+    },
+    {
+      "path": "source.json",
+      "bytes": 1327,
+      "sha256": "98a94d833087fb37c8788d2fbed2c29bb463d8d3a3d7a6380339e52551bdcb8b"
+    }
+  ]
+}
