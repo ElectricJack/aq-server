@@ -12,6 +12,27 @@ use std::{
     time::Duration,
 };
 
+async fn observe_blocked_transaction(pool: &sqlx::PgPool, xid: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let blocked: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE transactionid::text=$1 AND NOT granted)",
+        )
+        .bind(xid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if blocked {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "stop report never reached the held node transaction"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[tokio::test]
 async fn expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority() {
     let (mut f, started_request) = setup(true).await;
@@ -215,10 +236,14 @@ async fn stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock()
         .execute(&mut *tx)
         .await
         .unwrap();
+    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });
-    tokio::time::sleep(Duration::from_millis(40)).await;
+    observe_blocked_transaction(&pool, &blocker_xid).await;
     f.time.store((NOW + 90_000) as i64, Ordering::SeqCst);
     tx.commit().await.unwrap();
     assert_eq!(call.await.unwrap().unwrap().recorded_at_ms, NOW + 90_000);
@@ -307,10 +332,14 @@ async fn credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation
         .execute(&mut *tx)
         .await
         .unwrap();
+    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });
-    tokio::time::sleep(Duration::from_millis(40)).await;
+    observe_blocked_transaction(&pool, &blocker_xid).await;
     sqlx::query("UPDATE nodes SET credential_hash=$2 WHERE id=$1")
         .bind(f.node.node_id)
         .bind(aq_server::tokens::verifier(
