@@ -26,7 +26,13 @@ pub async fn run(
                 let maintenance=crate::updates::spool_dir(&state).is_some_and(|p|crate::updates::marker_present(&p.join("status/maintenance")));
                 if !maintenance && work.len()<4 {
                     let service=service.clone();let client=client.clone();
-                    work.spawn(async move{service.tick(id,&client).await});
+                    work.spawn(async move {
+                        // Bound the entire SQL/HTTP/receipt operation as well as
+                        // each individual database statement and HTTP request.
+                        // Cancellation after commit leaves an uncertain attempt.
+                        tokio::time::timeout(Duration::from_secs(15),service.tick(id,&client))
+                            .await.unwrap_or(Err(super::Error::Unavailable))
+                    });
                 }
             }
             Some(result)=work.join_next(),if !work.is_empty()=>{
