@@ -53,6 +53,7 @@ test-support = ["aq-notifications/test-support"]
 recovery-test-support = ["test-support"]
 
 [dev-dependencies]
+aq-playbook-host = { path = "../aq-playbook-host" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true

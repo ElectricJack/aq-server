@@ -1,0 +1,22 @@
+[package]
+name = "aq-playbooks-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aq-playbooks"
+path = "src/main.rs"
+
+[dependencies]
+aq-playbooks-model.workspace = true
+aq-playbooks-compiler.workspace = true
+aq-playbooks-runner.workspace = true
+aq-playbooks-postgres.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+zeroize = "1"
+
+[features]
+postgres-tests = []

@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "task": "PB-03",
+  "qualified_at_utc": "2026-10-31T07:47:18.329357+00:00",
+  "status": "implementation_verified_with_remaining_performance_failures",
+  "source": {
+    "base_commit": "79700b0435ff382f09875ebadd6b20ab77d4e09b",
+    "candidate_inventory_sha256": "906309e98c0b2537b726e166276e634a24457765b93323af0dee42fe59453856",
+    "measured_source": "Exact archives retained per experiment; final runtime source matches final measurements. Final correctness candidate additionally contains the mixed old/new race test.",
+    "schema_and_quota_changes": false,
+    "cache_or_external_service": false
+  },
+  "changes": [
+    "fresh authenticated full-artifact equality within owner/revision-locked CAS skips duplicate verification/canonicalization and payload/link writes",
+    "new catalog insertions and union locks use explicit ordered batches; all union locks and FK/reference checks retained",
+    "explicit same-key reencryption and ordinary active-key changes force refresh",
+    "default-off bounded value-free profiling of load/CAS stages and SQL driver API calls"
+  ],
+  "correctness": [
+    {
+      "log": "checks/core-tests.log",
+      "passed": 116,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "d10a1311f4515d5d6cebf1f92d1e849ec5c76548b06c9533bb94d6e5d807baa0"
+    },
+    {
+      "log": "checks/postgres-tests.log",
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "57f0d440216281cd064c620604938d59ea4da56e146c453b62223e3357ef71aa"
+    },
+    {
+      "log": "checks/admin-tests.log",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "06f75961f98c3ccdaa8515c8aa3e0a7b2e5172f8edfab461fa28a79c3fd85d7c"
+    },
+    {
+      "log": "checks/clippy.log",
+      "exit_code": 0,
+      "sha256": "fe0c3a2b65ac3f6b88fcb613db03cf4d156949e074bf586edd6e526fe700985e"
+    },
+    {
+      "log": "checks/format.log",
+      "exit_code": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "new_regressions": 5,
+  "profile_breakdown": {
+    "instrumented-baseline": {
+      "event_p95_us": 30848,
+      "completed_cas": 24,
+      "sql_driver_calls_per_cas": 38,
+      "fresh_plus_duplicate_verifications_per_cas": 10,
+      "extra_canonicalizations_per_cas": 5,
+      "unchanged_artifacts_skipped_per_cas": 0,
+      "stages": {
+        "artifact_disposal": {
+          "calls": 24,
+          "elapsed_us": 20,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "artifact_locks": {
+          "calls": 24,
+          "elapsed_us": 115818,
+          "sql_calls": 240,
+          "sql_wait_us": 115365
+        },
+        "artifact_read": {
+          "calls": 24,
+          "elapsed_us": 27271,
+          "sql_calls": 24,
+          "sql_wait_us": 17698
+        },
+        "artifact_validation": {
+          "calls": 120,
+          "elapsed_us": 12518,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "artifact_write": {
+          "calls": 120,
+          "elapsed_us": 232358,
+          "sql_calls": 480,
+          "sql_wait_us": 231621
+        },
+        "authority": {
+          "calls": 24,
+          "elapsed_us": 33639,
+          "sql_calls": 48,
+          "sql_wait_us": 33541
+        },
+        "commit": {
+          "calls": 24,
+          "elapsed_us": 38428,
+          "sql_calls": 24,
+          "sql_wait_us": 38417
+        },
+        "indexes": {
+          "calls": 24,
+          "elapsed_us": 18507,
+          "sql_calls": 24,
+          "sql_wait_us": 17485
+        },
+        "retention": {
+          "calls": 24,
+          "elapsed_us": 24017,
+          "sql_calls": 48,
+          "sql_wait_us": 23916
+        },
+        "snapshot_decode": {
+          "calls": 24,
+          "elapsed_us": 2966,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "snapshot_encode": {
+          "calls": 24,
+          "elapsed_us": 2720,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "snapshot_write": {
+          "calls": 24,
+          "elapsed_us": 31356,
+          "sql_calls": 24,
+          "sql_wait_us": 31340
+        }
+      }
+    },
+    "instrumented-optimized": {
+      "event_p95_us": 14225,
+      "completed_cas": 24,
+      "sql_driver_calls_per_cas": 9,
+      "fresh_plus_duplicate_verifications_per_cas": 5,
+      "extra_canonicalizations_per_cas": 0,
+      "unchanged_artifacts_skipped_per_cas": 5,
+      "stages": {
+        "artifact_compare": {
+          "calls": 120,
+          "elapsed_us": 82,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "artifact_disposal": {
+          "calls": 24,
+          "elapsed_us": 1,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "artifact_locks": {
+          "calls": 24,
+          "elapsed_us": 14758,
+          "sql_calls": 24,
+          "sql_wait_us": 14562
+        },
+        "artifact_read": {
+          "calls": 24,
+          "elapsed_us": 26265,
+          "sql_calls": 24,
+          "sql_wait_us": 16875
+        },
+        "authority": {
+          "calls": 24,
+          "elapsed_us": 32806,
+          "sql_calls": 48,
+          "sql_wait_us": 32711
+        },
+        "commit": {
+          "calls": 24,
+          "elapsed_us": 37171,
+          "sql_calls": 24,
+          "sql_wait_us": 37157
+        },
+        "indexes": {
+          "calls": 24,
+          "elapsed_us": 18384,
+          "sql_calls": 24,
+          "sql_wait_us": 17542
+        },
+        "retention": {
+          "calls": 24,
+          "elapsed_us": 24663,
+          "sql_calls": 48,
+          "sql_wait_us": 24567
+        },
+        "snapshot_decode": {
+          "calls": 24,
+          "elapsed_us": 2881,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "snapshot_encode": {
+          "calls": 24,
+          "elapsed_us": 2433,
+          "sql_calls": 0,
+          "sql_wait_us": 0
+        },
+        "snapshot_write": {
+          "calls": 24,
+          "elapsed_us": 30155,
+          "sql_calls": 24,
+          "sql_wait_us": 30141
+        }
+      }
+    }
+  },
+  "pb02_workload_starting_state_configuration_match": true,
+  "event_scaling": [
+    {
+      "history": 0,
+      "pb02_p95_us": 28798,
+      "pb03_p95_us": 17101,
+      "pb03_load_p95_us": 4928,
+      "pb03_commit_p95_us": 11692,
+      "event_budget_pass": true
+    },
+    {
+      "history": 32,
+      "pb02_p95_us": 34941,
+      "pb03_p95_us": 19985,
+      "pb03_load_p95_us": 5884,
+      "pb03_commit_p95_us": 14152,
+      "event_budget_pass": true
+    },
+    {
+      "history": 128,
+      "pb02_p95_us": 56690,
+      "pb03_p95_us": 42057,
+      "pb03_load_p95_us": 9470,
+      "pb03_commit_p95_us": 30685,
+      "event_budget_pass": false
+    },
+    {
+      "history": 512,
+      "pb02_p95_us": 172370,
+      "pb03_p95_us": 130369,
+      "pb03_load_p95_us": 21262,
+      "pb03_commit_p95_us": 99026,
+      "event_budget_pass": false
+    }
+  ],
+  "performance_acceptance": {
+    "normal_envelope_adopted": false,
+    "500_agent_claim": false,
+    "remaining_blocker": "128/512 history event budgets and512 history dispatch budgets fail; PB-04/PERF-01 remain release blockers"
+  },
+  "instrumentation_semantics": [
+    "SQL API call counts include COMMIT but not BEGIN, not wire RTT; raw-string prepare+execute can span multiple exchanges.",
+    "Stage elapsed includes SQL and CPU; verification/canonical timings overlap their containing stage.",
+    "BEGIN, connection-mutex wait and automatic rollback duration are outside phase spans.",
+    "aborted means no successful COMMIT acknowledgement, not durable rollback proof.",
+    "Counters bounded by fixed internal phase/operation keys, saturating integers; no names, SQL, parameters, keys, payloads or error text."
+  ],
+  "platform": {
+    "same_as_PB02": true,
+    "image": "postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b",
+    "postgres_version": "17.11",
+    "cpu_limit": 2,
+    "memory_limit_bytes": 1073741824,
+    "durability": [
+      "fsync=on",
+      "synchronous_commit=on",
+      "full_page_writes=on"
+    ],
+    "host": "shared Ryzen9 5900X/24logicalCPUs WSL2 DockerDesktop; not isolated from other compilation/testing"
+  },
+  "excluded": [
+    "PB-04 whole-state persistence redesign",
+    "protected-store performance qualification",
+    "production AQ integration",
+    "500-agent capacity",
+    "quota widening or unresolved-work eviction"
+  ],
+  "artifact_directory": "/home/jkern/dev/.aq-qualification/pb03-2026-10-31",
+  "artifact_manifest_sha256": "83c046e450ccc0ad506ad107b395e87f1082c8f9b307eed5f124099621339661",
+  "results_sha256": "23aa2475ff4796a9dac88e3a2f9291c42d9ece5fa7be731ac0e535e9d611cc98"
+}

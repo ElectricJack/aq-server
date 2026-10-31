@@ -1,0 +1,22 @@
+[package]
+name = "aq-playbook-host"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+aq-playbooks-model = { path = "../../vendor/aq-playbooks-42f9449/crates/aq-playbooks-model", version = "=0.1.0" }
+aq-playbooks-runner = { path = "../../vendor/aq-playbooks-42f9449/crates/aq-playbooks-runner", version = "=0.1.0" }
+aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-42f9449/crates/aq-playbooks-postgres", version = "=0.1.0" }
+postgres = "0.19"
+nix.workspace = true
+hex.workspace = true
+zeroize = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

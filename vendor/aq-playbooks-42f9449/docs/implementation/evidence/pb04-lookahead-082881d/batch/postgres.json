@@ -1,0 +1,1 @@
+{"version" : "PostgreSQL 17.11 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit", "fsync" : "on", "synchronous_commit" : "on", "full_page_writes" : "on", "shared_buffers" : "128MB", "max_connections" : "32"}

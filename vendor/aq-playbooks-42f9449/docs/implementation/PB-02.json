@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "task": "PB-02",
+  "measured_at_utc": "2026-10-31T07:16:07.735986+00:00",
+  "status": "measurement_complete_negative_performance_acceptance",
+  "normal_operating_envelope": null,
+  "capacity_claim": false,
+  "performance_acceptance": "failed for tested five-artifact workload; reduced finite points do not establish a steady combined envelope",
+  "source": {
+    "base_commit": "911fc5dc7d509688a078ff1715eda715b0b81cf1",
+    "pb01_commit": "921208a780e39c9d4cb68d5970d4f37b1e7a956b",
+    "reconciliation": "PB-02.source-reconciliation.json",
+    "engine_changed_by_task": false,
+    "measurement_binding": "Each experiment retains exact measured-source.tar.gz, inventory, release binary hash and raw timings. Final public harness differs only in clarified configuration-header labels and equivalent debug-build refusal form.",
+    "final_candidate_inventory_sha256": "465b23bc97fda6d8731114a85f36514bc74fe25fa229a24936829b266bf9d2d6"
+  },
+  "platform": {
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor,24logical CPUs",
+    "host": "WSL2 x86_64 Linux 6.18.33.2-microsoft-standard-WSL2; Docker Desktop",
+    "rust": "1.96.1; cargo1.96.1; release thin LTO",
+    "postgres": "17.11 Alpine",
+    "image": "postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b",
+    "postgres_limits": {
+      "cpus": 2,
+      "memory_bytes": 1073741824,
+      "shared_buffers": "128MB",
+      "max_connections": 32
+    },
+    "durability": {
+      "fsync": "on",
+      "synchronous_commit": "on",
+      "full_page_writes": "on"
+    },
+    "load": "Shared development host; other component compilation/testing not isolated. Exact before/after loadavg retained per experiment; no uncontended-host claim."
+  },
+  "budgets_us": {
+    "pure_transition_evaluation": 1000,
+    "event_admission": 25000,
+    "ready_dispatch": 100000
+  },
+  "timing_caveats": [
+    "Closure instrumentation excludes index synchronization and whole-state quota serialization; its passing values do not establish1ms total transition CPU.",
+    "Batch admission-to-first-visit upper bound includes dispatcher deliberately waiting until batch admission finishes; separate dispatch-call latency retained.",
+    "All local TCP/PostgreSQL synchronization costs are included; no provider effects or remote network measured.",
+    "Nearest-rank p95 over24samples in full matrix; reduced profile64event samples and24fresh queue batches, two repetitions per cell, two fresh databases.",
+    "Some queue/pending/concurrency storage summaries include diagnostic snapshot or selection-probe calls; primary event scaling table records the meter before its final diagnostic snapshot."
+  ],
+  "scaling": [
+    {
+      "initial_settled_runs_and_events": 0,
+      "initial_receipts": 0,
+      "initial_state_bytes": 14800,
+      "final_state_bytes": 42180,
+      "event_p95_us": 28798,
+      "load_p95_us": 4156,
+      "commit_p95_us": 24649,
+      "closure_p95_us": 65,
+      "non_storage_wall_p95_us": 441
+    },
+    {
+      "initial_settled_runs_and_events": 32,
+      "initial_receipts": 64,
+      "initial_state_bytes": 89661,
+      "final_state_bytes": 117035,
+      "event_p95_us": 34941,
+      "load_p95_us": 4909,
+      "commit_p95_us": 29544,
+      "closure_p95_us": 76,
+      "non_storage_wall_p95_us": 1040
+    },
+    {
+      "initial_settled_runs_and_events": 128,
+      "initial_receipts": 256,
+      "initial_state_bytes": 315357,
+      "final_state_bytes": 342731,
+      "event_p95_us": 56690,
+      "load_p95_us": 8440,
+      "commit_p95_us": 46067,
+      "closure_p95_us": 76,
+      "non_storage_wall_p95_us": 3219
+    },
+    {
+      "initial_settled_runs_and_events": 512,
+      "initial_receipts": 1024,
+      "initial_state_bytes": 1222920,
+      "final_state_bytes": 1250342,
+      "event_p95_us": 172370,
+      "load_p95_us": 23276,
+      "commit_p95_us": 131103,
+      "closure_p95_us": 93,
+      "non_storage_wall_p95_us": 15995
+    }
+  ],
+  "quota_cases": [
+    {
+      "quota": "runs",
+      "refused": true,
+      "state_unchanged": true,
+      "retained": {
+        "canonical_bytes": 17384,
+        "events": 0,
+        "pending_children": 0,
+        "queued_destinations": 0,
+        "receipts": 2,
+        "runs": 2,
+        "terminal_runs": 0
+      }
+    },
+    {
+      "quota": "events",
+      "refused": true,
+      "state_unchanged": true,
+      "retained": {
+        "canonical_bytes": 17139,
+        "events": 2,
+        "pending_children": 0,
+        "queued_destinations": 0,
+        "receipts": 0,
+        "runs": 0,
+        "terminal_runs": 0
+      }
+    },
+    {
+      "quota": "receipts",
+      "refused": true,
+      "state_unchanged": true,
+      "retained": {
+        "canonical_bytes": 17384,
+        "events": 0,
+        "pending_children": 0,
+        "queued_destinations": 0,
+        "receipts": 2,
+        "runs": 2,
+        "terminal_runs": 0
+      }
+    },
+    {
+      "quota": "state_bytes",
+      "refused": true,
+      "state_unchanged": true,
+      "retained": {
+        "canonical_bytes": 14800,
+        "events": 0,
+        "pending_children": 0,
+        "queued_destinations": 0,
+        "receipts": 0,
+        "runs": 0,
+        "terminal_runs": 0
+      }
+    },
+    {
+      "quota": "queued_destinations",
+      "refused": true,
+      "state_unchanged": true,
+      "retained": {
+        "canonical_bytes": 20040,
+        "events": 1,
+        "pending_children": 0,
+        "queued_destinations": 1,
+        "receipts": 0,
+        "runs": 0,
+        "terminal_runs": 0
+      }
+    }
+  ],
+  "fairness": {
+    "all_tested_ready_scope_prefixes_round_robin": true,
+    "scopes": 3,
+    "batch_backlogs": [
+      6,
+      24
+    ],
+    "admission": "CAS conflicts remain explicit. At four threads30/32 completed within8immediateattempts in final run; earlier27/32 retained. No producer fairness or unbounded retry claim."
+  },
+  "resources": {
+    "full_runner_peak_rss_kib": 37820,
+    "largest_measured_canonical_state_bytes": 1254530,
+    "default_namespace_limits": {
+      "runs": 10000,
+      "events": 100000,
+      "queued_destinations": 10000,
+      "receipts": 1000000,
+      "state_bytes": 67108864
+    },
+    "limits_are_not_capacity_claims": true
+  },
+  "checks": [
+    {
+      "log": "correctness/core-tests.log",
+      "passed": 116,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "eec9bbddf702d53d2efddfe0e26e644c67ef54db479b8b9b90271b928b07964f"
+    },
+    {
+      "log": "correctness/postgres-tests.log",
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "3ba3a35df3fbdf103789122fa176a9b5c292cb04155e36afa3d85e5521ef2a2d"
+    },
+    {
+      "log": "correctness/admin-tests.log",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "sha256": "ab5991d926eaa24a2cfca79ad4ed605d198706c52365985d5c64ed1460b0d588"
+    },
+    {
+      "log": "correctness/clippy.log",
+      "exit_code": 0,
+      "sha256": "2f029b670a3017b6b42caf290ce72b244a21ef8fb807cc9071c1435ac89dd171"
+    },
+    {
+      "log": "correctness/format.log",
+      "exit_code": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "followups": {
+    "PB-03": "Unchanged immutable-artifact CAS overhead; see PB-02.optimizations.md",
+    "PB-04": "Bounded history-sensitive persistence; see PB-02.optimizations.md",
+    "graph_commit": "59028ed",
+    "release_block": "No broader playbook/product performance qualification until follow-ups and PERF-01 pass"
+  },
+  "exclusions": [
+    "500-agent product capacity",
+    "production AQ Host integration",
+    "protected/encrypted-store performance",
+    "open-loop sustained arrival throughput",
+    "parallel foreach",
+    "uncontended hardware latency guarantee"
+  ],
+  "artifact_directory": "/home/jkern/dev/.aq-qualification/pb02-2026-10-31",
+  "artifact_manifest_sha256": "10692b692204c1fae90f4bbcc30cae72a808260ca40f4ef78b7a265c3ba43ca0",
+  "results_sha256": "ffc42f9bf6fa38c1f6f39fe336668030875be1fcc940f6aa15aac30749dd31ec",
+  "initial_failures": "Retained startup temporary-server readiness refusal, fixture structural-validation errors, and initial benchmark-only Clippy assertion failure; no engine changes were used to conceal them."
+}

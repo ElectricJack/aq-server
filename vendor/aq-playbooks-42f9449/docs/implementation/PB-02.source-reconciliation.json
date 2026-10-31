@@ -1,0 +1,126 @@
+{
+  "qualified_commit": "921208a780e39c9d4cb68d5970d4f37b1e7a956b",
+  "qualified_archive_sha256": "e0d1ece9f30971f79403bafa4dd5219bd0f28d3640ad9692fee60db40eba2bf6",
+  "measured_base_commit": "911fc5dc7d509688a078ff1715eda715b0b81cf1",
+  "changed_existing_files": [
+    {
+      "path": "README.md",
+      "qualified_sha256": "29230fc4eac37e85ecff40e01249e28923d46d4774c4aa7b64bb7495f20c9766",
+      "current_sha256": "d843d1a3b8d7a15b380bb21776e804f8c5798c64b5b437c7488ff268a4673fde"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/catalog.rs",
+      "qualified_sha256": "492d90a03356e1e602248e0b7dfac25533cac4bd0d496fd970ec55534d402a08",
+      "current_sha256": "7409bb6622d5920f9d185a47a3328c7964fe9df7162a082eb794d2abf3b38243"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/main.rs",
+      "qualified_sha256": "6bb9ed12956dfea8419e00e75c39c1813bced74921cea660657b728f184fc5cb",
+      "current_sha256": "0f260f6614290b5677c0d6626e2f6fcce0c1ec3da3769f7fed91022d7c9b0cb2"
+    },
+    {
+      "path": "crates/aq-playbooks-compiler/src/lib.rs",
+      "qualified_sha256": "22cc0e11f61f2b75167353d9585b9dde2ea4ce8a826ab856b82ff208acf2dc84",
+      "current_sha256": "ef98e3e17b632921058f1ffd823343b46f939d3d16c7796f19823e552a9035e6"
+    },
+    {
+      "path": "crates/aq-playbooks-model/src/lib.rs",
+      "qualified_sha256": "6c1b4dccbc0c8b78daa7e268f5d53352a397aef9759c41b236847ed101084e20",
+      "current_sha256": "f8a3bbafc113d1b96ba73d39b23ac4ece0aeece77a02c3b9ef014bbf0702150d"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/README.md",
+      "qualified_sha256": "44dfb45d32660fe6985dc1c79c90780d2dcc797b965b8537bf223ccf267163f3",
+      "current_sha256": "9643c6fa0dda7a131bd9f3a6b8caf9f5a433081518f995a224e32a49fc6d68f1"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/migrations/0002_indexes_and_protection.sql",
+      "qualified_sha256": "31534dbe0123e3c3d8b49bc6092b9fc12cf2a59dc884d4fcb950422d9f699a94",
+      "current_sha256": "7d9c0217f74b0c321d5ccabf07be178838cd4bb1ca6a83026aba12cd74e0afcc"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/indexes.rs",
+      "qualified_sha256": "93de2c1c86aedd3b9a94c0fe46cd66f801dcaa6e9eb4014fb1bb737e039498ef",
+      "current_sha256": "7d89bafe5d14767c59b4f6b8af638c395f6f1a5c389ad36c0995d2764f6dc9ec"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/lib.rs",
+      "qualified_sha256": "124f03f59df3b1dedb07427f10d2cdc3d68520f8536b5609f8fb77bd013228a0",
+      "current_sha256": "35be63fe17039cad270095b3cf1a0a5fa6d704c163fb660d3311ee8766b0c8a7"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/retention.rs",
+      "qualified_sha256": "d9151746ac606c415b8c58be8e337d4c14ea7a0d162b8f3a1960011e73d1d21b",
+      "current_sha256": "9976964dafb34019723dd546b0a966376c407fae2ca838b93ed4f0cbe83256cd"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/tests/protected_indexes.rs",
+      "qualified_sha256": "11e1f0cb809c627bc7de3f70b1e67db636db2b2a126086acf3bb8e822be61c08",
+      "current_sha256": "8d281bdd644d78465771d3e872a8f2105340fd1beadc6b53bbcfe4799b29b94c"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/README.md",
+      "qualified_sha256": "f81d67f2595ed46b4eccdd81b4ef6a7169d3c7f30dbced51ab6a1938ec281816",
+      "current_sha256": "f0735ebf4ef7b2f98b8a9ea03e29fb0488605ac2946a76a6038517bb65e824ea"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/indexes.rs",
+      "qualified_sha256": "f7dbb9230b99fab9fc1cfe76f5835baaea5aa3fff1e7f7af702b6386cd0159d4",
+      "current_sha256": "182cca1e9d757d0ba5846e15f18ca2bc030bc4a56cf581a6e600e8a606f40f2a"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/inspection.rs",
+      "qualified_sha256": "cee4a7ab14e5ee7906bc7251b60eda5d63159e8c4806435026f300e55423b71e",
+      "current_sha256": "f218d99328db6feacfb50c22084beb6b122a50a4ff9a53a379b7ffb6cabaf3ae"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/lib.rs",
+      "qualified_sha256": "e444616b33da278a48ce122e1185dcccf356d439e15d8929cd61335da48dd81d",
+      "current_sha256": "7b3e76452bb9695aa9aa9797c5b22f2b2631d6d57ba31e61cf236268810dac12"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/retention.rs",
+      "qualified_sha256": "6a468e5f4ef3b5d8fef408e964dd90cfe46a6b2826297c3410a57204ba49c036",
+      "current_sha256": "5bffa1317bce4c80511747713d82d845c0738298d3fbeeb887640c292817ef2a"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/review_regressions.rs",
+      "qualified_sha256": "26f46fd78eb4ba095211be997db5ddd7a276f42d8a99e6313baa49fe265ea741",
+      "current_sha256": "84796370502973175891504e6b04e4a0626af0b994b8fbc8275cce3929085ccd"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/semantics.rs",
+      "qualified_sha256": "89f6854868b1abf566e18a8cf0e6316064a9f5a4e82e0e84f14b0cfd6bb024e4",
+      "current_sha256": "aea2525b3499f96add4edbcd29f5c92b737a6094d0b02c8d7471f5cca0ccc215"
+    },
+    {
+      "path": "docs/acceptance.md",
+      "qualified_sha256": "d9882c16ace9686055fdd4a6ac48ca3c2e7420d9b04986a5f0d47d8a823c29c5",
+      "current_sha256": "83af3049b4cc7954c0fe2dc80b55a26ca931d6aff3ff0297e209007787fcffa6"
+    },
+    {
+      "path": "docs/aq-host-integration.md",
+      "qualified_sha256": "f758a1d6fcec6ee1b4566fb6ddc61d67a34202d7d1bf9f5db0667cb902017f4b",
+      "current_sha256": "eb29a8b2c222f2234f6d8de54de40933cfd411e2dfb9d777018c72cf93d5cfd6"
+    },
+    {
+      "path": "docs/scenario-dispositions.csv",
+      "qualified_sha256": "5fcc939fd9f8911e0bb1ac94b6e0e18795a889d415ee433bda936efbaec76e39",
+      "current_sha256": "411c5b77b91d8b0f4bd4539141691e51838f7db28598ea463fad1f27f2988af8"
+    },
+    {
+      "path": "docs/specs/0002-implementation.md",
+      "qualified_sha256": "8b0f2c4206458f2fa3a45f6466296cde8d4a646f223ef11f4d3fd8e9bb7702f7",
+      "current_sha256": "fe54c1e9ae73645474146ef268ad49caf01aeaee4d0329b5569ed650eb550a25"
+    },
+    {
+      "path": "skills/aq-playbook-author/SKILL.md",
+      "qualified_sha256": "3991dd3064059af9110b540991432b685ac03d8578c245f1037c371bfb5a6d67",
+      "current_sha256": "ff98977f625e34ed5e2c8b096a04b333b794245837324042d754005ae83e70d0"
+    }
+  ],
+  "added_tracked_engine_files": [
+    "crates/aq-playbooks-runner/src/metrics.rs"
+  ],
+  "disposition": "Current source contains functional changes, including sensitive event fields, named join behavior, metrics and storage/index/retention changes; PB-01 tests/builds do not transfer automatically. PB-02 only claims measured current-source behavior. No engine files were changed by this task."
+}

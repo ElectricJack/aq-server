@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/aq-playbooks-model",
+    "crates/aq-playbooks-compiler",
+    "crates/aq-playbooks-runner",
+    "crates/aq-playbooks-postgres",
+    "crates/aq-playbooks-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
+aq-playbooks-model = { path = "crates/aq-playbooks-model" }
+aq-playbooks-compiler = { path = "crates/aq-playbooks-compiler" }
+aq-playbooks-runner = { path = "crates/aq-playbooks-runner" }
+aq-playbooks-postgres = { path = "crates/aq-playbooks-postgres" }
+
+[profile.release]
+lto = "thin"
