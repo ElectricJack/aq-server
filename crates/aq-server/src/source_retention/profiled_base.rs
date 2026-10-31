@@ -19,6 +19,14 @@ use uuid::Uuid;
 const MAX_MANIFEST: usize = 1_048_576;
 const MAX_RETENTION: usize = 16_384;
 pub const MAX_VERIFIED_BYTES: usize = 4_194_304;
+static FILE_READS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+fn file_slot() -> Result<tokio::sync::OwnedSemaphorePermit> {
+    FILE_READS
+        .get_or_init(|| Arc::new(Semaphore::new(2)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| pending())
+}
 fn refused() -> AppError {
     AppError::Conflict("pre-offer source export unavailable or inconsistent".into())
 }
@@ -242,12 +250,7 @@ pub async fn verify_export(state: &AppState, token: &ReservedExport) -> Result<V
     let _bulk = rt.bulk.try_acquire().map_err(|_| pending())?;
     // A timed-out regular-file read keeps this slot until its OS call actually
     // returns. Cancellation cannot accumulate unbounded blocking hash workers.
-    static FILE_READS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    let slot = FILE_READS
-        .get_or_init(|| Arc::new(Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| pending())?;
+    let slot = file_slot()?;
     if token.reserved_bytes()
         < rt.config
             .max_bundle_bytes
@@ -513,6 +516,90 @@ fn read_files(
     Ok((manifest_json, manifest_digest, total, digest, installation))
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Member {
+    Manifest,
+    Bundle,
+}
+/// Fixed bounded I/O only. The native route owns credential, attempt and current
+/// retention checks before and after this call. Workers verify the assembled
+/// artifact digest before hydration; reading a chunk does not admit execution.
+pub async fn read_chunk(
+    state: &AppState,
+    token: &ReservedExport,
+    fact: &VerifiedExport,
+    member: Member,
+    offset: u64,
+    limit: u32,
+) -> Result<Vec<u8>> {
+    fact.validate_for(token)?;
+    if limit == 0 || limit > 262_144 {
+        return Err(refused());
+    }
+    let rt = runtime(state)?;
+    let _bulk = rt.bulk.try_acquire().map_err(|_| pending())?;
+    let slot = file_slot()?;
+    let root = rt.config.git_root.clone();
+    let fact = fact.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        read_chunk_file(&root, &fact, member, offset, limit)
+    });
+    tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .map_err(|_| pending())?
+        .map_err(|_| pending())?
+}
+fn read_chunk_file(
+    root: &std::path::Path,
+    fact: &VerifiedExport,
+    member: Member,
+    offset: u64,
+    limit: u32,
+) -> Result<Vec<u8>> {
+    use std::io::{Seek, SeekFrom};
+    if limit == 0 || limit > 262_144 {
+        return Err(refused());
+    }
+    let root = open_root(root)?;
+    let artifacts = open_member(&root, std::ffi::OsStr::new("artifacts"), true)?;
+    private_metadata(&artifacts, true)?;
+    let directory = open_member(
+        &artifacts,
+        std::ffi::OsStr::new(&fact.export_operation_id.to_string()),
+        true,
+    )?;
+    private_metadata(&directory, true)?;
+    // Manifest is small and pins the member length/digest. A replaced bundle
+    // with unchanged size is still caught by the worker's whole-artifact hash.
+    let manifest = bounded_file(&directory, "manifest.json", MAX_MANIFEST)?;
+    if manifest != fact.manifest_bytes() {
+        return Err(refused());
+    }
+    let expected = match member {
+        Member::Manifest => manifest.len() as u64,
+        Member::Bundle => fact.bundle_bytes,
+    };
+    let remaining = expected.checked_sub(offset).ok_or_else(refused)?;
+    let count = remaining.min(u64::from(limit)) as usize;
+    if matches!(member, Member::Manifest) {
+        let start = usize::try_from(offset).map_err(|_| refused())?;
+        return Ok(manifest[start..start + count].to_vec());
+    }
+    let mut file = open_member(&directory, std::ffi::OsStr::new("objects.bundle"), false)?;
+    let before = private_metadata(&file, false)?;
+    if before.len() != expected {
+        return Err(refused());
+    }
+    file.seek(SeekFrom::Start(offset)).map_err(|_| refused())?;
+    let mut bytes = vec![0; count];
+    file.read_exact(&mut bytes).map_err(|_| refused())?;
+    if !unchanged(&before, &file.metadata().map_err(|_| refused())?) {
+        return Err(refused());
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,6 +769,45 @@ mod tests {
         )
         .unwrap();
         assert!(read_files(&f.root, f.token.request(), &f.response, 4096).is_err());
+    }
+    #[test]
+    fn chunk_reads_are_bounded_exact_and_refuse_changed_members() {
+        let f = fixture();
+        let v = fact(&f);
+        let expected = fs::read(f.artifact.join("objects.bundle")).unwrap();
+        let mut actual = Vec::new();
+        for offset in (0..expected.len()).step_by(7) {
+            actual.extend(read_chunk_file(&f.root, &v, Member::Bundle, offset as u64, 7).unwrap());
+        }
+        assert_eq!(actual, expected);
+        assert!(
+            read_chunk_file(&f.root, &v, Member::Bundle, expected.len() as u64, 7)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            read_chunk_file(&f.root, &v, Member::Bundle, expected.len() as u64 + 1, 7).is_err()
+        );
+        assert!(read_chunk_file(&f.root, &v, Member::Bundle, u64::MAX, 7).is_err());
+        for limit in [0, 262145, u32::MAX] {
+            assert!(read_chunk_file(&f.root, &v, Member::Bundle, 0, limit).is_err());
+        }
+        assert_eq!(
+            read_chunk_file(&f.root, &v, Member::Manifest, 0, 262144).unwrap(),
+            v.manifest_bytes()
+        );
+        fs::write(f.artifact.join("manifest.json"), b"{}").unwrap();
+        assert!(read_chunk_file(&f.root, &v, Member::Bundle, 0, 7).is_err());
+        let f = fixture();
+        let v = fact(&f);
+        let path = f.artifact.join("objects.bundle");
+        let saved = path.with_extension("saved");
+        fs::rename(&path, &saved).unwrap();
+        symlink(&saved, &path).unwrap();
+        assert!(read_chunk_file(&f.root, &v, Member::Bundle, 0, 7).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"short").unwrap();
+        assert!(read_chunk_file(&f.root, &v, Member::Bundle, 0, 7).is_err());
     }
     #[test]
     fn retention_requires_exact_active_transfer_and_finite_observation() {
