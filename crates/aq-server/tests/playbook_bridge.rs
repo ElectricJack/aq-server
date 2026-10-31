@@ -23,11 +23,40 @@ async fn setup() -> Env {
     let f = fixture().await;
     let attempt = insert(&f).await;
     let pool = f.db.pool().await;
-    // Candidate tables only. meta remains the currently registered ordered version.
-    sqlx::raw_sql(include_str!("../migrations/0023_playbook_bridge.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    let registered: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('public.playbook_namespaces')::text")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    if aq_server::STATE_FORMAT_VERSION >= 23 {
+        // Ordered integration must install the real migration. Never repair a
+        // missing registered table or silently accept a migration gap here.
+        assert!(registered.is_some(), "registered023 tables missing");
+    } else {
+        // Isolated candidate profile only: explicit table install, no meta bump.
+        assert!(
+            registered.is_none(),
+            "unexpected candidate tables before install"
+        );
+        let before: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0023_playbook_bridge.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let after: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            before, after,
+            "candidate fixture changed registered version"
+        );
+    }
     let p = &f.profiled.offer.binding;
     let aq_session_protocol::SessionIdentity::Remote {
         session_id,
