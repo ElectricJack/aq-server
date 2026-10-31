@@ -1,0 +1,41 @@
+   Compiling aq-server v0.1.0 (/tmp/aq10-result-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.59s
+     Running tests/profiled_results.rs (/tmp/aq22-observations/target/debug/deps/profiled_results-f097babf11cbcdbb)
+
+running 7 tests
+test result_http_uses_current_machine_auth_and_bounded_work_admission ... ok
+test cancellation_is_retained_without_turning_claim_into_success ... ok
+test recording_retains_claims_replays_and_serializes_corrections_without_settlement ... ok
+test sql_requires_exact_stopped_outcome_and_atomic_report_head ... ok
+test report_quota_preserves_exact_replay_and_immutable_heads ... ok
+test rotated_credential_after_observed_lock_wait_cannot_record ... ok
+test stopped_and_pinned_typed_outcome_are_actual_required_owners ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s
+
+     Running tests/profiled_started.rs (/tmp/aq22-observations/target/debug/deps/profiled_started-cbaf354657347005)
+
+running 6 tests
+test grant_expiring_while_waiting_for_owner_lock_cannot_become_running ... ok
+test journal_heads_preserve_exact_phase_scope_and_require_original_start_record ... ok
+test original_started_is_atomic_and_historical_replay_never_revives_stopped_host ... ok
+test receipt_journal_and_running_rollback_together_and_rotated_auth_cannot_replay ... ok
+test worker_http_start_report_uses_current_node_auth_and_returns_only_historical_ack ... ok
+test missing_prepared_head_foreign_owner_and_unregistered_allowlist_never_make_running ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s
+
+     Running tests/profiled_stopped.rs (/tmp/aq22-observations/target/debug/deps/profiled_stopped-179337babffcc096)
+
+running 8 tests
+test credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation ... ok
+test missing_started_or_foreign_physical_owner_cannot_settle ... ok
+test expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority ... ok
+test journal_failure_rolls_back_receipt_and_stop_then_retry_succeeds ... ok
+test renewed_shorter_permit_is_valid_but_rotated_owner_cannot_replay ... ok
+test sql_rejects_digest_only_physical_substitution_and_receipt_without_atomic_projection ... ok
+test worker_http_stop_is_bounded_authenticated_and_historical_only ... ok
+test stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s
+

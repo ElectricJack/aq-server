@@ -231,3 +231,11 @@ wrong physical/logical binding, expired/cancelled recording, credential rotation
 while blocked, atomic rollback, and unchanged held task/source/effect/graph state.
 Only the recorded-receipt pure contract can be qualified before migration024 and
 actual owner integration. Stage B evaluation and Stage C release remain open.
+
+### B1 isolated implementation checkpoint
+
+The [report-ledger component](AQ-10-result-ledger-qualification.md) implements
+Recorded receipts and immutable correction history with21 passing new/regression
+SQL/HTTP tests. Candidate024 remains unregistered until022/023 integrate; explicit
+disposable application is not ordered-migration qualification. Strict lint and
+format pass. B1 does not close eligibility evaluation, StageC or GATE-04.

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "task": "AQ-10",
+  "source_revision": "c1ab603310636fb63c768172fde8c959df64fcd5",
+  "captured_at": "2026-10-31T19:44:00.124142+00:00",
+  "status": "Qualified isolated report-ledger component; migration024 not registered or ordered-union qualified",
+  "qualification": {
+    "new_result_pg_http_tests": 7,
+    "existing_started_tests": 6,
+    "existing_stopped_tests": 8,
+    "total": 21,
+    "strict_server_all_targets_all_features_clippy": "passed",
+    "format": "passed"
+  },
+  "commands": [
+    "DATABASE_URL=<disposable PG> RUST_TEST_THREADS=4 cargo test -p aq-server --test profiled_results --test profiled_stopped --test profiled_started --locked --offline",
+    "cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo fmt -p aq-server -- --check"
+  ],
+  "source_sha256": {
+    "crates/aq-server/migrations/0024_profiled_results.sql": "b5de98d626581c83b93cc6ad9646fff1f74cf278bcd8bbd2ee94f116ae5238c7",
+    "crates/aq-server/src/lib.rs": "4bd48accf34f4e59601be4a53fb9793170dc361b85aea33f2f0fa7601585e12e",
+    "crates/aq-server/src/profiled_execution.rs": "95ac8255233f1d15390e1d6441df0d6eea227a6ef87c4b3d37e6b9cfa9414dca",
+    "crates/aq-server/src/profiled_execution/results.rs": "a4581885599f2a58a6ca290e55517d336a7ad7d2455fa98d0d43feffb39b6b4f",
+    "crates/aq-server/tests/common/native_started.rs": "fb23e859add4f2ff7c2259101e68117e4e30f70bd04a149a934d1e100044cd0d",
+    "crates/aq-server/tests/profiled_results.rs": "4afe9ec54fdd2e427710f42c2073ab51315e715a2ebbdb93a027d4ef06a26826"
+  },
+  "evidence": {
+    "docs/implementation/evidence/aq10-result-ledger-c1ab603/clippy.log": {
+      "sha256": "d2e7f25789f8b6ceb11ade6ce13f4381ab9045b673a1fb59d17ca1052d3371cf",
+      "bytes": 2075
+    },
+    "docs/implementation/evidence/aq10-result-ledger-c1ab603/fmt.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "docs/implementation/evidence/aq10-result-ledger-c1ab603/regression.log": {
+      "sha256": "03aab86c4c2f05e59c061fcff5d9bfaf74e7a8663a298a68ebade541911109e2",
+      "bytes": 2531
+    }
+  },
+  "limits": [
+    "The result tests explicitly apply candidate024 SQL to disposable state21 databases. This is not ordered migration, rolling upgrade or assembled source qualification;022/023 must integrate first.",
+    "Started/Stopped and Outcome are real daemon owners, but launch/host and graph/source setup use explicitly synthetic fixtures. No native worker or provider execution is qualified.",
+    "The receipt retains worker claims only. Source references, pending effects, review/check evidence, policy eligibility, held-task release and graph completion are not evaluated or changed.",
+    "Current admitted boot/runtime still gates historical POST replay. Future old-incarnation receipt lookup remains separate StageC work."
+  ]
+}
