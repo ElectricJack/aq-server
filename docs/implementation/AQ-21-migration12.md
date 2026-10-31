@@ -51,3 +51,8 @@ The separate worktree is `/home/jkern/dev/agent-q-aq21-migration`; its evidence 
 retained under `target/aq21-migration-evidence` and copied to the immutable bundle
 listed in the companion JSON. Shared Cargo build cache was used, but compilation
 source paths/manifests are this migration-only worktree, not unfinished runtime.
+
+The reviewed source checkpoint is `bb57616`, cherry-picked to main as `7769508`.
+Tracked qualification logs and the exact disposable-database script are in
+`AQ-21-migration12-evidence/`. The recorded version12 assertion describes this
+checkpoint; later additive migrations should assert the current server format.

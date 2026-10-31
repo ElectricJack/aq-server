@@ -1,0 +1,24 @@
+    Checking digest v0.10.7
+    Checking aq-release v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-release)
+    Checking aq-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-protocol-0.1.0)
+    Checking sha2 v0.10.9
+    Checking hmac v0.12.1
+    Checking hkdf v0.12.4
+    Checking aq-session-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-session-protocol-0.1.0)
+    Checking sqlx-core v0.8.6
+    Checking md-5 v0.10.6
+    Checking aq-agent-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-agent-api)
+    Checking aq-worker-protocol v0.2.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-worker-protocol-0.2.0)
+    Checking aq-session-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-session-api)
+    Checking aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking sqlx-postgres v0.8.6
+    Checking aq-profiles v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-profiles)
+    Checking aq-lifecycle-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-lifecycle-api)
+    Checking aq-selection v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-selection)
+    Checking sqlx v0.8.6
+    Checking aq-admission v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-admission)
+    Checking signature v2.2.0
+    Checking rsa v0.9.10
+    Checking aq-notifications v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-notifications)
+    Checking aq-server v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.92s

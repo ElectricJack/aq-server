@@ -24,5 +24,8 @@
     "No process/provider/renderer qualification",
     "No production database or product pin changed",
     "Shared build cache; source is separate migration-only worktree"
-  ]
+  ],
+  "checkpoint_commit": "bb57616",
+  "main_cherry_pick": "7769508",
+  "tracked_evidence_root": "docs/implementation/AQ-21-migration12-evidence"
 }

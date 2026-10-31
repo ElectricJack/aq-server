@@ -1,0 +1,67 @@
+   Compiling digest v0.10.7
+   Compiling aq-release v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-release)
+   Compiling aq-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-protocol-0.1.0)
+   Compiling sha2 v0.10.9
+   Compiling hmac v0.12.1
+   Compiling hkdf v0.12.4
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-session-protocol-0.1.0)
+   Compiling sqlx-core v0.8.6
+   Compiling md-5 v0.10.6
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-agent-api)
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-session-api)
+   Compiling sqlx-postgres v0.8.6
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-lifecycle-api)
+   Compiling aq-profiles v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-profiles)
+   Compiling aq-selection v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-selection)
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-notifications)
+   Compiling sqlx v0.8.6
+   Compiling aq-admission v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-admission)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/agent-q-aq21-migration/vendor/aq-worker-protocol-0.2.0)
+   Compiling signature v2.2.0
+   Compiling rsa v0.9.10
+   Compiling aq-server v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.99s
+     Running tests/session_inspection.rs (/home/jkern/dev/agent-q-aq21/target/debug/deps/session_inspection-5e6c0b61beaca259)
+
+running 4 tests
+test every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize ... FAILED
+test current_roles_exact_session_revocation_expiry_and_deletion_are_rechecked ... FAILED
+test migration012_registers_only_schema_and_exact_state_format ... FAILED
+test inspection_expiry_is_sampled_after_an_observed_acl_lock_wait ... FAILED
+
+failures:
+
+---- every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize stdout ----
+
+thread 'every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize' (3227501) panicked at crates/aq-server/tests/session_inspection.rs:46:245:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "42P01", message: "relation \"session_inspection_acl\" does not exist", detail: None, hint: None, position: Some(Original(13)), where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("parse_relation.c"), line: Some(1449), routine: Some("parserOpenTable") })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- current_roles_exact_session_revocation_expiry_and_deletion_are_rechecked stdout ----
+
+thread 'current_roles_exact_session_revocation_expiry_and_deletion_are_rechecked' (3227500) panicked at crates/aq-server/tests/session_inspection.rs:95:46:
+called `Result::unwrap()` on an `Err` value: Internal
+
+---- migration012_registers_only_schema_and_exact_state_format stdout ----
+
+thread 'migration012_registers_only_schema_and_exact_state_format' (3227505) panicked at crates/aq-server/tests/session_inspection.rs:58:5:
+assertion `left == right` failed
+  left: "11"
+ right: "12"
+
+---- inspection_expiry_is_sampled_after_an_observed_acl_lock_wait stdout ----
+
+thread 'inspection_expiry_is_sampled_after_an_observed_acl_lock_wait' (3227504) panicked at crates/aq-server/tests/session_inspection.rs:46:245:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "42P01", message: "relation \"session_inspection_acl\" does not exist", detail: None, hint: None, position: Some(Original(13)), where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("parse_relation.c"), line: Some(1449), routine: Some("parserOpenTable") })
+
+
+failures:
+    current_roles_exact_session_revocation_expiry_and_deletion_are_rechecked
+    every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize
+    inspection_expiry_is_sampled_after_an_observed_acl_lock_wait
+    migration012_registers_only_schema_and_exact_state_format
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+
+error: test failed, to rerun pass `-p aq-server --test session_inspection`

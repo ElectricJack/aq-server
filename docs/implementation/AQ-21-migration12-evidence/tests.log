@@ -1,0 +1,12 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/agent-q-aq21-migration/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.52s
+     Running tests/session_inspection.rs (/home/jkern/dev/agent-q-aq21/target/debug/deps/session_inspection-5e6c0b61beaca259)
+
+running 4 tests
+test every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize ... ok
+test current_roles_exact_session_revocation_expiry_and_deletion_are_rechecked ... ok
+test migration012_registers_only_schema_and_exact_state_format ... ok
+test inspection_expiry_is_sampled_after_an_observed_acl_lock_wait ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+
