@@ -3,6 +3,7 @@ pub mod admission;
 pub mod agent_access;
 pub mod authz;
 pub mod config;
+pub mod dashboard_assets;
 pub mod error;
 pub mod execution;
 pub mod identity;
@@ -158,9 +159,30 @@ pub fn build_admin_router_with_policy_owners(
     playbooks: Option<Arc<playbooks::driver::Driver>>,
     reviews: Option<Arc<reviews::Service>>,
 ) -> Router {
+    build_admin_router_with_optional_dashboard(state, playbooks, reviews, None)
+}
+/// Explicit test/embedding injection. The machine router never receives assets.
+pub fn build_admin_router_with_dashboard(
+    state: AppState,
+    dashboard: Arc<dashboard_assets::DashboardAssets>,
+) -> Router {
+    build_admin_router_with_optional_dashboard(state, None, None, Some(dashboard))
+}
+fn build_admin_router_with_optional_dashboard(
+    state: AppState,
+    playbooks: Option<Arc<playbooks::driver::Driver>>,
+    reviews: Option<Arc<reviews::Service>>,
+    dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
+) -> Router {
     let policy_routes = playbooks.map(playbooks::api::routes).unwrap_or_default();
     let review_routes = reviews.map(reviews::admin_routes).unwrap_or_default();
-    Router::new()
+    let app = Router::new()
+        .merge(
+            dashboard
+                .as_ref()
+                .map(|a| dashboard_assets::routes(a.clone()))
+                .unwrap_or_default(),
+        )
         .merge(policy_routes)
         .merge(review_routes)
         .merge(admin_api::admin_routes())
@@ -186,8 +208,13 @@ pub fn build_admin_router_with_policy_owners(
             state.store.admission.clone(),
             admission::gate,
         ))
-        .layer(from_fn(harden))
-        .with_state(state)
+        .layer(from_fn(harden));
+    let app = if let Some(dashboard) = dashboard {
+        app.layer(axum::Extension(dashboard))
+    } else {
+        app
+    };
+    app.with_state(state)
 }
 
 /// Machine routes plus `/healthz`. No human routes are mounted here.
@@ -231,6 +258,15 @@ pub async fn run_with_listeners(
     worker: tokio::net::TcpListener,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    run_with_listeners_and_dashboard(state, admin, worker, shutdown, None).await
+}
+async fn run_with_listeners_and_dashboard(
+    state: AppState,
+    admin: tokio::net::TcpListener,
+    worker: tokio::net::TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
+) -> anyhow::Result<()> {
     profiled_execution::policies::install(&state)
         .await
         .map_err(|_| anyhow::anyhow!("profiled policy installation failed"))?;
@@ -257,7 +293,8 @@ pub async fn run_with_listeners(
     let wait = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let admin_app = build_admin_router(state.clone());
+    let admin_app =
+        build_admin_router_with_optional_dashboard(state.clone(), None, None, dashboard);
     let worker_app = build_worker_router(state);
     let serving = tokio::try_join!(
         async {
@@ -306,6 +343,11 @@ async fn shutdown_signal() {
 
 /// Binds both listeners and serves until SIGTERM or ctrl-c.
 pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
+    let dashboard = std::env::var_os("AQ_DASHBOARD_DIR")
+        .map(|path| {
+            dashboard_assets::DashboardAssets::load(std::path::Path::new(&path)).map(Arc::new)
+        })
+        .transpose()?;
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -328,5 +370,5 @@ pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
         store,
         clock: system_clock(),
     };
-    run_with_listeners(state, admin, worker, shutdown_signal()).await
+    run_with_listeners_and_dashboard(state, admin, worker, shutdown_signal(), dashboard).await
 }
