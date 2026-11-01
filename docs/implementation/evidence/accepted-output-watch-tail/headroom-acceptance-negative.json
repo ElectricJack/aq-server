@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "authority": "historical static diagnostic; no accepted output or execution proof",
+  "worker_source": "04b8f13",
+  "server_source": "8c477d4",
+  "documentation_source": "79c54b1",
+  "worker_sha256": "adbf3230fc6c9d19de9c29a744e8f8ee0eccaa5aa6bacbcadb50c512c3638b20",
+  "server_test_sha256": "901a7aa06b45938f2c86a4366314dfdffbe7a00a43827e3f0da38e756f25f81c",
+  "owners_sha256": {
+    "periodic_elf": "fdbfbdc8e8a906019303aeec2a386b43d3f5862404f3448623f653585500f912",
+    "aq_git": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "git": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+    "host": "96aaafcc295b45e95accf67d06f9a90d5a1caf9dad09ebdd09034f7cf8ad9044",
+    "tmux": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd"
+  },
+  "disk_available_before_case_bytes": 23643541504,
+  "default_git_import_minimum_available_bytes": 11005853696,
+  "default_git_profile_changed": false,
+  "timeouts_changed": false,
+  "rebuild_performed": false,
+  "case_seconds": 4.31,
+  "constant_stage": "phase_accept",
+  "journal_revision": 3,
+  "http_statuses": [
+    [
+      "register",
+      200,
+      58
+    ],
+    [
+      "poll",
+      200,
+      492
+    ],
+    [
+      "proposal",
+      200,
+      84
+    ],
+    [
+      "accept",
+      409,
+      152
+    ]
+  ],
+  "execution_issued_count": 0,
+  "execution_deadline_ns": null,
+  "baseline": false,
+  "running": false,
+  "stopped": false,
+  "kernel_echild": null,
+  "started_ack": false,
+  "stopped_ack": false,
+  "limits_of_inference": [
+    "first acceptance refused; exact409 application reason was not emitted",
+    "hydration not reached; prior disk hypothesis not newly verified",
+    "no terminal registration, Watch, node pull, upload or authorized tail",
+    "no host execution/cleanup, latest-format startup or production qualification",
+    "no Codex/provider call or newDDL",
+    "no retry after this result"
+  ]
+}

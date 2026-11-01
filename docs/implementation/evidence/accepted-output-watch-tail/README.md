@@ -80,3 +80,27 @@ The earlier worker and both previous negatives remain recorded separately.
 An accepted-output proof still requires an independently sufficient environment
 or an explicitly reviewed/provisioned stopped-node fixture profile, then a new
 authorized attempt. No Codex or provider was invoked and no retry occurred.
+
+
+## Fourth attempt: sufficient disk, earlier acceptance refusal
+
+Root reclaimed only two inactive owned scratch Cargo caches; no source, repository
+or pinned owner was changed. Before the next explicitly authorized single attempt,
+all pins were rechecked and available disk was23643541504B, above the unchanged
+default Git import requirement11005853696B. The existing diagnostic server binary
+was reused without a Cargo rebuild; source since8c477d4 differed only in evidence.
+The historical33 fixture, default Git profile and all timeouts remained unchanged.
+
+The case ran4.31s and refused at `phase_accept`: register200/58ms, poll200/492ms,
+proposal200/84ms and first accept409/152ms. Journal revision was3, no execution
+grant was issued, execution deadline was absent, baseline/Running/Stopped and both
+ACKs were false, and ECHILD was absent. It never reached source hydration or any
+terminal Watch/pull/upload/tail step. The exact application reason for409 was not
+emitted; no inference that it was expiry or a changed authority fact is made.
+The [bounded log](headroom-acceptance-negative.log) and
+[full pin/status observation](headroom-acceptance-negative.json) retain this result.
+
+This distinct earlier refusal cannot verify or disprove the prior source-supported
+disk diagnosis. No timer, profile or admission check was weakened, no retry followed,
+and no Codex/provider call, host execution, accepted output or production claim
+follows from this attempt. The shared build target was released after completion.

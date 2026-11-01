@@ -1,0 +1,18 @@
+
+running 1 test
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ... bounded phase failure clocks (historical, no execution permission): {"availability":[{"expires_at_ms":1793565952701,"received_at_ms":1793565922701,"sequence":2,"state":"available"}],"issued":[],"server_now_ms":1793565924643}
+bounded output fixture refusal: {"baseline":false,"execution_deadline_ns":null,"http_statuses":[["/v1/worker/profiled/register",200,58],["/v1/worker/profiled/poll",200,492],["/v1/worker/profiled-v2/proposal",200,84],["/v1/worker/profiled-v2/accept",409,152]],"journal_revision":3,"kernel_wait_echild":null,"phase":"refused","running":false,"stage":"phase_accept","started_ack":false,"stopped":false,"stopped_ack":false}
+
+thread 'published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop' (833720) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase_output.rs:147:5:
+assertion `left == right` failed: worker refusal stage=Some(String("phase_accept"))
+  left: String("refused")
+ right: "terminal_registered"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 4.31s
