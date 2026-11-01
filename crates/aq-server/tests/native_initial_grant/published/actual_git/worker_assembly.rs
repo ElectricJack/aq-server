@@ -9,6 +9,8 @@ mod phase;
 mod phase_history;
 #[path = "worker_assembly/phase_host.rs"]
 mod phase_host;
+#[path = "worker_assembly/phase_output.rs"]
+mod phase_output;
 #[path = "worker_assembly/phase_terminal.rs"]
 mod phase_terminal;
 async fn read_frame(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
@@ -61,6 +63,11 @@ async fn actual_worker_reads_history_after_withheld_first_execution_reply() {
 async fn actual_worker_reports_real_host_lifecycle_and_persists_daemon_acknowledgments() {
     run_worker(Mode::Terminal).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires pinned output-capable worker, periodic ELF, Git and tmux"]
+async fn actual_worker_output_reaches_authorized_tail_after_physical_stop() {
+    run_worker(Mode::Output).await;
+}
 #[derive(Clone, Copy)]
 enum Mode {
     Legacy,
@@ -70,19 +77,26 @@ enum Mode {
     Host,
     LostExecutionReply,
     Terminal,
+    Output,
 }
 async fn run_worker(mode: Mode) {
     let use_phase = !matches!(mode, Mode::Legacy);
     let prepare_phase_inputs = matches!(
         mode,
-        Mode::Inputs | Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal
+        Mode::Inputs
+            | Mode::Execution
+            | Mode::Host
+            | Mode::LostExecutionReply
+            | Mode::Terminal
+            | Mode::Output
     );
     let execute_phase = matches!(
         mode,
-        Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal
+        Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal | Mode::Output
     );
-    let host = matches!(mode, Mode::Host | Mode::Terminal);
-    let terminal = matches!(mode, Mode::Terminal);
+    let host = matches!(mode, Mode::Host | Mode::Terminal | Mode::Output);
+    let terminal = matches!(mode, Mode::Terminal | Mode::Output);
+    let relay_output = matches!(mode, Mode::Output);
     let history_loss = matches!(mode, Mode::LostExecutionReply);
     let mut a = setup_actual_unpublished().await;
     let case = &mut a.case;
@@ -100,6 +114,10 @@ async fn run_worker(mode: Mode) {
             if terminal {
                 phase_terminal::configure(case).await;
                 config["report_terminal"] = json!(true);
+                if relay_output {
+                    phase_output::configure(case).await;
+                    config["relay_output"] = json!(true);
+                }
             }
         }
         (Some(config), inventory_qualification)
@@ -236,7 +254,15 @@ async fn run_worker(mode: Mode) {
             .bind(identity.node_id).bind(identity.boot_id).bind(json!(snapshot)).execute(&case.env.env.pool).await.unwrap();
     }
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
-    let result = read_frame(&mut output).await;
+    let mut result = read_frame(&mut output).await;
+    let watch = if relay_output {
+        let watched = phase_output::watch(case, &result).await;
+        input.write_all(b"{\"continue\":true}\n").await.unwrap();
+        result = read_frame(&mut output).await;
+        Some(watched)
+    } else {
+        None
+    };
     let expected_phase = if history_loss {
         "phase_history_only"
     } else if execute_phase {
@@ -304,6 +330,9 @@ async fn run_worker(mode: Mode) {
             phase_host::verify(&worker_root, &result);
             if terminal {
                 phase_terminal::verify(case, &worker_root, &result).await;
+                if let Some(watched) = &watch {
+                    phase_output::verify(case, watched, &result).await;
+                }
             }
         } else {
             assert!(result.get("host_started").is_none());
