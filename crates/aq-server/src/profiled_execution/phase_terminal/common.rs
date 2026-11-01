@@ -223,6 +223,10 @@ pub(super) async fn require_start_open_locked(
     .map_err(database)?;
     crate::intelligence::fence_continuing_principal(state, tx, decision, loaded.view.project_id)
         .await?;
-    loaded.view.active_at(now(state)?)?;
+    let checked = now(state)?;
+    if checked < loaded.history.receipt.issued_at_ms {
+        return Err(conflict());
+    }
+    loaded.view.active_at(checked)?;
     Ok(())
 }

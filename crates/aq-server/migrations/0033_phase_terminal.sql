@@ -16,6 +16,7 @@ CREATE FUNCTION profiled_phase_terminal_capacity_guard() RETURNS trigger LANGUAG
 DECLARE n BIGINT; b BIGINT; pn BIGINT; pb BIGINT;
 BEGIN
  IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'retained phase terminal capacity'; END IF;
+ IF current_setting('transaction_isolation') NOT IN ('read committed','serializable') THEN RAISE EXCEPTION 'phase capacity requires current predicate visibility'; END IF;
  IF NOT EXISTS(SELECT 1 FROM profiled_phase_execution_grants g WHERE g.attempt_id=NEW.attempt_id AND g.node_id=NEW.node_id) THEN RAISE EXCEPTION 'actual phase grant capacity owner required'; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('aq-phase-terminal-capacity-v1',0));
  SELECT count(*),COALESCE(sum(reserved_bytes),0),count(*) FILTER(WHERE node_id=NEW.node_id),COALESCE(sum(reserved_bytes) FILTER(WHERE node_id=NEW.node_id),0) INTO n,b,pn,pb FROM profiled_phase_terminal_capacity;
@@ -83,6 +84,7 @@ BEGIN
  SELECT * INTO STRICT g FROM profiled_phase_execution_grants WHERE attempt_id=NEW.attempt_id;
  IF NEW.initial_authority_kind<>'phase_execution_v2' OR NEW.node_id<>g.node_id OR NEW.initial_authority_receipt_digest IS DISTINCT FROM g.receipt_digest
  OR current_setting('aq.phase_terminal_receipt',true) IS DISTINCT FROM g.receipt_digest THEN RAISE EXCEPTION 'qualified transaction-local phase terminal writer required'; END IF;
+ IF current_setting('transaction_isolation') NOT IN ('read committed','serializable') THEN RAISE EXCEPTION 'phase terminal requires current predicate visibility'; END IF;
  q:=convert_from(NEW.request_bytes,'UTF8')::JSONB; r:=convert_from(NEW.receipt_bytes,'UTF8')::JSONB;
  envelope:=convert_from(NEW.phase_envelope_bytes,'UTF8')::JSONB; ack:=convert_from(NEW.phase_ack_bytes,'UTF8')::JSONB;
  IF envelope->>'schema_version' IS DISTINCT FROM '1' OR ack->>'schema_version' IS DISTINCT FROM '1'
@@ -107,13 +109,18 @@ END $$;
 CREATE TRIGGER profiled_phase_terminal_origin_guard BEFORE INSERT ON profiled_started_receipts FOR EACH ROW EXECUTE FUNCTION profiled_phase_terminal_origin_guard();
 CREATE TRIGGER profiled_phase_terminal_origin_guard BEFORE INSERT ON profiled_stopped_receipts FOR EACH ROW EXECUTE FUNCTION profiled_phase_terminal_origin_guard();
 CREATE TRIGGER profiled_phase_terminal_origin_guard BEFORE INSERT ON profiled_launch_closures FOR EACH ROW EXECUTE FUNCTION profiled_phase_terminal_origin_guard();
--- Legacy closure operation FK cannot name a phase record. Each strict guard
--- branch now resolves its real immutable owning table instead of a facade row.
+-- Preserve real parent FK delete/key-update semantics in both origin namespaces.
+-- Generated NULL keys select exactly the actual parent, never a facade row.
 DO $$ DECLARE c TEXT; n BIGINT; BEGIN
  SELECT count(*),min(conname) INTO n,c FROM pg_constraint WHERE conrelid='profiled_launch_closures'::regclass AND confrelid='profiled_execution_receipts'::regclass AND contype='f';
  IF n<>1 THEN RAISE EXCEPTION 'exact legacy closure origin FK required'; END IF;
  EXECUTE format('ALTER TABLE profiled_launch_closures DROP CONSTRAINT %I',c);
 END $$;
+ALTER TABLE profiled_launch_closures
+ ADD COLUMN legacy_origin_operation_id UUID GENERATED ALWAYS AS (CASE WHEN initial_authority_kind='legacy_prepare_v1' THEN initial_prepare_operation_id END) STORED,
+ ADD COLUMN phase_origin_operation_id UUID GENERATED ALWAYS AS (CASE WHEN initial_authority_kind='phase_execution_v2' THEN initial_prepare_operation_id END) STORED,
+ ADD CONSTRAINT profiled_launch_closures_legacy_origin_fk FOREIGN KEY(node_id,legacy_origin_operation_id) REFERENCES profiled_execution_receipts(node_id,operation_id),
+ ADD CONSTRAINT profiled_launch_closures_phase_origin_fk FOREIGN KEY(node_id,phase_origin_operation_id) REFERENCES profiled_phase_execution_grants(node_id,operation_id);
 CREATE OR REPLACE FUNCTION profiled_launch_closure_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE a execution_attempts%ROWTYPE; h profiled_authority_hot%ROWTYPE; history profiled_native_registration_history%ROWTYPE; native JSONB; original JSONB; req JSONB; receipt JSONB; n BIGINT; b BIGINT; per_n BIGINT; per_b BIGINT; incoming BIGINT; phase BOOLEAN;
 BEGIN
@@ -144,4 +151,15 @@ BEGIN
  IF n>=4096 OR b+incoming>67108864 OR per_n>=256 OR per_b+incoming>4194304 THEN RAISE EXCEPTION 'launch closure history quota'; END IF;
  RETURN NEW;
 END $$;
+-- Terminal evidence does not qualify legacy result recording or settlement.
+-- Old already-open writers must not acquire these capabilities via generic Stop.
+CREATE FUNCTION profiled_phase_unqualified_result_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS(SELECT 1 FROM profiled_v2_accepts WHERE attempt_id=NEW.attempt_id)
+ OR EXISTS(SELECT 1 FROM profiled_phase_execution_grants WHERE attempt_id=NEW.attempt_id)
+ THEN RAISE EXCEPTION 'phase result and settlement protocol not qualified' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER profiled_phase_unqualified_result_guard BEFORE INSERT ON profiled_result_reports FOR EACH ROW EXECUTE FUNCTION profiled_phase_unqualified_result_guard();
+CREATE TRIGGER profiled_phase_unqualified_release_guard BEFORE INSERT ON profiled_verified_releases FOR EACH ROW EXECUTE FUNCTION profiled_phase_unqualified_result_guard();
 UPDATE meta SET value='33' WHERE key='state_format_version';

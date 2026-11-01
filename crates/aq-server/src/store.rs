@@ -351,6 +351,47 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
             ));
         }
     }
+    if supported >= 33 {
+        let complete:bool=sqlx::query_scalar(r#"SELECT
+          to_regclass('profiled_phase_terminal_capacity') IS NOT NULL
+          AND to_regprocedure('profiled_phase_terminal_capacity_guard()') IS NOT NULL
+          AND to_regprocedure('profiled_phase_terminal_reserve()') IS NOT NULL
+          AND to_regprocedure('profiled_phase_terminal_origin_guard()') IS NOT NULL
+          AND to_regprocedure('profiled_phase_terminal_extra_bytes(text,text,text,bytea,bytea,jsonb)') IS NOT NULL
+          AND to_regprocedure('profiled_phase_terminal_used_bytes(uuid)') IS NOT NULL
+          AND to_regprocedure('profiled_phase_unqualified_result_guard()') IS NOT NULL
+          AND NOT EXISTS(
+            SELECT 1 FROM (VALUES
+             ('profiled_phase_terminal_capacity','profiled_phase_terminal_capacity_guard'),
+             ('profiled_phase_execution_grants','profiled_phase_terminal_reserve'),
+             ('profiled_started_receipts','profiled_phase_terminal_origin_guard'),
+             ('profiled_stopped_receipts','profiled_phase_terminal_origin_guard'),
+             ('profiled_launch_closures','profiled_phase_terminal_origin_guard'),
+             ('profiled_result_reports','profiled_phase_unqualified_result_guard'),
+             ('profiled_verified_releases','profiled_phase_unqualified_release_guard')
+            ) expected(rel,name) WHERE NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.rel) AND t.tgname=expected.name AND NOT t.tgisinternal AND t.tgenabled IN ('O','A') AND t.tgfoid=to_regprocedure(CASE WHEN expected.name='profiled_phase_unqualified_release_guard' THEN 'profiled_phase_unqualified_result_guard()' ELSE expected.name||'()' END)))
+          AND NOT EXISTS(
+            SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel)
+            CROSS JOIN (VALUES ('initial_authority_kind','text'),('initial_authority_receipt_digest','text'),('phase_request_digest','text'),('phase_envelope_bytes','bytea'),('phase_ack_bytes','bytea'),('phase_terminal_qualification','jsonb')) col(name,kind)
+            WHERE NOT EXISTS(SELECT 1 FROM information_schema.columns c WHERE c.table_schema='public' AND c.table_name=expected.rel AND c.column_name=col.name AND c.udt_name=col.kind))
+          AND NOT EXISTS(
+            SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel)
+            CROSS JOIN (VALUES ('phase_envelope_digest'),('phase_ack_digest')) col(name)
+            WHERE NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass(expected.rel) AND a.attname=col.name AND a.attgenerated='s' AND NOT a.attisdropped))
+          AND NOT EXISTS(SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel) WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass(expected.rel) AND c.conname=expected.rel||'_phase_origin_check' AND c.contype='c' AND c.convalidated))
+          AND NOT EXISTS(
+            SELECT 1 FROM (VALUES ('legacy_origin_operation_id'),('phase_origin_operation_id')) col(name)
+            WHERE NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('profiled_launch_closures') AND a.attname=col.name AND a.attgenerated='s' AND a.atttypid='uuid'::regtype AND NOT a.attisdropped))
+          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('profiled_launch_closures') AND conname='profiled_launch_closures_legacy_origin_fk' AND contype='f' AND convalidated AND confrelid=to_regclass('profiled_execution_receipts'))
+          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('profiled_launch_closures') AND conname='profiled_launch_closures_phase_origin_fk' AND contype='f' AND convalidated AND confrelid=to_regclass('profiled_phase_execution_grants'))
+        "#).fetch_one(&mut *tx).await?;
+        if !complete {
+            return Err(StoreError::Corrupt(
+                "phase terminal origin/capacity storage missing or disabled in current schema"
+                    .into(),
+            ));
+        }
+    }
     tx.commit().await?;
     Ok(())
 }

@@ -52,7 +52,10 @@ pub(crate) fn validate_catalog(c: &super::super::config::ProfiledConfig) -> Resu
         let q: TerminalQualification =
             serde_json::from_str(d.body()).map_err(|_| "terminal qualification body")?;
         q.validate()?;
-        if !seen.insert((q.runtime.id.clone(), q.runtime.version.clone())) {
+        if !seen.insert(
+            aq_selection::digest(&(&q.runtime, &q.runtime_qualification))
+                .map_err(|_| "terminal qualification identity")?,
+        ) {
             return Err("duplicate terminal runtime qualification".into());
         }
     }
@@ -80,4 +83,96 @@ pub(super) fn for_history(
         }
     }
     Err(conflict())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiled_execution::{config::ProfiledConfig, definitions::Definition};
+    use aq_admission::{ArtifactKind, Digest, Text};
+    fn reference(id: &str) -> ArtifactRef {
+        ArtifactRef {
+            id: Text::new(id).unwrap(),
+            version: Text::new("1").unwrap(),
+            digest: Digest::of(id.as_bytes()),
+        }
+    }
+    fn qualification() -> TerminalQualification {
+        TerminalQualification {
+            schema_version: 1,
+            contract: aq_phase_terminal_protocol::contract_artifact().unwrap(),
+            runtime: reference("synthetic-runtime"),
+            runtime_qualification: reference("synthetic-runtime-qualification"),
+            proof_producer: reference("synthetic-proof-producer"),
+        }
+    }
+    fn definition(id: &str, q: &TerminalQualification) -> Definition {
+        let body = serde_json::to_string(q).unwrap();
+        Definition::new(
+            ArtifactRef {
+                id: Text::new(format!("{PREFIX}{id}")).unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: Digest::of(body.as_bytes()),
+            },
+            ArtifactKind::Definition,
+            body,
+        )
+        .unwrap()
+    }
+    fn config(definition_bodies: Vec<Definition>) -> ProfiledConfig {
+        ProfiledConfig {
+            revision: 1,
+            qualified_runtimes: vec![],
+            projects: vec![],
+            context_qualifications: vec![],
+            definition_bodies,
+        }
+    }
+    #[test]
+    fn unsupported_contract_and_unknown_policy_fields_refuse() {
+        let mut q = qualification();
+        q.contract.version = Text::new("2").unwrap();
+        assert!(validate_catalog(&config(vec![definition("unsupported", &q)])).is_err());
+        let mut body = serde_json::to_value(qualification()).unwrap();
+        body["authorize"] = true.into();
+        assert!(serde_json::from_value::<TerminalQualification>(body).is_err());
+    }
+    #[test]
+    fn retired_runtime_cleanup_profile_remains_explicit_and_unambiguous() {
+        let first = qualification();
+        let mut second = first.clone();
+        second.runtime_qualification = reference("synthetic-second-qualification");
+        // Keeping historical verifier definitions does not restore launch eligibility.
+        let c = config(vec![
+            definition("first", &first),
+            definition("second", &second),
+        ]);
+        c.validate().unwrap();
+        assert!(c.qualified_runtimes.is_empty());
+        assert!(
+            validate_catalog(&config(vec![
+                definition("one", &first),
+                definition("duplicate", &first)
+            ]))
+            .is_err()
+        );
+    }
+    #[test]
+    fn oversized_policy_body_refuses_before_owner_lookup() {
+        for (length, valid) in [(4096, true), (4097, false)] {
+            let mut body = serde_json::to_string(&qualification()).unwrap();
+            body.extend(std::iter::repeat_n(' ', length - body.len()));
+            let d = Definition::new(
+                ArtifactRef {
+                    id: Text::new(format!("{PREFIX}bounded")).unwrap(),
+                    version: Text::new("1").unwrap(),
+                    digest: Digest::of(body.as_bytes()),
+                },
+                ArtifactKind::Definition,
+                body,
+            )
+            .unwrap();
+            assert_eq!(validate_catalog(&config(vec![d])).is_ok(), valid);
+        }
+    }
 }
