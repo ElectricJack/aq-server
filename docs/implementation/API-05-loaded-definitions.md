@@ -51,6 +51,18 @@ regexes. Exact `const` schemas for version, source and `current_catalog=false`
 corrected the contract without expanding that validator. Actual responses now
 pass the published schema, including scalar-aligned multibyte truncation.
 
+Subsequent [independent compiled-browser/visual acceptance](../../../aq-dashboard/docs/evidence/loaded-definitions-browser/README.md)
+passed on immutable bundle
+`8fe4fa06127cc0f3188bb3bbe45fdd6741cbb395f952d27ec7d7dd29b6b3628c`
+in 2.89s (1207ms browser). A capture-only second run passed in 2.65s to inspect
+lower phone panels. Actual 128-byte names/entries/dependency aliases, exact
+metadata, reload, 1440/390/320 layout and phone exit/focus were independently
+reviewed. Definitions made no engine inspection requests; a final explicit Runs
+navigation made one intended read. Mutations, foreign requests and page errors
+were zero. The complete UI `tsc -b` check also passes after two test-only typing
+fixes. Canonical runtime activation/promotion remains a separate operator gate;
+the current TCP-only PostgreSQL deployment is not a valid Unix owner transport.
+
 ## Follow-up for the current installed catalog
 
 The frozen runner inspector exposes only Runs, Effects and Receipts. Its
