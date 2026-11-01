@@ -1,5 +1,7 @@
 # Human actions and session usage: local preview qualification
 
+**Earlier state34 checkpoint.** The [canonical state35 promotion](dashboard-canonical-state35-2026-11-01.md) supersedes this record's current-preview identity and Supervisor status. Its historical state34 fixture proofs and rollback details remain retained.
+
 The development preview at **http://localhost:4188** now serves task creation in
 Work, current-account notification inspection in Settings, and on-demand usage
 in Agents' Session details. State format is 34. The actual served bundle digest

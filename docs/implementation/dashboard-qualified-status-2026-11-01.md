@@ -1,5 +1,7 @@
 # Dashboard qualification status — November 1, 2026
 
+**Current preview:** see the [canonical state35 promotion](dashboard-canonical-state35-2026-11-01.md) for the actual 2b3d bundle, Supervisor mailbox foundation, compact header and bounded PNG/loaded-definition/native dispositions. The qualification table below is historical.
+
 **Earlier checkpoint.** The subsequent [promoted preview record](dashboard-actions-preview-2026-11-01.md) supersedes the pending task-composer, notification-browser, 320px Scope control and canonical-promotion gates below. It also records the delivered session-usage increment. Full parent tasks remain open.
 
 This records bounded source and isolated-runtime qualification at agent-q

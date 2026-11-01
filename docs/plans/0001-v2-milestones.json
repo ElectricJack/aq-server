@@ -3052,7 +3052,9 @@
       ],
       "evidence": [
         "../implementation/API-05-playbooks-inspection.md",
-        "../implementation/dashboard-qualified-status-2026-11-01.md"
+        "../implementation/dashboard-qualified-status-2026-11-01.md",
+        "../../../aq-dashboard/docs/evidence/loaded-definitions-browser/README.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
       ]
     },
     {
@@ -3089,7 +3091,7 @@
       "repo": "agent-q",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "AQ-11",
         "AQ-19"
@@ -3110,7 +3112,10 @@
         "Hosting the central harness",
         "Routing global chat to an arbitrary worker"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/API-07-supervisor-conversation-foundation.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
+      ]
     },
     {
       "id": "API-08",
@@ -3207,7 +3212,7 @@
       "repo": "agent-q",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "API-06",
         "AQ-09"
@@ -3228,7 +3233,10 @@
         "Arbitrary capture of operator desktop",
         "Historical media synthesized from result metadata"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/API-11-png-first-plan.md",
+        "../implementation/API-11-core-qualification.md"
+      ]
     },
     {
       "id": "API-12",
@@ -3284,7 +3292,10 @@
         "Counting placeholder pages as completed destinations",
         "New visual direction replacing accepted references"
       ],
-      "evidence": []
+      "evidence": [
+        "../../../aq-dashboard/docs/evidence/shell-mobile-responsive/README.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-06",
@@ -3377,7 +3388,9 @@
         "Implicit policy compilation/installation from source editing"
       ],
       "evidence": [
-        "../implementation/dashboard-qualified-status-2026-11-01.md"
+        "../implementation/dashboard-qualified-status-2026-11-01.md",
+        "../../../aq-dashboard/docs/implementation/playbooks-inspection.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
       ]
     },
     {
@@ -3504,7 +3517,8 @@
       ],
       "evidence": [
         "../implementation/dashboard-qualified-status-2026-11-01.md",
-        "../implementation/dashboard-actions-preview-2026-11-01.md"
+        "../implementation/dashboard-actions-preview-2026-11-01.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
       ]
     },
     {
@@ -3538,7 +3552,11 @@
         "Completing live provider qualification from offline tests",
         "Native runner command/orchestration owned by WRK-18"
       ],
-      "evidence": []
+      "evidence": [
+        "../../../aq-worker/docs/implementation/WRK-17-named-readonly-exec-profile.md",
+        "../../../aq-worker/docs/implementation/WRK-17-owned-scoped-auth.md",
+        "../../../aq-worker/docs/implementation/evidence/wrk17-named-readonly-physical/README.md"
+      ]
     },
     {
       "id": "WRK-18",
@@ -3570,7 +3588,10 @@
         "Concurrent edits to adapter/launch owner files",
         "Reopened-journal live adoption or implicit renewal"
       ],
-      "evidence": []
+      "evidence": [
+        "../../../aq-worker/docs/implementation/WRK-18-native-runner.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-13",
@@ -3689,7 +3710,7 @@
       "repo": "aq-dashboard",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "UI-13",
         "API-07"
@@ -3711,7 +3732,10 @@
         "Waiting for central harness hosting to build history/composer",
         "Presenting mailbox acceptance as completed reasoning"
       ],
-      "evidence": []
+      "evidence": [
+        "../../../aq-dashboard/docs/implementation/supervisor-conversation-foundation.md",
+        "../implementation/dashboard-canonical-state35-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-17",
@@ -3838,6 +3862,10 @@
     {
       "source": "../../../aq-dashboard/docs/design/visual-acceptance.md",
       "summary": "User reaffirmed visual fidelity while real infrastructure is connected. Named mockups, page composition, independent desktop/phone captures and reviewed visual subsets are acceptance requirements; API success does not establish design completion."
+    },
+    {
+      "source": "../implementation/dashboard-canonical-state35-2026-11-01.md",
+      "summary": "Canonical state35 serves exact 2b3d assets: durable human Supervisor history/text mailbox foundation and compact 114px phone header, with canonical read-only Graph/Overview checks. API-07/UI-16/API-11 remain in progress; loaded startup metadata is isolated-qualified, PNG is pure core only, and production native capsule/key/context gates remain open."
     }
   ],
   "implementation_reference_maps": [

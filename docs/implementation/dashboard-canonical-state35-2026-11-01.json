@@ -1,0 +1,163 @@
+{
+  "date": "2026-11-01",
+  "scope": "Canonical local development preview promotion; bounded partial feature delivery",
+  "preview": {
+    "url": "http://localhost:4188",
+    "state_format": 35,
+    "bundle_digest": "sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689",
+    "bundle_manifest_path": "/tmp/aq-dashboard-actions-promotion/dist-supervisor-responsive/dashboard-manifest.json",
+    "server_path": "/tmp/aq-dashboard-actions-promotion/aq-server-supervisor",
+    "server_sha256": "f0a3a31b09b59b74db6e7148551077bc8c12f9dcd71605ddf6fa72da9c57fdad"
+  },
+  "documentation_baseline": {
+    "agent_q": "918559f",
+    "aq_dashboard": "19dd9a3"
+  },
+  "frontend": {
+    "passed_tests": 464,
+    "test_duration_seconds": 21.33,
+    "typecheck_passed": true,
+    "production_build_ms": 564,
+    "assets": 29,
+    "mock_code_in_bundle": false
+  },
+  "canonical_browser": {
+    "supervisor": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-supervisor-readonly/result.json",
+      "source_sha256": "ca4a1e85c48c546dc77ed9d7a3944d498c4f77684b0528d9db0cd92b1731911f",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "initial_human_rows": 0,
+      "elapsed_ms": 1833,
+      "scope_switch_performed": true,
+      "explicit_enqueue_requests": 0,
+      "runtime": {
+        "state": "unavailable",
+        "binding": null,
+        "reason": "central_runtime_not_connected"
+      },
+      "served_bundle_digest": "sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689",
+      "page_errors": 0
+    },
+    "graph": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-state35-graph/result.json",
+      "source_sha256": "f0dfbe35e6266f0158a0375ff261baa5a50e506c1ede9a0bb2559291e6268b1a",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 3462,
+      "human_reads": 16,
+      "mutations": 0,
+      "page_errors": 0,
+      "served_bundle_digest": "sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689"
+    },
+    "overview": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-state35-overview/result.json",
+      "source_sha256": "44546a6390f09deefc67bb0f34bc2903327178bdb172541cdca10f1796b43cfb",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 736,
+      "contract": "human-overview-tasks-1",
+      "coverage": "complete",
+      "count_accuracy": "complete_observation",
+      "served_product": {
+        "version": "0.1.0",
+        "dashboard_digest": "sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689"
+      }
+    }
+  },
+  "documentation_read_only_http_check": {
+    "bootstrap_bundle_matched": true,
+    "healthz_http": 200,
+    "readyz_http": 200,
+    "domain_mutations": 0,
+    "note": "GET-only identity/health check while recording these docs; root owns final independent verification."
+  },
+  "earlier_exact_bundle_qualification": {
+    "supervisor_owner": {
+      "evidence": "../../../aq-dashboard/docs/implementation/evidence/supervisor-2b3d/owner/result.json",
+      "fixture_seconds": 3.48,
+      "browser_ms": 2329,
+      "explicit_enqueue_requests": 1,
+      "boundary": "Disposable persisted human messages, queued/not_attempted only; no runtime reply"
+    },
+    "supervisor_staging_readonly": {
+      "evidence": "../../../aq-dashboard/docs/implementation/evidence/supervisor-2b3d/stage-readonly/result.json",
+      "browser_ms": 1618,
+      "explicit_enqueue_requests": 0
+    },
+    "shared_shell": {
+      "evidence": "../../../aq-dashboard/docs/evidence/shell-mobile-responsive/README.md",
+      "browser_ms": 6292,
+      "desktop_header_px": 69,
+      "phone_header_px": 114,
+      "focused_agents_header_px": 62,
+      "viewports": [
+        1440,
+        390,
+        320
+      ],
+      "boundary": "Actual cloned state35 at staging 4204 before canonical promotion; exact same 2b3d bundle"
+    }
+  },
+  "isolated_loaded_definitions": {
+    "evidence": "../../../aq-dashboard/docs/evidence/loaded-definitions-browser/README.md",
+    "bundle_digest": "sha256:8fe4fa06127cc0f3188bb3bbe45fdd6741cbb395f952d27ec7d7dd29b6b3628c",
+    "source": "runtime_startup_configuration",
+    "current_catalog": false,
+    "maximum_records": 4,
+    "fixture_seconds": 2.89,
+    "browser_ms": 1207,
+    "canonical_available": false,
+    "remaining_gate": "Actual configured optional runtime/UDS owner; no installed catalog or activation claims"
+  },
+  "png_core": {
+    "evidence": "API-11-core-qualification.md",
+    "focused_tests": 24,
+    "codec_target_seconds": 1.2,
+    "scope": "Pure closed-domain validation and deterministic PNG processing only",
+    "store": false,
+    "http": false,
+    "ui": false
+  },
+  "native": {
+    "named_readonly_source": "../../../aq-worker/docs/implementation/WRK-17-named-readonly-exec-profile.md",
+    "scoped_auth_source": "../../../aq-worker/docs/implementation/WRK-17-owned-scoped-auth.md",
+    "static_physical_evidence": "../../../aq-worker/docs/implementation/evidence/wrk17-named-readonly-physical/README.md",
+    "boundary": "Named/scoped source and KERNEL/static physical peer evidence; production capsule, upstream-key isolation, implicit context counting and provider/tool gates remain open",
+    "production_admission_enabled": false
+  },
+  "rollback": {
+    "pre_upgrade_state_format": 34,
+    "backup_path": "/tmp/aq-dashboard-actions-promotion/preview-state34-final.dump",
+    "backup_sha256": "8100e63296bf0b25b56b779e50df5aa0344b3086e893a5677841921c8645aea9",
+    "prior_binary_retained": true,
+    "requires_matching_database_and_binary": true,
+    "prior_record": "dashboard-actions-preview-2026-11-01.json",
+    "note": "A state34 reader refuses35; restoring the earlier reader also requires its pre-upgrade state34 database backup."
+  },
+  "limits": [
+    "Canonical Supervisor history is empty; no real canonical message bodies were copied into this record.",
+    "Queued human-message history is not delivery, a supervisor reply, reasoning or performed work.",
+    "Configured Decisions and Playbooks proofs remain isolated; canonical optional owners are unavailable.",
+    "Pure PNG core has no media storage, HTTP serving, upload UI or retained-byte proof.",
+    "Provider quota, live supervisor dispatch/replies, interactive terminal control, full media/comments and production native qualification remain open."
+  ],
+  "plan_changes": {
+    "in_progress": [
+      "API-07",
+      "UI-16",
+      "API-11"
+    ],
+    "other_statuses_changed": false,
+    "dependencies_changed": false
+  },
+  "documentation_checks": {
+    "dag_tasks": 103,
+    "milestones": 7,
+    "assigned_requirements_scenarios": 99,
+    "generated_markdown_consistent": true,
+    "dashboard_reader_regenerated": true,
+    "local_href_src_targets_checked": 548,
+    "link_check_scope": "changed Markdown and generated HTML in a disposable sibling-repo validation view; source/user documentation unchanged"
+  }
+}

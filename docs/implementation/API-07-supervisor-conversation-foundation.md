@@ -57,3 +57,5 @@ retained revision/message-ID refusal; bounded admission and UTF-8; authorization
 change during lock wait; existing AQ-11 wire regression; state 34 upgrade and old
 reader refusal; no worker delivery allocation or provider effect. Browser evidence
 must distinguish queued history from real supervisor reply qualification.
+
+The [canonical state35 promotion](dashboard-canonical-state35-2026-11-01.md) now records the mounted foundation and exact 2b3d browser/visual evidence. Canonical history is empty; the one-enqueue positive case is disposable persisted human-message evidence. API-07/UI-16 remain in progress; central dispatch and live replies remain open.
