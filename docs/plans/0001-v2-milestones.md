@@ -222,7 +222,7 @@ Requirements name implementation responsibility, not passing test coverage. E re
 | [UI-15](#ui-15): Deliver core Overview layout and actual partial summaries | aq-dashboard | [UI-13](#ui-13), [API-13](#api-13) | planned |
 | [UI-16](#ui-16): Build supervisor conversation presentation and history increment | aq-dashboard | [UI-13](#ui-13), [API-07](#api-07) | in_progress |
 | [UI-17](#ui-17): Deliver the focused live read-only Agents workspace | aq-dashboard | [UI-13](#ui-13), [CON-02](#con-02) | in_progress |
-| [UI-18](#ui-18): Deliver retained result media browsing | aq-dashboard | [UI-14](#ui-14), [API-11](#api-11) | planned |
+| [UI-18](#ui-18): Deliver retained result media browsing | aq-dashboard | [UI-14](#ui-14), [API-11](#api-11) | in_progress |
 | [UI-19](#ui-19): Deliver result comments and explicit feedback task UI | aq-dashboard | [UI-18](#ui-18), [API-12](#api-12) | planned |
 
 ## Task contracts
@@ -1016,7 +1016,7 @@ Requirement links: D4, W1, X11, X13, P2, P4, P5, H1, H3, H4, C6, S1, S2.
 
 Outside this task: General supervisor autonomy or all v1 profiles.
 
-Evidence: [AQ-12-through-17-plan.md](../implementation/AQ-12-through-17-plan.md), [AQ-17-central-authority-core.md](../implementation/AQ-17-central-authority-core.md).
+Evidence: [AQ-12-through-17-plan.md](../implementation/AQ-12-through-17-plan.md), [AQ-17-central-authority-core.md](../implementation/AQ-17-central-authority-core.md), [WRK-17-codex-mapper-extraction.md](../../../aq-worker/docs/implementation/WRK-17-codex-mapper-extraction.md), [dashboard-canonical-events35-2026-11-01.md](../implementation/dashboard-canonical-events35-2026-11-01.md).
 
 ### AQ-12
 
@@ -1947,7 +1947,7 @@ Requirement links: U2, U3, U4, U6.
 
 Outside this task: Mandatory external object-storage service; Arbitrary capture of operator desktop; Historical media synthesized from result metadata.
 
-Evidence: [API-11-png-first-plan.md](../implementation/API-11-png-first-plan.md), [API-11-core-qualification.md](../implementation/API-11-core-qualification.md).
+Evidence: [API-11-png-first-plan.md](../implementation/API-11-png-first-plan.md), [API-11-core-qualification.md](../implementation/API-11-core-qualification.md), [API-11-storage-owner.md](../implementation/API-11-storage-owner.md), [dashboard-canonical-events35-2026-11-01.md](../implementation/dashboard-canonical-events35-2026-11-01.md).
 
 ### API-12
 
@@ -2131,7 +2131,7 @@ Requirement links: U1, U2, U3, U6, U9, U12, U14.
 
 Outside this task: New hibernation/stall lifecycle owners; Claiming account quota from usage; Full terminal rendering/control.
 
-Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md), [dashboard-actions-preview-2026-11-01.md](../implementation/dashboard-actions-preview-2026-11-01.md), [dashboard-canonical-state35-2026-11-01.md](../implementation/dashboard-canonical-state35-2026-11-01.md).
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md), [dashboard-actions-preview-2026-11-01.md](../implementation/dashboard-actions-preview-2026-11-01.md), [dashboard-canonical-state35-2026-11-01.md](../implementation/dashboard-canonical-state35-2026-11-01.md), [session-source-events.md](../../../aq-dashboard/docs/implementation/session-source-events.md), [dashboard-canonical-events35-2026-11-01.md](../implementation/dashboard-canonical-events35-2026-11-01.md).
 
 ### WRK-17
 
@@ -2295,13 +2295,13 @@ Requirement links: U1, U3, U6, U9, U10, U11.
 
 Outside this task: Waiting for production native runner; Interactive renderer/control.
 
-Evidence: [dashboard-actions-preview-2026-11-01.md](../implementation/dashboard-actions-preview-2026-11-01.md).
+Evidence: [dashboard-actions-preview-2026-11-01.md](../implementation/dashboard-actions-preview-2026-11-01.md), [dashboard-canonical-events35-2026-11-01.md](../implementation/dashboard-canonical-events35-2026-11-01.md).
 
 ### UI-18
 
 **Deliver retained result media browsing**
 
-Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: planned.
+Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: in_progress.
 
 Hard prerequisites: [UI-14](#ui-14), [API-11](#api-11).
 
@@ -2315,6 +2315,8 @@ Acceptance:
 Requirement links: U1, U2, U3, U6.
 
 Outside this task: Waiting for feedback-task creation.
+
+Evidence: [ResultMedia.tsx](../../../aq-dashboard/src/features/results/ResultMedia.tsx), [ResultMedia.test.tsx](../../../aq-dashboard/src/features/results/ResultMedia.test.tsx), [dashboard-canonical-events35-2026-11-01.md](../implementation/dashboard-canonical-events35-2026-11-01.md).
 
 ### UI-19
 

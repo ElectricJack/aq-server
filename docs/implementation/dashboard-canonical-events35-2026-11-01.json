@@ -1,0 +1,199 @@
+{
+  "date": "2026-11-01",
+  "scope": "Canonical local development preview, same state35 database; bounded Events reading increment",
+  "preview": {
+    "url": "http://localhost:4188",
+    "state_format": 35,
+    "database_upgrade_performed": false,
+    "bundle_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+    "bundle_manifest_path": "/tmp/aq-dashboard-actions-promotion/dist-events-media/dashboard-manifest.json",
+    "server_path": "/tmp/aq-dashboard-actions-promotion/aq-server-events",
+    "server_sha256": "8ad0aad8a1cb156660decdebc0fbbef8e4ea04a0e7c80a84c8921bb0681153ad"
+  },
+  "source_vs_runtime": {
+    "documentation_agent_q_base": "01e09b6",
+    "documentation_dashboard_base": "f777c4d",
+    "latest_source_state_format": 36,
+    "canonical_state_format": 35,
+    "note": "New media migration36 is source/internal-owner qualification only. The retained8ad binary and canonical database stay35; no media HTTP/config/capability mount."
+  },
+  "frontend": {
+    "tests": 539,
+    "test_seconds": 23.68,
+    "typecheck_passed": true,
+    "build_seconds": 1.65,
+    "assets": 29,
+    "mock_code_in_bundle": false
+  },
+  "canonical_browser": {
+    "events": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-events-readonly/result.json",
+      "source_sha256": "62f4362709058ce9b15ec41cdec2081a2f8063d154c931ce5ce06367ca11ad9c",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 1668,
+      "served_bundle_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+      "loaded_reports": 0,
+      "mode": "empty",
+      "through_sequence": 0,
+      "browser_reads": [
+        {
+          "path": "/api/observations/sessions/38a3fe3a-5e17-589c-87fa-893754037804/events",
+          "after": "0",
+          "through": null,
+          "limit": "16"
+        },
+        {
+          "path": "/api/observations/sessions/38a3fe3a-5e17-589c-87fa-893754037804/events",
+          "after": "0",
+          "through": null,
+          "limit": "16"
+        }
+      ],
+      "mutations": [],
+      "foreign_requests": [],
+      "page_errors": []
+    },
+    "supervisor": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-events-supervisor/result.json",
+      "source_sha256": "55182538a023487e367c344086b887f2b44e1a78b88c09ddeaca493f82e4b470",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 2206,
+      "served_bundle_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+      "initial_human_rows": 0,
+      "explicit_enqueue_requests": 0,
+      "scope_switch_performed": true,
+      "runtime": {
+        "state": "unavailable",
+        "binding": null,
+        "reason": "central_runtime_not_connected"
+      },
+      "page_errors": 0
+    },
+    "graph": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-events-graph/result.json",
+      "source_sha256": "0cb66c9aa4895fd6b841927a83e6941acce67758766f39dabf8e0b43f76dbedb",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 4018,
+      "served_bundle_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+      "human_reads": 16,
+      "mutations": 0,
+      "page_errors": 0
+    },
+    "overview": {
+      "source_path": "/tmp/aq-dashboard-actions-promotion/live-events-overview/result.json",
+      "source_sha256": "d0420eb0887311b44342acba0e4f14c09c26b3deb765f16e86acd5531f270cd3",
+      "passed": true,
+      "origin": "http://localhost:4188",
+      "elapsed_ms": 889,
+      "served_product": {
+        "version": "0.1.0",
+        "dashboard_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667"
+      },
+      "contract": "human-overview-tasks-1",
+      "coverage": "complete",
+      "count_accuracy": "complete_observation"
+    }
+  },
+  "documentation_http_get_check": {
+    "bootstrap_digest_matched": true,
+    "healthz_http": 200,
+    "readyz_http": 200,
+    "domain_mutations": 0
+  },
+  "events_positive": {
+    "evidence": "../../../aq-dashboard/docs/evidence/session-source-events/README.md",
+    "result": "../../../aq-dashboard/docs/evidence/session-source-events/nonempty-result.json",
+    "pins": "../../../aq-dashboard/docs/evidence/session-source-events/nonempty-artifacts.json",
+    "browser_ms": 1885,
+    "parent_fixture_seconds": 3.05,
+    "loaded_reports": 3,
+    "kinds": [
+      "usage"
+    ],
+    "synthetic_source_registered_and_domain_ingest_used": true,
+    "browser_event_gets": 2,
+    "mutations": 0,
+    "foreign_requests": 0,
+    "page_errors": 0,
+    "boundary": "Disposable actual observation owner; metadata and historical accounting only. No real harness/parser/model run, complete transcript, current accounting head, invoice or terminal-control claim."
+  },
+  "media": {
+    "ui_source_checks": 44,
+    "ui_source_only": true,
+    "ui_in_bundle": true,
+    "capability": "results.media.read",
+    "capability_advertised": false,
+    "capability_enabled": false,
+    "actual_media_http_browser_qualified": false,
+    "internal_owner_evidence": "API-11-storage-owner.md",
+    "qualification": "evidence/api11-media-storage/qualification.json",
+    "internal_owner_tests": 14,
+    "internal_owner_seconds": 16.2,
+    "migration_drift_tests": 3,
+    "migration_drift_seconds": 14.81,
+    "affected_clippy_seconds": 23.51,
+    "source_state_format": 36,
+    "canonical_state_format": 35,
+    "http_config_bootstrap_mount": false,
+    "boundary": "Real SQL/managed-file internal owner qualification and source UI do not publish human media bytes. No canonical migration36 or actual UI image-byte proof.",
+    "ui_source_commits": [
+      "e5172b0",
+      "a175928",
+      "f84960e"
+    ]
+  },
+  "central": {
+    "task": "AQ-17",
+    "status": "in_progress",
+    "source": "72281b8",
+    "evidence": "AQ-17-central-authority-core.md",
+    "pure_tests": 16,
+    "test_seconds": 0.02,
+    "strict_seconds": 0.26,
+    "worker_mapper_source": "88fcbfe",
+    "runtime_dispatch_reply_enabled": false,
+    "boundary": "Pure taskless authority model and shared recipe mapping, no SQL owner, physical central host, credential provisioning, dispatch or reply qualification."
+  },
+  "native": {
+    "isolated_tool_source": "08de5dc",
+    "evidence": "../../../aq-worker/docs/implementation/evidence/wrk17-named-readonly-physical/README.md",
+    "terminal_output_disposition": "409 gated",
+    "production_admission_qualified": false,
+    "boundary": "Isolated actual tool path only; production capsule/key/context/provider/terminal gates remain open."
+  },
+  "rollback": {
+    "database_restore_required": false,
+    "database_state_format": 35,
+    "old_server_path": "/tmp/aq-dashboard-actions-promotion/aq-server-supervisor",
+    "old_server_sha256": "f0a3a31b09b59b74db6e7148551077bc8c12f9dcd71605ddf6fa72da9c57fdad",
+    "old_bundle_path": "/tmp/aq-dashboard-actions-promotion/dist-supervisor-responsive",
+    "old_bundle_digest": "sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689",
+    "note": "This binary/assets-only promotion stays on the same35 database. Restore oldf0a binary plus2b assets together; no DB restore needed. Earlier34\u219235 backup requirement remains historical, and future35\u219236 upgrade is separate."
+  },
+  "prior_record": "dashboard-canonical-state35-2026-11-01.json",
+  "limits": [
+    "Canonical source-event and Supervisor histories are empty; no real message/transcript bodies copied into documentation.",
+    "Positive three-report fixture contains synthetic usage records only, one page and no explicit gaps. Gap/paging stress remains focused-test evidence.",
+    "Source migration36 has not been applied to canonical35. Bundled media UI remains unavailable without an actually mounted contract/capability.",
+    "Queued human history and pure AQ17 source are not live Supervisor replies or performed work.",
+    "Full media/comments, account quota, renderer/control and production native acceptance remain open."
+  ],
+  "plan_changes": {
+    "UI-18": "planned to in_progress; source-only",
+    "other_statuses_changed": false,
+    "dependencies_changed": false
+  },
+  "documentation_checks": {
+    "dag_tasks": 103,
+    "milestones": 7,
+    "assigned_requirements_scenarios": 99,
+    "generated_markdown_consistent": true,
+    "dashboard_reader_regenerated": true,
+    "local_href_src_targets_checked": 571,
+    "only_status_change": "UI-18 planned\u2192in_progress (source-only)",
+    "hard_prerequisites_changed": false
+  }
+}

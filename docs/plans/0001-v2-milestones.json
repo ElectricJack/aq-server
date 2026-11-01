@@ -1568,7 +1568,9 @@
       ],
       "evidence": [
         "../implementation/AQ-12-through-17-plan.md",
-        "../implementation/AQ-17-central-authority-core.md"
+        "../implementation/AQ-17-central-authority-core.md",
+        "../../../aq-worker/docs/implementation/WRK-17-codex-mapper-extraction.md",
+        "../implementation/dashboard-canonical-events35-2026-11-01.md"
       ]
     },
     {
@@ -3236,7 +3238,9 @@
       ],
       "evidence": [
         "../implementation/API-11-png-first-plan.md",
-        "../implementation/API-11-core-qualification.md"
+        "../implementation/API-11-core-qualification.md",
+        "../implementation/API-11-storage-owner.md",
+        "../implementation/dashboard-canonical-events35-2026-11-01.md"
       ]
     },
     {
@@ -3519,7 +3523,9 @@
       "evidence": [
         "../implementation/dashboard-qualified-status-2026-11-01.md",
         "../implementation/dashboard-actions-preview-2026-11-01.md",
-        "../implementation/dashboard-canonical-state35-2026-11-01.md"
+        "../implementation/dashboard-canonical-state35-2026-11-01.md",
+        "../../../aq-dashboard/docs/implementation/session-source-events.md",
+        "../implementation/dashboard-canonical-events35-2026-11-01.md"
       ]
     },
     {
@@ -3767,7 +3773,8 @@
         "Interactive renderer/control"
       ],
       "evidence": [
-        "../implementation/dashboard-actions-preview-2026-11-01.md"
+        "../implementation/dashboard-actions-preview-2026-11-01.md",
+        "../implementation/dashboard-canonical-events35-2026-11-01.md"
       ]
     },
     {
@@ -3776,7 +3783,7 @@
       "repo": "aq-dashboard",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "UI-14",
         "API-11"
@@ -3795,7 +3802,11 @@
       "out_of_scope": [
         "Waiting for feedback-task creation"
       ],
-      "evidence": []
+      "evidence": [
+        "../../../aq-dashboard/src/features/results/ResultMedia.tsx",
+        "../../../aq-dashboard/src/features/results/ResultMedia.test.tsx",
+        "../implementation/dashboard-canonical-events35-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-19",

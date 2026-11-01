@@ -1,5 +1,7 @@
 # Canonical state35 preview: conversation foundation and compact shared header
 
+**Earlier 35/2b checkpoint.** The [canonical Events35 promotion](dashboard-canonical-events35-2026-11-01.md) supersedes the current-preview identity below. This record and its state34→35 rollback evidence remain historical; the new 35→35 assets/binary rollback does not require restoring a database.
+
 The local preview at **http://localhost:4188** now runs state format **35** with
 bundle `sha256:2b3d3d6ee8be801288f2f7c95446ac18e73e80e8010c18d905885e9d4b077689`.
 The actual binary SHA256 is
