@@ -9,7 +9,7 @@ http-body = "=1.1.0"
 aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
 schemars = "1"
 aq-review-protocol = { path = "../aq-review-protocol", version = "=0.1.0" }
-aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.2" }
+aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.3" }
 aq-observation-admission = { path = "../aq-observation-admission", version = "=0.1.0" }
 aq-terminal-relay = { path = "../aq-terminal-relay", version = "=0.1.0" }
 aq-terminal-relay-protocol = { path = "../aq-terminal-relay-protocol", version = "=0.1.0" }
@@ -59,7 +59,7 @@ test-support = ["aq-notifications/test-support"]
 recovery-test-support = ["test-support"]
 
 [dev-dependencies]
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler", version = "=0.1.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true

@@ -30,6 +30,7 @@ pub(crate) struct MountedOwners {
     pub(crate) reviews: bool,
     pub(crate) playbook_owner: Option<Uuid>,
     pub(crate) playbook_loaded_definitions: bool,
+    pub(crate) playbook_catalog: bool,
 }
 
 #[derive(Debug)]

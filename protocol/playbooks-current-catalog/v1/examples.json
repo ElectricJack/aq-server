@@ -1,0 +1,80 @@
+{
+  "fixture_note": "Schematic closed-contract examples only; not runtime/catalog evidence.",
+  "definitions": {
+    "api_version": "playbooks-current-catalog-1",
+    "component_api_version": "playbooks-catalog-1",
+    "source": "current_namespace_state",
+    "current_catalog": true,
+    "namespace": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "generation": "1",
+      "name": "Explicit contract fixture namespace",
+      "project_id": "22222222-2222-4222-8222-222222222222"
+    },
+    "server_time_ms": 1000000,
+    "state_revision": "7",
+    "incarnation": "2",
+    "metadata_revision": "5",
+    "next_cursor": null,
+    "kind": "definitions",
+    "items": [
+      {
+        "key": "sha256:a63fa59d01e4ff71d3ace20fa4b7b9b2451955578b9024ea817f7b8703efb7f7",
+        "record": {
+          "kind": "definition",
+          "metadata": {
+            "artifact": "sha256:a63fa59d01e4ff71d3ace20fa4b7b9b2451955578b9024ea817f7b8703efb7f7",
+            "executable_fingerprint": "sha256:a63fa59d01e4ff71d3ace20fa4b7b9b2451955578b9024ea817f7b8703efb7f7",
+            "source_digest": "sha256:a63fa59d01e4ff71d3ace20fa4b7b9b2451955578b9024ea817f7b8703efb7f7",
+            "name": "contract-fixture",
+            "scope": "project",
+            "compiler": "contract-example",
+            "purpose": "Schematic DTO example; never installed by this file.",
+            "purpose_truncated": false,
+            "entries": [
+              "main"
+            ],
+            "dependencies": {}
+          }
+        }
+      }
+    ]
+  },
+  "activations": {
+    "api_version": "playbooks-current-catalog-1",
+    "component_api_version": "playbooks-catalog-1",
+    "source": "current_namespace_state",
+    "current_catalog": true,
+    "namespace": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "generation": "1",
+      "name": "Explicit contract fixture namespace",
+      "project_id": "22222222-2222-4222-8222-222222222222"
+    },
+    "server_time_ms": 1000000,
+    "state_revision": "7",
+    "incarnation": "2",
+    "metadata_revision": "5",
+    "next_cursor": null,
+    "kind": "activations",
+    "items": [
+      {
+        "key": "sha256:338357e07a90dfb569e2c7afa1b1bb310da781178061fae6dd201f883aadfcc3",
+        "record": {
+          "kind": "activation",
+          "metadata": {
+            "binding": "catalog-contract-binding",
+            "artifact": "sha256:a63fa59d01e4ff71d3ace20fa4b7b9b2451955578b9024ea817f7b8703efb7f7",
+            "revision": "3",
+            "controls": {
+              "calls_enabled": true,
+              "event_starts_enabled": false,
+              "execution_enabled": true
+            },
+            "artifact_execution_denied": false
+          }
+        }
+      }
+    ]
+  }
+}

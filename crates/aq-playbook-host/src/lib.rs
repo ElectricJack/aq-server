@@ -11,7 +11,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -224,9 +224,23 @@ impl Request {
     }
 }
 
-struct Envelope {
-    request: Request,
-    reply: oneshot::Sender<Result<Value, Error>>,
+enum Envelope {
+    Operation {
+        request: Request,
+        reply: oneshot::Sender<Result<Value, Error>>,
+    },
+    Catalog {
+        query: runner::CatalogQuery,
+        reply: oneshot::Sender<Result<runner::CatalogPage, CatalogCallError>>,
+    },
+}
+/// Additive typed read errors; legacy Request/Error wire shapes remain unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogCallError {
+    #[error(transparent)]
+    Host(#[from] Error),
+    #[error(transparent)]
+    Catalog(#[from] runner::CatalogError),
 }
 #[derive(Default)]
 struct Queues {
@@ -240,6 +254,7 @@ struct Shared {
     clients: AtomicUsize,
     limits: Limits,
     registry: Registry,
+    catalog_supported: AtomicBool,
 }
 /// Cloning this handle never creates a second namespace owner. Drop does not join
 /// the thread: a stuck storage call retains its ownership until it really returns.
@@ -312,6 +327,7 @@ impl Owner {
             clients: AtomicUsize::new(1),
             limits,
             registry,
+            catalog_supported: AtomicBool::new(false),
         });
         let owner = Self {
             shared: shared.clone(),
@@ -344,6 +360,22 @@ impl Owner {
                         return;
                     }
                 };
+                // Probe only interface support at startup, through the actual
+                // acquired Engine. Never retain the returned current metadata.
+                match engine.inspect_catalog(&runner::CatalogQuery::first(
+                    runner::CatalogKind::Definitions,
+                    1,
+                )) {
+                    Ok(_) => {
+                        shared.catalog_supported.store(true, Ordering::Release);
+                    }
+                    Err(runner::CatalogError::Unsupported) => {}
+                    Err(error) => {
+                        let _ = engine.release();
+                        let _ = ready_tx.send(Err(engine_error(error)));
+                        return;
+                    }
+                }
                 let mut host = match host_factory(AcquiredOwner {
                     namespace: engine.namespace.clone(),
                     incarnation: engine.owner.clone(),
@@ -377,26 +409,46 @@ impl Owner {
                     let Some(envelope) = envelope else {
                         break;
                     };
-                    let stop = matches!(envelope.request, Request::Stop);
-                    let result = if stop {
-                        engine.release().map(|_| Value::Null).map_err(engine_error)
-                    } else {
-                        execute(
-                            &engine,
-                            &mut host,
-                            envelope.request,
-                            shared.limits.transitions,
-                        )
-                    };
-                    // A size failure after a commit is unknown, never 'not applied'.
-                    let result = result.and_then(|v| {
-                        if bounded_json(&v, shared.limits.response_bytes) {
-                            Ok(v)
-                        } else {
-                            Err(Error::Unknown)
+                    let stop = matches!(
+                        &envelope,
+                        Envelope::Operation {
+                            request: Request::Stop,
+                            ..
                         }
-                    });
-                    let _ = envelope.reply.send(result);
+                    );
+                    match envelope {
+                        Envelope::Operation { request, reply } => {
+                            let result = if stop {
+                                engine.release().map(|_| Value::Null).map_err(engine_error)
+                            } else {
+                                execute(&engine, &mut host, request, shared.limits.transitions)
+                            };
+                            // A size failure after a commit is unknown, never 'not applied'.
+                            let result = result.and_then(|v| {
+                                if bounded_json(&v, shared.limits.response_bytes) {
+                                    Ok(v)
+                                } else {
+                                    Err(Error::Unknown)
+                                }
+                            });
+                            let _ = reply.send(result);
+                        }
+                        Envelope::Catalog { query, reply } => {
+                            let result = engine
+                                .inspect_catalog(&query)
+                                .map_err(CatalogCallError::Catalog)
+                                .and_then(|page| {
+                                    if serde_json::to_vec(&page).is_ok_and(|bytes| {
+                                        bytes.len() <= shared.limits.response_bytes
+                                    }) {
+                                        Ok(page)
+                                    } else {
+                                        Err(Error::Unknown.into())
+                                    }
+                                });
+                            let _ = reply.send(result);
+                        }
+                    }
                     if stop {
                         break;
                     }
@@ -439,13 +491,55 @@ impl Owner {
             if queue.len() >= bound {
                 return Err(Error::Overloaded);
             }
-            queue.push_back(Envelope { request, reply });
+            queue.push_back(Envelope::Operation { request, reply });
             self.shared.wake.notify_one();
         }
         tokio::time::timeout(deadline, receiver)
             .await
             .map_err(|_| Error::Unknown)?
             .map_err(|_| Error::Stopped)?
+    }
+    /// Interface support established once by an actual acquired bounded query.
+    /// It does not cache metadata or promise later profile/ownership availability.
+    pub fn catalog_supported(&self) -> bool {
+        self.shared.catalog_supported.load(Ordering::Acquire)
+            && !self
+                .shared
+                .queues
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .closing
+    }
+    pub async fn inspect_catalog(
+        &self,
+        query: runner::CatalogQuery,
+        deadline: Duration,
+    ) -> Result<runner::CatalogPage, CatalogCallError> {
+        query.validate()?;
+        if !self.catalog_supported() {
+            return Err(runner::CatalogError::Unsupported.into());
+        }
+        if !serde_json::to_vec(&query)
+            .is_ok_and(|bytes| bytes.len() <= self.shared.limits.request_bytes)
+        {
+            return Err(Error::Invalid.into());
+        }
+        let (reply, receiver) = oneshot::channel();
+        {
+            let mut queues = self.shared.queues.lock().unwrap_or_else(|e| e.into_inner());
+            if queues.closing {
+                return Err(Error::Stopped.into());
+            }
+            if queues.work.len() >= self.shared.limits.work_queue {
+                return Err(Error::Overloaded.into());
+            }
+            queues.work.push_back(Envelope::Catalog { query, reply });
+            self.shared.wake.notify_one();
+        }
+        tokio::time::timeout(deadline, receiver)
+            .await
+            .map_err(|_| CatalogCallError::Host(Error::Unknown))?
+            .map_err(|_| CatalogCallError::Host(Error::Stopped))?
     }
 }
 fn engine_error(e: impl std::fmt::Display) -> Error {

@@ -291,6 +291,11 @@ pub(super) async fn bootstrap(
             playbooks && mounted.playbook_loaded_definitions,
             "Loaded definitions require the configured runtime namespace owner",
         ),
+        capability(
+            "playbooks.catalog.read",
+            playbooks && mounted.playbook_catalog,
+            "Current catalog inspection requires the mounted component query and namespace owner",
+        ),
     ];
     let bytes = contract::schema_bytes();
     let data = Bootstrap {

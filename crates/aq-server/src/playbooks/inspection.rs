@@ -21,6 +21,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+pub mod catalog;
 pub mod definitions;
 
 pub const VERSION: &str = "playbooks-inspection-1";
@@ -309,6 +310,14 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         .route("/api/playbooks/inspection/runs", get(runs))
         .route("/api/playbooks/inspection/runs/{id}", get(detail))
         .route("/api/playbooks/inspection/admissions", get(admissions))
+        .route(
+            "/api/playbooks/inspection/catalog/definitions",
+            get(catalog::definitions),
+        )
+        .route(
+            "/api/playbooks/inspection/catalog/activations",
+            get(catalog::activations),
+        )
         .route(
             "/api/playbooks/inspection/loaded-definitions",
             get(definitions::loaded_definitions),

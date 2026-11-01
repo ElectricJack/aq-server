@@ -1,0 +1,413 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "0173673a92090eae3cb45ee090d2c14468e7b318",
+  "publication_profile": "exact standalone Git source archive; runner/postgres/CLI0.1.3, unchanged model/compiler0.1.0; no registry publication",
+  "archive_format": "git archive --format=tar 0173673 Cargo.toml Cargo.lock crates scripts docs/implementation/current-catalog-inspection-design.md",
+  "archive_sha256": "6f8c373abacc9360c7be9618bdef3d608ac2f12d605738e711466a22fe6a1b4a",
+  "vendor_root": "vendor/aq-playbooks-0173673",
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "mode": "100644",
+      "bytes": 29670,
+      "sha256": "7ec744a26ad6d4b750e12fb5c57c682f0154c293c0fff7f8a172bb8f57a5ebbe"
+    },
+    {
+      "path": "Cargo.toml",
+      "mode": "100644",
+      "bytes": 849,
+      "sha256": "8ff21b51c37446da3fae6a812fca8d5502c60d59bacc74bd33209714af129476"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/Cargo.toml",
+      "mode": "100644",
+      "bytes": 441,
+      "sha256": "2ba241cd3e56ec60333fa1f1e0281e4a65d1e0cbcc5daac8361c38cde1422949"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/examples/measure.rs",
+      "mode": "100644",
+      "bytes": 1749,
+      "sha256": "b39ef7e33c415802d9df191363b6e8d9adf7218f833cd602b9d6898ce1f94a36"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/catalog.rs",
+      "mode": "100644",
+      "bytes": 11445,
+      "sha256": "7409bb6622d5920f9d185a47a3328c7964fe9df7162a082eb794d2abf3b38243"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/configuration.rs",
+      "mode": "100644",
+      "bytes": 3681,
+      "sha256": "5a3c0d8d509cce48d714ed3c54d2f2404b0e3ae0838221aef16aa3e57a7879ad"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/fake_host.rs",
+      "mode": "100644",
+      "bytes": 61297,
+      "sha256": "c83587e738aad6be2e8a2a545ab5b003ed314c11291be4953d6d1928bcb2f47e"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/lib.rs",
+      "mode": "100644",
+      "bytes": 96,
+      "sha256": "eb0eaa6169a11c16dcb74441b13ac87eaafc70bd0d401a123de1e34caea5c1af"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/main.rs",
+      "mode": "100644",
+      "bytes": 20584,
+      "sha256": "4858aa835357dc390c4cc956d2f0e76aea9be4b982c0744bc65a963f762ca61c"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/pilots.rs",
+      "mode": "100644",
+      "bytes": 29619,
+      "sha256": "09b996751279dc38d2a63e5ae3404f81e745d78bd82a75bf1b218dca97183b42"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/src/simulation.rs",
+      "mode": "100644",
+      "bytes": 6035,
+      "sha256": "14fbe13d0eb813f8bee61df25af12da849e90abc601eba393db7f4fec2a5d689"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/admin_cli.rs",
+      "mode": "100644",
+      "bytes": 9572,
+      "sha256": "b0606e035744fede4ac4b4f68560478f21690187a372e31693e9d7698e0a49a5"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/cli.rs",
+      "mode": "100644",
+      "bytes": 2855,
+      "sha256": "29569b4020c505990f874ea0af95f1c9df98b24208edbb216819da2f8f178501"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/host_pilots.rs",
+      "mode": "100644",
+      "bytes": 13880,
+      "sha256": "d7863a0e771bca4892c6d657ecd560e51aaf173a6f9186f954a32dcc7d9300f3"
+    },
+    {
+      "path": "crates/aq-playbooks-compiler/Cargo.toml",
+      "mode": "100644",
+      "bytes": 220,
+      "sha256": "4bab98de3d251da268079e2a224543814e995a71fc1db10b17e168d843bce68a"
+    },
+    {
+      "path": "crates/aq-playbooks-compiler/src/lib.rs",
+      "mode": "100644",
+      "bytes": 34099,
+      "sha256": "ef98e3e17b632921058f1ffd823343b46f939d3d16c7796f19823e552a9035e6"
+    },
+    {
+      "path": "crates/aq-playbooks-model/Cargo.toml",
+      "mode": "100644",
+      "bytes": 203,
+      "sha256": "538837919e4326f062c0516b49b55d5659113c95d94c3433acb2218b401d00e5"
+    },
+    {
+      "path": "crates/aq-playbooks-model/FORMAT.md",
+      "mode": "100644",
+      "bytes": 4229,
+      "sha256": "3240592cbab00a51f554fe28edf7b4b596198e936841eb8b3889d43d39864c45"
+    },
+    {
+      "path": "crates/aq-playbooks-model/src/lib.rs",
+      "mode": "100644",
+      "bytes": 108411,
+      "sha256": "f8a3bbafc113d1b96ba73d39b23ac4ece0aeece77a02c3b9ef014bbf0702150d"
+    },
+    {
+      "path": "crates/aq-playbooks-model/src/schedules.rs",
+      "mode": "100644",
+      "bytes": 10570,
+      "sha256": "f29cfd23d9d8157a2e634610467986f7c2db00a17a5270ecb3598a8f46a059a3"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/Cargo.toml",
+      "mode": "100644",
+      "bytes": 346,
+      "sha256": "7495c2641a85e6ccd0d11c6a609158eb4129edf3cdf87e45a63409920b227132"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/README.md",
+      "mode": "100644",
+      "bytes": 8358,
+      "sha256": "9643c6fa0dda7a131bd9f3a6b8caf9f5a433081518f995a224e32a49fc6d68f1"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/admission_benchmark.rs",
+      "mode": "100644",
+      "bytes": 3750,
+      "sha256": "a624a65b138d00f456d1976b38f0281ce1b69dcad74d543d18cc3f6c88360938"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/catalog_compatibility_probe.rs",
+      "mode": "100644",
+      "bytes": 1311,
+      "sha256": "b2de2d56f221f19c40daa07f6b1360528ce7d61baaeac93bd6e5a62b0959a861"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/keyed_receipt_probe.rs",
+      "mode": "100644",
+      "bytes": 1289,
+      "sha256": "2407ec3f6e8c1305328c0d7e2dbb6f9a9f6753c3690cfd02526f1e92b1453ea3"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/operating_envelope.rs",
+      "mode": "100644",
+      "bytes": 27856,
+      "sha256": "db17d65f14b73d44923522ce6ff537abff978823d50591a866a4a0259e16b049"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/rooted/admission.rs",
+      "mode": "100644",
+      "bytes": 10352,
+      "sha256": "354b7db996116bd28576cc8c2dc043d02e634dc755a41adafbc37c3c5f1fddd0"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/rooted/checks.rs",
+      "mode": "100644",
+      "bytes": 12332,
+      "sha256": "e28ab47922432bf190eb8be57ddcdcf9ab03b57b81ba2933085674e50158d433"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/rooted/fixture.rs",
+      "mode": "100644",
+      "bytes": 8756,
+      "sha256": "1715f86430dffae30cf9ffe6b449bd4d235db5d4c525bdf70a67ce3ee8ccbfa1"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/rooted/tree.rs",
+      "mode": "100644",
+      "bytes": 21467,
+      "sha256": "dcabd9f7b546aa450182f770da187eb8f21acf56f561e5a0309440ae54667bd3"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/examples/rooted_admission_prototype.rs",
+      "mode": "100644",
+      "bytes": 8058,
+      "sha256": "eec7afecb97c0dd0eef9a05fbba84f375dc636f49747cdb6648c075221a89ecf"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/migrations/0001_initial.sql",
+      "mode": "100644",
+      "bytes": 1384,
+      "sha256": "da9232069be4d0093d468bab740a9cee64915e80f648c37762d38a86ae1cbf33"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/migrations/0002_indexes_and_protection.sql",
+      "mode": "100644",
+      "bytes": 4220,
+      "sha256": "7d9c0217f74b0c321d5ccabf07be178838cd4bb1ca6a83026aba12cd74e0afcc"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/migrations/0003_keyed_admission_writer.sql",
+      "mode": "100644",
+      "bytes": 1401,
+      "sha256": "ab683d7a617cc99cee3af34c24e520c31e3857769daff1e8844fe9beec4003ed"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/migrations/0004_catalog_inspection.sql",
+      "mode": "100644",
+      "bytes": 6186,
+      "sha256": "3d665f00b8fe66cbb2f786c160b246ff8cdd2e990dd07732b115d52d74e0dd68"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/scripts/benchmark-envelope.sh",
+      "mode": "100755",
+      "bytes": 5230,
+      "sha256": "bf5ec1b52e58ec9bc19bb63d493ab67931c29969e0887c5d1543d58b1106d986"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/scripts/benchmark-rooted-prototype.sh",
+      "mode": "100755",
+      "bytes": 5121,
+      "sha256": "3fde7372352203da48cdc78621aab19f8702544d310365d65e1c1b0fd6aaebf4"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/scripts/test-postgres.sh",
+      "mode": "100755",
+      "bytes": 1306,
+      "sha256": "0654f4a71e99b4c75a81926ca7284c3cfbfe53e3df2c7e349b05f7a330a4abba"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/catalog.rs",
+      "mode": "100644",
+      "bytes": 11853,
+      "sha256": "e090c22e2cb8364f696a6d5a05aaddde65655275a6a406c617c983df2b7073b7"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/catalog_tests.rs",
+      "mode": "100644",
+      "bytes": 21761,
+      "sha256": "ea3b174296b1b20d0a9dfda02530e7c3cca9638406422cd07a793b55c462554a"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/indexes.rs",
+      "mode": "100644",
+      "bytes": 21566,
+      "sha256": "de2c79b08f6fe321e516c8cfb1f8a7fcaf306246b04dbc8dc8b3ac7720c8233d"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/lib.rs",
+      "mode": "100644",
+      "bytes": 30631,
+      "sha256": "9db98ca8329b25452907dad1c3d72514e15553238db1f6e6abf93235849fb156"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/profiling.rs",
+      "mode": "100644",
+      "bytes": 7094,
+      "sha256": "9ba794011a3f83983a993cf79dc2499b490ea4766ff1b5d52ef65e755b933274"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/projection.rs",
+      "mode": "100644",
+      "bytes": 10818,
+      "sha256": "1bd6cf5a58d668fbfb91a10b2a678e4fef64be2d08c30d5a9fae866672e07805"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/protection.rs",
+      "mode": "100644",
+      "bytes": 10039,
+      "sha256": "10a7a1e3d0221a76d23ff336d3d9d5758aaf9e2e02014e97f3b29e7677c876ea"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/src/retention.rs",
+      "mode": "100644",
+      "bytes": 9520,
+      "sha256": "75e3a4ec575c0aefaa3d7031efdd902212813d3d143ee155ad955c23cb2efd40"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/tests/keyed_admission.rs",
+      "mode": "100644",
+      "bytes": 4665,
+      "sha256": "7a79262649ae721eabe97106fafd49e8d20051e591d7090227f6cbf4eb5adea9"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/tests/persistence.rs",
+      "mode": "100644",
+      "bytes": 9656,
+      "sha256": "b7ee909584589ff1436be69699cb83a7d09f75f752d71e7cf14ba99882406f7e"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/tests/protected_indexes.rs",
+      "mode": "100644",
+      "bytes": 45140,
+      "sha256": "09cbe2aa3cb45c512399accd74442e8f049ac1097930bfddfabbacaacd6606fb"
+    },
+    {
+      "path": "crates/aq-playbooks-postgres/tests/support/mod.rs",
+      "mode": "100644",
+      "bytes": 6898,
+      "sha256": "d7afbf018590daf153506d2dd896124a27ceba2a258498e3b9d55aa35bec5304"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/Cargo.toml",
+      "mode": "100644",
+      "bytes": 254,
+      "sha256": "4de4ef2a13caf21f2c613251381fb146b24c205fd13e32db10e4a34ea4c795ad"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/README.md",
+      "mode": "100644",
+      "bytes": 6791,
+      "sha256": "f0735ebf4ef7b2f98b8a9ea03e29fb0488605ac2946a76a6038517bb65e824ea"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/admission.rs",
+      "mode": "100644",
+      "bytes": 7477,
+      "sha256": "5c84eb075c78c9f4ccc6b1ceb875ee708e9f8c4adc242e869a8eea1f7429d9ff"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/catalog_inspection.rs",
+      "mode": "100644",
+      "bytes": 14635,
+      "sha256": "84e48f07ce2321e828deb2a9dd970303939c2cbe5cffb6e3499ddd95f0252bd2"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/indexes.rs",
+      "mode": "100644",
+      "bytes": 29538,
+      "sha256": "182cca1e9d757d0ba5846e15f18ca2bc030bc4a56cf581a6e600e8a606f40f2a"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/inspection.rs",
+      "mode": "100644",
+      "bytes": 7685,
+      "sha256": "f218d99328db6feacfb50c22084beb6b122a50a4ff9a53a379b7ffb6cabaf3ae"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/lib.rs",
+      "mode": "100644",
+      "bytes": 117621,
+      "sha256": "54f133774d2205a2a7ce7f2fbc82cb513627985aa129db5cb47795d2e90e21aa"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/metrics.rs",
+      "mode": "100644",
+      "bytes": 10035,
+      "sha256": "b8d661be04c4b9a7069eb358b2686fc413940b096c5902c1455bced06fff8f9c"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/retention.rs",
+      "mode": "100644",
+      "bytes": 16527,
+      "sha256": "5bffa1317bce4c80511747713d82d845c0738298d3fbeeb887640c292817ef2a"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/storage.rs",
+      "mode": "100644",
+      "bytes": 8383,
+      "sha256": "0ee710e157c20ec2da076ad63c7bf2dc4165ce83896d5a6be50a18476b04ee67"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/catalog_inspection.rs",
+      "mode": "100644",
+      "bytes": 10509,
+      "sha256": "4ffe84cd5fd54c81da9e8f67076444453e13bb612cfe2d83783af4947b90d334"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/keyed_admission.rs",
+      "mode": "100644",
+      "bytes": 11848,
+      "sha256": "3179f9ff4216898d21bef2051c6f0fab7efae59dae0377ff0c38f39095619bdc"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/review_regressions.rs",
+      "mode": "100644",
+      "bytes": 47636,
+      "sha256": "84796370502973175891504e6b04e4a0626af0b994b8fbc8275cce3929085ccd"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/tests/semantics.rs",
+      "mode": "100644",
+      "bytes": 59596,
+      "sha256": "5c6d7415fa9cc0dcd8575d72e9173989cf28271c310b46ad6e446ba776476ba6"
+    },
+    {
+      "path": "docs/implementation/current-catalog-inspection-design.md",
+      "mode": "100644",
+      "bytes": 9560,
+      "sha256": "92a9def8721c46d8a04dd7d4c27de80758debf9e6d54d15714c527f455135af1"
+    },
+    {
+      "path": "scripts/test-catalog-old-writer.py",
+      "mode": "100644",
+      "bytes": 4397,
+      "sha256": "78012506092c5566ac043c61e53a48e9b49aabef0fd5a2abbf106af6ad575718"
+    },
+    {
+      "path": "scripts/test-keyed-old-writer.py",
+      "mode": "100644",
+      "bytes": 3703,
+      "sha256": "397b568d4d610dab154659518a1db68e1413a2806e4d1b060f5c74610cae5f89"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/aq-central-authority", "crates/aq-result-media", "crates/aq-phase-terminal-protocol", "crates/aq-review-protocol", "crates/aq-playbook-host", "crates/aq-observation-admission", "crates/aq-session-cli", "crates/aq-terminal-relay-protocol", "crates/aq-terminal-relay", "crates/aq-observation-api", "crates/aq-accounting", "crates/aq-notify", "crates/aq-human-http", "crates/aq-notifications", "crates/aq-admission", "crates/aq-agent-api", "crates/aq-lifecycle-api", "crates/aq-selection", "crates/aq-profiles", "crates/aq-session-api", "crates/aq-release", "crates/aq-server", "crates/aq-updater"]
-exclude = ["vendor/png-0.18.1-aq1", "vendor/aq-playbooks-d3bd349", "vendor/aq-playbooks-a463e59", "vendor/aq-playbooks-42f9449", "vendor/aq-lifecycle-protocol-0.1.0", "vendor/aq-session-protocol-0.1.0", "vendor/aq-worker-protocol-0.1.1", "vendor/aq-worker-protocol-0.2.0", "vendor/aq-protocol-0.1.0"]
+exclude = ["vendor/aq-playbooks-0173673", "vendor/png-0.18.1-aq1", "vendor/aq-playbooks-d3bd349", "vendor/aq-playbooks-a463e59", "vendor/aq-playbooks-42f9449", "vendor/aq-lifecycle-protocol-0.1.0", "vendor/aq-session-protocol-0.1.0", "vendor/aq-worker-protocol-0.1.1", "vendor/aq-worker-protocol-0.2.0", "vendor/aq-protocol-0.1.0"]
 
 [workspace.package]
 version = "0.1.0"

@@ -225,6 +225,9 @@ pub fn build_admin_router_with_optional_owners(
         playbook_loaded_definitions: playbooks
             .as_ref()
             .is_some_and(|driver| driver.loaded_definitions_available()),
+        playbook_catalog: playbooks
+            .as_ref()
+            .is_some_and(|driver| driver.catalog_supported()),
         playbook_owner: playbooks
             .as_ref()
             .map(|d| d.service.namespace.owner_user_id),

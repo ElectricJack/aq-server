@@ -831,3 +831,6 @@ mod browser;
 
 #[path = "playbook_activation/definitions.rs"]
 mod definitions;
+
+#[path = "playbook_activation/catalog.rs"]
+mod catalog;
