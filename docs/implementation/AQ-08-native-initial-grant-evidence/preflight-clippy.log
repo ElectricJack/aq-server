@@ -1,0 +1,6 @@
+    Checking aq-agent-api v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-agent-api)
+    Checking aq-release v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-release)
+    Checking aq-profiles v0.1.1 (/tmp/aq-native-initial-grant/crates/aq-profiles)
+    Checking aq-selection v0.1.2 (/tmp/aq-native-initial-grant/crates/aq-selection)
+    Checking aq-server v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 55.12s

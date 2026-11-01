@@ -1,0 +1,11 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.19s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9)
+
+running 3 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`
+
+Caused by:
+  process didn't exit successfully: `/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9` (signal: 15, SIGTERM: termination signal)

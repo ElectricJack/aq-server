@@ -1,0 +1,22 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 43s
+     Running unittests src/lib.rs (/home/jkern/dev/agent-q/target/debug/deps/aq_server-f655029f9b38a729)
+
+running 2 tests
+test profiled_execution::native_offer::observation::tests::each_read_has_its_own_freshness_and_workspace ... ok
+test profiled_execution::native_offer::observation::tests::same_authorized_context_digest_does_not_replace_exact_read_provenance ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.00s
+
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/native_preparation.rs (/home/jkern/dev/agent-q/target/debug/deps/native_preparation-888bc2e07883003d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+

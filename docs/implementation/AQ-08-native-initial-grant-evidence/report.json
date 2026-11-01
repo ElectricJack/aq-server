@@ -1,0 +1,52 @@
+{
+  "source_commit": "54f4a7ba880f661caad76102cc2740a6261531ab",
+  "parent": "43995bb",
+  "schema_base": "eacdc05",
+  "upstream_equivalents": {
+    "loader4f829e4": "9d243bc",
+    "producer43995bb": "2e59883"
+  },
+  "results": {
+    "final_tests": {
+      "exit": 0,
+      "processes": 14,
+      "passed": 153,
+      "ignored": 2,
+      "failed": 0,
+      "cargo_build_seconds": 122,
+      "summed_test_process_seconds": 74.43
+    },
+    "strict_server_alltargets_allfeatures_clippy": {
+      "exit": 0,
+      "cargo_reported_seconds_including_build_directory_wait": 190
+    },
+    "workspace_fmt": {
+      "exit": 0
+    },
+    "initial_grant_cases": 12,
+    "prior_actual_matrix": 26,
+    "prior_mounted_http_target": 1
+  },
+  "environment": {
+    "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "postgres_image": "sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+    "RUST_TEST_THREADS": 2,
+    "CARGO_BUILD_JOBS": 2,
+    "CARGO_INCREMENTAL": 0
+  },
+  "negative_and_interrupted_history": [
+    "preflight4: reviewer-authored two-fixture test held shared process-environment gate while requesting another fixture; owned hung test SIGTERM, cargo exit 101. Fixed dropping first fixture before second setup; preflight 5 and final pass. No production retry/TTL change.",
+    "preflight3 CLI filter selected only 2 native_offer unit tests and filtered integration cases; not counted as integration evidence.",
+    "prehardening final test/lint invocations intentionally interrupted(exit 130) to add positive grant_revision guard before source freeze. Their logs retained, not qualified.",
+    "Earlier preflights precede final source/hardening and are not substituted for final checks."
+  ],
+  "scope": [
+    "No total wall-time measurement or throughput/capacity claim; concurrent unrelated host load not isolated.",
+    "Actual mounted publication and Accept use real clock; grant/replay/expiry tests switch to controlled clock only after actual Accept, retaining original expiry/deadline without extension.",
+    "Graph and Git component peers are local synthetic qualification fixtures with actual HTTP/Unix I/O and files; source bundle bytes are not a qualified Git bundle. No physical worker installation/model/provider/harness execution is claimed.",
+    "Source retention is freshly inspected; whole bundle byte verification belongs to qualified downloader, not an unbounded rehash at grant admission. Inline bodies/current private credential backing bytes are reverified.",
+    "Receipts use INSERT-only APIs and exact current-owner/replay validation; no generic SQL UPDATE/DELETE guard was introduced. Same-privilege direct SQL is trusted.",
+    "No Started, no-start recovery, Renew/Reconcile, resource release, optional owner activation, schema/public DTO change, deployment or runtime adoption."
+  ]
+}

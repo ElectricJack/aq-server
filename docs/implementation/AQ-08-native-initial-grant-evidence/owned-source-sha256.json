@@ -1,0 +1,12 @@
+{
+  "crates/aq-server/src/admission.rs": "c27ee5831b592e04a455d3cfcf99c9ece89510474418ef203d3890dbdadd70bd",
+  "crates/aq-server/src/intelligence/resolver.rs": "facf014d6bbd5add5ccb00c8e24bf852ea754f2d0f19c9cc9538098cceb8ad22",
+  "crates/aq-server/src/profiled_execution.rs": "38267b81671a4df633e274de5c835ff039e6e173a02c87cf5099738a643950a4",
+  "crates/aq-server/src/profiled_execution/control_api.rs": "798d2f541a64c757d6d8c736f556ba71e9e28cb7b610894aa63dae05391f0b18",
+  "crates/aq-server/src/profiled_execution/initial_grant.rs": "7a1a79478ee69500f526d6b70cd2847a00dcd9b6dd6d299e04e3ec9142bdd2d2",
+  "crates/aq-server/src/profiled_execution/initial_grant/history.rs": "a46edb8d3712f1c234386669e565e72e6e68c6f510d644e801895595f7d20821",
+  "crates/aq-server/src/profiled_execution/preparation.rs": "2312dce7451843b93682b03cc6f3fd0a8a2a0c915509566a3d135c992856a7ad",
+  "crates/aq-server/tests/native_initial_grant.rs": "c4877420ea07e623accc272c4091afebc78254f1c6ffc6bfe5c530580f576e29",
+  "crates/aq-server/tests/native_initial_grant/published.rs": "2a59d0e5fac9700b96ad185557e90feb7abb9c5dcb34e82a3117a952f3444764",
+  "docs/implementation/AQ-08-native-initial-grant-plan.md": "e490911cd1b50f7487d90f490b03d056899e32e56e886a223697eda9160d3c6a"
+}

@@ -1,0 +1,241 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-grant/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 02s
+     Running unittests src/lib.rs (/home/jkern/dev/agent-q/target/debug/deps/aq_server-f655029f9b38a729)
+
+running 63 tests
+test agent_access::graph::tests::http_adapter_never_exposes_graph_errors_or_follows_redirects ... ok
+test agent_access::graph::tests::edge_projection_requires_both_endpoints_and_allowed_type ... ok
+test agent_access::graph::tests::http_adapter_refuses_missing_or_changed_response_version ... ok
+test agent_access::graph::tests::projection_removes_metadata_and_enforces_workspace ... ok
+test agent_access::mutations::tests::oversized_postadmission_status_reports_unknown_with_existing_identity ... ok
+test agent_access::mutations::tests::retained_admission_count_and_byte_boundaries_are_exact ... ok
+test agent_access::mutations::dispatch::tests::native_draft_defaults_preserve_exact_plan_but_extra_meaning_is_refused ... ok
+test agent_access::tests::canonical_digest_matches_published_profile_and_context ... ok
+test agent_access::tests::context_and_issuance_budgets_include_profile_binding_and_credentials ... ok
+test agent_access::tests::contract_enforces_unknown_fields_uuid_integer_and_conditional_rules ... ok
+test agent_access::tests::strict_json_rejects_duplicate_and_fractional_values ... ok
+test config::tests::other_deployments_accept_dev_vault ... ok
+test agent_access::tests::query_digest_omits_cursor_but_binds_authority ... ok
+test config::tests::production_deployment_accepts_production_vault ... ok
+test config::tests::production_deployment_rejects_dev_auth_in_production_env ... ok
+test config::tests::production_deployment_rejects_dev_vault ... ok
+test config::tests::production_deployment_rejects_development_env_with_access_auth ... ok
+test dashboard_api::runtime::tests::snapshot_caps_are_per_principal_and_global_without_cross_actor_eviction ... ok
+test dashboard_api::runtime::tests::cursor_authenticates_actor_partition_scope_resource_limit_expiry_and_bytes ... ok
+test dashboard_assets::tests::manifest_and_total_quotas_and_exact_path_grammar_refuse ... ok
+test dashboard_assets::tests::corrupt_length_versions_unknown_keys_and_duplicate_entries_refuse ... ok
+test dashboard_assets::tests::verified_exact_manifest_digest_and_loaded_bytes_survive_backing_changes ... ok
+test notifications::config::tests::protected_configuration_refuses_unsafe_files_and_keeps_credentials_opaque ... ok
+test dashboard_assets::tests::member_symlink_hardlink_fifo_and_symlink_directory_refuse_without_blocking ... ok
+test profiled_execution::context_budget::tests::capacity_overflow_zero_unknown_and_ambiguous_definitions_refuse ... ok
+test profiled_execution::context_budget::tests::on_demand_content_is_not_claimed_as_zero_token_startup_and_tampering_refuses ... ok
+test profiled_execution::context_budget::tests::missing_expired_or_wrong_exact_subject_never_infers_model_facts_from_bytes ... ok
+test profiled_execution::context_budget::tests::optional_config_defaults_preserve_old_digest_and_facts_require_owned_runtime ... ok
+test profiled_execution::context_projection::tests::expired_partial_forged_and_foreign_observations_refuse ... ok
+test profiled_execution::context_projection::tests::mixed_context_never_expands_task_only_or_knowledge_only_permission ... ok
+test profiled_execution::context_projection::tests::only_authorized_api01_fields_enter_startup_and_original_age_is_preserved ... ok
+test profiled_execution::context_budget::tests::qualified_count_binds_actual_utf8_rendering_overhead_and_reserved_output ... ok
+test profiled_execution::context_projection::tests::scoped_edges_require_exact_authorized_endpoints_and_pinned_revisions ... ok
+test profiled_execution::initial_grant::tests::initial_grant_history_requires_an_actual_positive_grant_revision ... ok
+test profiled_execution::material_api::tests::valid_public_metadata_can_exceed_the_explicit_http_header_profile ... ok
+test profiled_execution::native_offer::observation::tests::each_read_has_its_own_freshness_and_workspace ... ok
+test profiled_execution::native_offer::observation::tests::same_authorized_context_digest_does_not_replace_exact_read_provenance ... ok
+test profiled_execution::source::tests::reference_observation_requires_original_complete_fresh_exact_generation ... ok
+test profiled_execution::source::tests::retention_is_exact_active_complete_and_never_inferred_from_missing_fields ... ok
+test profiled_execution::source_exports::tests::export_identity_is_exact_and_no_execution_binding_is_fabricated ... ok
+test project_bindings::domain::tests::external_absence_staleness_forbidden_and_cross_identity_never_admit ... ok
+test profiled_execution::material::tests::delivery_requires_exact_scope_and_current_bounded_file_bytes ... ok
+test project_bindings::domain::tests::pure_gate_freezes_exact_revision_and_never_rewrites_old_snapshots ... ok
+test project_bindings::domain::tests::operator_groups_and_environment_profile_ceilings_fail_closed ... ok
+test project_bindings::domain::tests::request_fields_cannot_install_urls_credentials_or_worker_claimed_groups ... ok
+test project_bindings::external::tests::repository_reply_rejects_duplicate_subject_and_envelope_fields ... ok
+test source_retention::profiled_base::actual_git_test::real_export_exact_retry_and_fresh_inspection_preserve_original_fact ... ignored, requires selected immutable aq-git and Git executables; disposable PostgreSQL
+test protected_storage::tests::typed_domains_are_independent_and_aad_is_bounded ... ok
+test source_retention::profiled_base::tests::chunk_reads_are_bounded_exact_and_refuse_changed_members ... ok
+test source_retention::profiled_base::tests::historical_fact_is_canonical_bound_and_cannot_refresh_itself ... ok
+test source_retention::profiled_base::tests::retention_requires_exact_active_transfer_and_finite_observation ... ok
+test source_retention::profiled_base::tests::nofollow_applies_to_every_artifact_component_and_special_files_do_not_block ... ok
+test source_retention::profiled_base::tests::socket_replies_are_bounded_and_correlated_without_inventing_success ... ok
+test source_retention::result_retention::tests::current_result_inspection_requires_exact_active_handle_and_single_source_ref ... ok
+test source_retention::result_retention::tests::observed_confirmation_digest_changes_for_exact_manifest_receipt_and_ack_bytes ... ok
+test store::tests::state_format_is_the_latest_migration ... ok
+test terminal::protection::tests::ciphertext_is_randomized_and_bound_to_exact_row_purpose_revision_and_key ... ok
+test terminal::protection::tests::rotation_requires_retained_old_key_and_missing_keys_never_fall_back ... ok
+test terminal::protection::tests::unsafe_key_files_and_duplicate_ids_refuse_without_reading_fifo ... ok
+test updates::tests::stamped_binary_refuses_other_revision ... ok
+test updates::tests::unreadable_marker_dir_counts_as_maintenance ... ok
+test updates::tests::unstamped_binary_accepts_any_revision ... ok
+test source_retention::profiled_base::tests::verification_refuses_corrupt_size_digest_manifest_and_installation ... ok
+
+test result: ok. 62 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/dashboard_read.rs (/home/jkern/dev/agent-q/target/debug/deps/dashboard_read-22fe3b64f404ac67)
+
+running 5 tests
+test acl_expiry_during_database_wait_refuses_read ... ok
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+
+     Running tests/intelligence.rs (/home/jkern/dev/agent-q/target/debug/deps/intelligence-47b90b28d39fe5a7)
+
+running 4 tests
+test credential_loading_is_private_bounded_regular_and_never_claims_missing_keys ... ok
+test manual_observation_has_authenticated_provenance_exact_replay_and_expiry_tombstones ... ok
+test server_material_owner_is_derived_only_for_explicit_safe_configured_delivery ... ok
+test installed_inventory_is_current_boot_bound_does_not_authorize_keys_and_legacy_feedback_refuses ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9)
+
+running 12 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.94s
+
+     Running tests/native_offers.rs (/home/jkern/dev/agent-q/target/debug/deps/native_offers-54d549aa0e9c5f5e)
+
+running 4 tests
+test missing_qualified_capacity_never_invents_zero_or_exports_source ... ok
+test actual_native_offer_seals_real_owner_artifacts_source_and_graph_without_grant ... ok
+test poll_rejects_chosen_scope_duplicate_fields_and_oversized_body_before_admission ... ok
+test task_cas_and_same_cas_content_mismatch_never_publish_an_offer ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.73s
+
+     Running tests/native_preparation.rs (/home/jkern/dev/agent-q/target/debug/deps/native_preparation-888bc2e07883003d)
+
+running 11 tests
+test accept_missing_nonce_unknown_and_duplicate_fields_and_body_bound_are_typed_failures ... ok
+test actual_original_plan_lease_mapping_reserved_journal_and_exact_replay_without_grant ... ok
+test changed_private_file_never_admits_lease_or_reservation_journal ... ok
+test concurrent_exact_accept_can_reconcile_original_receipt_without_duplicate_leases ... ok
+test credential_rotation_during_actual_git_io_never_admits_preparation ... ok
+test expiry_after_observed_node_lock_wait_never_commits_preparation ... ok
+test incoming_preparation_bytes_cannot_overshoot_retained_storage_limit ... ok
+test extra_known_worker_capabilities_and_missing_durable_journal_never_qualify_preparation ... ok
+test issued_grant_cannot_be_discounted_as_an_owned_ungranted_reservation ... ok
+test journal_storage_failure_rolls_back_lease_mapping_hot_and_receipt_atomically ... ok
+test mounted_accept_and_actual_private_material_fetch_keep_preparation_separate_from_grant ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.66s
+
+     Running tests/never_granted.rs (/home/jkern/dev/agent-q/target/debug/deps/never_granted-df86675ed3622e2c)
+
+running 7 tests
+test contradictory_effects_are_never_absence_proofs ... ok
+test missing_or_unsupported_empty_material_plan_is_unknown_not_fake_preparation_authority ... ok
+test offline_expired_offer_closes_without_guardian_and_preserves_history_budget_and_replay ... ok
+test observed_node_lock_race_issued_authority_wins_and_closure_cannot_erase_it ... ok
+test preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_closes ... ok
+test repeated_unissued_offers_keep_lineage_generation_and_finite_retry_budget ... ok
+test queued_mail_becomes_stale_but_received_or_unknown_mail_refuses_closure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s
+
+     Running tests/playbook_review_contract.rs (/home/jkern/dev/agent-q/target/debug/deps/playbook_review_contract-c4757846b4fa7a0d)
+
+running 4 tests
+test catalog1_bytes_and_capabilities_do_not_silently_gain_human_decision_authority ... ok
+test catalog2_snapshot_is_generated_and_operation_lookup_has_no_generic_service_or_url ... ok
+test decision_input_refuses_authority_fields_duplicate_owners_and_mismatched_subject_id ... ok
+test actual_compiler_refuses_old_catalog_and_accepts_explicit_registered_async_owner_contract ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/profiled_authority.rs (/home/jkern/dev/agent-q/target/debug/deps/profiled_authority-75696f3e789943b9)
+
+running 7 tests
+test actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuses_foreign_spec ... ok
+test actual_profiled_graph_adapter_issues_exact_api01_binding_and_revokes_on_current_authority ... ok
+test common_task_claim_and_legacy_decoders_cannot_cross_profiled_kind ... ok
+test authority_expiry_is_sampled_after_an_observed_node_lock_wait ... ok
+test migration_freezes_common_identity_profiled_boot_generation_deadline_and_immutable_seal ... ok
+test database_derives_revisions_on_noop_and_bounds_uncompressed_state_and_material_verifier ... ok
+test shared_view_fences_exact_seal_identity_live_time_and_revision_semantics ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.30s
+
+     Running tests/profiled_hot.rs (/home/jkern/dev/agent-q/target/debug/deps/profiled_hot-0de901604e0e314c)
+
+running 5 tests
+test adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_seals ... ok
+test actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback ... ok
+test immutable_cache_hit_never_caches_renewal_revocation_or_expiry ... ok
+test immutable_cache_is_exact_keyed_count_and_byte_bounded ... ok
+test production_typed_spec_checks_actual_sealed_selection_and_source ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.59s
+
+     Running tests/profiled_started.rs (/home/jkern/dev/agent-q/target/debug/deps/profiled_started-d61d8d348ad28fb1)
+
+running 6 tests
+test grant_expiring_while_waiting_for_owner_lock_cannot_become_running ... ok
+test journal_heads_preserve_exact_phase_scope_and_require_original_start_record ... ok
+test original_started_is_atomic_and_historical_replay_never_revives_stopped_host ... ok
+test receipt_journal_and_running_rollback_together_and_rotated_auth_cannot_replay ... ok
+test missing_prepared_head_foreign_owner_and_unregistered_allowlist_never_make_running ... ok
+test worker_http_start_report_uses_current_node_auth_and_returns_only_historical_ack ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s
+
+     Running tests/profiled_stopped.rs (/home/jkern/dev/agent-q/target/debug/deps/profiled_stopped-1f61a1b186c4b954)
+
+running 8 tests
+test credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation ... ok
+test expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority ... ok
+test journal_failure_rolls_back_receipt_and_stop_then_retry_succeeds ... ok
+test missing_started_or_foreign_physical_owner_cannot_settle ... ok
+test renewed_shorter_permit_is_valid_but_rotated_owner_cannot_replay ... ok
+test sql_rejects_digest_only_physical_substitution_and_receipt_without_atomic_projection ... ok
+test stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock ... ok
+test worker_http_stop_is_bounded_authenticated_and_historical_only ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.38s
+
+     Running tests/project_bindings.rs (/home/jkern/dev/agent-q/target/debug/deps/project_bindings-c9d5b5fc6f19f383)
+
+running 13 tests
+test catalog_activation_blocks_future_eligibility_and_keeps_frozen_project_revision ... ok
+test absent_stale_forbidden_and_offline_components_refuse_and_disable_stays_available ... ok
+test committed_binding_installs_pending_policy_and_historical_ack_survives_retirement ... ok
+test empty_policy_configuration_still_retains_global_revision_owner ... ok
+test exact_replay_survives_group_configuration_changes_but_new_mutations_do_not ... ok
+test final_local_fence_rechecks_node_revocation_after_lock_wait ... ok
+test intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_facts ... ok
+test observation_expiring_during_mutation_lock_wait_never_commits_fresh_validation ... ok
+test owner_scope_node_restrictions_and_mutation_unknown_fields_are_enforced ... ok
+test policy_install_is_atomic_retains_tombstones_and_refuses_configuration_rollback ... ok
+test project_policy_decisions_have_no_human_actor_and_recheck_installed_policy ... ok
+test selected_real_public_repository_and_graph_workspace_bind ... ignored, requires immutable selected aq-git and aq-graph components via scripts/test-project-bindings.py
+test revisioned_binding_replay_history_and_retained_snapshot_survive_updates ... ok
+
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.09s
+
+     Running tests/schema26_27.rs (/home/jkern/dev/agent-q/target/debug/deps/schema26_27-73f0a7abed0e6f01)
+
+running 6 tests
+test format_change_requires_backup_restore_before_rollback ... ok
+test fresh_database_installs_ordered27_without_activating_optional_owners ... ok
+test failure_in27_rolls_back26_and_all_metadata_then_explicit_retry_succeeds ... ok
+test old25_reader_profile_refuses27_without_touching_rows_or_migration_metadata ... ok
+test inconsistent_recorded_format_refuses_without_repair_or_partial_changes ... ok
+test populated25_upgrades_to27_preserving_rows_and_reopening_idempotently ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
