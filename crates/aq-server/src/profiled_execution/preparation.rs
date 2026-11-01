@@ -33,13 +33,13 @@ fn now(state: &AppState) -> Result<u64, AppError> {
         .filter(|t| *t > 0)
         .ok_or_else(refused)
 }
-struct Locked {
-    hot: HotState,
-    selection: aq_selection::ResolvedSelection,
-    source: source_exports::LinkedExport,
-    offer_expiry: u64,
+pub(super) struct Locked {
+    pub(super) hot: HotState,
+    pub(super) selection: aq_selection::ResolvedSelection,
+    pub(super) source: source_exports::LinkedExport,
+    pub(super) offer_expiry: u64,
 }
-async fn locked(
+pub(super) async fn locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     auth: &AuthenticatedNode,
@@ -174,6 +174,12 @@ async fn original(
     auth: &AuthenticatedNode,
     request: &Accept,
 ) -> Result<Option<PreparationPlan>, AppError> {
+    super::accepted_preparation::reject_legacy_operation_collision(
+        tx,
+        auth.id(),
+        request.operation_id,
+    )
+    .await?;
     let row=sqlx::query("SELECT kind,request_digest,response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(auth.id()).bind(request.operation_id).fetch_optional(&mut **tx).await.map_err(db)?;
     let Some(row) = row else { return Ok(None) };
     if row.get::<String, _>("kind") != "accept"
@@ -457,6 +463,9 @@ pub(super) async fn retained_quota_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
 ) -> Result<(i64, i64, i64, i64), AppError> {
-    let quota: (i64,i64,i64,i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id WHERE m.node_id=$1),0) FROM admission_material_leases").bind(node).fetch_one(&mut **tx).await.map_err(db)?;
+    let mut quota: (i64,i64,i64,i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id WHERE m.node_id=$1),0) FROM admission_material_leases").bind(node).fetch_one(&mut **tx).await.map_err(db)?;
+    let extra = super::accepted_preparation::retained_bytes_locked(tx, node).await?;
+    quota.2 = quota.2.checked_add(extra.0).ok_or_else(refused)?;
+    quota.3 = quota.3.checked_add(extra.1).ok_or_else(refused)?;
     Ok(quota)
 }

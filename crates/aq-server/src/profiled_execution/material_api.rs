@@ -163,30 +163,17 @@ pub async fn fetch(
     {
         return Err(refused());
     }
-    let owner = hot.owner.as_ref().ok_or_else(refused)?;
-    let preparation = hot.preparation_operation_id.ok_or_else(refused)?;
-    let original: Value = sqlx::query_scalar(
-        "SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 AND kind='accept' FOR SHARE",
+    let original = super::accepted_preparation::load_preparing_locked(
+        state,
+        &mut tx,
+        auth,
+        &request.binding,
+        &hot,
     )
-    .bind(auth.id())
-    .bind(preparation)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(refused)?;
-    let original: TransportDocument = serde_json::from_value(original).map_err(|_| refused())?;
-    original.validate().map_err(|_| refused())?;
-    let TransportDocument::PreparationPlan(plan) = original else {
-        return Err(refused());
-    };
-    if plan.operation_id != preparation
-        || plan.binding != request.binding
-        || plan.guardian_id != owner.guardian_id
-        || plan.launch_id != owner.launch_id
-        || plan.reservation.reservation_id != owner.reservation_id
-        || plan.materials.len() != 1
-        || !same(&plan.materials[0], &lease)?
-        || plan.clock.expires_at_ms != lease.expires_at_ms
+    .await?;
+    if original.materials().len() != 1
+        || !same(&original.materials()[0], &lease)?
+        || original.window().1 != lease.expires_at_ms
     {
         return Err(refused());
     }
@@ -242,7 +229,7 @@ pub async fn fetch(
     // The original expiry is immutable. Every retry charges time spent waiting
     // for node, hot, registry and lease locks before reporting its remaining TTL.
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| refused())?;
-    if now < plan.clock.server_time_ms || now >= plan.clock.expires_at_ms {
+    if now < original.window().0 || now >= original.window().1 {
         return Err(refused());
     }
     lease

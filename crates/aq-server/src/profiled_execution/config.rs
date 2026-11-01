@@ -83,6 +83,7 @@ fn artifact(value: &ArtifactRef) -> Result<(), String> {
 impl ProfiledConfig {
     pub fn validate(&self) -> Result<(), String> {
         super::definitions::validate_catalog(&self.definition_bodies)?;
+        super::accepted_preparation::policy::validate_catalog(self)?;
         super::context_budget::validate_catalog(&self.context_qualifications)
             .map_err(|_| "invalid context qualifications".to_string())?;
         if self.revision == 0

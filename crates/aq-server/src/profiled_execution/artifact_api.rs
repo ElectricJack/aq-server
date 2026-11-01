@@ -117,26 +117,15 @@ async fn fetch(
     }
     let (issued, expires) = match hot.status {
         Status::Offered => (0, sealed.get::<i64, _>("offer_expires_at_ms") as u64),
-        Status::Preparing => {
-            let operation = hot.preparation_operation_id.ok_or_else(refused)?;
-            let owner = hot.owner.as_ref().ok_or_else(refused)?;
-            let response:Value=sqlx::query_scalar("SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 AND kind='accept' FOR SHARE").bind(auth.id()).bind(operation).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(refused)?;
-            let document: TransportDocument =
-                serde_json::from_value(response).map_err(|_| refused())?;
-            document.validate().map_err(|_| refused())?;
-            let TransportDocument::PreparationPlan(plan) = document else {
-                return Err(refused());
-            };
-            if plan.binding != request.binding
-                || plan.operation_id != operation
-                || plan.guardian_id != owner.guardian_id
-                || plan.launch_id != owner.launch_id
-                || plan.reservation.reservation_id != owner.reservation_id
-            {
-                return Err(refused());
-            }
-            (plan.clock.server_time_ms, plan.clock.expires_at_ms)
-        }
+        Status::Preparing => super::accepted_preparation::load_preparing_locked(
+            &state,
+            &mut tx,
+            &auth,
+            &request.binding,
+            &hot,
+        )
+        .await?
+        .window(),
         Status::Granted => (
             0,
             hot.grant

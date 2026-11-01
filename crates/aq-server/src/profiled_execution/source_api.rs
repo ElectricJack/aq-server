@@ -16,7 +16,7 @@ use crate::{
 use aq_admission::{
     LaunchBinding,
     control::{ControlReply, Failure, FailureCode},
-    transport::{Feature, TransportDocument},
+    transport::Feature,
 };
 use aq_session_protocol::Validate;
 use axum::{
@@ -212,23 +212,9 @@ async fn locked(
     let (issued, deadline) = match hot.status {
         Status::Offered => (0, launch.get::<i64, _>("offer_expires_at_ms") as u64),
         Status::Preparing => {
-            let operation = hot.preparation_operation_id.ok_or_else(refused)?;
-            let owner = hot.owner.as_ref().ok_or_else(refused)?;
-            let raw:serde_json::Value=sqlx::query_scalar("SELECT response FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2 AND kind='accept' FOR SHARE").bind(auth.id()).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(refused)?;
-            let doc: TransportDocument = serde_json::from_value(raw).map_err(|_| refused())?;
-            doc.validate().map_err(|_| refused())?;
-            let TransportDocument::PreparationPlan(plan) = doc else {
-                return Err(refused());
-            };
-            if plan.binding != *binding
-                || plan.operation_id != operation
-                || plan.guardian_id != owner.guardian_id
-                || plan.launch_id != owner.launch_id
-                || plan.reservation.reservation_id != owner.reservation_id
-            {
-                return Err(refused());
-            }
-            (plan.clock.server_time_ms, plan.clock.expires_at_ms)
+            super::accepted_preparation::load_preparing_locked(state, tx, auth, binding, &hot)
+                .await?
+                .window()
         }
         Status::Granted => (
             0,

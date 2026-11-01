@@ -252,6 +252,9 @@ fn build_worker_router_inner(
         .merge(worker_api::worker_routes(state.clone()))
         .merge(profiled_execution::api::routes(state.clone()))
         .merge(profiled_execution::control_api::routes(state.clone()))
+        .merge(profiled_execution::accepted_preparation::routes(
+            state.clone(),
+        ))
         .merge(profiled_execution::reconciliation::routes(state.clone()))
         .merge(profiled_execution::renewal::routes(state.clone()))
         .merge(profiled_execution::producer::api::routes(state.clone()))

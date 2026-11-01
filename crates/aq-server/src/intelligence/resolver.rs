@@ -529,3 +529,22 @@ pub(super) async fn explain(
     .await
     .map_err(|_| AppError::Internal)?
 }
+
+/// Current principal fence for already accepted no-launch input retrieval only.
+/// Does not renew snapshots, select a candidate or authorize execution.
+pub(crate) async fn fence_preparation_input_principal(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    attempt: Uuid,
+) -> Result<()> {
+    let row=sqlx::query("SELECT d.decision_id,d.decision#>>'{inputs,project,lineage,project_id}' AS project,l.launch_manifest#>>'{bindings,project_id}' AS bound_project FROM profiled_launches l JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1 FOR SHARE OF l,d").bind(attempt).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(||conflict("preparation principal missing"))?;
+    let project: Uuid = row
+        .get::<String, _>("project")
+        .parse()
+        .map_err(|_| AppError::Internal)?;
+    let bound: Uuid = row
+        .get::<String, _>("bound_project")
+        .parse()
+        .map_err(|_| AppError::Internal)?;
+    principal::fence_subject(state, tx, row.get("decision_id"), project, bound).await
+}
