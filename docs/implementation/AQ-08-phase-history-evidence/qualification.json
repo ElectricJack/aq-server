@@ -1,0 +1,87 @@
+{
+  "source": "c8af391",
+  "integrated_source": "d11f6b4",
+  "state_format": 32,
+  "results": {
+    "actual_sql_tests": {
+      "passed": 4,
+      "failed": 0,
+      "seconds": 7.95,
+      "threads": 1
+    },
+    "strict_affected_clippy_seconds": 24.95,
+    "format": "pass"
+  },
+  "bounds": {
+    "concurrent_history": 2,
+    "total_budget_ms": 3000,
+    "sql_lock_timeout_ms": 500,
+    "sql_statement_timeout_ms": 2000,
+    "wire_bytes": 65536,
+    "pool": "General only"
+  },
+  "source_files": {
+    "Cargo.lock": {
+      "sha256": "b220c3ffc0d1e2dbc02b835c3af36dc303b21d038555bdc3c5974cb6033d09e4",
+      "bytes": 88878
+    },
+    "crates/aq-server/Cargo.toml": {
+      "sha256": "77a3eb121580ec3c809b89ff6ea74aa91f314383e470a5e888ee9103d8367e2c",
+      "bytes": 2512
+    },
+    "crates/aq-server/src/profiled_execution.rs": {
+      "sha256": "fcd025c9a7fffc5f2528b6455942a2e9012220a4df9c357653ad330c49447d35",
+      "bytes": 966
+    },
+    "crates/aq-server/src/profiled_execution/phase_terminal.rs": {
+      "sha256": "61f5ad7af382c721a40bc27e627d999ceeaf166dec9a5ed9f9760ee079b69e98",
+      "bytes": 89
+    },
+    "crates/aq-server/src/profiled_execution/phase_terminal/history.rs": {
+      "sha256": "8026e428dc81a5952c041d244d65e7c1c645e761df2a6a0cd6e276e68df118c2",
+      "bytes": 5668
+    },
+    "crates/aq-server/tests/phase_terminal_history.rs": {
+      "sha256": "5cefe0a7edac33208c9b15814b18d2fee9000dd0d7525357fd1a5f189294bf81",
+      "bytes": 9071
+    }
+  },
+  "logs": {
+    "build.log": {
+      "sha256": "42f9585d5e3867d7bda1a315157c3ec7145d84936e9a34e23596bf2a5e910c67",
+      "bytes": 2835
+    },
+    "build-final.log": {
+      "sha256": "f685dc6b3bb5d8e8e6aca4bf6f68b9e8699005841460b75361ac236fe88cacec",
+      "bytes": 273
+    },
+    "tests.log": {
+      "sha256": "6ee107863bf8900507a00671f3203af817babfbb81b33d801f58f5457526f6c3",
+      "bytes": 633
+    },
+    "clippy.log": {
+      "sha256": "c2bf22c99d6603946ef87eb50d2c67611bcaf175963a984a7f7c92951f8dbafe",
+      "bytes": 2708
+    }
+  },
+  "commands": {
+    "environment": {
+      "CARGO_TARGET_DIR": "/tmp/aq-native-union-target",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "2",
+      "DATABASE_URL": "postgres://postgres:test@127.0.0.1:55432/postgres",
+      "RUST_TEST_THREADS": "1"
+    },
+    "test": "cargo test -p aq-server --test phase_terminal_history --all-features --locked --offline -- --test-threads=1 --nocapture",
+    "lint": "cargo clippy -p aq-server --test phase_terminal_history --all-features --locked --offline -- -D warnings"
+  },
+  "limits": [
+    "Actual PostgreSQL/auth/receipt owners; synthetic Graph/Git/runtime fixtures",
+    "No production route or lifecycle mutation/renewal/release activated",
+    "History is finite identity; absence is snapshot only, never NeverGranted",
+    "No HTTP client/server union qualification in this checkpoint",
+    "No complete old-binary mixed deployment qualification",
+    "Test timings are not fleet capacity or service latency evidence"
+  ]
+}

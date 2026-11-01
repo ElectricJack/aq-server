@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized] target(s) in 0.15s
+     Running tests/phase_terminal_history.rs (/tmp/aq-native-union-target/debug/deps/phase_terminal_history-3648578491ef8f23)
+
+running 4 tests
+test blocked_history_has_finite_admission_and_does_not_take_renewal_connections ... ok
+test corrupt_retained_receipt_or_missing_owner_table_never_becomes_absence ... ok
+test lost_first_reply_lookup_advances_from_absence_to_history_without_effects ... ok
+test wrong_origin_operation_binding_and_current_credentials_are_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.95s
+

@@ -1,0 +1,3 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-root-phase-terminal-history/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 31.14s
+  Executable tests/phase_terminal_history.rs (/tmp/aq-native-union-target/debug/deps/phase_terminal_history-3648578491ef8f23)
