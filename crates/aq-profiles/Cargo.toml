@@ -1,6 +1,6 @@
 [package]
 name = "aq-profiles"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 publish = false
 
@@ -9,6 +9,7 @@ name = "aq"
 path = "src/main.rs"
 
 [dependencies]
+schemars = "1"
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 aq-session-api = { path = "../aq-session-api", version = "=0.1.0" }

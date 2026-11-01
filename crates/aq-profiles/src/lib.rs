@@ -1,7 +1,9 @@
 //! Deterministic composition, immutable catalog artifacts and activation CAS.
 //! No provider selection, authority service, database or process launch.
 mod catalog;
+pub mod central;
 mod compile;
+mod composition_core;
 mod graph_policy;
 pub use graph_policy::*;
 mod registry;
