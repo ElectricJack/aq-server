@@ -2,6 +2,31 @@ use super::{Result, StoreError};
 use sqlx::{Postgres, Transaction};
 
 pub(super) async fn media36_storage_guard(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    // A surviving function OID/name is insufficient after CREATE OR REPLACE.
+    // Compare the installed body with the exact frozen migration body too.
+    let migration = include_str!("../../migrations/0036_result_media_owner.sql");
+    for name in [
+        "guard_result_media_storage",
+        "guard_result_media_budget",
+        "guard_result_media_intent",
+    ] {
+        let expected = migration
+            .split_once(&format!("CREATE FUNCTION {name}()"))
+            .and_then(|(_, tail)| tail.split_once("AS $$"))
+            .and_then(|(_, tail)| tail.split_once("$$;"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| StoreError::Corrupt("result media guard source missing".into()))?;
+        let actual: Option<String> =
+            sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure($1)")
+                .bind(format!("{name}()"))
+                .fetch_optional(&mut **tx)
+                .await?;
+        if actual.as_deref() != Some(expected) {
+            return Err(StoreError::Corrupt(
+                "result media guard body drifted".into(),
+            ));
+        }
+    }
     let complete: bool = sqlx::query_scalar(r#"SELECT
       to_regclass('result_media_storage') IS NOT NULL
       AND to_regclass('result_media_budgets') IS NOT NULL

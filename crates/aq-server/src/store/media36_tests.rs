@@ -76,6 +76,7 @@ async fn missing_disabled_or_wrong_owner_guards_are_refused_without_repair() {
         .await;
     corrupt("ALTER TABLE result_media_intents DROP COLUMN receipt_bytes CASCADE").await;
     corrupt("DROP TABLE result_media_intents CASCADE").await;
+    corrupt("CREATE OR REPLACE FUNCTION guard_result_media_intent() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$").await;
 }
 #[tokio::test]
 async fn budget_storage_identity_and_history_cannot_be_erased_or_reset() {

@@ -255,7 +255,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         35,
         include_str!("../migrations/0035_supervisor_conversation.sql"),
     ),
-    (36, include_str!("../migrations/0036_result_media_owner.sql")),
+    (
+        36,
+        include_str!("../migrations/0036_result_media_owner.sql"),
+    ),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
