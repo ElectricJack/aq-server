@@ -19,7 +19,7 @@ pub async fn record(
         record_inner(state, node, request),
     )
     .await
-    .map_err(|_| AppError::IdentityUnavailable("phase Started deadline exceeded".into()))?
+    .map_err(|_| AppError::IdentityUnavailable("phase Started commit outcome unknown".into()))?
 }
 fn replay(
     row: &PgRow,
