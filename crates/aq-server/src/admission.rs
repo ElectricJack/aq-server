@@ -140,6 +140,7 @@ pub fn classify(path: &str) -> Class {
             | "/v2/worker/directive-ack"
             | "/v2/worker/result"
             | "/v2/worker/reconcile"
+            | "/v1/worker/profiled/reconcile"
             | "/v2/worker/agent-session"
             | "/api/execution/replace-incarnation"
             | "/api/execution/test-control"

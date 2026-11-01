@@ -45,7 +45,7 @@ impl IntoResponse for Error {
         reply
     }
 }
-fn nonce(headers: &HeaderMap) -> Result<Uuid, AppError> {
+pub(crate) fn nonce(headers: &HeaderMap) -> Result<Uuid, AppError> {
     if headers.get_all("aq-delivery-nonce").iter().count() != 1 {
         return Err(AppError::BadRequest(
             "one physical delivery nonce required".into(),

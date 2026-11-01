@@ -589,3 +589,63 @@ async fn graph_changes_during_preparation_refuse_without_retiming_original_input
     .unwrap();
     assert_eq!(grant_id, first.original.grant.grant_id.to_string());
 }
+
+#[tokio::test]
+async fn actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation() {
+    use aq_admission::{
+        control::{CurrentPhase, ReconcileEntry},
+        transport::{JournalEvidence, Reconcile, ReconcileAttempt},
+    };
+    let c = setup().await;
+    let first = grant(&c).await.unwrap();
+    let request = Reconcile {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: c.request.identity.clone(),
+        after_attempt: None,
+        limit: 1,
+        attempts: vec![ReconcileAttempt {
+            binding: c.request.binding.clone(),
+            guardian_id: c.request.guardian_id,
+            launch_id: c.request.launch_id,
+            last_grant_id: None,
+            journal: JournalEvidence::Unavailable {
+                reason: aq_admission::transport::JournalUnavailable::Missing,
+            },
+        }],
+    };
+    let before:Value=sqlx::query_scalar("SELECT jsonb_build_object('hot',to_jsonb(h),'journal',to_jsonb(j),'receipts',(SELECT count(*) FROM profiled_execution_receipts)) FROM profiled_authority_hot h JOIN profiled_owner_journals j USING(attempt_id) WHERE attempt_id=$1").bind(c.request.binding.attempt_id).fetch_one(&c.case.env.env.pool).await.unwrap();
+    let page = aq_server::profiled_execution::reconciliation::reconcile(
+        &c.case.env.env.state,
+        &auth(&c).await,
+        &request,
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let ReconcileEntry::Current { authority } = &page.attempts[0] else {
+        panic!()
+    };
+    assert!(
+        matches!(authority.phase,CurrentPhase::Granted {grant_id,started_operation_id:None,..} if grant_id==first.original.grant.grant_id)
+    );
+    assert!(!serde_json::to_string(&page).unwrap().contains("\"clock\""));
+    c.clock
+        .store(first.original.grant.expires_at_ms as i64, Ordering::SeqCst);
+    let expired = aq_server::profiled_execution::reconciliation::reconcile(
+        &c.case.env.env.state,
+        &auth(&c).await,
+        &request,
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let ReconcileEntry::Current { authority } = &expired.attempts[0] else {
+        panic!()
+    };
+    assert!(
+        matches!(authority.phase,CurrentPhase::StopRequired {last_grant_id:Some(id),..} if id==first.original.grant.grant_id)
+    );
+    let after:Value=sqlx::query_scalar("SELECT jsonb_build_object('hot',to_jsonb(h),'journal',to_jsonb(j),'receipts',(SELECT count(*) FROM profiled_execution_receipts)) FROM profiled_authority_hot h JOIN profiled_owner_journals j USING(attempt_id) WHERE attempt_id=$1").bind(c.request.binding.attempt_id).fetch_one(&c.case.env.env.pool).await.unwrap();
+    assert_eq!(before, after);
+}
