@@ -542,6 +542,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-wait-engine"
+version = "0.1.0"
+dependencies = [
+ "aq-lifecycle-api",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-worker-protocol"
 version = "0.2.0"
 dependencies = [
