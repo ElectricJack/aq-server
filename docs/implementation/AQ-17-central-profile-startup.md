@@ -158,3 +158,25 @@ all historical archives and old checker behavior. Root coordinates narrow Cargo
 pins and any later integration. There is no claim of central execution readiness
 until real selection, profile/HostPlan ownership, artifact retention and physical
 authority are separately implemented and qualified.
+
+## Completed first pure increment
+
+Source `43ac07b` implements this compile/render boundary in profiles 0.1.2.
+Selector 0.1.3 only follows that dependency; its selection algorithm is unchanged.
+The compiler source itself has a genuine new identity, recorded by generated
+compiler/renderer artifacts rather than presented as the old task compiler.
+Task wire and errors match 21 actual canonical cases captured on untouched
+0.1.1 before refactoring, in addition to the existing task/native goldens.
+
+The independently extracted five-package closure passes all 60 tests, strict
+Clippy and formatting offline. New package payloads byte-match source `43ac07b`;
+all old archives/checkers remain unchanged. The frozen schema, actual catalog/
+request/result examples and package inventory are in
+[`protocol/central-profile/v1`](../../protocol/central-profile/v1/README.md).
+Reproducible qualification details and exact archive hashes are in
+[`evidence/aq17-central-profile-43ac07b`](evidence/aq17-central-profile-43ac07b/qualification.json).
+
+This completes pure composition and rendering only. A future central selection
+adapter, owner-retained artifacts and exact subject-neutral HostPlan/permit/
+material/reply associations are still required before any production execution.
+The reservation owner and API-07 continue to expose no supervisor runtime.

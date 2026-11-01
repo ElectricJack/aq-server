@@ -1,0 +1,36 @@
+{
+  "contract": "central-profile-1",
+  "source_commit": "43ac07bd105fa676875c656294e763ee6c178699",
+  "packages": [
+    {
+      "name": "aq-agent-api",
+      "version": "0.1.0",
+      "archive": "docs/implementation/evidence/aq08-policy-4b7cc26/archives/aq-agent-api-0.1.0.crate",
+      "sha256": "59925d45196e14c18674375c3064fede5181f1ff42f285e3f81c02efbce36733"
+    },
+    {
+      "name": "aq-session-api",
+      "version": "0.1.0",
+      "archive": "docs/implementation/evidence/aq08-policy-4b7cc26/archives/aq-session-api-0.1.0.crate",
+      "sha256": "b9b8c743f806ef76d29d55a64dad2036f29d5acb40ec8156ead6130231f9e4cc"
+    },
+    {
+      "name": "aq-session-protocol",
+      "version": "0.1.0",
+      "archive": "docs/implementation/evidence/aq08-policy-4b7cc26/archives/aq-session-protocol-0.1.0.crate",
+      "sha256": "479778d8ea76f0605b9a20460e0bd3fda73b699337b1e80783ada0d291a68090"
+    },
+    {
+      "name": "aq-profiles",
+      "version": "0.1.2",
+      "archive": "docs/implementation/evidence/aq17-central-profile-43ac07b/archives/aq-profiles-0.1.2.crate",
+      "sha256": "d4f53b764d3e65c6cbbd0cda1b5b11da523866b19595d4461d3a64e3e1fdd015"
+    },
+    {
+      "name": "aq-selection",
+      "version": "0.1.3",
+      "archive": "docs/implementation/evidence/aq17-central-profile-43ac07b/archives/aq-selection-0.1.3.crate",
+      "sha256": "726aed0c9437cd26927013f5702b4b17ee59a47aeb47b4eb0684f696e73db2be"
+    }
+  ]
+}

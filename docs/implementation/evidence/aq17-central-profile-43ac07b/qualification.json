@@ -1,0 +1,72 @@
+{
+  "source_commit": "43ac07bd105fa676875c656294e763ee6c178699",
+  "scope": "pure compile/render and standalone package closure; no execution authority",
+  "baseline": {
+    "capture_commit": "96b584b",
+    "compiler_version": "0.1.1",
+    "untouched_compile_rs_sha256": "379f629b618243e324b5b34414bb816f71577809b1c6e9ff445b0663c5fec31b",
+    "canonical_cases": 21,
+    "comparison": "exact equality; no normalized-away compiler identities"
+  },
+  "new_versions": {
+    "aq-profiles": "0.1.2",
+    "aq-selection": "0.1.3"
+  },
+  "standalone": {
+    "command": "CARGO_TARGET_DIR=<leased existing target> CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 python3 scripts/test-central-profile-packages.py",
+    "mode": "locked offline extracted archives only; no live sibling checkout",
+    "profiles": {
+      "tests": 37,
+      "build_seconds": 4.7,
+      "strict_seconds": 2.79,
+      "fmt": "pass"
+    },
+    "selection": {
+      "tests": 23,
+      "build_seconds": 3.86,
+      "strict_seconds": 2.45,
+      "fmt": "pass"
+    },
+    "total_tests": 60,
+    "outcome": "pass"
+  },
+  "normative_vectors": {
+    "schema": "Draft 2020-12 independently checked with Python jsonschema",
+    "request": "pass",
+    "compilation": "pass",
+    "export_check": "pass"
+  },
+  "compiler": {
+    "digest": "2d4fc864c8c9eec2384b409f53cb35591cd8ac20ee0c3e76e516c9267dceae2a",
+    "id": "aq.central-profile.compiler/2d4fc864c8c9eec2384b409f53cb35591cd8ac20ee0c3e76e516c9267dceae2a",
+    "version": "1"
+  },
+  "renderer": {
+    "digest": "80a80ed416d113b13b178da94cfb7943fc8327b4dbb1b51a2a59586d9bf339f6",
+    "id": "aq.central-profile.renderer/80a80ed416d113b13b178da94cfb7943fc8327b4dbb1b51a2a59586d9bf339f6",
+    "version": "1"
+  },
+  "historical_archives": "unchanged; three frozen dependency digests match existing AQ08 qualification; old profiles/selection archives and checker untouched",
+  "capabilities": {
+    "runtime": false,
+    "launch": false,
+    "selection": "unresolved",
+    "authority": "none",
+    "token_count": null,
+    "cost": null
+  },
+  "excluded": [
+    "SQL/schema38",
+    "HTTP/daemon driver",
+    "credential material",
+    "provider/model calls",
+    "host/tmux launch",
+    "model-settings selection bridge"
+  ],
+  "independent_review": {
+    "source_commit": "43ac07b",
+    "reviewer": "decisions_vertical_v2",
+    "outcome": "no concrete blocker in scoped pure compile/render boundary",
+    "tests_independently_rerun_by_reviewer": false
+  }
+}

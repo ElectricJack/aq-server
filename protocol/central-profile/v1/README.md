@@ -107,3 +107,12 @@ The raw request is the `data` value of `request.example.json`; the outer envelop
 is documentation only. `compilation.example.json` contains the full typed result,
 including exact generated UTF-8 artifact bytes. SHA references deliberately change
 when actual compiler source bytes or package identity change.
+
+`packages.json` pins the five-package standalone test closure. New profile/selector
+archives retain every tracked source/test/example byte from source `43ac07b`
+(except Cargo's generated manifest/lock/VCS metadata); `Cargo.toml.orig` exactly
+matches the source manifest. Run
+`CARGO_TARGET_DIR=<explicitly leased existing target> python3 scripts/test-central-profile-packages.py`
+for locked offline tests, strict Clippy and formatting against only extracted
+archives. The three old contract archives are reused unchanged, and all earlier
+profile/selector archives and their checker remain intact.
