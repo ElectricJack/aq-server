@@ -120,7 +120,7 @@ The fixture also records the original proposal publication/offer clocks,
 selection budget/node/project/source expiries, Graph read stamps, and local
 reservation/phase-accept intent/deadline fields. Selected SQL clock fields are
 reduced to unsigned integers or null before logging. No sealed timestamp or
-observation is rewritten. Compilation/tests for this increment are pending a
+observation is rewritten. The checks below compiled this increment under a
 separate explicit shared build lease; no further process case has run.
 
 Source inspection distinguishes the clocks: production already re-reads actual
@@ -133,3 +133,21 @@ acceptance refused. The new fixed classification and original clocks must identi
 that cause before any fixture boundary, build profile or performance change is
 proposed. No source renewal, fabricated observation, TTL or timeout relaxation
 is introduced by these diagnostics.
+
+### Diagnostic source checks
+
+For source `4fc2360`, both focused pure library cases passed: the arbitrary-message
+fallback and the byte-identical redacted wire failure (one test each, 0.00s).
+The first library artifact rebuild took 1m14s; the two qualified test invocations
+reused it. An initial short-name exact filter selected zero tests and is not
+counted as verification. The actual integration test was compiled with
+`--features test-support --no-run` in 4.79s, without invoking its database,
+worker, host or any model. All Cargo commands used the existing target2 cache,
+jobs2, debug0 and incremental0; that lease was released afterward.
+
+The resulting test artifact is
+`native_initial_grant-6d7239cfc04f9e89`, 98,844,432 bytes, SHA256
+`d0d871db9cebe7e9e2127a5a0dc9f8efccb644c967b07d5b22e40225cfefdbbc`.
+This compile evidence does not identify the earlier HTTP409 cause and does not
+establish accepted output. A separately authorized diagnostic process attempt
+would be needed to obtain the fixed refusal category and original clocks.
