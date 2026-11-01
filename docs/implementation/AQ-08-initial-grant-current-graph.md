@@ -37,3 +37,10 @@ private-material and actual-Git cases remain in the selected regression suite.
 The deterministic test clock now never lags real public read timestamps; injected
 expiry still advances to the original deadline without widening it. Frozen
 qualification results and source hashes are recorded separately after checks.
+
+Frozen source `421804a` passed43 tests across five targets, including15 initial
+grant cases with two actual-Git cases, with no failures or ignores. Strict affected
+all-feature Clippy and workspace formatting passed. [Evidence inventory](evidence/aq08-current-graph-421804a/artifact-sha256.json)
+binds source and logs. The earlier15-case preflight precedes the review-driven
+final precommit check and expiry cap; only the final43-case run qualifies this
+source. Counts overlap earlier component checkpoints.

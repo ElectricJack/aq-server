@@ -1,0 +1,21 @@
+{
+  "source_commit": "421804a62755ca23fbf103f5fa12a50f0ec15dc0",
+  "tests": {
+    "targets": 5,
+    "passed": 43,
+    "failed": 0,
+    "ignored": 0,
+    "summed_process_seconds": 56.0,
+    "actual_git_cases": 2
+  },
+  "strict_affected_all_feature_clippy": 0,
+  "workspace_format": 0,
+  "review": "Independent Sol review identified final precommit freshness requirement. Final source checks after all SQL operations and additionally caps expiry; first15-test preflight predates this hardening and is not final qualification.",
+  "scope": [
+    "Fresh bounded ready/context reobservation, unchanged original authorized context excluding own observed_at, exact CAS/content, original source and grant protection.",
+    "Actual Git binary c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39, source2035654eeda57ded8880ea3f518ff0b4d324fa49; Git2.43.0.",
+    "Graph/runtime/material installation facts synthetic; actual public HTTP, disposable SQL and files. New actualGit cases use real wall clock.",
+    "Other controlled tests use max(injected,real) to admit fresh actual Graph stamps; original deadlines/bodies remain unchanged.",
+    "Finite observations are not an atomic Graph/SQL transaction or worker lifetime lock. No provider, native physical worker, fleet throughput or live preview upgrade claimed."
+  ]
+}

@@ -1,0 +1,47 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-native-grant-graph/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq-native-grant-graph/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-native-grant-graph/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-session-api)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-lifecycle-api)
+   Compiling aq-playbooks-runner v0.1.2 (/tmp/aq-native-grant-graph/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.1 (/tmp/aq-native-grant-graph/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.2 (/tmp/aq-native-grant-graph/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.2 (/tmp/aq-native-grant-graph/crates/aq-playbook-host)
+   Compiling aq-notifications v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-notifications)
+   Compiling aq-selection v0.1.2 (/tmp/aq-native-grant-graph/crates/aq-selection)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-observation-api)
+   Compiling aq-accounting v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-accounting)
+   Compiling aq-admission v0.1.7 (/tmp/aq-native-grant-graph/crates/aq-admission)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-observation-admission)
+   Compiling aq-review-protocol v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-native-grant-graph/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-native-grant-graph/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-server v0.1.0 (/tmp/aq-native-grant-graph/crates/aq-server)
+   Compiling aq-playbooks-compiler v0.1.0 (/tmp/aq-native-grant-graph/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 35s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9)
+
+running 15 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ok
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... ok
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.13s
+

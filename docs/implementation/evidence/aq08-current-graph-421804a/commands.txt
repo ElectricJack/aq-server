@@ -1,0 +1,4 @@
+DATABASE_URL=<local disposable PostgreSQL> AQ_TEST_GIT_CANDIDATE=/home/jkern/dev/aq-git/target/debug/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test -p aq-server --test native_initial_grant --test native_offers --test native_expiry --test native_preparation --test never_granted --locked --offline -- --include-ignored --test-threads=2
+CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo clippy -p aq-server --lib --test native_initial_grant --test native_offers --test native_expiry --test native_preparation --test never_granted --all-features --locked --offline -- -D warnings
+cargo fmt --all -- --check
+All final checks exit0.
