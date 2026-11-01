@@ -156,8 +156,12 @@ pub(super) async fn bootstrap(
     runtime: &Runtime,
     user: &User,
     digest: Option<String>,
+    mounted: super::MountedOwners,
 ) -> Result<Envelope<Bootstrap>> {
     let a = auth(state, runtime, user).await?;
+    let graph = mounted.graph && a.owner && state.agent_access.is_some();
+    let reviews = a.owner && mounted.reviews;
+    let playbooks = a.owner && mounted.playbook_owner == Some(a.actor);
     let caps = vec![
         capability("dashboard.overview", true, ""),
         capability(
@@ -172,12 +176,35 @@ pub(super) async fn bootstrap(
         ),
         capability("status.read", true, ""),
         capability("workers.read", true, ""),
-        capability("tasks.read", false, "Task inspection is not connected yet"),
-        capability("search.read", false, "Search is not connected yet"),
+        capability(
+            "human.graph.read",
+            graph,
+            "Human Graph inspection requires an owner account and configured Graph runtime",
+        ),
+        capability(
+            "tasks.read",
+            graph,
+            "Task inspection requires an owner account and configured Graph runtime",
+        ),
+        capability(
+            "knowledge.read",
+            graph,
+            "Knowledge inspection requires an owner account and configured Graph runtime",
+        ),
+        capability(
+            "search.read",
+            graph,
+            "Search requires an owner account and configured Graph runtime",
+        ),
         capability(
             "decisions.read",
-            false,
-            "Decision inspection is not connected yet",
+            reviews,
+            "Decision inspection requires an owner account and a mounted review owner",
+        ),
+        capability(
+            "decisions.resolve",
+            reviews,
+            "Decision resolution requires an owner account and a mounted review owner",
         ),
         capability(
             "provider.quota",
@@ -204,11 +231,15 @@ pub(super) async fn bootstrap(
             false,
             "Dashboard actions are not connected yet",
         ),
-        capability("results.read", false, "Results are not connected yet"),
+        capability(
+            "results.read",
+            mounted.results && a.owner,
+            "Result inspection requires an owner account",
+        ),
         capability(
             "playbooks.inspect",
-            false,
-            "Playbook inspection is not connected yet",
+            playbooks,
+            "Playbook inspection requires the mounted runtime namespace owner",
         ),
     ];
     let bytes = contract::schema_bytes();

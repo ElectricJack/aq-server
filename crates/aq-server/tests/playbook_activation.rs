@@ -631,6 +631,38 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
     s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
     let (base, stop, task) = launch(s.f.state.clone()).await;
     ready(&base, &task).await;
+    let bootstrap = get(&base, "/api/v1/bootstrap").await;
+    let enabled = |body: &Value| {
+        body["data"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "playbooks.inspect")
+            .unwrap()["enabled"]
+            == true
+    };
+    assert!(
+        enabled(&bootstrap),
+        "actual injected runtime namespace owner sees discovery"
+    );
+    for (email, role) in [
+        ("other-owner@localhost", "owner"),
+        ("viewer@localhost", "viewer"),
+    ] {
+        sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,$2,$3,'dev',$2,now())").bind(Uuid::new_v4()).bind(email).bind(role).execute(&s.f.db.pool().await).await.unwrap();
+        let response = client()
+            .get(format!("{base}/api/v1/bootstrap"))
+            .header("x-aq-dev-email", email)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.unwrap();
+        assert!(
+            !enabled(&body),
+            "only exact runtime namespace owner may inspect"
+        );
+    }
     let first = get(&base, "/api/playbooks/inspection/runs?limit=1").await;
     assert_eq!(first["api_version"], "playbooks-inspection-1");
     assert_eq!(first["namespace"]["id"], json!(s.namespace));

@@ -16,6 +16,15 @@ use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, Error>;
+/// Facts captured by the actual protected human router, never inferred from files.
+#[derive(Clone, Default)]
+pub(crate) struct MountedOwners {
+    pub(crate) graph: bool,
+    pub(crate) results: bool,
+    pub(crate) reviews: bool,
+    pub(crate) playbook_owner: Option<Uuid>,
+}
+
 #[derive(Debug)]
 enum Error {
     Api(AppError),
@@ -185,6 +194,7 @@ async fn bootstrap(
     DashboardUser(user): DashboardUser,
     Extension(runtime): Extension<Arc<Runtime>>,
     assets: Option<Extension<Arc<crate::dashboard_assets::DashboardAssets>>>,
+    owners: Option<Extension<MountedOwners>>,
 ) -> Result<Json<Envelope<Bootstrap>>> {
     let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
     let future = service::bootstrap(
@@ -192,6 +202,7 @@ async fn bootstrap(
         &runtime,
         &user,
         assets.as_ref().map(|v| format!("sha256:{}", v.0.digest())),
+        owners.map(|Extension(v)| v).unwrap_or_default(),
     );
     bounded(
         tokio::time::timeout(Duration::from_secs(2), future)

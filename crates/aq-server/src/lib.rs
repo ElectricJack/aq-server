@@ -188,6 +188,14 @@ fn build_admin_router_with_optional_dashboard(
     reviews: Option<Arc<reviews::Service>>,
     dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
 ) -> Router {
+    let mounted = dashboard_api::MountedOwners {
+        graph: true,
+        results: true,
+        reviews: reviews.is_some(),
+        playbook_owner: playbooks
+            .as_ref()
+            .map(|d| d.service.namespace.owner_user_id),
+    };
     let policy_routes = playbooks.map(playbooks::api::routes).unwrap_or_default();
     let review_routes = reviews.map(reviews::admin_routes).unwrap_or_default();
     let app = Router::new()
@@ -201,6 +209,8 @@ fn build_admin_router_with_optional_dashboard(
         .merge(review_routes)
         .merge(admin_api::admin_routes())
         .merge(dashboard_api::routes(state.clone()))
+        .merge(agent_access::human::routes(&state))
+        .merge(profiled_execution::human_results::routes())
         .merge(notifications::api::routes(state.clone()))
         .merge(observations::api::admin_routes(state.clone()))
         .merge(terminal::api::human_routes(state.clone()))
@@ -223,7 +233,8 @@ fn build_admin_router_with_optional_dashboard(
             state.store.admission.clone(),
             admission::gate,
         ))
-        .layer(from_fn(harden));
+        .layer(from_fn(harden))
+        .layer(axum::Extension(mounted));
     let app = if let Some(dashboard) = dashboard {
         app.layer(axum::Extension(dashboard))
     } else {
