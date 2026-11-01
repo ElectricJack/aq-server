@@ -1,0 +1,11 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-current-playbooks-consumer-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 41.08s
+     Running unittests src/lib.rs (/tmp/aq-native-union-target/debug/deps/aq_server-7161eb92ef038a03)
+
+running 3 tests
+test playbooks::inspection::catalog::tests::closed_query_bounds_and_context_are_lossless ... ok
+test playbooks::inspection::catalog::tests::exact_namespace_kind_stamp_and_opaque_key_are_joined_after_owner_read ... ok
+test playbooks::inspection::catalog::tests::wrapper_budget_never_exceeds_component_limit_or_loses_last_key_cursor ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.03s
+

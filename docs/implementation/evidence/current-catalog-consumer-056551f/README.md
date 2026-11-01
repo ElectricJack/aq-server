@@ -9,7 +9,7 @@ The exact new component archive is vendored separately, with runner/Postgres/CLI
 
 Final checks passed: three owner-interface/lifecycle cases, three pure API
 contract cases, three actual protected PostgreSQL/owner/HTTP cases, scoped server
-and host strict lint, schema regeneration and owned-source formatting. Sixty
+and host strict lint, schema regeneration and owned-source formatting. Sixty-one
 finite-client/adapter/component/unchanged-fallback checks and full TypeScript
 checking passed. Earlier existing-host, actual protected-host restart and loaded/
 inert tests are recorded separately with their source-stage limits.
@@ -18,7 +18,7 @@ Independent review caught stopped capability capture, UUID-only principal
 checking, an unbounded browser body and an exact409 stale-roster edge. The fixes
 use a weak live support handle, original trusted User/row-version checks before
 and after the owner wait, true403 authorization denial, a finite headers-first
-stream client, and a refused-context fence. Actual held subject/issuer/role/
+stream client, a refused-context fence, and a pre-paint capability-loss epoch/cache fence. Actual held subject/issuer/role/
 row-version vectors include an engine-error wait; no metadata is returned after
 denial. A separate negative exact-cursor case and a precisely full component
 budget exercise AQ's shorter-page cursor packing.

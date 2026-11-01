@@ -72,15 +72,16 @@
     "owned_rustfmt": true,
     "diff_check": true,
     "frontend": {
-      "passed": 60,
-      "seconds": 3.12,
+      "passed": 61,
+      "seconds": 2.94,
       "full_tsc_b": true,
       "probe_node_syntax": true,
       "cases": [
         "finite request/body deadline and abort",
         "256KiB preparse cap/fatal UTF8/duplicate/lossy-number rejection",
         "held401/403 stream cancellation not awaited; bootstrap503 preserves global denial latch; no historical fallback",
-        "matching exact409 fences old roster across selection clearing until fresh epoch; late replaced-stamp409 preserves fresh rows"
+        "matching exact409 fences old roster across selection clearing until fresh epoch; late replaced-stamp409 preserves fresh rows",
+        "capability loss cancels/removes only current-catalog queries and advances source epoch while hidden; gain with held new first page cannot repaint old incarnation/controls"
       ]
     },
     "whole_workspace_fmt": {
@@ -118,7 +119,8 @@
     "same_uuid_principal_rebind": "fixed original full trusted User and authorization-version pin pre/post await; true403 for denial, hidden foreign404 preserved",
     "unbounded_browser_body_and_held_auth": "fixed feature-local bounded streamed client with headers-first classification; actual ReadableStream +SessionProvider regression passed",
     "exact409_roster_staleness": "fixed context-bound refusal persisted until fresh epoch; both matching and late-replaced vectors passed",
-    "malformed_exact_cursor": "guarded and negative pure case passed"
+    "malformed_exact_cursor": "guarded and negative pure case passed",
+    "capability_loss_gain_stale_paint": "fixed feature-local pre-paint capability-loss fence; delayed replacement-incarnation regression passed"
   },
   "boundaries": [
     "no remote publication",
