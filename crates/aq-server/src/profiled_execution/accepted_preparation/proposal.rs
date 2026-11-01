@@ -10,6 +10,7 @@ use aq_admission::{
     preparation_v2::{ChoicePins, Negotiation, Proposal},
     transport::WorkerIdentity,
 };
+use aq_session_protocol::Validate;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +34,23 @@ pub(super) async fn build_locked(
     request: &ProposalRequest,
 ) -> Result<(ArtifactRef, Proposal), AppError> {
     request.negotiation.validate().map_err(|_| refused())?;
-    if request.identity.node_id != auth.id() {
-        return Err(refused());
+    request
+        .identity
+        .validate()
+        .map_err(|_| AppError::BadRequest("invalid proposal identity".into()))?;
+    request
+        .binding
+        .validate()
+        .map_err(|_| AppError::BadRequest("invalid proposal binding".into()))?;
+    // The raw proposal DTO has no TransportDocument scope validator. Fence the
+    // complete authenticated identity BEFORE loading or locking any foreign owner.
+    if request.identity.node_id != auth.id()
+        || !matches!(&request.binding.session,aq_admission::SessionIdentity::Remote{node_id,boot_id,attempt_id,..}
+            if *node_id==auth.id() && *boot_id==request.identity.boot_id && *attempt_id==request.binding.attempt_id)
+    {
+        return Err(AppError::Forbidden(
+            "proposal assignment scope mismatch".into(),
+        ));
     }
     crate::worker_api::lock_current_node(tx, auth).await?;
     let runtime = super::super::registration::current_runtime_locked(
