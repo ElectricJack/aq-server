@@ -176,11 +176,26 @@ async fn post(rt: &Runtime, mapped: &Value) -> Result<(StatusCode, Value)> {
         Some("draft_create") => "changesets",
         _ => return Err(Error("internal")),
     };
+    let bytes = canonical(&mapped["payload"])?;
+    post_body(rt, workspace, route, bytes).await
+}
+pub(super) async fn post_mutation_bytes(
+    rt: &Runtime,
+    workspace: Uuid,
+    bytes: Vec<u8>,
+) -> Result<(StatusCode, Value)> {
+    post_body(rt, workspace, "mutations", bytes).await
+}
+async fn post_body(
+    rt: &Runtime,
+    workspace: Uuid,
+    route: &str,
+    bytes: Vec<u8>,
+) -> Result<(StatusCode, Value)> {
     let url = rt
         .url
         .join(&format!("/v1/workspaces/{workspace}/{route}"))
         .map_err(|_| Error("internal"))?;
-    let bytes = canonical(&mapped["payload"])?;
     let mut response = rt
         .client
         .post(url)

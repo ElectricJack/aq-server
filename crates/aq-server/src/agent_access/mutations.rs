@@ -4,6 +4,17 @@ mod authorize;
 mod dispatch;
 use axum::extract::Path;
 
+// Fixed human actor path shares the installed Graph transport/identity, not agent authority.
+pub(super) fn service_identity(rt: &Runtime, workspace: Uuid) -> Result<Value> {
+    authorize::identity(rt, &json!(workspace))
+}
+pub(super) async fn post_human_creation(
+    rt: &Runtime,
+    workspace: Uuid,
+    bytes: Vec<u8>,
+) -> Result<(StatusCode, Value)> {
+    dispatch::post_mutation_bytes(rt, workspace, bytes).await
+}
 const MAX_RETAINED_OPERATIONS: i64 = 4096;
 const MAX_RETAINED_BYTES: i64 = 32 * 1024 * 1024;
 fn admission_budget(count: i64, bytes: i64, additional: i64) -> Result<()> {
