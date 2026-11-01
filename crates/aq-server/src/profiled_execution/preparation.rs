@@ -385,19 +385,22 @@ async fn admit(
     };
     plan.validate().map_err(|_| refused())?;
     let response = TransportDocument::PreparationPlan(plan.clone());
-    let lease_bytes = serde_json::to_vec(&lease)
-        .map_err(|_| AppError::Internal)?
-        .len() as u64;
-    let response_bytes = serde_json::to_vec(&response)
-        .map_err(|_| AppError::Internal)?
-        .len() as u64;
+    // Charge exactly the same JSONB text representation as retained rows.
+    let lease_value = serde_json::to_value(&lease).map_err(|_| AppError::Internal)?;
+    let response_value = serde_json::to_value(&response).map_err(|_| AppError::Internal)?;
+    let (lease_bytes, response_bytes): (i32, i32) =
+        sqlx::query_as("SELECT octet_length($1::jsonb::text),octet_length($2::jsonb::text)")
+            .bind(&lease_value)
+            .bind(&response_value)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    let lease_bytes = u64::try_from(lease_bytes).map_err(|_| refused())?;
+    let response_bytes = u64::try_from(response_bytes).map_err(|_| refused())?;
     if lease_bytes > 8192 || response_bytes > 16384 {
         return Err(refused());
     }
-    // Existing JSONB text is a conservative uncompressed byte charge. Incoming
-    // compact bytes define the logical raw budget; PostgreSQL/RSS overhead is
-    // additional and is not represented as a claimed physical-memory ceiling.
-    let quota:(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE kind='accept'),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE kind='accept' AND node_id=$1),0) FROM admission_material_leases").bind(auth.id()).fetch_one(&mut **tx).await.map_err(db)?;
+    let quota:(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0) FROM admission_material_leases").bind(auth.id()).fetch_one(&mut **tx).await.map_err(db)?;
     let incoming = lease_bytes
         .checked_add(response_bytes)
         .ok_or_else(refused)?;

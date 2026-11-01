@@ -273,6 +273,27 @@ pub(crate) async fn fence_for_preparation(
     decision: &Decision,
     binding: &aq_session_protocol::LaunchBinding,
 ) -> Result<()> {
+    fence_owned_attempt(state, tx, decision, binding, None).await
+}
+/// Exact initial-grant receipt replay only; this never admits another attempt
+/// or treats an issued grant as an ungranted reservation. The caller separately
+/// verifies the immutable Prepare digest/receipt and original grant identity.
+pub(crate) async fn fence_for_grant_replay(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    decision: &Decision,
+    binding: &aq_session_protocol::LaunchBinding,
+    grant_id: Uuid,
+) -> Result<()> {
+    fence_owned_attempt(state, tx, decision, binding, Some(grant_id)).await
+}
+async fn fence_owned_attempt(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    decision: &Decision,
+    binding: &aq_session_protocol::LaunchBinding,
+    grant_id: Option<Uuid>,
+) -> Result<()> {
     use crate::execution::{
         authority::{self, Kind, Policy},
         profiled::Status,
@@ -288,8 +309,13 @@ pub(crate) async fn fence_for_preparation(
         || view.revoked
         || view.stopped
         || view.cancellation_id.is_some()
-        || !matches!(view.status, Status::Offered | Status::Preparing)
-        || view.grant_id.is_some()
+        || match grant_id {
+            None => {
+                !matches!(view.status, Status::Offered | Status::Preparing)
+                    || view.grant_id.is_some()
+            }
+            Some(id) => id.is_nil() || view.status != Status::Granted || view.grant_id != Some(id),
+        }
         || view.offer_id != binding.offer_id
         || view.execution_spec_digest != binding.execution_spec_digest.as_str()
         || view.launch_manifest_digest.as_ref() != Some(&binding.launch_manifest_digest)
@@ -324,8 +350,19 @@ pub(crate) async fn fence_for_preparation(
             .map_err(|_| AppError::Internal)?;
     hot.validate_against(binding)
         .map_err(|_| conflict("invalid native reservation"))?;
-    if hot.grant.is_some() || !matches!(hot.status, Status::Offered | Status::Preparing) {
-        return Err(conflict("reservation has issued authority"));
+    match grant_id {
+        None if hot.grant.is_some()
+            || !matches!(hot.status, Status::Offered | Status::Preparing) =>
+        {
+            return Err(conflict("reservation has issued authority"));
+        }
+        Some(id)
+            if hot.status != Status::Granted
+                || hot.grant.as_ref().is_none_or(|g| g.grant_id != id) =>
+        {
+            return Err(conflict("initial grant replay owner changed"));
+        }
+        _ => {}
     }
     fence_retained_decision(state, tx, decision, true).await
 }
@@ -333,7 +370,7 @@ async fn fence_retained_decision(
     state: &AppState,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
-    owned_ungranted: bool,
+    owned_attempt: bool,
 ) -> Result<()> {
     let stored: Value = sqlx::query_scalar(
         "SELECT decision FROM intelligence_decisions WHERE decision_id=$1 FOR SHARE",
@@ -362,7 +399,7 @@ async fn fence_retained_decision(
     if decision.outcome.resolved.is_none() {
         return Err(conflict("decision has no eligible selection"));
     }
-    fence_snapshot(state, tx, decision, owned_ungranted).await?;
+    fence_snapshot(state, tx, decision, owned_attempt).await?;
     principal::fence(state, tx, decision).await?;
     check_time(state, decision)
 }
@@ -370,7 +407,7 @@ async fn fence_snapshot(
     state: &AppState,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
-    owned_ungranted: bool,
+    owned_attempt: bool,
 ) -> Result<()> {
     crate::project_bindings::fence_for_offer(state, tx, &decision.project).await?;
     registry::check_current(state, tx).await?;
@@ -431,7 +468,7 @@ async fn fence_snapshot(
     )
     .await?
     .check_retry_bound()?;
-    if owned_ungranted {
+    if owned_attempt {
         counts.started = counts
             .started
             .checked_sub(1)
@@ -448,7 +485,7 @@ async fn fence_snapshot(
     }
     check_time(state, decision)
 }
-fn check_time(state: &AppState, decision: &Decision) -> Result<()> {
+pub(crate) fn check_time(state: &AppState, decision: &Decision) -> Result<()> {
     let time = now(state)?;
     if time < decision.inputs.now_ms
         || time >= decision.inputs.node.expires_at_ms

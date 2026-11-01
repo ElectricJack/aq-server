@@ -30,5 +30,6 @@ pub mod preparation;
 
 pub mod control_api;
 
+pub mod initial_grant;
 pub mod native_offer;
 pub mod producer;

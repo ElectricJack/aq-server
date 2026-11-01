@@ -2,7 +2,7 @@
 use crate::{AppState, error::AppError};
 use aq_admission::{
     control::{ControlReply, Failure, FailureCode},
-    transport::Accept,
+    transport::{Accept, Prepare},
 };
 use axum::{
     Json, Router,
@@ -60,8 +60,16 @@ fn nonce(headers: &HeaderMap) -> Result<Uuid, AppError> {
 }
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/v1/worker/profiled/accept", post(accept))
-        .layer(DefaultBodyLimit::max(65_536))
+        .route(
+            "/v1/worker/profiled/accept",
+            post(accept).layer(DefaultBodyLimit::max(65_536)),
+        )
+        .route(
+            "/v1/worker/profiled/prepare",
+            post(prepare).layer(DefaultBodyLimit::max(
+                aq_admission::transport::MAX_FRAME_BYTES,
+            )),
+        )
         .with_state(state.control_view())
 }
 async fn accept(
@@ -76,6 +84,24 @@ async fn accept(
         .map_err(|_| AppError::BadRequest("invalid native acceptance document".into()))?;
     let reply = super::preparation::accept(&state, &auth, &request, nonce).await?;
     let mut response = Json(ControlReply::Preparation(reply)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    Ok(response)
+}
+
+async fn prepare(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, Error> {
+    let nonce = nonce(&headers)?;
+    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let body = body.map_err(|_| AppError::PayloadTooLarge("native control body bound".into()))?;
+    let request: Prepare = serde_json::from_slice(&body)
+        .map_err(|_| AppError::BadRequest("invalid native preparation document".into()))?;
+    let reply = super::initial_grant::prepare(&state, &auth, &request, nonce).await?;
+    let mut response = Json(ControlReply::InitialGrant(reply)).into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
