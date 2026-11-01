@@ -53,7 +53,11 @@ capability rules remain exact. A typed initial-only central attempt policy state
 that task max_attempts/max_lineage_elapsed are not central accounting; unsupported
 retry/cumulative requirements refuse instead of being interpreted as fresh zeros.
 Any monetary ceiling, complete/hard-accounting requirement or task-cost capability
-refuses in central-v1. Unknown cost requires explicit bounded permission; spend,
+refuses in central-v1. Unknown cost requires BOTH the intelligence budget policy AllowBounded and the
+central turn allow_unknown_cost flag, even with no monetary ceiling. This new
+central refusal is deliberately stricter than the legacy task cost function
+(which consults unknown_cost only when a monetary limit exists); task semantics
+remain unchanged. Spend,
 usage tokens and estimates remain unavailable. Shared ModelSettings can have only
 `spending_budget=None`, never a task-cumulative basis relabelled central.
 

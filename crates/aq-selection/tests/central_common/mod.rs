@@ -203,3 +203,69 @@ pub fn repin(i: &mut CentralSelectionInputs) {
     i.registry = Pinned::<RegistrySnapshot>::new(i.registry.value.clone()).unwrap();
     i.installation = Pinned::<InstallationSnapshot>::new(i.installation.value.clone()).unwrap();
 }
+/// Actual new catalog/policy/compatibility/composition bytes, never a forged pin.
+pub fn change_intelligence_policy(
+    catalog: &ValidatedCatalog,
+    input: &mut CentralSelectionInputs,
+    mutate: impl FnOnce(&mut SelectionPolicy),
+) -> ValidatedCatalog {
+    let mut definitions = catalog.artifact().catalog.clone();
+    let key = input
+        .policy
+        .value
+        .intelligence_profile
+        .identity
+        .strip_prefix("intelligence:")
+        .unwrap();
+    let intelligence = definitions
+        .intelligence
+        .iter_mut()
+        .find(|i| aq_profiles::key(&i.id, i.version) == key)
+        .unwrap();
+    mutate(intelligence.selection_policy.as_mut().unwrap());
+    let catalog =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    let mut request = decode_request(input.compositions[0].request.utf8.as_bytes()).unwrap();
+    request.policy.catalog_digest = catalog.digest().into();
+    request.compatibility.catalog_digest = catalog.digest().into();
+    let agent = request
+        .compatibility
+        .agent_profile
+        .identity
+        .strip_prefix("agent:")
+        .unwrap()
+        .to_owned();
+    let intelligence = request
+        .compatibility
+        .intelligence_profile
+        .identity
+        .strip_prefix("intelligence:")
+        .unwrap()
+        .to_owned();
+    let execution = request
+        .compatibility
+        .execution_profile
+        .identity
+        .strip_prefix("execution:")
+        .unwrap()
+        .to_owned();
+    request.compatibility.agent_profile = catalog.source("agent", &agent).unwrap();
+    request.compatibility.intelligence_profile =
+        catalog.source("intelligence", &intelligence).unwrap();
+    request.compatibility.execution_profile = catalog.source("execution", &execution).unwrap();
+    request.policy.compatibility_digest = aq_selection::digest(&request.compatibility).unwrap();
+    let CentralProfileSubject::CentralConversation { policy, .. } = &mut request.subject;
+    *policy = request.policy.artifact().unwrap().reference;
+    let bundle = compile_central(&catalog, &request).unwrap().bundle.unwrap();
+    let p = &mut input.policy.value;
+    p.subject = bundle.composition.subject.clone();
+    p.composition_policy = bundle.policy.reference.clone();
+    p.compatibility = bundle.compatibility.reference.clone();
+    p.catalog = bundle.composition.catalog.clone();
+    p.agent_profile = bundle.composition.agent_profile.clone();
+    p.intelligence_profile = bundle.composition.intelligence_profile.clone();
+    p.execution_profile = bundle.composition.execution_profile.clone();
+    input.compositions = vec![bundle];
+    repin(input);
+    catalog
+}

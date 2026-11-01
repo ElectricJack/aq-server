@@ -311,3 +311,73 @@ fn actual_schema_and_normative_vectors_are_frozen() {
         }
     }
 }
+
+#[test]
+fn actual_intelligence_cost_policies_cannot_be_overridden_by_turn_permission() {
+    for mode in 0..5 {
+        let (c, mut i) = fixture();
+        let original_composition_policy = i.policy.value.composition_policy.clone();
+        let original_compatibility = i.policy.value.compatibility.clone();
+        let catalog = change_intelligence_policy(&c, &mut i, |p| match mode {
+            0 => p.budget.unknown_cost = aq_profiles::UnknownCostPolicy::Deny,
+            1 => p.budget.require_complete_accounting = true,
+            2 => {
+                p.budget.max_cost_microunits = Some(100);
+                p.budget.currency = Some("USD".into());
+                p.budget.require_hard_cost_enforcement = true;
+                p.budget.require_complete_accounting = true;
+                p.budget.unknown_cost = aq_profiles::UnknownCostPolicy::Deny;
+            }
+            3 => {
+                p.budget.max_cost_microunits = Some(100);
+                p.budget.currency = Some("USD".into());
+            }
+            _ => p
+                .required_capabilities
+                .push(aq_session_protocol::Capability {
+                    id: Text::new("aq.budget.task-cost").unwrap(),
+                    version: 1,
+                }),
+        });
+        assert_ne!(
+            original_composition_policy,
+            i.policy.value.composition_policy
+        );
+        assert_ne!(original_compatibility, i.policy.value.compatibility);
+        aq_profiles::central::verify_central(&catalog, &i.compositions[0]).unwrap();
+        let out = select_central(&catalog, &i).unwrap();
+        assert!(out.resolved.is_none(), "policy{mode}");
+        assert!(out.traces.iter().all(|t| {
+            t.reason_codes
+                .iter()
+                .any(|r| r == "central_cost_accounting_unavailable")
+        }));
+    }
+}
+
+#[test]
+fn actual_required_native_capability_is_not_inferred_from_model_or_qualification() {
+    let (c, mut i) = fixture();
+    let c = change_intelligence_policy(&c, &mut i, |p| {
+        p.required_capabilities
+            .push(aq_session_protocol::Capability {
+                id: Text::new("aq.harness.transcript").unwrap(),
+                version: 1,
+            })
+    });
+    let out = select_central(&c, &i).unwrap();
+    assert!(out.resolved.is_none());
+    assert!(
+        out.traces
+            .iter()
+            .all(|t| t.state == CandidateState::Unsupported)
+    );
+    i.installation.value.harnesses[0]
+        .capabilities
+        .push(aq_session_protocol::Capability {
+            id: Text::new("aq.harness.transcript").unwrap(),
+            version: 1,
+        });
+    repin(&mut i);
+    assert!(select_central(&c, &i).unwrap().resolved.is_some());
+}

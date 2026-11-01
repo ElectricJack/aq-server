@@ -39,6 +39,7 @@ pub fn select_central(
     } else if policy.max_output_tokens > turn.max_output_tokens {
         Some("central_output_ceiling_conflict")
     } else if !turn.allow_unknown_cost
+        || policy.budget.unknown_cost != aq_profiles::UnknownCostPolicy::AllowBounded
         || turn.ceilings.cost_limit_microunits.is_some()
         || turn.ceilings.require_hard_cost_enforcement
         || policy.budget.max_cost_microunits.is_some()

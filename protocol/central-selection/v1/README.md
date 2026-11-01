@@ -31,7 +31,9 @@ credential presence has no worker-preparation field. Worker observations may be
 retained as input data but do not influence central availability. The choice
 carries exact native model/reasoning, adapter/environment/qualification and
 credential/account/endpoint pins. ModelSettings spending_budget is always null.
-Cost/token totals are unavailable/null; monetary/hard/complete-accounting policy
+Unknown cost requires BOTH intelligence AllowBounded and the explicit central
+turn flag. Legacy task semantics remain unchanged. Cost/token totals are
+unavailable/null; monetary/hard/complete-accounting policy
 requirements refuse selection. InitialSelectionOnly is metadata policy, not a
 claim that a model was started or runtime retry accounting exists. Original
 43ac bundles remain unmodified/unresolved; a selected artifact links to them.
