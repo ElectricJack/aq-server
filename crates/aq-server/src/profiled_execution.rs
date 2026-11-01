@@ -14,6 +14,7 @@ pub mod material_api;
 pub mod no_grant;
 pub mod policies;
 
+pub mod phase_terminal;
 pub mod registration;
 pub mod source;
 pub mod started;

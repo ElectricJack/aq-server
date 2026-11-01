@@ -368,6 +368,7 @@ dependencies = [
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
+ "aq-phase-terminal-protocol",
  "aq-playbook-host",
  "aq-playbooks-compiler",
  "aq-profiles",
