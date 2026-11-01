@@ -964,11 +964,18 @@ fn restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_membe
     encoded["outcome"]["members"][0]["state"] = serde_json::json!("pending");
     encoded["outcome"]["members"][0]["evidence"] = serde_json::Value::Null;
     encoded["outcome"]["kind"] = serde_json::json!("deadline_reached");
+    encoded["logical_now"] = serde_json::json!(finished.next.deadline_ms());
+    encoded["outcome"]["recorded_at_ms"] = serde_json::json!(finished.next.deadline_ms());
     let mut payload = encoded["outcome"].clone();
     payload["outcome"].as_object_mut().unwrap().remove("digest");
     payload.sort_all_objects();
     encoded["outcome"]["outcome"]["digest"] =
         serde_json::to_value(wire::Digest::of(&serde_json::to_vec(&payload).unwrap())).unwrap();
+    let wire_outcome: wire::WaitOutcome =
+        serde_json::from_value(encoded["outcome"].clone()).unwrap();
+    wire_outcome
+        .validate_for(&finished.next.registration().predicate)
+        .unwrap();
     assert!(
         Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err(),
         "a recomputed digest cannot replace retained member source facts"
