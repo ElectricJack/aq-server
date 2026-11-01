@@ -1,0 +1,770 @@
+{
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "human-graph-1"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$"
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "revision",
+        "workspace_id"
+      ],
+      "additionalProperties": false
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/HumanNode"
+        },
+        {
+          "$ref": "#/components/schemas/HumanPage"
+        },
+        {
+          "$ref": "#/components/schemas/HumanGraph"
+        }
+      ]
+    }
+  },
+  "required": [
+    "contract",
+    "project",
+    "observed_at",
+    "data"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AQ human Graph read projection v1",
+  "components": {
+    "schemas": {
+      "HumanGraph": {
+        "type": "object",
+        "properties": {
+          "root_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nodes": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/HumanNode"
+            }
+          },
+          "edges": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/HumanEdge"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "root_id",
+          "nodes",
+          "edges",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
+      "HumanEdge": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "edge_type": {
+            "$ref": "#/components/schemas/EdgeType"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_revision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target",
+          "edge_type",
+          "description",
+          "version",
+          "source_revision",
+          "target_revision"
+        ],
+        "additionalProperties": false
+      },
+      "EdgeType": {
+        "type": "string",
+        "enum": [
+          "blocks",
+          "parent-child",
+          "references",
+          "motivated_by",
+          "produces",
+          "supports",
+          "contradicts",
+          "supersedes"
+        ]
+      },
+      "HumanNode": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 262144
+          },
+          "acceptance_criteria": {
+            "type": "string",
+            "maxLength": 16384
+          },
+          "labels": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "task_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verification"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New nodes of either kind start unverified; assertions are independent of task completion."
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retired": {
+            "type": "boolean"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "description": "Immutable authenticated creator. Legacy snapshots may omit this field; legacy default is legacy:unknown.",
+            "readOnly": true
+          },
+          "provenance": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "description": "Unique source_id values, at most 16384 UTF-8 bytes total."
+          },
+          "last_verified_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true
+          },
+          "retirement_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timezone required; UTC microseconds after normalization."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timezone required; UTC microseconds after normalization."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timezone required; UTC microseconds after normalization."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "successor_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "readOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "content_revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "summary_of_revision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "acceptance_criteria",
+          "labels",
+          "task_state",
+          "verification",
+          "content_type",
+          "retired",
+          "deleted",
+          "created_at",
+          "updated_at",
+          "created_by",
+          "provenance",
+          "last_verified_by",
+          "last_verified_at",
+          "retirement_reason",
+          "valid_from",
+          "valid_until",
+          "review_at",
+          "successor_id",
+          "summary",
+          "version",
+          "content_revision",
+          "summary_of_revision"
+        ],
+        "additionalProperties": false,
+        "description": "Canonical current and exact-revision response. All nullable shared keys are present; raw history and retained legacy receipts use their original payload shapes."
+      },
+      "Source": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TaskSource"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewSource"
+          },
+          {
+            "$ref": "#/components/schemas/GitSource"
+          },
+          {
+            "$ref": "#/components/schemas/ArtifactSource"
+          },
+          {
+            "$ref": "#/components/schemas/UrlSource"
+          },
+          {
+            "$ref": "#/components/schemas/LegacySource"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "description": "Attributed typed source descriptor. This service does not fetch external content or prove retention/access/approval of external task, review, or artifact systems."
+      },
+      "LegacySource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "legacy"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "store": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "snapshot_id",
+          "store",
+          "key",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "UrlSource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "url"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "url",
+          "observed_at",
+          "retained"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "retained": {
+                  "const": true
+                }
+              },
+              "required": [
+                "retained"
+              ]
+            },
+            "then": {
+              "required": [
+                "artifact_id"
+              ],
+              "properties": {
+                "artifact_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ArtifactSource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "artifact"
+          },
+          "artifact_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "artifact_id",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "GitSource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "git"
+          },
+          "repository": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blob_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "repository",
+          "commit",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewSource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "review"
+          },
+          "review_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "review_id",
+          "revision",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "TaskSource": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "const": "task"
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_id",
+          "kind",
+          "task_id"
+        ],
+        "additionalProperties": false
+      },
+      "ContentType": {
+        "type": "string",
+        "enum": [
+          "fact",
+          "decision",
+          "policy",
+          "procedure",
+          "incident",
+          "reference",
+          "note"
+        ],
+        "description": "Shared content classification for tasks and knowledge."
+      },
+      "Verification": {
+        "type": "string",
+        "enum": [
+          "unverified",
+          "verified",
+          "disputed"
+        ]
+      },
+      "TaskState": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "active",
+          "completed",
+          "canceled"
+        ]
+      },
+      "NodeKind": {
+        "type": "string",
+        "enum": [
+          "task",
+          "knowledge"
+        ]
+      },
+      "HumanPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/HumanNode"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

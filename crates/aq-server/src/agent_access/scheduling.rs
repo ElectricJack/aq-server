@@ -1,6 +1,6 @@
 //! Fixed public graph observations for future scheduling. These reads never
 //! claim a task, reserve capacity, mutate graph state or grant execution.
-mod parse;
+pub(super) mod parse;
 use super::{Runtime, contract};
 use aq_admission::TaskRevision;
 use serde::Serialize;

@@ -1,6 +1,7 @@
 //! Online attempt credentials, scoped graph reads, durable graph intent and mail.
 mod contract;
 mod graph;
+pub mod human;
 pub(crate) mod messaging;
 mod mutations;
 pub(crate) mod native_binding;
