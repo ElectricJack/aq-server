@@ -1,0 +1,15 @@
+# Human review discovery — first delivery
+
+Adds `GET /api/reviews/decisions` inside the existing optional `reviews::admin_routes` installation. It needs the same configured protected review owner and current Owner role as exact-ID inspection. The default unconfigured router still has no review routes. Root owns capability/installation integration.
+
+Query parameters: `state=open|closed` (default open), `project_id=<UUID>` (optional), `limit=1..50` (default 25), and `cursor=<opaque hex>` (optional). The reply has `api_version: review-inbox-1`, `server_time_ms`, `items`, `next_cursor`, and `sampled: true`. Items contain `decision_id`, `decision_revision`, recorded `state`, `expires_at_ms`, `project_id`, `task_id`, `report_id`, `current_report_head` and `eligible_owner`. No task title, creation time, impact count or priority is invented.
+
+Each page samples current state. It scans at most 64 indexed candidate IDs, decrypts/checks request eligibility, and loads the actual existing inspection owner only for visible candidates. Foreign owners receive no request/subject body or foreign identity in a cursor. Scanned but invisible candidates can produce an empty continuation page. The cursor is encrypted with a dedicated AAD and bound to actor/project/state/page size and the original 30-second deadline. Pagination never extends that deadline. Invalid, tampered, expired or rebound cursors refuse. SQL uses the existing owner transaction timeout; the complete inbox read is bounded at five seconds. Current Owner role is checked before and after owner reads. The HTTP reply is no-store.
+
+The page uses the existing exact-ID inspection and resolve operations. New `decisions.read` v1 capability means configured review owner and current Owner account; a successfully empty inbox remains meaningful. New `decisions.resolve` v1 capability is separate and may stay disabled until action integration qualifies. Per-record eligibility, current result head, project revision and expiry are rechecked by the actual resolve owner.
+
+Actual SQL/router tests reuse the existing labelled native result/review fixture. They verify persisted discovery, encrypted cursor/filter binding, unauthorized Owner exclusion, foreign project, tampering and role demotion. This fixture is not a live model or native source-retention qualification.
+
+Exact-ID inspection also returns bounded additive `acceptance_criteria` text from the retained ExpectedOutcomeDefinition and `recorded_result` (`report_id`, `conclusion`, `process_outcome`, `recorded_at_ms`) from the validated result owner. It does not return stop internals or provider material. The existing request/subject/receipt and resolve behavior remain exact; the detail bound accounts for the extra retained outcome text (at most four 64 KiB protocol bodies plus 2048 bytes).
+
+`reviews::inbox_contract_schema()` generates JSON Schema from the exact public InboxPage DTO. Root can incorporate its output into the assembled public contract inventory before capability activation. The Rust DTO and dedicated frontend validator agree on `review-inbox-1`; there is no old-shape fallback for the new list route.

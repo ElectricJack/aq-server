@@ -14,6 +14,10 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
+mod inbox;
+pub use inbox::schema as inbox_contract_schema;
+pub use inbox::{InboxItem, InboxPage, InboxQuery, InboxState};
+
 type Result<T> = std::result::Result<T, AppError>;
 fn db(_: sqlx::Error) -> AppError {
     AppError::Internal
@@ -628,11 +632,11 @@ impl Service {
                 return Err(AppError::Internal);
             }
         }
-        let view = json!({"request":request,"subject":subject,"decision_revision":row.get::<i64,_>("decision_revision"),"state":row.get::<String,_>("state"),"receipt":receipt,"current_report_head":result.is_current_report_head});
+        let view = json!({"request":request,"subject":subject,"decision_revision":row.get::<i64,_>("decision_revision"),"state":row.get::<String,_>("state"),"receipt":receipt,"current_report_head":result.is_current_report_head,"acceptance_criteria":result.outcome.acceptance_criteria,"recorded_result":{"report_id":result.report.report_id,"conclusion":result.report.conclusion,"process_outcome":result.report.outcome,"recorded_at_ms":result.receipt.recorded_at_ms}});
         if serde_json::to_vec(&view)
             .map_err(|_| AppError::Internal)?
             .len()
-            > 3 * MAX_BYTES + 1024
+            > 4 * MAX_BYTES + 2048
         {
             return Err(AppError::Internal);
         }
@@ -821,6 +825,7 @@ pub fn admin_routes(service: Arc<Service>) -> axum::Router<AppState> {
         routing::{get, post},
     };
     axum::Router::new()
+        .route("/api/reviews/decisions", get(inbox::inbox_http))
         .route("/api/reviews/decisions/{id}", get(inspect_http))
         .route("/api/reviews/decisions/{id}/resolve", post(resolve_http))
         .route("/api/reviews/decisions/{id}/cancel", post(cancel_http))
