@@ -5,6 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use tokio::io::AsyncReadExt;
 #[path = "worker_assembly/phase.rs"]
 mod phase;
+#[path = "worker_assembly/phase_assessment.rs"]
+mod phase_assessment;
 #[path = "worker_assembly/phase_history.rs"]
 mod phase_history;
 #[path = "worker_assembly/phase_host.rs"]
@@ -126,6 +128,7 @@ async fn run_worker(mode: Mode) {
                 if relay_output {
                     phase_output::configure(case).await;
                     config["relay_output"] = json!(true);
+                    config["await_synthetic_assessment"] = json!(true);
                 }
             }
         }
@@ -295,6 +298,18 @@ async fn run_worker(mode: Mode) {
     }
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
     let mut result = read_frame(&mut output).await;
+    if relay_output && result["phase"] == "prepared_inputs_awaiting_synthetic_assessment" {
+        phase_assessment::assess(
+            case,
+            &worker_root,
+            &identity,
+            &result,
+            &request["phase_preparation"]["synthetic_host"],
+        )
+        .await;
+        input.write_all(b"{\"continue\":true}\n").await.unwrap();
+        result = read_frame(&mut output).await;
+    }
     let watch = if relay_output {
         if result["phase"] != "terminal_registered" {
             phase::diagnostics(case).await;

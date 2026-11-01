@@ -387,6 +387,9 @@ pub(super) async fn record_current_inventory(
     );
 }
 pub(super) async fn record_operator_availability(case: &Case) {
+    record_operator_availability_sequence(case, 2).await;
+}
+pub(super) async fn record_operator_availability_sequence(case: &Case, sequence: u64) -> Value {
     let revision: i64 =
         sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
             .fetch_one(&case.env.env.pool)
@@ -395,7 +398,7 @@ pub(super) async fn record_operator_availability(case: &Case) {
     let mut observation = case.env.manual.clone();
     observation["operation_id"] = json!(Uuid::new_v4());
     observation["expected_revision"] = json!(revision);
-    observation["sequence"] = json!(2);
+    observation["sequence"] = json!(sequence);
     let (status, body) = crate::common::selection::call(
         &aq_server::build_admin_router(case.env.env.state.clone()),
         "/api/intelligence/observations",
@@ -404,6 +407,7 @@ pub(super) async fn record_operator_availability(case: &Case) {
     )
     .await;
     assert_eq!(status, 200, "{body}");
+    body
 }
 /// Test-only wrapping of the actual issuer. No daemon production route change.
 pub(super) fn execution_routes(state: aq_server::AppState) -> axum::Router {
