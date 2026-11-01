@@ -49,6 +49,7 @@ struct ProtectedCursor {
 pub struct InboxItem {
     pub decision_id: Uuid,
     pub decision_revision: u64,
+    #[schemars(regex(pattern = "^(pending|answered|expired|cancelled)$"))]
     pub state: String,
     pub expires_at_ms: u64,
     pub project_id: Uuid,
@@ -60,9 +61,12 @@ pub struct InboxItem {
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InboxPage {
+    #[schemars(regex(pattern = "^review-inbox-1$"))]
     pub api_version: String,
     pub server_time_ms: u64,
+    #[schemars(length(max = 50))]
     pub items: Vec<InboxItem>,
+    #[schemars(length(max = 4096))]
     pub next_cursor: Option<String>,
     /// Pages sample current authorized rows; they are not a transactional snapshot.
     pub sampled: bool,
