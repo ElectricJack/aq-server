@@ -483,6 +483,22 @@ impl Store {
 
     pub async fn from_pool(pool: PgPool) -> Result<Store> {
         migrate(&pool).await?;
+        Self::initialize_pools(pool).await
+    }
+
+    /// Test-only actual frozen migration prefix; never a production fallback.
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn connect_state32_for_testing(options: PgConnectOptions) -> Result<Store> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(options)
+            .await?;
+        migrate_known(&pool, &MIGRATIONS[..32], 32).await?;
+        Self::initialize_pools(pool).await
+    }
+
+    async fn initialize_pools(pool: PgPool) -> Result<Store> {
         let control_pool = PgPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(2))

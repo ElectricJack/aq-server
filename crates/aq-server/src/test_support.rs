@@ -6,6 +6,24 @@ use sqlx::{Connection, PgConnection, PgPool};
 use std::str::FromStr;
 use uuid::Uuid;
 
+#[cfg(feature = "test-support")]
+tokio::task_local! { static STATE32_STORE: (); }
+
+/// Scope a fixture to a real frozen32 migration prefix. It does not relabel a
+/// database and does not alter normal Store startup or inherited spawned tasks.
+#[cfg(feature = "test-support")]
+pub async fn with_state32_store<F: std::future::Future>(future: F) -> F::Output {
+    STATE32_STORE.scope((), future).await
+}
+/// Expected actual fixture format; ordinary fixtures always use current Store.
+pub fn fixture_store_state_version() -> u32 {
+    #[cfg(feature = "test-support")]
+    if STATE32_STORE.try_with(|_| ()).is_ok() {
+        return 32;
+    }
+    crate::STATE_FORMAT_VERSION
+}
+
 pub struct TestDb {
     admin_url: String,
     name: String,
@@ -43,6 +61,12 @@ impl TestDb {
 
     /// Connects (and migrates) a fresh `Store` to this database.
     pub async fn store(&self) -> Store {
+        #[cfg(feature = "test-support")]
+        if STATE32_STORE.try_with(|_| ()).is_ok() {
+            return Store::connect_state32_for_testing(self.options())
+                .await
+                .expect("connect actual state32 store");
+        }
         Store::connect_with(self.options())
             .await
             .expect("connect store")
