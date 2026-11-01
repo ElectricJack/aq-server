@@ -406,7 +406,7 @@ pub(super) async fn record_operator_availability_sequence(case: &Case, sequence:
         "owner@localhost",
     )
     .await;
-    assert_eq!(status, 200, "{body}");
+    assert!(status == 200, "synthetic operator assessment refused");
     body
 }
 /// Test-only wrapping of the actual issuer. No daemon production route change.
