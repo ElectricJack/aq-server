@@ -202,7 +202,7 @@ impl FakeSource {
                     None
                 }
             })
-            .last()
+            .next_back()
             .unwrap_or(wire::MemberState::Pending)
     }
     fn proof(&mut self, r: &SourceRequest, install: bool) -> Result<SourceReply> {
@@ -230,17 +230,16 @@ impl FakeSource {
         // Fixture predicate means a committed terminal transition since start0.
         // Previously committed historical terminal evidence survives later reopen.
         for (seq, tx) in self.transactions.range(..=through) {
-            if let Tx::Committed(ops) = tx {
-                if let Some((_, verdict)) = ops.iter().find(|(m, _)| *m == r.member.member_id)
-                    && matches!(
-                        verdict,
-                        wire::MemberState::Satisfied | wire::MemberState::SourceFailed
-                    )
-                {
-                    state = verdict.clone();
-                    matched = *seq;
-                    break;
-                }
+            if let Tx::Committed(ops) = tx
+                && let Some((_, verdict)) = ops.iter().find(|(m, _)| *m == r.member.member_id)
+                && matches!(
+                    verdict,
+                    wire::MemberState::Satisfied | wire::MemberState::SourceFailed
+                )
+            {
+                state = verdict.clone();
+                matched = *seq;
+                break;
             }
         }
         let evidence = matches!(
@@ -864,7 +863,9 @@ fn bounded_known_cycles_and_serialized_opposing_registration_refuse_without_glob
     );
     graph.edges = vec![(source.clone(), source.clone()); 4097];
     assert_eq!(
-        graph.check(&owner, &[source.clone()]).unwrap_err(),
+        graph
+            .check(&owner, std::slice::from_ref(&source))
+            .unwrap_err(),
         Error::Capacity
     );
     graph.edges = (0..66)
@@ -882,7 +883,9 @@ fn bounded_known_cycles_and_serialized_opposing_registration_refuse_without_glob
         })
         .collect();
     assert_eq!(
-        graph.check(&owner, &[source.clone()]).unwrap_err(),
+        graph
+            .check(&owner, std::slice::from_ref(&source))
+            .unwrap_err(),
         Error::Capacity
     );
     graph.edges = vec![(owner.clone(), source.clone())];
@@ -940,4 +943,34 @@ fn bounded_restore_and_backpressure_refuse_malformed_or_duplicate_work() {
         "frozen self-wait validation refuses before resealing"
     );
     assert!(Snapshot::begin(request, &fence, policy, ids, &graph, 1000).is_err());
+}
+#[test]
+fn restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_member_history() {
+    let (plan, fence) = begin(1, false);
+    let mut encoded = serde_json::to_value(&plan.next).unwrap();
+    encoded["inflight"]["kind"] = serde_json::json!("reobserve");
+    assert!(Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+    encoded["phase"] = serde_json::json!("pending");
+    assert!(Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+    let mut source = FakeSource::new();
+    let seq = source.allocate(vec![(id(20), wire::MemberState::Satisfied)]);
+    source.commit(seq);
+    let installed = respond(&plan, &fence, &mut source, 1001);
+    let mut encoded = serde_json::to_value(&installed.next).unwrap();
+    encoded["inflight"]["kind"] = serde_json::json!("install");
+    assert!(Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+    let finished = respond(&installed, &fence, &mut source, 1002);
+    let mut encoded = serde_json::to_value(&finished.next).unwrap();
+    encoded["outcome"]["members"][0]["state"] = serde_json::json!("pending");
+    encoded["outcome"]["members"][0]["evidence"] = serde_json::Value::Null;
+    encoded["outcome"]["kind"] = serde_json::json!("deadline_reached");
+    let mut payload = encoded["outcome"].clone();
+    payload["outcome"].as_object_mut().unwrap().remove("digest");
+    payload.sort_all_objects();
+    encoded["outcome"]["outcome"]["digest"] =
+        serde_json::to_value(wire::Digest::of(&serde_json::to_vec(&payload).unwrap())).unwrap();
+    assert!(
+        Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err(),
+        "a recomputed digest cannot replace retained member source facts"
+    );
 }

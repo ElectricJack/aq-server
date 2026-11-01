@@ -615,6 +615,9 @@ impl Snapshot {
         if self.phase == Phase::Pending {
             require(self.members.iter().all(|m| m.original.is_some()))?;
         }
+        if self.phase == Phase::Installing {
+            require(self.members.iter().any(|m| m.original.is_none()))?;
+        }
         if self.phase == Phase::RecoveryHeld {
             require(self.hold_reason.is_some() && self.inflight.is_none())?;
         }
@@ -634,6 +637,16 @@ impl Snapshot {
                     && self.outcome.is_none()
                     && self.phase != Phase::RecoveryHeld,
             )?;
+            require(match ticket.kind {
+                WorkKind::Install => {
+                    self.phase == Phase::Installing
+                        && self.members.iter().any(|m| m.original.is_none())
+                }
+                WorkKind::Reobserve => {
+                    self.phase == Phase::Pending
+                        && self.members.iter().all(|m| m.original.is_some())
+                }
+            })?;
         }
         require((self.phase == Phase::Terminal) == self.outcome.is_some())?;
         if let Some(outcome) = &self.outcome {
@@ -644,6 +657,14 @@ impl Snapshot {
                     && outcome.outcome.digest == outcome_digest(outcome)?
                     && outcome.recorded_at_ms >= self.created
                     && outcome.recorded_at_ms <= self.logical_now,
+            )?;
+            require(
+                outcome.members
+                    == self
+                        .members
+                        .iter()
+                        .map(|m| m.last.clone())
+                        .collect::<Vec<_>>(),
             )?;
         }
         if serde_json::to_vec(self).map_err(|_| Error::Invalid)?.len() > MAX_SNAPSHOT_BYTES {
