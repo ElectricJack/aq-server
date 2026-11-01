@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking aq-session-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-session-protocol)
+    Checking aq-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-protocol)
+    Checking aq-worker-protocol v0.2.0 (/tmp/aq-worker-format10-union/crates/aq-worker-protocol)
+    Checking aq-lifecycle-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-lifecycle-protocol)
+    Checking aq-terminal-relay-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-terminal-relay-protocol-0.1.0)
+    Checking aq-session-host v0.1.4 (/tmp/aq-worker-format10-union/crates/aq-session-host)
+    Checking aq-admission v0.1.9 (/tmp/aq-worker-format10-union/vendor/aq-admission-0.1.9)
+    Checking aq-phase-terminal-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-phase-terminal-protocol-0.1.0)
+    Checking aq-worker v0.3.3 (/tmp/aq-worker-format10-union/crates/aq-worker)
+    Finished `dev` profile [unoptimized] target(s) in 11.39s

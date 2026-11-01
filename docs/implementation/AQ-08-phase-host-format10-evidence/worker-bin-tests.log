@@ -1,0 +1,18 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-session-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-protocol)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-worker-format10-union/crates/aq-worker-protocol)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-lifecycle-protocol)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-terminal-relay-protocol-0.1.0)
+   Compiling aq-admission v0.1.9 (/tmp/aq-worker-format10-union/vendor/aq-admission-0.1.9)
+   Compiling aq-session-host v0.1.4 (/tmp/aq-worker-format10-union/crates/aq-session-host)
+   Compiling aq-phase-terminal-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-phase-terminal-protocol-0.1.0)
+   Compiling aq-worker v0.3.3 (/tmp/aq-worker-format10-union/crates/aq-worker)
+    Finished `test` profile [unoptimized] target(s) in 13.72s
+     Running unittests src/bin/native-prepare-smoke.rs (/tmp/aq-worker-artifact-overlap-target/debug/deps/native_prepare_smoke-f7ed1d105946c2cb)
+
+running 2 tests
+test tests::input_frames_are_bounded_complete_and_do_not_consume_the_following_frame ... ok
+test tests::existing_owner_children_and_replaced_scope_are_refused_without_cleanup ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

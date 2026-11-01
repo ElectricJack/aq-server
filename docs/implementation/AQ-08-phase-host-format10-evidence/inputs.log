@@ -1,0 +1,8 @@
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_prepares_phase_inputs_after_proposal_expiry ... bounded phase inputs: {"artifacts":38,"deadline_ns":169118454535390,"materials":1,"original_deadline_ns":169089914751136,"prepared_at_ns":169093464494743,"prepared_revision":26}
+bounded phase clocks: {"accepted_expiry_ms":1793512500735,"accepted_issued_ms":1793512470845,"journal_format":10,"journal_revision":26,"proposal_expiry_ms":1793512472382,"replay_server_ms":1793512472921}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 7.01s
+

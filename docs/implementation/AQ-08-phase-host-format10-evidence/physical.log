@@ -1,0 +1,10 @@
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_phase_execution_launches_and_stops_actual_tmux_host ... bounded phase inputs: {"artifacts":38,"deadline_ns":169106564605396,"materials":1,"original_deadline_ns":169078003316552,"prepared_at_ns":169079621272008,"prepared_revision":26}
+bounded phase execution: {"checked_at_ns":169080150365376,"execution_deadline_ns":169089540060623,"execution_revision":27,"grant_expires_at_ms":1793512472126,"hard_deadline_ms":1793512522126,"hard_deadline_ns":169139540060623,"issued_at_ms":1793512462126}
+bounded phase clocks: {"accepted_expiry_ms":1793512488849,"accepted_issued_ms":1793512458962,"journal_format":10,"journal_revision":34,"proposal_expiry_ms":1793512460481,"replay_server_ms":1793512459088}
+actual host: Running then durable ECHILD; execution_revision=27, stopped_revision=34
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 6.60s
+

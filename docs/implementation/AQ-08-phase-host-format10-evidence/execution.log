@@ -1,0 +1,9 @@
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... bounded phase inputs: {"artifacts":38,"deadline_ns":169112798511103,"materials":1,"original_deadline_ns":169084243921907,"prepared_at_ns":169085900208899,"prepared_revision":26}
+bounded phase execution: {"checked_at_ns":169086414988764,"execution_deadline_ns":169095821042727,"execution_revision":27,"grant_expires_at_ms":1793512478393,"hard_deadline_ms":1793512528393,"hard_deadline_ns":169145821042727,"issued_at_ms":1793512468393}
+bounded phase clocks: {"accepted_expiry_ms":1793512495081,"accepted_issued_ms":1793512465193,"journal_format":10,"journal_revision":27,"proposal_expiry_ms":1793512466721,"replay_server_ms":1793512465316}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 48 filtered out; finished in 5.74s
+

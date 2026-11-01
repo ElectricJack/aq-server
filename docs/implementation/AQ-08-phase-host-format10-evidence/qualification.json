@@ -1,0 +1,255 @@
+{
+  "source": {
+    "server": "f533e206d4e51acc354ecefbbc227e3aaca38db9",
+    "server_base": "3eb5d590f94db6e1aee89f3d85f88e3fb1ec3521",
+    "worker": "e805bb476d4f5fcdcb19a3ac6781e3e2a5ab1ab0"
+  },
+  "schema": 32,
+  "journal_format": 10,
+  "sources": [
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly.rs",
+      "sha256": "42d7e618e9a9f7b771e7e94818e39d1639c10df6e88dd9d1682b21861df1f50a",
+      "bytes": 16108
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs",
+      "sha256": "d0b7a14d83f77cafccca502c85a489c6b93d369451101438be0717c151b958bf",
+      "bytes": 23880
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase_host.rs",
+      "sha256": "5776ab54969f40f32347feac7e0dde1ad7d46d3c6cba3d8160323d0e14f52e9c",
+      "bytes": 6021
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/Cargo.toml",
+      "sha256": "a2664e052ac3c2f22451ef304962e67a4d09ad6a52ff07ff61cafb2e08886a92",
+      "bytes": 2083
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/Cargo.lock",
+      "sha256": "f530f6795ed4e61021d1c875b5e069d350e14a5534ed0b32d2d34f81cfa6635f",
+      "bytes": 61584
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/Cargo.toml",
+      "sha256": "ce406cda6e84bdc152550fed078398e942f5b60f5e937b84710b29ed748a7e5f",
+      "bytes": 1320
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/bin/native-prepare-smoke.rs",
+      "sha256": "91bebd1a9beda72ea82a3fb5ad09bd3a416924d164c679fd4a991b08837ef67b",
+      "bytes": 23827
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/journal.rs",
+      "sha256": "5b677593ee53a8f56b6471328521ca90584dd6518f530e124f6adb2f955f45fa",
+      "bytes": 26305
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/journal/phase_terminal.rs",
+      "sha256": "7085c561e976144d550395158a001086868b0f2adbcf3a324fc7cf5691dc0a0e",
+      "bytes": 10856
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/journal/launch.rs",
+      "sha256": "549b08134e902b439188d192194d658d7064548075bf5eb261fe6f61e8b2c950",
+      "bytes": 14171
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/launch/authority.rs",
+      "sha256": "5f6e7d57755160e90688efcae41fa50bda84cd9c271daca7028b20ea3820ae0e",
+      "bytes": 4831
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/launch/mod.rs",
+      "sha256": "637394522297870760e7f238b4fbf1772a1c6e4e94067f00bf4111462a14f2a3",
+      "bytes": 26058
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/crates/aq-worker/src/native/http/phase_terminal.rs",
+      "sha256": "9eb3f790202cc8af92a6b5141b523028f37f189b25fb97dae05f51774b3bf90a",
+      "bytes": 2763
+    },
+    {
+      "path": "/tmp/aq-worker-format10-union/vendor/aq-phase-terminal-protocol-0.1.0.crate",
+      "sha256": "1b3e4afbd9356f6d7027b0a4be3fe37e2231b55bdfa10269c87a84bf9568f0bb",
+      "bytes": 43951
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/tmp/aq-format10-process-pin/native-prepare-smoke",
+      "sha256": "c52c22046f7ad05a99a0e762cd580714b17dca9af8c2c9ac98140b3887925bf7",
+      "bytes": 10863088
+    },
+    {
+      "path": "/tmp/aq-format10-process-pin/native_initial_grant",
+      "sha256": "66f93c01d23ec9850132f119b480c2350c820769ca2676fd8b0d4d172d150011",
+      "bytes": 92907440
+    },
+    {
+      "path": "/tmp/aq-native-host-pin/aq-session-host",
+      "sha256": "0f6a4cb134982cc62a2e082ee460ab6eb7d7d54701e114befc4ed5819c68b568",
+      "bytes": 5348624
+    },
+    {
+      "path": "/tmp/aq-native-host-pin/aq-native-synthetic-harness",
+      "sha256": "c624ae59154f3623c2b026fb0a1dc34e896263ce1eb6423b541f31c681011e81",
+      "bytes": 16488
+    },
+    {
+      "path": "/usr/bin/tmux",
+      "sha256": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd",
+      "bytes": 1102608
+    },
+    {
+      "path": "/tmp/aq-wrk08-git-pin/aq-git",
+      "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+      "bytes": 45338176
+    },
+    {
+      "path": "/usr/bin/git",
+      "sha256": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+      "bytes": 4066232
+    }
+  ],
+  "logs": {
+    "physical.log": {
+      "sha256": "45044acff019d71f43f1768add54e3866c15b01b6bf958708d6e021ad3617078",
+      "bytes": 954
+    },
+    "execution.log": {
+      "sha256": "e960c6e7a34854fa26096a32f4224c0e823333423c192a67da937a177ecd03e2",
+      "bytes": 869
+    },
+    "inputs.log": {
+      "sha256": "ba983837e7bb24f5b1b312c1e1b0dec6a1381ff77e60d08eba197f25c753f9b5",
+      "bytes": 605
+    },
+    "run.log": {
+      "sha256": "aba804006ffbe332d02ded1302efd153d9cd843972f089a7caf684ccd234b520",
+      "bytes": 33
+    },
+    "server-build.log": {
+      "sha256": "10852c5c7a8e164365527a02ec6fe990826adb4a791df72fb9870fd7edcad4a5",
+      "bytes": 2616
+    },
+    "worker-build.log": {
+      "sha256": "c31c44332910a160bb6d8de034b28223b4f7ba5e5891e7e60137c5167b049cc5",
+      "bytes": 944
+    },
+    "server-clippy.log": {
+      "sha256": "1066b24a4d5d32188d8e333b6fbf07d2b0da5cb43033d4a35ee250fa3104c404",
+      "bytes": 2651
+    },
+    "worker-clippy.log": {
+      "sha256": "e74a2c7d74849f9a22cda244518e43daccde5a0f1eb937bbd02627ada467a353",
+      "bytes": 1046
+    },
+    "worker-bin-tests.log": {
+      "sha256": "ae20264f086700865c04ccffa54f8b5710f2025b10251496951562332ad24eac",
+      "bytes": 1383
+    },
+    "server-fmt.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "worker-fmt.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "checks": {
+    "physical_process": {
+      "passed": 1,
+      "seconds": 6.6
+    },
+    "existing_execution": {
+      "passed": 1,
+      "seconds": 5.74
+    },
+    "existing_input_expiry": {
+      "passed": 1,
+      "seconds": 7.01
+    },
+    "worker_binary_tests": {
+      "passed": 2,
+      "seconds": 0.0
+    },
+    "server_affected_strict_clippy_seconds": 32.5,
+    "worker_binary_strict_clippy_seconds": 11.39,
+    "worker_release_build_seconds": 72.0,
+    "server_test_build_seconds": 56.98,
+    "format": "pass"
+  },
+  "measured": {
+    "inputs": {
+      "artifacts": 38,
+      "deadline_ns": 169106564605396,
+      "materials": 1,
+      "original_deadline_ns": 169078003316552,
+      "prepared_at_ns": 169079621272008,
+      "prepared_revision": 26
+    },
+    "execution": {
+      "checked_at_ns": 169080150365376,
+      "execution_deadline_ns": 169089540060623,
+      "execution_revision": 27,
+      "grant_expires_at_ms": 1793512472126,
+      "hard_deadline_ms": 1793512522126,
+      "hard_deadline_ns": 169139540060623,
+      "issued_at_ms": 1793512462126
+    },
+    "clocks": {
+      "accepted_expiry_ms": 1793512488849,
+      "accepted_issued_ms": 1793512458962,
+      "journal_format": 10,
+      "journal_revision": 34,
+      "proposal_expiry_ms": 1793512460481,
+      "replay_server_ms": 1793512459088
+    }
+  },
+  "commands": {
+    "binary": "/tmp/aq-format10-process-pin/native_initial_grant",
+    "common_arguments": [
+      "--exact",
+      "--ignored",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "tests": [
+      "published::actual_git::worker_assembly::actual_worker_phase_execution_launches_and_stops_actual_tmux_host",
+      "published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer",
+      "published::actual_git::worker_assembly::actual_worker_prepares_phase_inputs_after_proposal_expiry"
+    ],
+    "environment": {
+      "DATABASE_URL": "postgres://postgres:test@127.0.0.1:55432/postgres",
+      "RUST_TEST_THREADS": "1",
+      "AQ_TEST_GIT_CANDIDATE": "/tmp/aq-wrk08-git-pin/aq-git",
+      "AQ_TEST_GIT_EXECUTABLE": "/usr/bin/git",
+      "AQ_TEST_NATIVE_WORKER": "/tmp/aq-format10-process-pin/native-prepare-smoke",
+      "AQ_TEST_NATIVE_WORKER_SHA256": "c52c22046f7ad05a99a0e762cd580714b17dca9af8c2c9ac98140b3887925bf7",
+      "AQ_NATIVE_HOST_BINARY": "/tmp/aq-native-host-pin/aq-session-host",
+      "AQ_NATIVE_HOST_SHA256": "0f6a4cb134982cc62a2e082ee460ab6eb7d7d54701e114befc4ed5819c68b568",
+      "AQ_NATIVE_TMUX_BINARY": "/usr/bin/tmux",
+      "AQ_NATIVE_TMUX_SHA256": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd",
+      "AQ_NATIVE_SYNTHETIC_ELF": "/tmp/aq-native-host-pin/aq-native-synthetic-harness",
+      "AQ_NATIVE_SYNTHETIC_SHA256": "c624ae59154f3623c2b026fb0a1dc34e896263ce1eb6423b541f31c681011e81"
+    }
+  },
+  "limitations": [
+    "No remote phase Started/Stopped ACK: both queued receipt fields verified null",
+    "Actual daemon HTTP/PostgreSQL, aq-git/Git, independent worker, production host helper, tmux, positive Running and ECHILD; registry/provider/Graph/harness qualification synthetic",
+    "No no-Started closure publisher, renewal, task success or resource release",
+    "Test-support opt-in only; no default runtime capability/provider calls",
+    "Old format9 evidence unchanged",
+    "Timings include fixture work; not fleet capacity or guaranteed latency"
+  ],
+  "policies_unchanged": {
+    "phase_observation_ms": 2000,
+    "selection_source_age_ms": 5000,
+    "execution_lease_ms": 10000
+  }
+}

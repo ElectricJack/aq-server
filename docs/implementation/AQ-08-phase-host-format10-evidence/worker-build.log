@@ -1,0 +1,10 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-session-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-protocol)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-worker-format10-union/crates/aq-worker-protocol)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-worker-format10-union/crates/aq-lifecycle-protocol)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-terminal-relay-protocol-0.1.0)
+   Compiling aq-admission v0.1.9 (/tmp/aq-worker-format10-union/vendor/aq-admission-0.1.9)
+   Compiling aq-session-host v0.1.4 (/tmp/aq-worker-format10-union/crates/aq-session-host)
+   Compiling aq-phase-terminal-protocol v0.1.0 (/tmp/aq-worker-format10-union/vendor/aq-phase-terminal-protocol-0.1.0)
+   Compiling aq-worker v0.3.3 (/tmp/aq-worker-format10-union/crates/aq-worker)
+    Finished `release` profile [optimized] target(s) in 1m 12s
