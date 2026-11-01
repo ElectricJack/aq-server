@@ -148,6 +148,7 @@ struct FakeSource {
     subscriptions: BTreeMap<wire::Digest, wire::ArtifactRef>,
     calls: usize,
     unavailable: bool,
+    retained_snapshots: BTreeMap<wire::Digest, Vec<u8>>,
 }
 impl FakeSource {
     fn new() -> Self {
@@ -158,6 +159,7 @@ impl FakeSource {
             subscriptions: BTreeMap::new(),
             calls: 0,
             unavailable: false,
+            retained_snapshots: BTreeMap::new(),
         }
     }
     fn allocate(&mut self, operations: Vec<(Uuid, wire::MemberState)>) -> u64 {
@@ -262,6 +264,17 @@ impl FakeSource {
             .entry(sub.clone())
             .or_insert_with(|| artifact(&format!("fixture-source-sub-{}", sub.as_str())))
             .clone();
+        let mut snapshot = serde_json::json!({"owner_profile":"committed-fixture-source-1","scope":r.scope,"subscription":r.subscription,"condition":r.member.condition,"committed_prefix":through,"observation":observation});
+        snapshot.sort_all_objects();
+        let snapshot = serde_json::to_vec(&snapshot).unwrap();
+        let owner_digest = wire::Digest::of(&snapshot);
+        self.retained_snapshots
+            .insert(owner_digest.clone(), snapshot);
+        let owner_snapshot = wire::ArtifactRef {
+            id: text(format!("fixture-owner-snapshot-{}", owner_digest.as_str())),
+            version: text("1"),
+            digest: owner_digest.clone(),
+        };
         Ok(SourceReply::Committed(Box::new(CommittedObservation {
             protocol: SourceProtocol::CommittedReplay,
             subscription: r.subscription.clone(),
@@ -277,8 +290,10 @@ impl FakeSource {
                 committed_revision: text(format!("committed-prefix-{through}")),
                 committed_replay_cursor: text(through.to_string()),
                 subscription_receipt: receipt,
-                snapshot_digest: canonical_digest(&observation)?,
+                snapshot_digest: owner_digest,
             },
+            owner_snapshot,
+            projection_digest: canonical_digest(&observation)?,
             replay_from: r
                 .previous
                 .as_ref()
@@ -318,6 +333,49 @@ fn early_resolution_never_skips_unconditional_reobserve_and_result_is_immutable(
         .unwrap();
     assert_eq!(late.next.outcome(), Some(&original));
     assert!(late.actions.is_empty());
+}
+#[test]
+fn owner_snapshot_and_aq_projection_digests_are_independent_verified_links() {
+    let (plan, fence) = begin(1, false);
+    let mut source = FakeSource::new();
+    let (ticket, requests) = work(&plan);
+    let SourceReply::Committed(proof) = source.install(&requests[0]).unwrap() else {
+        panic!()
+    };
+    assert_ne!(proof.boundary.snapshot_digest, proof.projection_digest);
+    assert_eq!(
+        wire::Digest::of(&source.retained_snapshots[&proof.owner_snapshot.digest]),
+        proof.boundary.snapshot_digest
+    );
+    assert_eq!(
+        canonical_digest(&proof.observation).unwrap(),
+        proof.projection_digest
+    );
+    let installed = plan
+        .next
+        .step(
+            Input::SourceBatch {
+                ticket,
+                replies: vec![SourceReply::Committed(proof)],
+            },
+            &fence,
+            1001,
+        )
+        .unwrap();
+    assert!(matches!(installed.actions[0], Action::Reobserve { .. }));
+    let restored = Snapshot::decode(&installed.next.encode().unwrap()).unwrap();
+    assert_eq!(
+        restored.members[0]
+            .original_snapshot
+            .as_ref()
+            .unwrap()
+            .digest,
+        restored.members[0]
+            .original
+            .as_ref()
+            .unwrap()
+            .snapshot_digest
+    );
 }
 #[test]
 fn resolution_during_install_and_with_no_hint_is_found_after_restart() {
@@ -641,7 +699,7 @@ fn source_scope_principal_incarnation_and_snapshot_proof_are_mandatory() {
     let mut source = FakeSource::new();
     let installed = respond(&plan, &fence, &mut source, 1001);
     let (ticket, requests) = work(&installed);
-    for change in 0..7 {
+    for change in 0..11 {
         let SourceReply::Committed(mut proof) = source.reobserve(&requests[0]).unwrap() else {
             panic!()
         };
@@ -652,7 +710,11 @@ fn source_scope_principal_incarnation_and_snapshot_proof_are_mandatory() {
             3 => proof.source_access = wire::Digest::of(b"new source"),
             4 => proof.incarnation = text("new epoch"),
             5 => proof.boundary.snapshot_digest = wire::Digest::of(b"not observed"),
-            _ => proof.replay_from = Some(text("999")),
+            6 => proof.replay_from = Some(text("999")),
+            7 => proof.projection_digest = wire::Digest::of(b"different projection"),
+            8 => proof.boundary.condition_digest = wire::Digest::of(b"different condition"),
+            9 => proof.subscription.member_id = id(800),
+            _ => proof.owner_snapshot.digest = wire::Digest::of(b"different owner body"),
         }
         assert!(
             installed
@@ -873,6 +935,9 @@ fn bounded_restore_and_backpressure_refuse_malformed_or_duplicate_work() {
         };
         r.predicate_digest = canonical_digest(&r.predicate).unwrap();
     }
-    request.body_digest = canonical_digest(&request.body).unwrap();
+    assert!(
+        request.validate().is_err(),
+        "frozen self-wait validation refuses before resealing"
+    );
     assert!(Snapshot::begin(request, &fence, policy, ids, &graph, 1000).is_err());
 }

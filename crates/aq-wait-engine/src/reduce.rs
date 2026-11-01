@@ -61,6 +61,8 @@ impl Snapshot {
                 current: None,
                 original_observation: None,
                 current_observation: None,
+                original_snapshot: None,
+                current_snapshot: None,
                 incarnation: None,
                 last: wire::MemberOutcome {
                     member_id: v.member_id,
@@ -272,10 +274,12 @@ impl Snapshot {
                     if progress.original.is_none() {
                         progress.original = Some(proof.boundary.clone());
                         progress.original_observation = Some(proof.observation.clone());
+                        progress.original_snapshot = Some(proof.owner_snapshot.clone());
                         progress.incarnation = Some(proof.incarnation.clone());
                     }
                     progress.current = Some(proof.boundary);
                     progress.current_observation = Some(proof.observation.clone());
+                    progress.current_snapshot = Some(proof.owner_snapshot);
                     progress.last = proof.observation;
                     progress.unavailable_reason = None;
                     progress.last_checked_at = Some(self.logical_now);
@@ -356,6 +360,7 @@ impl Snapshot {
         proof.boundary.validate()?;
         proof.observation.validate()?;
         proof.incarnation.validate()?;
+        wire::artifact(&proof.owner_snapshot)?;
         let boundary = &proof.boundary;
         let valid = proof.protocol == SourceProtocol::CommittedReplay
             && proof.subscription == request.subscription
@@ -366,7 +371,8 @@ impl Snapshot {
             && boundary.member_id == request.member.member_id
             && boundary.owner == request.member.condition.owner()
             && boundary.condition_digest == canonical_digest(&request.member.condition)?
-            && boundary.snapshot_digest == canonical_digest(&proof.observation)?
+            && boundary.snapshot_digest == proof.owner_snapshot.digest
+            && proof.projection_digest == canonical_digest(&proof.observation)?
             && proof.observation.member_id == request.member.member_id
             && proof.observation.state != wire::MemberState::SourceUnavailable;
         if !valid {
@@ -538,20 +544,33 @@ impl Snapshot {
                 progress.original.is_some() == progress.current.is_some()
                     && progress.original.is_some() == progress.incarnation.is_some()
                     && progress.original.is_some() == progress.original_observation.is_some()
-                    && progress.original.is_some() == progress.current_observation.is_some(),
+                    && progress.original.is_some() == progress.current_observation.is_some()
+                    && progress.original.is_some() == progress.original_snapshot.is_some()
+                    && progress.original.is_some() == progress.current_snapshot.is_some(),
             )?;
-            for (boundary, observation) in [
-                (&progress.original, &progress.original_observation),
-                (&progress.current, &progress.current_observation),
+            for (boundary, observation, snapshot) in [
+                (
+                    &progress.original,
+                    &progress.original_observation,
+                    &progress.original_snapshot,
+                ),
+                (
+                    &progress.current,
+                    &progress.current_observation,
+                    &progress.current_snapshot,
+                ),
             ] {
-                if let (Some(boundary), Some(observation)) = (boundary, observation) {
+                if let (Some(boundary), Some(observation), Some(snapshot)) =
+                    (boundary, observation, snapshot)
+                {
                     boundary.validate()?;
                     observation.validate()?;
+                    wire::artifact(snapshot)?;
                     require(
                         boundary.member_id == member.member_id
                             && boundary.owner == member.condition.owner()
                             && boundary.condition_digest == canonical_digest(&member.condition)?
-                            && boundary.snapshot_digest == canonical_digest(observation)?
+                            && boundary.snapshot_digest == snapshot.digest
                             && observation.member_id == member.member_id,
                     )?;
                     if let Some(evidence) = &observation.evidence {

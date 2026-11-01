@@ -138,6 +138,9 @@ pub struct CommittedObservation {
     pub source_access: wire::Digest,
     pub incarnation: wire::Text,
     pub boundary: wire::SourceBoundary,
+    /// Exact owner snapshot reference/hash, separate from this AQ projection.
+    pub owner_snapshot: wire::ArtifactRef,
+    pub projection_digest: wire::Digest,
     pub replay_from: Option<wire::Text>,
     pub observation: wire::MemberOutcome,
 }
@@ -178,6 +181,8 @@ pub(crate) struct MemberProgress {
     pub current: Option<wire::SourceBoundary>,
     pub original_observation: Option<wire::MemberOutcome>,
     pub current_observation: Option<wire::MemberOutcome>,
+    pub original_snapshot: Option<wire::ArtifactRef>,
+    pub current_snapshot: Option<wire::ArtifactRef>,
     pub incarnation: Option<wire::Text>,
     pub last: wire::MemberOutcome,
     pub unavailable_reason: Option<wire::Text>,
