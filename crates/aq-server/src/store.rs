@@ -255,6 +255,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         35,
         include_str!("../migrations/0035_supervisor_conversation.sql"),
     ),
+    (36, include_str!("../migrations/0036_result_media_owner.sql")),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
@@ -425,6 +426,9 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
                 "global supervisor conversation singleton missing or invalid".into(),
             ));
         }
+    }
+    if supported >= 36 {
+        media36_storage_guard(&mut tx).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -967,3 +971,10 @@ mod tests {
 #[cfg(test)]
 #[path = "store/supervisor35_tests.rs"]
 mod supervisor35_tests;
+
+#[path = "store/media36.rs"]
+mod media36;
+use media36::media36_storage_guard;
+#[cfg(test)]
+#[path = "store/media36_tests.rs"]
+mod media36_tests;
