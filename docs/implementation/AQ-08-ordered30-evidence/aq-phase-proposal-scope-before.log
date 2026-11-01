@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-schema30/crates/aq-server)
+error[E0609]: no field `id` on type `Option<Node>`
+   --> crates/aq-server/tests/native_proposal_scope.rs:134:20
+    |
+134 |         node_id: b.id,
+    |                    ^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+134 |         node_id: b.unwrap().id,
+    |                    +++++++++
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `aq-server` (test "native_proposal_scope") due to 1 previous error

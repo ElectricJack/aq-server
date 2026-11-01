@@ -1,0 +1,24 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-schema30/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.50s
+     Running tests/native_proposal_scope.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_proposal_scope-1a9f19896b2ada49)
+
+running 1 test
+test authenticated_other_node_cannot_read_or_poison_foreign_original_proposal ... FAILED
+
+failures:
+
+---- authenticated_other_node_cannot_read_or_poison_foreign_original_proposal stdout ----
+
+thread 'authenticated_other_node_cannot_read_or_poison_foreign_original_proposal' (335171) panicked at crates/aq-server/tests/native_proposal_scope.rs:164:5:
+assertion `left == right` failed: foreign node must neither retain nor poison another attempt's proposal
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    authenticated_other_node_cannot_read_or_poison_foreign_original_proposal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+error: test failed, to rerun pass `-p aq-server --test native_proposal_scope`

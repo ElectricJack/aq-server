@@ -1,0 +1,39 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-schema30/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.51s
+     Running tests/native_accepted_preparation.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_accepted_preparation-bee3d72b9007997b)
+
+running 14 tests
+test absent_policy_has_no_route_and_invalid_policy_refuses_configuration ... ok
+test changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts ... ok
+test changed_current_project_and_private_bytes_cannot_deliver_inputs ... ok
+test current30_missing_both_phase_tables_cannot_undercharge_legacy_admission ... ok
+test failure_after_actual_material_insert_rolls_back_entire_admission ... ok
+test legacy_and_v2_accept_share_one_actual_owner_and_material_scope ... ok
+test mixed_candidate_schema_is_corruption_not_older_profile ... ok
+test mounted_v2_routes_require_machine_auth_negotiation_and_physical_nonce ... ok
+test observed_node_wait_charges_expiry_before_any_new_accept_commit ... ok
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... ok
+test real_timed_accept_retains_independent_lease_and_exact_replay ... ok
+test reopened_store_and_reloaded_protected_policy_replay_exact_accepted_receipt ... ok
+test structurally_complete_v2_prepare_never_falls_back_to_legacy_execution_issuer ... ok
+test shared_bytes_quota_rolls_back_new_accept_but_never_forgets_exact_replay ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.23s
+
+     Running tests/native_proposal_scope.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_proposal_scope-1a9f19896b2ada49)
+
+running 1 test
+test authenticated_other_node_cannot_read_or_poison_foreign_original_proposal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+     Running tests/schema30_preparation.rs (/tmp/aq-phase30-qualification-target/debug/deps/schema30_preparation-381641fe6cb4768d)
+
+running 4 tests
+test failure_after_sql_metadata_transition_rolls_back_tables_and_meta_before_commit ... ok
+test current30_missing_one_or_both_tables_refuses_reopen_without_repair ... ok
+test fresh_ordered30_is_empty_and_reopens_without_activating_any_owner ... ok
+test real29_collision_rolls_back_all30_and_explicit_repair_allows_exact_upgrade ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+

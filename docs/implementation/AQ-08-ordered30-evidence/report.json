@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "source_revision": "66e83bec7ff7c97412515113108a323def881316",
+  "base_revision": "ed40790",
+  "narrow_auth_fix": "dd441e0",
+  "ordered_schema_revision": "66e83be",
+  "state_format_version": 30,
+  "schema": {
+    "ordered": "normal migrations1..30; actual29->30 and freshStore startup",
+    "original_unregistered_candidate_sql_sha256": "45b8d617a1ffac53094fcb3b5073419a1a7886326ab6337e80dd9f2afc9f6698",
+    "final_registered_sql_sha256": "e08e7e713bd62c203e7f0467ae1c7bbdbf00a84c669e556d1fea6f6e826e08b7",
+    "change": "owner DDL exact; explicit meta30 UPDATE added before registration",
+    "guards": [
+      "current missing one/both tables refuses startup without repair",
+      "already-open current30 legacy admission refuses missing tables; no undercharge fallback",
+      "late failure after SQL meta transition rolls back metadata/tables before commit",
+      "real29 collision rollback then explicit retry",
+      "older29 profile refuses30; readable/source/Docker metadata aligned"
+    ]
+  },
+  "results": {
+    "final_owner_scope_schema": {
+      "passed": 19,
+      "ignored": 0
+    },
+    "related_targets": {
+      "passed": 84,
+      "ignored": 4,
+      "targets": 12
+    },
+    "metadata_unit": 1,
+    "explicit_actual_git_v2": 1,
+    "distinct_passed_across_groups": 105,
+    "remaining_declared_ignored_not_run": 3,
+    "strict_server_all_targets_all_features": true
+  },
+  "functional_clock": {
+    "scope": "only mounted route/auth/nonce fixture",
+    "captured": "after actual NativeOffer publication, before first v2Proposal/Accept",
+    "original_clocks_unchanged": true,
+    "limitation": "freezes logical elapsed age; cannot qualify real I/O freshness/latency. Superseded real-clock safe409 retained. Other expiry/barrier tests and actualGit use their original clock semantics."
+  },
+  "actual_git_trace": {
+    "accepted_expires_at_ms": 1793503404146,
+    "accepted_issued_at_ms": 1793503374276,
+    "bundle_digest": "190113434caaf3bf40f79a7daf36e27e8b59acb48cf3364ff5e366976155a5bd",
+    "export_retirement_refused_reads": true,
+    "grant": null,
+    "historical_source_expires_at_ms": 1793503403797,
+    "historical_source_observed_at_ms": 1793503373797,
+    "holds_task": true,
+    "installed_receipts": 0,
+    "manifest_digest": "25c12a1f2ac173d12817d8e5182e17f9ba791a1563b76d8386f8ec0d874c07e9",
+    "original_base": "93a34733c2ddf03734ef0ee175b66ef9acaa94e7",
+    "proposal_clock": {
+      "expires_at_ms": 1793503375779,
+      "server_time_ms": 1793503373939,
+      "valid_for_ms": 1840
+    },
+    "read_started_at_ms": 1793503375806,
+    "source_profile": {
+      "digest": "e03a140297fd263be0e524f7ade813ddc819a0f14ba0b56449d4b6c071cd3ca5",
+      "id": "synthetic-retained-reader-profile-no-hydration",
+      "version": "1"
+    },
+    "transfer_id": "d33657b1-9589-50e3-a0d5-c3c89e8273ac"
+  },
+  "git": {
+    "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "producer_revision": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+    "executable": "/tmp/aq-wrk08-git-pin/aq-git",
+    "git": "/usr/bin/git",
+    "version": "2.43.0"
+  },
+  "public_dependency": {
+    "package": "aq-admission",
+    "version": "0.1.9",
+    "source_revision": "b9451cb81972e80acbcc61119bb65592f594b15b",
+    "archive_sha256": "30f4cfca11ff6840eab325026dfea33dd55c23e25099dedb303b52a1ede75b49",
+    "unchanged": true
+  },
+  "commands": [
+    "DATABASE_URL=<scripts/test-db disposableURL> CARGO_TARGET_DIR=/tmp/aq-phase30-qualification-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p aq-server --test native_proposal_scope --test native_accepted_preparation --test schema30_preparation --locked --offline -- --test-threads=2",
+    "same environment cargo test -p aq-server --test schema28_closure --test schema29_presence --test scoped_presence_inventory --test native_offers --test native_preparation --test native_material_issuance --test native_source --test native_initial_grant --test native_reconciliation --test never_granted --test dashboard_read --test dashboard_assets --locked --offline -- --test-threads=2",
+    "same build environment cargo test -p aq-server --lib store::tests::state_format_is_the_latest_migration --locked --offline -- --exact",
+    "same environment plus AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git cargo test -p aq-server --test native_initial_grant published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease --locked --offline -- --exact --ignored --test-threads=2 --nocapture",
+    "same build environment cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo fmt --package aq-server --check",
+    "git diff --check"
+  ],
+  "qualification_limits": [
+    "default inactive; no runtime deployment/service restart",
+    "no phase-aware new execution Grant, worker input adoption or host/provider calls",
+    "SourceAdmission history was not yet expired during realGit read; only original proposal expiry qualified",
+    "no cold-workload/PB04 latency closure; real-clock functional safe refusal retained",
+    "not a full workspace audit or full production service qualification"
+  ],
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "bytes": 88659,
+      "sha256": "401c007635de6429e0af9721ee41c8ed20fe2472fd9e70b4c2e7b209f5c65d15"
+    },
+    {
+      "path": "Dockerfile",
+      "bytes": 4140,
+      "sha256": "60b054ffbb546a17b8dd8dd4bff3e7e458620478c94360bb08df546de3833ce0"
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "bytes": 2420,
+      "sha256": "6b35511647dce1ad7c070e1e8657f99ea5a256a4a5b41362f0d3aeadd0580d70"
+    },
+    {
+      "path": "crates/aq-server/migrations/0030_accepted_preparation_v2.sql",
+      "bytes": 1905,
+      "sha256": "e08e7e713bd62c203e7f0467ae1c7bbdbf00a84c669e556d1fea6f6e826e08b7"
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "bytes": 15562,
+      "sha256": "263542b806483112bf72e0764d68bb401236f574da9726668732c4c9778b9e91"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation.rs",
+      "bytes": 4849,
+      "sha256": "bf1a97ba11c438dd1015c422299d9315734725a9d7ebcc68f998bfc9dc3dcfd0"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/accept.rs",
+      "bytes": 11141,
+      "sha256": "f38c52a354451aa3ba6def7fac8dca157f886a402f6d09ca0ad7b85e3669b974"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/api.rs",
+      "bytes": 1649,
+      "sha256": "b9f65a06bd8a25ad0a43b43629eaa2a4e26b64d900096a0076c51035b6e0f8a5"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/authority.rs",
+      "bytes": 13978,
+      "sha256": "d6e328ff0c06fd9aaf5256dcaafe7002c8b99eaed2d60d70af03c86b0624a6a2"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/policy.rs",
+      "bytes": 4276,
+      "sha256": "b53d0c85705510db2abeb5746896718b0855059d2915e681fd6ad7f73d08b977"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/proposal.rs",
+      "bytes": 8336,
+      "sha256": "04b20bc8d513f8f645792c630612050294d3f480dbb34485ed23eacde3fd0599"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/preparation.rs",
+      "bytes": 19601,
+      "sha256": "01f8b9e38c89f88372905b4fa3230a959fca50b21e9f2add265081cc24b5cf60"
+    },
+    {
+      "path": "crates/aq-server/src/store.rs",
+      "bytes": 27170,
+      "sha256": "f2fea3e2d8bd9f9aaacfcb6db53b66377deef0f6b053613a78446a248b1b8af1"
+    },
+    {
+      "path": "crates/aq-server/tests/native_accepted_preparation.rs",
+      "bytes": 31924,
+      "sha256": "a3b9a1a1a4bd98324d378a89b3a9a0fc4af4bf249e14dd4fa5dc340960e94899"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs",
+      "bytes": 13687,
+      "sha256": "fbe18e226da633b54026b88454df4a5c223b7f55c527f270672bec0388fd99a8"
+    },
+    {
+      "path": "crates/aq-server/tests/native_proposal_scope.rs",
+      "bytes": 6912,
+      "sha256": "440d8cdf5a604ed075e2da9e3bd53bac18c4f94ecbfe7c4a9b9e323e97d0ee6b"
+    },
+    {
+      "path": "crates/aq-server/tests/schema30_preparation.rs",
+      "bytes": 4908,
+      "sha256": "e68efd0fa3311ca59cbf6854ea030ad6f6d8602d9e425513c30c503506f5b291"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-plan.md",
+      "bytes": 5636,
+      "sha256": "b283a8f643288a4e5f0650e4994f53a2035c3aa85545581d91961ca59afeb681"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner.md",
+      "bytes": 4447,
+      "sha256": "048493c7e2bb9788764165b1d50d87e503a9b815e7046fa5cb89e2f5aadc1399"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-first.log",
+      "bytes": 12785,
+      "sha256": "e452acc92d0df96b30323ff86dfd6e6980ac2ea6f3cfc84318c6742a0e644ade",
+      "result": "initial ordered18 actualPG tests passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-regression.log",
+      "bytes": 11434,
+      "sha256": "e0bb572dcf6f2accc37afc3fef28bd6e773c95efc0638b07abfc72d5a10d4590",
+      "result": "related12 targets84 passed4 declared ignores before narrow authfix; unrelated paths unchanged"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-owner-final.log",
+      "bytes": 2104,
+      "sha256": "07bb12023b4a22d0f5d06c340d9aaa0f2a058ddf7bfe985c32b339f2312164a0",
+      "result": "superseded real-clock run13 passed1 safe409; later fixed only route/auth/nonce functional clock, no runtimeTTL change"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-owner-final2.log",
+      "bytes": 2439,
+      "sha256": "da77d754a7eca263ed07813b42784ee99914dd96e2bbb0d68337c85ac0a8afd3",
+      "result": "final ordered19 actualPG tests passed (14 owner1 crossnode4 schema)"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-metadata.log",
+      "bytes": 448,
+      "sha256": "23f2ad2b78d9421b622cce9a73abd9747f311c70ee3f9918bf74e55f53d1f8a0",
+      "result": "metadata/library invariant1 passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-actual-git.log",
+      "bytes": 1397,
+      "sha256": "2928128bb37a8adb76002ac4ca04080ab7a146faf61ea90c2dc07e2374c6cd3e",
+      "result": "actual-clock pinned Gitv2 source test1 passed4.78s"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-clippy-final.log",
+      "bytes": 160,
+      "sha256": "f62ff38eee3319abeefc173aa0be5f2e5e59c1dc268bb4118049feb430936bab",
+      "result": "strict server all-target/all-feature lint passed33.92s"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase30-fmt-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "package formatting passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase-proposal-scope-before.log",
+      "bytes": 589,
+      "sha256": "3463fddbdc4099132cd520ad5df8baed6725138512af7ecf017c8ce4a5f1a39d",
+      "result": "superseded regression compilation Option<Node> fixture unwrap error"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase-proposal-scope-before2.log",
+      "bytes": 1129,
+      "sha256": "da6688efef44162d6d6da4fa27a276754084ab6388125298cd9689da98d7ac09",
+      "result": "actual before-fix cross-node bug reproduced: foreign node committed1 proposal row"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-phase-proposal-scope-after.log",
+      "bytes": 491,
+      "sha256": "6225a8375716dc469272363e92aecc0c7949686880b84e1a3b6a3f3ea4d17886",
+      "result": "narrow scope fix after-test passed in working ordered30 candidate; final complete source rechecked in owner-final2"
+    },
+    {
+      "path": "docs/implementation/AQ-08-ordered30-evidence/aq-proposal-scope-main29.log",
+      "bytes": 456,
+      "sha256": "736d6df6954759047be27d468db33c68267a8a34c38916bf9b5df6b24596c394",
+      "result": "parent independently qualified same authfix at maina271649/profile29;1 passed1.20s"
+    }
+  ]
+}

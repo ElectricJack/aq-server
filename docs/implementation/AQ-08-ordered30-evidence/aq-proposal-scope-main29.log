@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/agent-q/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 36.91s
+     Running tests/native_proposal_scope.rs (/tmp/aq-native-union-target/debug/deps/native_proposal_scope-2a58ac727f31a724)
+
+running 1 test
+test authenticated_other_node_cannot_read_or_poison_foreign_original_proposal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+

@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-schema30/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.28s
+     Running unittests src/lib.rs (/tmp/aq-phase30-qualification-target/debug/deps/aq_server-59b2c0d7a3ee27ba)
+
+running 1 test
+test store::tests::state_format_is_the_latest_migration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.00s
+
