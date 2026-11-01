@@ -1,0 +1,17 @@
+{
+  "artifact": {
+    "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+    "id": "aq.admission.preparation-v2-contract",
+    "version": "1"
+  },
+  "manifest": {
+    "publication": "aq-admission/0.1.9",
+    "required_features": [
+      "accepted_preparation_v2",
+      "fresh_initial_confirmation_v2",
+      "independent_execution_delivery_v2"
+    ],
+    "schema_digest": "6ab84212c278a78772921171f6640f15a30e535f39b66e8883869d3fa62bfd9f",
+    "schema_version": 2
+  }
+}

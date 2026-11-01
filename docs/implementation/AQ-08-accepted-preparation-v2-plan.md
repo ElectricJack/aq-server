@@ -123,3 +123,14 @@ actual control under held transfer/storage; Grant/closure races; and committed
 Grant with unusable delivery. Qualify actual daemon + independent worker process
 + actual Git, with physical bounds and cold/warm timing reported separately.
 A tiny optimized success does not close arbitrary cold workloads or PB04 latency.
+
+## Explicit historical owner boundary before activation
+
+The current OriginalGrant, renewal and closure loaders consume the legacy stored
+`prepare` receipt. The new owner path must retain phase-aware provenance: either
+an explicit typed historical variant or a trusted normalized internal view that
+keeps the original receipt kind and canonical digest. It must never manufacture a
+legacy InitialGrantDelivery or retime an old preparation plan to reuse validators.
+Same-grant renewal and terminal closure must consume and test that explicit
+boundary before any phase-v2 activation. This is a later owner integration gate,
+not authority provided by the pure package.
