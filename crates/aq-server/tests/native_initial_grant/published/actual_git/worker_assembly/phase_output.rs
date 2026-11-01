@@ -275,6 +275,21 @@ pub(super) async fn verify(
     );
     assert!(tail.next_sequence > 0);
     eprintln!(
+        "bounded accepted output proof: {}",
+        json!({
+            "upload_ack":ack,
+            "subscription_id":watched.subscription,
+            "terminal":tail.terminal,
+            "tail_next_sequence":tail.next_sequence,
+            "tail_disconnected":tail.disconnected,
+            "tail_initial_incomplete":tail.initial_incomplete,
+            "byte_count":bytes.len(),
+            "frames":upload.frames.iter().map(|frame|json!({
+                "sequence":frame.sequence,"byte_length":frame.byte_length,"digest":frame.digest
+            })).collect::<Vec<_>>()
+        })
+    );
+    eprintln!(
         "actual worker output: real admin Watch, node pull, HTTP200 exact UploadAck, byte/digest/sequence-identical authorized tail after ECHILD; no Snapshot/input"
     );
     browser(case, watched).await;

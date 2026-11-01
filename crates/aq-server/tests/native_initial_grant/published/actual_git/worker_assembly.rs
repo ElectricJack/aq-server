@@ -70,6 +70,13 @@ async fn historical_state33_actual_worker_output_reaches_authorized_tail_after_p
     // prefix and uses its existing33 setup. It is not latest-format startup.
     aq_server::test_support::with_state32_store(Box::pin(run_worker(Mode::Output))).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires pinned output-capable worker, periodic ELF, Git and tmux"]
+async fn current_store_actual_worker_output_reaches_authorized_tail_after_physical_stop() {
+    // Use actual current Store startup. Prepare requires this compiled schema
+    // and the terminal capacity owners installed by the ordered migrations.
+    run_worker(Mode::Output).await;
+}
 #[derive(Clone, Copy)]
 enum Mode {
     Legacy,

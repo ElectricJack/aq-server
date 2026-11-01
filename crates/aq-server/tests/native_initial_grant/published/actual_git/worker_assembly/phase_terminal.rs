@@ -64,7 +64,11 @@ pub(super) async fn configure(case: &mut Case) {
             .unwrap();
         tx.commit().await.unwrap();
     } else {
-        assert_eq!(version, "33");
+        let version = version.parse::<u32>().unwrap();
+        if version != 33 {
+            assert_eq!(version, aq_server::STATE_FORMAT_VERSION);
+            assert!(version >= 33);
+        }
     }
 }
 pub(super) async fn verify(case: &Case, root: &std::path::Path, result: &Value) {
