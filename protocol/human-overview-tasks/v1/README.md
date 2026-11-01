@@ -1,0 +1,15 @@
+# Human Overview task contributions, version 1
+
+`GET /api/human/overview/tasks` returns a separate `human-overview-tasks-1` body. This does not change dashboard-read-1 or its frozen schema bytes. Root integration publishes `human.overview.tasks.read` v1 only after the actual route and paired UI are present, for a current Owner with configured Graph Runtime. The route reuses existing protected human Graph authentication, admission and read pool.
+
+Query parameters: optional `project_id` UUID, `project_limit` default 4/max 8, `task_limit` default 16/max 32, and optional `after` project UUID. Selected-project reads cannot also specify `after`. Project paging is keyset over current configured project IDs; `next_after` is a position, not authority or a fixed membership snapshot. Viewer requests are forbidden. Missing selected project is 404; absent Graph Runtime is 503.
+
+Response shape and examples are in schema.json and example.json. Each project contains its exact current saved project binding revision/workspace and one independently sampled Graph task observation. Tasks expose only ID, title, record/content revisions, task lifecycle and updated timestamp. Body, arbitrary metadata, credentials, readiness, execution observation, reviews/results and cost are excluded.
+
+Counts cover Graph's **default visible non-retired, non-deleted task collection**. That view also excludes disputed records under the current Graph API's default filters. `complete_observation` means that one Graph page ended without a continuation; `lower_bound` means more records were reported and each count is at least the observed value. `unknown` means the project source failed and all counts are null. An available empty observation has zero counts; an unavailable observation never does. Active/completed/canceled are Graph task lifecycle facts, not runtime eligibility, a running process, result acceptance or delivery settlement.
+
+Collection coverage is partial if the project page is truncated or any selected project's contribution is incomplete/unavailable. Complete covers the returned project selection as observed, not an atomic global state across Graph and AQ. Source timestamps are per observation. Newly created projects or changing task state can affect later pages; there is no global total or cross-owner transaction claim.
+
+Graph work has a 3-second aggregate budget and at most 750 ms per project, with each upstream response <=1000000 bytes. Failure or timeout preserves other projects' facts and gives a stable source reason. AQ checks the current human role and all selected binding revisions in a final short transaction using one ordered batch query. Authorization/binding drift discards the protected response. No database locks are held across Graph HTTP. The existing human router gate bounds two requests and total handler time to 5 seconds; final reply <=1 MiB.
+
+Static contract example data is explicitly a fixture. Actual integration qualification uses an independent pinned Graph binary and isolated real PostgreSQL databases; no browser mock substitutes for that flow. Generic human Graph errors retain their existing AQ error semantics.

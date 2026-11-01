@@ -1,5 +1,6 @@
 //! Owner-authorized read projection. Graph service credentials never leave AQ.
 mod cursor;
+mod overview;
 use super::{Runtime, contract};
 use crate::{
     AppState,
@@ -62,6 +63,7 @@ impl ReadRuntime {
 pub fn routes(state: &AppState) -> Router<AppState> {
     let runtime = Arc::new(ReadRuntime::new(state));
     Router::new()
+        .route("/api/human/overview/tasks", get(overview::read))
         .route("/api/human/projects/{project}/tasks", get(tasks))
         .route("/api/human/projects/{project}/tasks/{node}", get(task))
         .route(
@@ -156,12 +158,11 @@ async fn access(state: &AppState, r: &ReadRuntime, actor: User, project: Uuid) -
         requested: stamp(state),
     })
 }
-async fn finish(
-    state: &AppState,
-    r: &ReadRuntime,
-    a: Access,
-    data: Value,
-) -> Result<Json<Envelope>> {
+/// Final current-role and binding fence, with one bounded project batch query.
+async fn fence_records(r: &ReadRuntime, actor: &User, records: &[ProjectRecord]) -> Result<()> {
+    if records.len() > 8 {
+        return Err(invalid());
+    }
     let mut tx = r.pool.begin().await.map_err(|_| unavailable())?;
     sqlx::query("SET LOCAL statement_timeout='1500ms'")
         .execute(&mut *tx)
@@ -172,33 +173,48 @@ async fn finish(
         .await
         .map_err(|_| unavailable())?;
     let user = sqlx::query("SELECT role,email,issuer,subject FROM users WHERE id=$1 FOR SHARE")
-        .bind(a.actor.id)
+        .bind(actor.id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| unavailable())?
         .ok_or_else(conflict)?;
     if user.get::<String, _>("role") != "owner"
-        || user.get::<String, _>("email") != a.actor.email
-        || user.get::<Option<String>, _>("issuer") != a.actor.issuer
-        || user.get::<Option<String>, _>("subject") != a.actor.subject
+        || user.get::<String, _>("email") != actor.email
+        || user.get::<Option<String>, _>("issuer") != actor.issuer
+        || user.get::<Option<String>, _>("subject") != actor.subject
     {
         return Err(conflict());
     }
-    let latest = sqlx::query(
-        "SELECT revision,binding FROM project_execution_bindings WHERE project_id=$1 FOR SHARE",
-    )
-    .bind(a.record.binding.project_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| unavailable())?
-    .ok_or_else(conflict)?;
-    if latest.get::<i64, _>("revision") as u64 != a.record.revision
-        || latest.get::<Value, _>("binding")
-            != serde_json::to_value(&a.record.binding).map_err(|_| unavailable())?
-    {
+    let ids: Vec<Uuid> = records
+        .iter()
+        .map(|record| record.binding.project_id)
+        .collect();
+    let rows=sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(&ids).fetch_all(&mut *tx).await.map_err(|_|unavailable())?;
+    if rows.len() != records.len() {
         return Err(conflict());
+    }
+    for latest in rows {
+        let expected = records
+            .iter()
+            .find(|record| record.binding.project_id == latest.get::<Uuid, _>("project_id"))
+            .ok_or_else(conflict)?;
+        if latest.get::<i64, _>("revision") as u64 != expected.revision
+            || latest.get::<Value, _>("binding")
+                != serde_json::to_value(&expected.binding).map_err(|_| unavailable())?
+        {
+            return Err(conflict());
+        }
     }
     tx.commit().await.map_err(|_| unavailable())?;
+    Ok(())
+}
+async fn finish(
+    state: &AppState,
+    r: &ReadRuntime,
+    a: Access,
+    data: Value,
+) -> Result<Json<Envelope>> {
+    fence_records(r, &a.actor, std::slice::from_ref(&a.record)).await?;
     let now = stamp(state);
     if now < a.requested || now - a.requested >= 5000 {
         return Err(unavailable());
