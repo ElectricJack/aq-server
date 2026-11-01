@@ -1,7 +1,7 @@
 # AQ playbook owner foundation
 
 An internal embedding of the exact aq-playbooks source pinned in
-`vendor/aq-playbooks-source-0.1.2.json`. By default, no domain commands or events
+`vendor/aq-playbooks-source-0.1.3.json`. By default, no domain commands or events
 are registered. Explicit AQ adapters remain the embedding owner's responsibility.
 The CLI and synthetic host are not dependencies. There is no automatic driver,
 production registration, worker launch, supervisor, notification dispatcher or
@@ -76,7 +76,7 @@ fanout and run progress remain separate operations and acknowledgements.
 
 ## Confirmed admission recovery (0.1.2)
 
-This package definition consumes the separately versioned exact d3bd349 source
+Host0.1.2 consumed the separately versioned exact d3bd349 source
 archive (runner/Postgres0.1.2, unchanged model/compiler0.1.0). The old host1.1
 source and engine archives remain immutable. Confirmed Unknown→Accepted resumes
 the same blocked invoke before final completion; cancellation and authority
@@ -84,3 +84,28 @@ checks remain separate. No automatic repair of old already-stranded1.1 states or
 online mixed-version namespace adoption is qualified. AQ uses a deliberately new
 namespace/source pin for this runtime; existing origins are not restamped. This
 is a correctness fix, not PB04 performance closure.
+
+
+## Current catalog inspection (0.1.3)
+
+Host0.1.3 consumes exact component source0173673 (runner/Postgres/CLI0.1.3,
+unchanged model/compiler0.1.0). The new additive
+`Owner::inspect_catalog(CatalogQuery, deadline)` sends a private typed read message
+through the existing owner thread and delegates to that Engine's actual storage.
+Existing public Request and Error enum variants and serialization are unchanged;
+`CatalogCallError` preserves typed catalog conflicts/unsupported results without
+adding a legacy wire operation. Reads use the bounded work queue and cannot
+starve stop/cancellation control priority.
+
+A single actual bounded query after Engine acquisition establishes
+`Owner::catalog_supported()`. The result metadata is discarded. The support flag
+never claims cached current contents or later health; bootstrap need not query
+the engine. Later ownership loss, unsupported profiles or corrupt projections
+remain errors, never empty lists or startup-configuration fallbacks. Stop clears
+support before its acknowledgement. No State snapshot fallback is permitted.
+
+Component migration4/writer-format2 fences previously opened legacy writers.
+Retire a prior owner before deployment; do not apply this candidate to an active
+legacy database as a metadata preview. The consumer source qualification and
+no-canonical-change boundary are tracked in
+[API-05 current catalog](../../docs/implementation/API-05-current-catalog.md).

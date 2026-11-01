@@ -94,6 +94,23 @@ async fn actual_current_catalog_tracks_later_install_and_activation_without_rest
     let mut content = original.content.clone();
     content.playbook.purpose =
         "Actual later installation: current metadata, not startup capture".into();
+    content.playbook.id = "n".repeat(128);
+    content.source.header.id = content.playbook.id.clone();
+    let entry = content.playbook.entries.remove("main").unwrap();
+    content.playbook.entries.insert("e".repeat(128), entry);
+    content.source.header.interfaces = BTreeSet::from(["e".repeat(128)]);
+    content.dependencies.insert(
+        "d".repeat(128),
+        CallableDependency {
+            binding: "mail".into(),
+            selection: DependencySelection::Exact,
+            artifact: original.digest.clone(),
+            interfaces: original.content.playbook.entries.clone(),
+            capabilities: original.content.playbook.required_capabilities.clone(),
+            scope: original.content.playbook.scope.clone(),
+            dependencies: BTreeSet::new(),
+        },
+    );
     let later = Artifact::seal(content).unwrap();
     runtime.driver.install(later.clone()).await.unwrap();
     runtime
@@ -163,6 +180,7 @@ async fn actual_current_catalog_tracks_later_install_and_activation_without_rest
             .items
             .is_empty()
     );
+    optional_browser(&s, &runtime, &original.digest, &later.digest).await;
     runtime.shutdown().await.unwrap();
     assert_eq!(
         read(
@@ -267,4 +285,52 @@ async fn current_catalog_refuses_foreign_scope_roles_bad_query_and_unmounted_own
         .await
         .unwrap();
     runtime.shutdown().await.unwrap();
+}
+
+/// Optional actual browser proof on these two installed definitions and current
+/// activation; ordinary tests require no Node, browser or compiled assets.
+async fn optional_browser(
+    s: &Setup,
+    runtime: &aq_server::playbooks::runtime::Runtime,
+    original: &str,
+    later: &str,
+) {
+    let Some(script) = std::env::var_os("AQ_TEST_CURRENT_CATALOG_BROWSER_SCRIPT") else {
+        assert!(std::env::var_os("AQ_TEST_CURRENT_CATALOG_DASHBOARD_DIR").is_none());
+        return;
+    };
+    let bundle = std::env::var_os("AQ_TEST_CURRENT_CATALOG_DASHBOARD_DIR")
+        .expect("explicit compiled current catalog assets required");
+    let assets = aq_server::dashboard_assets::DashboardAssets::load(Path::new(&bundle)).unwrap();
+    let digest = assets.digest().to_owned();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mut state = s.f.state.clone();
+    let mut config = (*state.config).clone();
+    config.server.public_origin = origin.clone();
+    state.config = Arc::new(config);
+    let app = aq_server::build_admin_router_with_dashboard_and_policy_owners(
+        state,
+        Some(runtime.driver.clone()),
+        Some(runtime.reviews.clone()),
+        Arc::new(assets),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut browser = tokio::process::Command::new("node")
+        .arg(script)
+        .env("AQ_LIVE_URL", origin)
+        .env("AQ_LIVE_CATALOG_ORIGINAL", original)
+        .env("AQ_LIVE_CATALOG_LATER", later)
+        .env("AQ_LIVE_BUNDLE_MANIFEST_SHA256", digest)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(45), browser.wait()).await;
+    server.abort();
+    assert!(
+        result
+            .expect("bounded current catalog browser probe")
+            .unwrap()
+            .success()
+    );
 }
