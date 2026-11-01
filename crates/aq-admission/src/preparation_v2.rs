@@ -231,6 +231,10 @@ impl Proposal {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "PreparationV2ResourceHold")]
 pub struct ResourceHold {
+    /// Explicit newly negotiated no-launch phase duration; the original proposal
+    /// remaining time stays historical and is never extended/reinterpreted.
+    #[schemars(range(min = 1, max = 120000))]
+    pub maximum_preparation_ms: u64,
     pub reservation: NoLaunchReservation,
     pub resources: Resources,
     pub source_profile: ArtifactRef,
@@ -251,7 +255,8 @@ impl ResourceHold {
             revision(n)?;
         }
         require(
-            self.resources.slots == 1
+            (1..=p.policy.maximum_preparation_ms).contains(&self.maximum_preparation_ms)
+                && self.resources.slots == 1
                 && self.resources.memory_bytes >= r.memory_bytes
                 && self.resources.cpu_millis >= r.cpu_millis
                 && self.resources.disk_bytes >= self.source_disk_bytes
@@ -373,6 +378,7 @@ impl AcceptedReceipt {
                 && l.issued_at_ms < proposal.expires_at_ms
                 && l.expires_at_ms > l.issued_at_ms
                 && l.expires_at_ms - l.issued_at_ms <= p.policy.maximum_preparation_ms
+                && l.expires_at_ms - l.issued_at_ms <= r.hold.maximum_preparation_ms
                 && l.expires_at_ms <= i64::MAX as u64,
             "timely Accept independent preparation lease",
         )?;
