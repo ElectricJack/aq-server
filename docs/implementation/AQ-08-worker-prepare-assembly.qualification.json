@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "source_revision": "b4114210c7c4bf95987c789ac5b6c481fd3c1206",
+  "daemon_base": "876b60b",
+  "schema_version_under_test": 27,
+  "worker_source": "532ec8cb4418a8181e7a092208f659d9b0ecefd8",
+  "worker_binary_sha256": "b5ae2e3e8b7d2ca8166a30df75e88f40d7999733a96f3040f3e81a707c1f88ee",
+  "git_source": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+  "git_binary_sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+  "actual_assembly_passed": 1,
+  "actual_assembly_ignored": 0,
+  "actual_assembly_duration_seconds": 3.1,
+  "strict_affected_all_feature_clippy": true,
+  "source_inventory": {
+    "path": "docs/implementation/evidence/aq08-worker-assembly-b411421/source-inventory.json",
+    "sha256": "9896fb4058e69b7a2afa827f10cd1111955abcee4e2428c11969e185df4b5465",
+    "bytes": 23060
+  },
+  "logs": [
+    {
+      "path": "docs/implementation/evidence/aq08-worker-assembly-b411421/aq-native-worker-assembly-final-clippy.log",
+      "sha256": "f6fe1ea2fb824bea136eb7a8a84d4a45f71b7c5bd01b84c60e9026d7835a7f21",
+      "bytes": 153
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-worker-assembly-b411421/aq-native-worker-assembly-release-worker.log",
+      "sha256": "5e379fc5ac1d6c8d0482be868bdb16c18e713f546465d3991d0ce4eece759011",
+      "bytes": 3694
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-worker-assembly-b411421/aq-native-worker-assembly-batch-release.log",
+      "sha256": "70ace8c8665f812e8cb01dbbdd1cfc1aec76567e52e257bb9ee1a24cf94f464b",
+      "bytes": 3743
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-worker-assembly-b411421/aq-native-worker-assembly-issued-history.log",
+      "sha256": "414ebe47534d2ddc0ce54a9149c95ce46290cf74a9d003c2e6b6c2968c5277ab",
+      "bytes": 519
+    }
+  ],
+  "limitations": [
+    "Tiny fixture with synthetic runtime/harness/inventory/provider/Graph; actual daemon HTTP/SQL, independent worker process, installed bytes and separate Git owners.",
+    "Earlier same pinned batch worker reached committed Prepare200 but refused grant after local conservative deadline. Passing later run does not remove cold-preparation/time/load gap.",
+    "Earlier negative logs preceded bounded issued-grant diagnostic only; preserve as developmental evidence, not final-source full-suite runs.",
+    "No host, model call, Started, renewal, closure, settlement, physical disk capacity or fleet throughput qualified.",
+    "Final source is schema27; main schema28/renewal union requires independent regression evidence."
+  ]
+}

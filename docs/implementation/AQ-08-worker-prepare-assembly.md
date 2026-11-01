@@ -41,7 +41,7 @@ qualification; its retained run must name the exact worker and Git source/digest
 ## Measured limitation and narrow assembled success
 
 Frozen selection and budget observations live for 2 seconds. Poll/Accept and
-preparation consume that same interval; the last optimized run delivered an
+preparation consume that same interval; the earlier failed optimized run delivered an
 original preparation plan with 1,264 ms remaining. Batching removes avoidable
 journal writes but does not create a new authority phase. In that run all 36
 original inputs, actual private installation, central source download, worker
@@ -65,3 +65,17 @@ claiming practical cold preparation. See the
 [phase proposal](../../../aq-worker/docs/implementation/WRK-08-preparation-phase-separation.md).
 Earlier debug/unbatched release failures remain retained alongside the optimized
 batch result; none is replaced by a later run.
+
+
+## Frozen evidence
+
+Source `b411421` on daemon base `876b60b` (schema27), worker source `532ec8c`
+and Git source `2035654` are pinned in the
+[qualification manifest](AQ-08-worker-prepare-assembly.qualification.json).
+The final actual run passes1 test in3.10seconds, after37.61seconds incremental
+compilation. Affected all-feature strict Clippy and workspace formatting pass.
+Earlier unbatched release refusal and batched Prepare200/refused-delivery remain
+retained separately. The added diagnostic only enriches refusal evidence; no
+clock, permit, fixture input set or protocol was changed to produce the pass.
+The manifest lists exact source and log hashes. This is not evidence for newer
+schema28/renewal source until separately tested after integration.
