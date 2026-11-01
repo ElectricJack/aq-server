@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "status": "qualified_source_actual_router_pending_paired_browser",
+  "source_commit": "55b1dc67ea93aa098377150923dcf1473cd5942f",
+  "base_commit": "01e09b6",
+  "root_wiring_commit": "b070223",
+  "root_original_wiring_commit": "6adc909",
+  "state_format": 36,
+  "checks": [
+    {
+      "name": "default_lib_check",
+      "passed": true,
+      "seconds": 22.72
+    },
+    {
+      "name": "media_config_and_latest36_units",
+      "passed": 4,
+      "seconds": 14.25
+    },
+    {
+      "name": "actual_http_and_owner_backstop",
+      "passed": 19,
+      "seconds": 21.57
+    },
+    {
+      "name": "final_actual_http_caps_headers_full_sha_frame_lifetime_runtime",
+      "passed": 6,
+      "seconds": 7.33
+    },
+    {
+      "name": "retained_labelled_disposable_zero_media_fixture",
+      "passed": 1,
+      "seconds": 0.68
+    },
+    {
+      "name": "strict_affected_clippy",
+      "passed": true,
+      "seconds": 21.55
+    },
+    {
+      "name": "affected_rustfmt_and_git_diff_check",
+      "passed": true
+    }
+  ],
+  "binary": {
+    "path": "/tmp/aq-media-http-qualified/aq-server-55b1dc6",
+    "sha256": "49006758bfcf378f54a24343b6444563c55adf32cc214c0904c29ec3f58b30e8",
+    "source_revision": "55b1dc67ea93aa098377150923dcf1473cd5942f",
+    "default_features": true,
+    "test_support": false,
+    "build_seconds": 66
+  },
+  "environment": {
+    "database": "PostgreSQL17.11 disposable per-test databases",
+    "cargo_jobs": 2,
+    "dev_debug": 0,
+    "incremental": false,
+    "provider_calls": 0,
+    "canonical_database_changes": false
+  },
+  "dependency_delta": "Direct exact http-body=1.1.0 was already resolved in Cargo.lock; no new resolved dependency. Frozen codec/vendor unchanged.",
+  "independent_review": {
+    "status": "accepted",
+    "scope": "API/body/config/runtime and shared auth/CSRF/cache/capability/shutdown wiring",
+    "tests_rerun_by_reviewer": false
+  },
+  "fixtures": {
+    "retained_metadata_path": "/tmp/aq-media-http-demo.json",
+    "metadata_mode": "0600",
+    "initial_media_intents": 0,
+    "conclusion": "AQ disposable media fixture",
+    "provenance": "Synthetic native launch fixture, actual AQ28 SQL result owner; no provider or capture-success claim"
+  },
+  "scope_limits": [
+    "No canonical configuration/migration or production deployment enablement",
+    "Paired actual dashboard/browser qualification remains separate",
+    "Existing recorded_legacy_native_only results only; no worker upload grant",
+    "No uploader UI, arbitrary external URL, original-input download, comments, video or report mutation",
+    "Available listing is descriptor-presence observation; actual content verifies length and SHA"
+  ],
+  "sha256": {
+    "Cargo.lock": "f56ffe11675b0a0e787842dbabd8815315b5fc5a65d15bc382ca51c5c0148f32",
+    "crates/aq-server/Cargo.toml": "1700a2a95c699bdbd72e18093f3027c45b1df40a07856a5f7f441a2023132514",
+    "crates/aq-server/src/config.rs": "f72fc04da3ed24ba6a28d8d9a879e5b4442c56cf0e46f8a4cfd28990d870b43e",
+    "crates/aq-server/src/dashboard_api/service.rs": "89d4691bc5c26bac4321be6c3f309fafc006b57c14d69a76a21822f032a2c6c3",
+    "crates/aq-server/src/lib.rs": "b0d8add81e43c6a795f802d1782e5737f1ea18fd8b9c78ab769906bb489016d8",
+    "crates/aq-server/src/result_media/api.rs": "53b4a470a43be74d8feeba6de78ed8ae60081ca71b0ea129d942787d50e40e28",
+    "crates/aq-server/src/result_media/body.rs": "a482c55e143bbed5e11d5d02e4dc006b3a906c9819995705c8c2a217bc40d31e",
+    "crates/aq-server/src/result_media/cleanup.rs": "08a75077f37e423a1018aa6435783beaa258ee6cd8ca0619cb07b975b6a2d253",
+    "crates/aq-server/src/result_media/config.rs": "4d88197c024d72045ffb21c77997d2a7fba61c0b6a6018f8012a0d95c303b0e7",
+    "crates/aq-server/src/result_media/db.rs": "b27e6f831a26be3cd95efee46a5b6f477ad39d7e8e975981bf71ccdec39421e7",
+    "crates/aq-server/src/result_media/files.rs": "33a85e0298e034b6742d941dc37b26b04e5df4b2af5bc3c34b00bfeed654e4ec",
+    "crates/aq-server/src/result_media/mod.rs": "daf5a8f44bfece0af60caf51020e67c03444c4829ed4bb37b298d0a3f0a1b113",
+    "crates/aq-server/src/result_media/processing.rs": "428a9f04eac4eeef80bfc531a48be183cb9078bd3791e48bd375c3dcdefcd2d4",
+    "crates/aq-server/src/result_media/runtime.rs": "610878fc4f6b1438ef9c1f7a61e6440fd9789cf07db5a32960f1a536f41d4b39",
+    "crates/aq-server/tests/profiled_results/media_http.rs": "acd439344500c187c3de87112708a241031af8fc2c282c8ecf523715d21c3b68"
+  }
+}

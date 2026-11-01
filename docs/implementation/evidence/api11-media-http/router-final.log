@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-result-media-http-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 43.85s
+     Running tests/profiled_results.rs (/tmp/aq-native-union-target/debug/deps/profiled_results-e27377f0af236bdd)
+
+running 6 tests
+test media_http::actual_http_closed_requests_shared_csrf_and_read_only_upload_optin ... ok
+test media_http::actual_http_denied_during_failed_content_io_stays_auth_error_and_foreign_intent_hidden ... ok
+test media_http::actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_are_distinct ... ok
+test media_http::actual_http_reserves_replays_retains_lists_and_stream_frames_hold_all_guards ... ok
+test media_http::actual_http_retained_disposable_report_fixture_has_exact_metadata_and_no_media ... ok
+test media_http::actual_runtime_failed_initial_cleanup_refuses_mountable_success_and_preserves_charge ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 7.33s
+

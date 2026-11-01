@@ -1,5 +1,15 @@
 # API-11 optional human media port
 
+Frozen feature `55b1dc6` on root wiring `b070223` (`6adc909`) passed the actual
+six-case HTTP/router/runtime group in 7.33 seconds, four media/config/migration
+units in 14.25 seconds, and the earlier nineteen-case HTTP/owner backstop in
+21.57 seconds. Strict affected Clippy passed in 21.55 seconds. The default
+binary is stamped with the full feature revision; its SHA and all captured
+outputs are retained in the
+[qualification record](evidence/api11-media-http/qualification.json).
+Independent source review accepted this boundary. Paired dashboard/browser
+acceptance remains a separate gate.
+
 This increment connects the qualified internal media owner to the actual human
 router. It adds no worker upload grant, provider call, uploader UI, external
 service, arbitrary URL fetch, original-input download, or report mutation.
