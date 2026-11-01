@@ -1,7 +1,7 @@
 # API-11 internal storage owner: migration 36 review boundary
 
-Source-only first freeze. No HTTP/config/bootstrap/capability/UI exposure and no
-live database migration. Root reserves 36 after frozen conversation 35. This adds
+Internal owner qualification candidate. No HTTP/config/bootstrap/capability/UI
+exposure and no live database migration. Root reserves 36 after frozen conversation 35. This adds
 new canonical supplemental-media metadata to the existing PostgreSQL database;
 the separate pure component, frozen report transport and execution-input store
 are unchanged.
@@ -22,7 +22,9 @@ and operates only eligible owned files, without borrowing human/worker tokens.
 `0036_result_media_owner.sql` introduces:
 
 - `result_media_storage`: immutable singleton identity and opaque fingerprint
-  of the actual opened root's device/inode/owner. An unconfigured server may have
+  of the actual opened root and lock-marker device/inode/owner. Pinning both
+  prevents a replaced lock inode from starting a second owner while the old
+  physical job still holds its original flock. An unconfigured server may have
   no row; a registered root cannot silently be replaced or deleted.
 - `result_media_budgets`: installation/project byte reservations, physical
   retained charge and monotonic historical intent count. Installation is seeded
@@ -45,12 +47,14 @@ exact report/actor/input/variant linkage. Actual source/receipt proof still come
 from `results::load_locked` and the file owner, not JSON constraints. Trigger
 checks are additional corruption/state barriers, not filesystem attestations.
 
-The startup guard verifies exact enabled trigger target/function/type, required
-columns/constraints/indexes/FKs, required installation budget, and aggregate
+The startup guard verifies exact enabled trigger target/function/type/body,
+identity PK/unique keys and required nullability, critical CHECK expressions,
+named index columns/predicates and FK columns/actions, required installation budget, and aggregate
 intent/counter agreement. Missing/disabled/drifted state is refused without
 repair. Existing 35 readers refuse 36 before changing metadata. Fresh 36 and35→36
 tests preserve the actual conversation identity and check refusal/drift; they
-remain unrun until the parent assigns the SERVER lease.
+qualified against disposable databases only; the final candidate's results are
+recorded separately after its newest destructive vectors pass.
 
 ## Physical ownership and IO state to implement next
 
@@ -80,8 +84,13 @@ allocated file/directory blocks within the reservation. Only confirmed absence
 under a cleanup generation releases it; failure keeps budget and retry state.
 Invalid/rejected uploads can be cleaned once their physical job ends; other
 unfinalized uploads wait for original expiry, retained bytes for retention expiry.
-Preserve receipt/provenance tombstones after deletion. Missing/corrupt bytes are
-never an available image and never permission to modify a retained receipt.
+Preserve receipt/provenance tombstones after deletion. Listing availability is
+a bounded observation of owned regular files and expected lengths, with no
+media body read. It does not attest the current body digest. Probes run on the
+blocking pool after the SQL snapshot commits, then a fresh authorization,
+report-binding and immutable receipt fence runs before return. Content reads
+always check exact bounded byte length and SHA before exposure; missing/corrupt
+bytes never produce an image or permission to modify a retained receipt.
 
 ## Qualification gate before any route
 

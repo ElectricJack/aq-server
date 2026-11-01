@@ -115,6 +115,7 @@ BEGIN
   IF NEW.transition_at_ms<OLD.transition_at_ms OR NEW.processing_attempts<OLD.processing_attempts OR NEW.processing_attempts>OLD.processing_attempts+1 THEN RAISE EXCEPTION 'media history cannot regress'; END IF;
   IF OLD.received_at_ms IS NOT NULL AND NEW.received_at_ms IS DISTINCT FROM OLD.received_at_ms THEN RAISE EXCEPTION 'received media input is immutable'; END IF;
   IF OLD.state IN ('retained','rejected','expired') AND NEW.state<>OLD.state THEN RAISE EXCEPTION 'terminal media state cannot be replayed'; END IF;
+  IF OLD.state='rejected' AND NEW.rejection IS DISTINCT FROM OLD.rejection THEN RAISE EXCEPTION 'terminal media rejection is immutable'; END IF;
   IF OLD.state='received' AND NEW.state='reserved' OR OLD.state='finalizing' AND NEW.state IN ('reserved','received') THEN RAISE EXCEPTION 'media state cannot regress'; END IF;
   IF OLD.cleanup_state='done' AND NEW IS DISTINCT FROM OLD THEN RAISE EXCEPTION 'completed media cleanup is immutable'; END IF;
   IF OLD.cleanup_state='none' AND NEW.cleanup_state NOT IN ('none','running') OR OLD.cleanup_state='running' AND NEW.cleanup_state NOT IN ('running','blocked','done') OR OLD.cleanup_state='blocked' AND NEW.cleanup_state NOT IN ('blocked','running','done') THEN RAISE EXCEPTION 'media cleanup cannot regress'; END IF;
@@ -122,8 +123,15 @@ BEGIN
   IF NEW.lease_id IS NOT NULL AND NEW.lease_id=OLD.lease_id AND NEW.lease_expires_at_ms IS DISTINCT FROM OLD.lease_expires_at_ms THEN RAISE EXCEPTION 'media lease deadline is immutable'; END IF;
   IF NEW.lease_id IS NOT NULL AND OLD.lease_id IS NOT NULL AND NEW.lease_id<>OLD.lease_id AND NEW.transition_at_ms<OLD.lease_expires_at_ms THEN RAISE EXCEPTION 'live media lease cannot be replaced'; END IF;
   IF NEW.processing_attempts>OLD.processing_attempts AND (NEW.state<>'finalizing' OR NEW.lease_id IS NULL OR NEW.lease_id IS NOT DISTINCT FROM OLD.lease_id) THEN RAISE EXCEPTION 'media processing needs a new fenced lease'; END IF;
+  IF NEW.state='finalizing' AND NEW.cleanup_state='none' AND (OLD.state<>'finalizing' OR NEW.lease_id IS DISTINCT FROM OLD.lease_id OR NEW.processing_attempts<>OLD.processing_attempts) THEN
+   IF NEW.lease_id IS NULL OR NEW.lease_id IS NOT DISTINCT FROM OLD.lease_id OR NEW.processing_attempts<>OLD.processing_attempts+1 OR NEW.transition_at_ms>=NEW.upload_expires_at_ms THEN RAISE EXCEPTION 'media finalizing entry needs original-deadline processing lease'; END IF;
+  END IF;
+  IF NEW.state='finalizing' AND NEW.cleanup_state='none' AND NEW.lease_id IS NULL THEN RAISE EXCEPTION 'media finalizing owner lease missing'; END IF;
+  IF NEW.state='retained' AND OLD.state<>'retained' THEN
+   IF OLD.state<>'finalizing' OR OLD.lease_id IS NULL OR OLD.processing_attempts<1 OR OLD.cleanup_state<>'none' OR NEW.cleanup_state<>'none' OR NEW.transition_at_ms>=OLD.lease_expires_at_ms OR NEW.transition_at_ms>=OLD.upload_expires_at_ms OR (convert_from(NEW.receipt_bytes,'UTF8')::JSONB->>'retained_at_ms')::BIGINT IS DISTINCT FROM NEW.transition_at_ms THEN RAISE EXCEPTION 'media retention needs live original processing lease'; END IF;
+  END IF;
   IF NEW.cleanup_state IN ('running','done') AND NEW.cleanup_state<>OLD.cleanup_state THEN
-   IF NEW.transition_at_ms<CASE WHEN OLD.state='retained' THEN OLD.retain_until_ms WHEN OLD.state='rejected' THEN OLD.transition_at_ms ELSE OLD.upload_expires_at_ms END OR NEW.lease_id IS NOT NULL THEN RAISE EXCEPTION 'media cleanup is premature'; END IF;
+   IF NEW.transition_at_ms<(CASE WHEN OLD.state='retained' THEN OLD.retain_until_ms WHEN OLD.state='rejected' THEN OLD.transition_at_ms ELSE OLD.upload_expires_at_ms END) OR NEW.lease_id IS NOT NULL THEN RAISE EXCEPTION 'media cleanup is premature'; END IF;
   END IF;
   IF NEW.reserved_bytes<OLD.reserved_bytes AND NOT (NEW.state='retained' AND OLD.state='finalizing' OR NEW.cleanup_state='done') THEN RAISE EXCEPTION 'media reservation cannot be discarded'; END IF;
   IF NEW.reserved_bytes>OLD.reserved_bytes THEN RAISE EXCEPTION 'media reservation cannot grow'; END IF;

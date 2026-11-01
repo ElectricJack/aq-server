@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
 schemars = "1"
 aq-review-protocol = { path = "../aq-review-protocol", version = "=0.1.0" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.2" }

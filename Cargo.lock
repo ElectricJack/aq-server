@@ -393,6 +393,7 @@ dependencies = [
  "aq-profiles",
  "aq-protocol",
  "aq-release",
+ "aq-result-media",
  "aq-review-protocol",
  "aq-selection",
  "aq-server",

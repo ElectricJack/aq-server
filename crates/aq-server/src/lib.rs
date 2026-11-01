@@ -17,6 +17,7 @@ pub mod profiled_execution;
 pub mod project_bindings;
 pub mod protected_storage;
 pub mod readiness;
+pub mod result_media;
 pub mod reviews;
 pub mod session_access;
 pub mod source_retention;

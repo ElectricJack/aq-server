@@ -77,6 +77,15 @@ async fn missing_disabled_or_wrong_owner_guards_are_refused_without_repair() {
     corrupt("ALTER TABLE result_media_intents DROP COLUMN receipt_bytes CASCADE").await;
     corrupt("DROP TABLE result_media_intents CASCADE").await;
     corrupt("CREATE OR REPLACE FUNCTION guard_result_media_intent() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$").await;
+    corrupt("ALTER TABLE result_media_budgets DROP CONSTRAINT result_media_budget_capacity_check; ALTER TABLE result_media_budgets ADD CONSTRAINT result_media_budget_capacity_check CHECK(TRUE)").await;
+    corrupt("DROP INDEX result_media_actor_lookup; CREATE INDEX result_media_actor_lookup ON result_media_intents(actor_id)").await;
+    corrupt("DROP INDEX result_media_exact_report; CREATE INDEX result_media_exact_report ON result_media_intents(report_id,report_revision,operation_id) WHERE state='rejected'").await;
+    corrupt("ALTER TABLE result_media_intents DROP CONSTRAINT result_media_intents_actor_id_fkey; ALTER TABLE result_media_intents ADD CONSTRAINT result_media_intents_actor_id_fkey FOREIGN KEY(actor_id) REFERENCES users(id) ON DELETE CASCADE").await;
+    corrupt("ALTER TABLE result_media_intents DROP CONSTRAINT result_media_intents_pkey").await;
+    corrupt("ALTER TABLE result_media_intents DROP CONSTRAINT result_media_intents_pkey; ALTER TABLE result_media_intents ADD CONSTRAINT result_media_intents_pkey PRIMARY KEY(operation_id,actor_id)").await;
+    corrupt("ALTER TABLE result_media_budgets DROP CONSTRAINT result_media_budgets_pkey").await;
+    corrupt("ALTER TABLE result_media_storage DROP CONSTRAINT result_media_storage_pkey").await;
+    corrupt("ALTER TABLE result_media_intents ALTER COLUMN storage_id DROP NOT NULL").await;
 }
 #[tokio::test]
 async fn budget_storage_identity_and_history_cannot_be_erased_or_reset() {
