@@ -1,6 +1,8 @@
 # Private PostgreSQL UDS optional-runtime proof
 
-Status: source 371c7b0 reviewed; one actual isolated transport provision and independent inspect now passed. Actual AQ/optional-runtime startup remains a separate reviewed phase.
+Status: source 371c7b0 reviewed; actual isolated transport and the separately
+reviewed inert owner startup/read/restart now passed. Canonical optional runtime
+remains disabled; the isolated AQ process is gracefully stopped.
 This prepares an isolated proof only. Existing canonical AQ/Graph data, binary,
 vault, container on 55432, socket permissions, proxy settings and security policy
 are outside this helper's inputs and remain untouched. No Rust build is needed.
@@ -128,9 +130,17 @@ private PG proof cannot silently change canonical's old cluster/pool pointer.
 
 ## Actual transport checkpoint
 
-The [retained actual proof](evidence/private-uds-transport/README.md) now verifies one cached-image instance with unchanged reviewed policy. Real peer UID/GID 1000, 0700 directory/0600 socket, peer auth and cluster identity passed. Separate private Core/engine DSN metadata agrees; actual AQ and engine clients/runtime have not started. Existing55432/canonical 4188 configuration and optional capability state remain unchanged.
+The [retained transport checkpoint](evidence/private-uds-transport/README.md)
+verified one cached-image instance with unchanged reviewed policy. Real peer
+UID/GID1000,0700 directory/0600 socket, peer auth and cluster identity passed.
+At that checkpoint, separate private Core/engine DSN metadata agreed, and actual
+AQ/engine clients had not started. Existing55432/canonical4188 configuration and
+optional capability state remain unchanged through the later isolated proof.
 
 The [unchanged typed inert artifact export and proposed fresh context](evidence/private-uds-inert-artifact/README.md)
 are now retained separately. Export passed offline without building the server;
-the structural fixture and optional runtime configuration await review and have
-not been applied or launched.
+the reviewed fixture was then applied only in the fresh private database. The
+[separate actual owner/read/restart evidence](evidence/private-uds-inert-runtime/README.md)
+records real Unix clients, retained pins, zero work counts, actual desktop/phone
+reads and final graceful ownership release. The earlier transport/artifact
+checkpoints remain historical evidence of their narrower stages.

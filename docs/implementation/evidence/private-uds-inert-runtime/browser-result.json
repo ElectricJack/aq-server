@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "elapsed_ms": 836,
+  "artifact": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+  "bundle_manifest_sha256": "5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+  "source": "runtime_startup_configuration",
+  "current_catalog": false,
+  "loaded_definitions": 1,
+  "browser_reads": 2,
+  "startup_view_engine_reads": 0,
+  "intentional_runs_view_reads": 1,
+  "mutations": [],
+  "foreign_requests": [],
+  "errors": [],
+  "viewports": [
+    1440,
+    390,
+    320
+  ],
+  "max_name_length": 27,
+  "max_entry_length": 4,
+  "max_dependency_alias_length": 0,
+  "browser_interception": false
+}

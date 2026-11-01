@@ -1,0 +1,91 @@
+{
+  "passed": true,
+  "elapsed_ms": 762,
+  "origin": "http://127.0.0.1:4294",
+  "principal": "97ecbd79-e439-4b3a-a1b3-4337a166253f",
+  "bundle_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+  "viewports": [
+    1440,
+    390,
+    320
+  ],
+  "mutations": [],
+  "foreign": [],
+  "errors": [],
+  "responses": [
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    }
+  ],
+  "browser_interception": false,
+  "scope": "Fresh isolated real UDS Owner; unavailable structural project context; no eligibility or workflow execution claim"
+}

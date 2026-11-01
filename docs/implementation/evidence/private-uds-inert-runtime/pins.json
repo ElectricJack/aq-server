@@ -1,0 +1,33 @@
+{
+  "definitions_browser_probe": {
+    "path": "/tmp/aq-dashboard-actions-ui-v2/scripts/probe-loaded-playbook-definitions.mjs",
+    "sha256": "eb2e81da1f718577526d00b3b6cacd5f3b2e8c0e86fe0eb589a0fc3f07affefa"
+  },
+  "empty_pages_browser_probe": {
+    "path": "/tmp/aq-private-uds-empty-ui-probe.mjs",
+    "sha256": "be9ccbb5524fad33ca619de3f8ce046e129005c45eca200bf62effe2e5adcad6"
+  },
+  "pinned_state35_binary": {
+    "path": "/tmp/aq-dashboard-actions-promotion/aq-server-events",
+    "sha256": "8ad0aad8a1cb156660decdebc0fbbef8e4ea04a0e7c80a84c8921bb0681153ad"
+  },
+  "private_artifact": {
+    "path": "/tmp/aq-private-uds-n8vgb39f/development-inert-artifact.json",
+    "sha256": "eb8aec86aafb41ced748d13acb24fd45bf8b5497653b206f6b4f35b28a8d752f"
+  },
+  "bundle": {
+    "path": "/tmp/aq-dashboard-actions-promotion/dist-events-media",
+    "manifest_sha256": "5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667"
+  },
+  "screenshots": {
+    "loaded-definitions-desktop.png": "38bb7a1db7254e3751c47325b91f5f98b1fb60fdffd91ad0f48edcc89b565405",
+    "runs-390.png": "9dd920dca15a409ba5058888bf723b683ae0c7da2532eeb1d9703d139ce21135",
+    "decisions-1440.png": "35d70acc7915ff8dcd117ace95c8ee850d567562b590aace95ec02f59983d5e6",
+    "decisions-390.png": "44b87595b926ab03105221868afdd3a9a9c8865c35c4d810b6caf712492bea0d",
+    "runs-320.png": "c359a1c85e65797585161a2f8b62a6087b0cb1f6c61999a16d387ad6f26f81c0",
+    "runs-1440.png": "e08666dfe8475a818085553051a425f08ffdbe61147a6e73f11ac2c3e2550f5a",
+    "decisions-320.png": "de58debe4bd534cdf15ff444795b2b2d56f4621482c7bfb004bb04efef21dc00",
+    "loaded-definitions-320.png": "01a6a12cf4f14666d164cc93d62edd08879648e5b6d3d09fe2e252ddde3e8fc5",
+    "loaded-definitions-390.png": "38fa9aa95e6ad301278839fb4ea7da4ffa638892e2941ed27d53de08e3183f26"
+  }
+}

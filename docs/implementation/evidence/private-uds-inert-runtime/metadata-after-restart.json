@@ -1,0 +1,15 @@
+{
+  "users": 1,
+  "projects": 1,
+  "namespaces": 1,
+  "grants": 1,
+  "engine_namespaces": 1,
+  "engine_artifacts": 1,
+  "profile_active": null,
+  "enrolled_nodes": 0,
+  "runtime": {
+    "namespace_id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+    "runtime_revision": 3,
+    "runtime_incarnation": "e0655d02-d9ec-4021-9feb-d2e2d2d5fee3"
+  }
+}
