@@ -170,6 +170,11 @@ pub(super) async fn bootstrap(
             "Session inspection is unavailable for this account",
         ),
         capability(
+            "session.usage.read",
+            mounted.session_usage && a.visibility_complete,
+            "Session usage inspection requires a mounted observation owner and bounded session visibility",
+        ),
+        capability(
             "projects.read",
             a.owner,
             "Project inspection requires an owner account",
@@ -448,6 +453,7 @@ async fn session(
     let mut revisions = vec![];
     let mut task_revision = None;
     let mut lifecycle = None;
+    let mut observation_binding = None;
     if view.kind == Kind::ProfiledV1 {
         // Reuse the existing authorized per-session offer read: receipt PK joins
         // add bounded columns, never another per-row query or an event scan.
@@ -465,6 +471,17 @@ async fn session(
                     == view.launch_manifest_digest.as_ref()
                 && offer.binding.execution_spec_digest.as_str() == view.execution_spec_digest
             {
+                let binding = aq_admission::transport::lifecycle_binding(&offer)
+                    .map_err(|_| Error::Unavailable)?;
+                if binding.project_id != view.project_id
+                    || binding.task_id != view.task_id
+                    || binding.attempt_id != attempt
+                    || binding.attempt_generation != view.attempt.generation
+                    || binding.session != view.session
+                {
+                    return Err(Error::Unavailable);
+                }
+                observation_binding = Some(binding);
                 lifecycle = Some(lifecycle::from_row(&row, &offer.binding)?);
                 profile = Profile {
                     provider: Some(offer.manifest.model.provider.as_str().into()),
@@ -575,6 +592,7 @@ async fn session(
         profile_revisions: revisions,
         permissions: vec!["session.inspect".into()],
         last_activity_at: last_activity,
+        observation_binding,
     })
 }
 pub(super) async fn detail(

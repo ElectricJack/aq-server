@@ -20,6 +20,21 @@
       "observed_at": "1970-01-01T00:16:40.000Z",
       "state": "unknown"
     },
+    "observation_binding": {
+      "attempt_generation": 1,
+      "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+      "lineage_id": "aac06eab-3c76-5a50-830e-720fbe521fd8",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+        "boot_id": "1f64082a-2c00-45eb-ab7c-d0147a3ca441",
+        "kind": "remote",
+        "node_id": "dcf6b4c0-eb69-423d-8077-49f3e06c8ead",
+        "session_id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4"
+      },
+      "task_id": "00000000-0000-0000-0000-000000000003"
+    },
     "permissions": [
       "session.inspect"
     ],

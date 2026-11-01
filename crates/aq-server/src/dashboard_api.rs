@@ -20,6 +20,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Default)]
 pub(crate) struct MountedOwners {
     pub(crate) graph: bool,
+    pub(crate) session_usage: bool,
     pub(crate) results: bool,
     pub(crate) notifications: bool,
     pub(crate) reviews: bool,

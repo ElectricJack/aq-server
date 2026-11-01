@@ -46,3 +46,22 @@ and ACL reads. A warmed one-session fixture sampled five full human detail reads
 at 11.50–13.17 ms (median 12.50 ms). Its receipt/offer join used the three primary-key
 indexes, one row, and 0.167 ms SQL execution. These local shared-host samples are
 not a fleet-scale benchmark or a 500-agent operating envelope.
+
+Session detail optionally includes `observation_binding`, the exact lifecycle
+binding from the already verified and authorized retained profiled offer. Its
+project, task, lineage, attempt, attempt generation, and full session identity
+pin the independently fetched observation usage view. Protocol binding generation
+fields remain JSON integers; the existing summary session identity retains its
+decimal strings. Legacy/missing/null binding means usage cannot be pinned. No
+extra query, usage-derived identity, active-process fact or execution permission
+is introduced. Session list rows do not gain this field.
+
+`session.usage.read@1` advertises the actual mounted human observation usage API
+when current session visibility can be represented within the dashboard bound.
+Each GET `/api/observations/sessions/{attempt_id}/usage` still enforces current
+Owner or exact, unexpired Viewer inspection ACL. The unchanged version 1 body
+and strict schema live in `crates/aq-observation-api/artifacts/usage.schema.json`.
+Revision 0 and null last-recorded time mean no projection; counter unknown values
+must not become zero. Known category subtotals may overlap and remain partial
+when counters are unknown. Costs are unknown/not_reported; session usage does
+not establish provider account quota, invoice cost, or fleet-wide totals.

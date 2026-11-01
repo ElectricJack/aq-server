@@ -274,6 +274,9 @@ pub struct SessionDetail {
     pub profile_revisions: Vec<ProfileRevision>,
     pub permissions: Vec<String>,
     pub last_activity_at: Option<Timestamp>,
+    /// Independently pinned from the authorized retained offer, never usage input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_binding: Option<aq_lifecycle_api::Binding>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

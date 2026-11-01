@@ -13,6 +13,44 @@
       ],
       "type": "string"
     },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "lineage_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity2"
+        },
+        "task_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "task_id",
+        "lineage_id",
+        "attempt_id",
+        "attempt_generation",
+        "session"
+      ],
+      "type": "object"
+    },
     "Bootstrap": {
       "additionalProperties": false,
       "properties": {
@@ -860,6 +898,17 @@
         "observation": {
           "$ref": "#/$defs/ProcessObservation"
         },
+        "observation_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Binding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Independently pinned from the authorized retained offer, never usage input."
+        },
         "permissions": {
           "items": {
             "type": "string"
@@ -989,6 +1038,78 @@
             },
             "generation": {
               "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SessionIdentity2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "remote",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             },
             "kind": {
               "const": "central",

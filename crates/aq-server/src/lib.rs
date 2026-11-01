@@ -200,6 +200,7 @@ fn build_admin_router_with_optional_dashboard(
 ) -> Router {
     let mounted = dashboard_api::MountedOwners {
         graph: true,
+        session_usage: true,
         results: true,
         notifications: true,
         reviews: reviews.is_some(),
