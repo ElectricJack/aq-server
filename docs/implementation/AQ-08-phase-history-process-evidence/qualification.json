@@ -1,0 +1,145 @@
+{
+  "source": {
+    "server": "36e2bba",
+    "worker": "ed21fbe"
+  },
+  "schema": 32,
+  "journal_format": 10,
+  "sources": [
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly.rs",
+      "sha256": "5b4367140014187b36c4b471a3c56caac976d298b5e9bd981973fca9a0c21852",
+      "bytes": 17796
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs",
+      "sha256": "183bc6f9e6b02112f812817495f94bbf504e7e78ce7d60b756bbeb677eb12237",
+      "bytes": 24120
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase_history.rs",
+      "sha256": "1adbb5b8c453b04f8ec7f2b3f2954cf8bac6488141754eca9d71232d5607f8e8",
+      "bytes": 6165
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/phase_terminal/history.rs",
+      "sha256": "8026e428dc81a5952c041d244d65e7c1c645e761df2a6a0cd6e276e68df118c2",
+      "bytes": 5668
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/tmp/aq-phase-history-process-pin/native_initial_grant",
+      "sha256": "d3c107f5ef2cfb5fd72c6fb87d38424e7e25b1971a3ca636f5d3170fdc747c45",
+      "bytes": 93936752
+    },
+    {
+      "path": "/tmp/aq-phase-history-worker-pin/native-prepare-smoke",
+      "sha256": "673cde774bc7e03a563a7503cfa67a2812d967e8bea0b88b5b5b2cd8da60f8a3",
+      "bytes": 11004272
+    },
+    {
+      "path": "/tmp/aq-native-host-pin/aq-session-host",
+      "sha256": "0f6a4cb134982cc62a2e082ee460ab6eb7d7d54701e114befc4ed5819c68b568",
+      "bytes": 5348624
+    },
+    {
+      "path": "/tmp/aq-native-host-pin/aq-native-synthetic-harness",
+      "sha256": "c624ae59154f3623c2b026fb0a1dc34e896263ce1eb6423b541f31c681011e81",
+      "bytes": 16488
+    },
+    {
+      "path": "/usr/bin/tmux",
+      "sha256": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd",
+      "bytes": 1102608
+    },
+    {
+      "path": "/tmp/aq-wrk08-git-pin/aq-git",
+      "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+      "bytes": 45338176
+    },
+    {
+      "path": "/usr/bin/git",
+      "sha256": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+      "bytes": 4066232
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/history.log",
+      "sha256": "1e3ccb27679ed1c4f071b532505645b976a8bf7d728dd877224615c0d806a694",
+      "bytes": 718
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/input-regression.log",
+      "sha256": "d6f2d7e16cae1385ec1e7b37a19111fc0b2718dfa2a0750ce8a9175a820fa313",
+      "bytes": 605
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/physical-regression.log",
+      "sha256": "d8952e807152e0a407bcbc2be400dca60533529288f7acf80a4f487b333e59e5",
+      "bytes": 954
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/server-build.log",
+      "sha256": "60245fdd84162a08f088511ebc0c04000a8d81b5599b649d324a65d8d4530bc6",
+      "bytes": 2806
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/server-clean.log",
+      "sha256": "82e3d1b76285361448e5fb8a3606955a5e6227df880afd4e5bdfb5666b52a39b",
+      "bytes": 91
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/server-clippy.log",
+      "sha256": "b26ab30bf6165fc88d7ab30ff31275ba7cc4fd7d4e65533fc2c573d2e381dfe1",
+      "bytes": 2683
+    },
+    {
+      "path": "docs/implementation/AQ-08-phase-history-process-evidence/server-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "checks": {
+    "history_only_seconds": 5.85,
+    "physical_regression_seconds": 6.44,
+    "input_regression_seconds": 6.94,
+    "strict_clippy_seconds": 30.37,
+    "format": "pass"
+  },
+  "commands": {
+    "binary": "/tmp/aq-phase-history-process-pin/native_initial_grant",
+    "common_arguments": [
+      "--exact",
+      "--ignored",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "tests": [
+      "published::actual_git::worker_assembly::actual_worker_reads_history_after_withheld_first_execution_reply",
+      "published::actual_git::worker_assembly::actual_worker_phase_execution_launches_and_stops_actual_tmux_host",
+      "published::actual_git::worker_assembly::actual_worker_prepares_phase_inputs_after_proposal_expiry"
+    ],
+    "environment": {
+      "DATABASE_URL": "postgres://postgres:test@127.0.0.1:55432/postgres",
+      "RUST_TEST_THREADS": "1",
+      "AQ_TEST_GIT_CANDIDATE": "/tmp/aq-wrk08-git-pin/aq-git",
+      "AQ_TEST_GIT_EXECUTABLE": "/usr/bin/git",
+      "AQ_TEST_NATIVE_WORKER": "/tmp/aq-phase-history-worker-pin/native-prepare-smoke",
+      "AQ_TEST_NATIVE_WORKER_SHA256": "673cde774bc7e03a563a7503cfa67a2812d967e8bea0b88b5b5b2cd8da60f8a3",
+      "AQ_NATIVE_HOST_BINARY": "/tmp/aq-native-host-pin/aq-session-host",
+      "AQ_NATIVE_HOST_SHA256": "0f6a4cb134982cc62a2e082ee460ab6eb7d7d54701e114befc4ed5819c68b568",
+      "AQ_NATIVE_TMUX_BINARY": "/usr/bin/tmux",
+      "AQ_NATIVE_TMUX_SHA256": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd",
+      "AQ_NATIVE_SYNTHETIC_ELF": "/tmp/aq-native-host-pin/aq-native-synthetic-harness",
+      "AQ_NATIVE_SYNTHETIC_SHA256": "c624ae59154f3623c2b026fb0a1dc34e896263ce1eb6423b541f31c681011e81"
+    }
+  },
+  "limitations": [
+    "Test-only route and response-loss injection",
+    "History conveys identity, never live execution permission",
+    "Physical regression uses real Git/tmux and synthetic harness/provider/registry/Graph qualification",
+    "No remote Started/Stopped ACK, renewal, settlement or release"
+  ]
+}
