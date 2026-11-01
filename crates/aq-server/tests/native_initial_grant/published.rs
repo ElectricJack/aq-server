@@ -37,7 +37,10 @@ async fn auth(c: &Prepared) -> AuthenticatedNode {
         .unwrap()
 }
 async fn setup() -> Prepared {
-    let (mut case, offer) = native_offer::published().await;
+    let (case, offer) = native_offer::published().await;
+    setup_from(case, offer).await
+}
+async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
     let accepted = native_offer::acceptance(&case, &offer);
     let plan = native_offer::accept(&case, &accepted).await.original;
     let clock = Arc::new(AtomicI64::new(plan.clock.server_time_ms as i64 + 1));
@@ -540,3 +543,6 @@ async fn mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_l
     assert_eq!(first.versions, retry.versions);
     assert_eq!(first.original.grant.grant_id, retry.original.grant.grant_id);
 }
+
+#[path = "published/actual_git.rs"]
+mod actual_git;
