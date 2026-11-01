@@ -113,8 +113,13 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         phase_stopped["original"]["evidence"]["stop_operation_id"],
         history["intent"]["stopped_operation_id"]
     );
-    assert!(terminal["started"]["receipt"].is_null());
-    assert!(terminal["stopped"]["receipt"].is_null());
+    if result.get("phase_stopped_ack").is_some() {
+        assert_eq!(terminal["started"]["receipt"], result["phase_started_ack"]);
+        assert_eq!(terminal["stopped"]["receipt"], result["phase_stopped_ack"]);
+    } else {
+        assert!(terminal["started"]["receipt"].is_null());
+        assert!(terminal["stopped"]["receipt"].is_null());
+    }
     let directory = root.join("host").join(started.launch_id.to_string());
     assert_eq!(
         std::fs::read(directory.join("fixture-marker")).unwrap(),

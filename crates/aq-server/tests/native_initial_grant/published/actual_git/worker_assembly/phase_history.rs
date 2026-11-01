@@ -1,11 +1,9 @@
-//! Opt-in transport around the actual history owner; no production route mount.
+//! Withheld execution delivery and exact history checks through the worker router.
 use super::*;
 use aq_phase_terminal_protocol as wire;
-use axum::{body::to_bytes, response::IntoResponse};
+use axum::response::IntoResponse;
 use sqlx::Row;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::Semaphore;
-static INGRESS: Semaphore = Semaphore::const_new(2);
 
 pub(super) fn withhold_first_success(routes: axum::Router) -> axum::Router {
     let withheld = Arc::new(AtomicBool::new(false));
@@ -25,61 +23,6 @@ pub(super) fn withhold_first_success(routes: axum::Router) -> axum::Router {
         },
     ))
 }
-pub(super) fn routes(state: aq_server::AppState) -> axum::Router {
-    axum::Router::new()
-        .route("/v1/worker/profiled-v2/history", axum::routing::post(read))
-        .layer(axum::middleware::map_response(
-            |mut response: axum::response::Response| async move {
-                response
-                    .headers_mut()
-                    .insert("aq-phase-terminal-api-version", "1".parse().unwrap());
-                response.headers_mut().insert(
-                    axum::http::header::CACHE_CONTROL,
-                    "no-store".parse().unwrap(),
-                );
-                response
-            },
-        ))
-        .with_state(state)
-}
-async fn read(
-    axum::extract::State(state): axum::extract::State<aq_server::AppState>,
-    request: axum::extract::Request,
-) -> Result<axum::Json<wire::HistoryReceipt>, aq_server::error::AppError> {
-    use aq_server::error::AppError;
-    let _permit = INGRESS
-        .try_acquire()
-        .map_err(|_| AppError::Maintenance("history ingress full".into()))?;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let mut versions = request
-            .headers()
-            .get_all("aq-phase-terminal-api-version")
-            .iter();
-        if versions.next().is_none_or(|v| v != "1")
-            || versions.next().is_some()
-            || request
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .is_none_or(|v| v != "application/json")
-        {
-            return Err(AppError::BadRequest(
-                "exact phase history version/type required".into(),
-            ));
-        }
-        let auth = aq_server::worker_api::authenticate_context(&state, request.headers()).await?;
-        let body = to_bytes(request.into_body(), wire::MAX_BYTES)
-            .await
-            .map_err(|_| AppError::PayloadTooLarge("phase history body".into()))?;
-        let q = wire::decode_history_request(&body)
-            .map_err(|_| AppError::BadRequest("phase history request".into()))?;
-        aq_server::profiled_execution::phase_terminal::history::read(&state, &auth, &q)
-            .await
-            .map(axum::Json)
-    })
-    .await
-    .map_err(|_| AppError::Maintenance("history ingress timed out".into()))?
-}
-
 pub(super) async fn verify(
     case: &Case,
     result: &Value,

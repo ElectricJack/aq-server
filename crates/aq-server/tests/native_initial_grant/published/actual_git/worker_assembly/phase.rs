@@ -517,7 +517,12 @@ async fn verify_execution(
     );
     assert_eq!(record["record_revision"], result["execution_revision"]);
     if result.get("host_started").is_some() {
-        assert_eq!(snapshot["state"]["revision"], result["host_revision"]);
+        assert_eq!(
+            &snapshot["state"]["revision"],
+            result
+                .get("terminal_ack_revision")
+                .unwrap_or(&result["host_revision"])
+        );
         assert!(
             result["host_revision"].as_u64().unwrap()
                 > result["execution_revision"].as_u64().unwrap()
@@ -546,7 +551,14 @@ async fn verify_execution(
         result["execution_deadline_ns"].as_u64().unwrap()
             <= result["execution_hard_deadline_ns"].as_u64().unwrap()
     );
-    assert_eq!(hot["status"], "granted");
+    assert_eq!(
+        hot["status"],
+        if result.get("phase_stopped_ack").is_some() {
+            "finished"
+        } else {
+            "granted"
+        }
+    );
     assert_eq!(
         hot["grant"],
         serde_json::to_value(&delivery.receipt.grant).unwrap()

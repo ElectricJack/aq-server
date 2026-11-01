@@ -1,4 +1,4 @@
-//! Explicit phase terminal owners. No default worker route activation.
+//! Qualified phase lifecycle reports and history on the authenticated worker listener.
 pub mod closure;
 pub(crate) mod common;
 pub mod history;

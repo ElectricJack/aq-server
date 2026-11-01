@@ -9,6 +9,8 @@ mod phase;
 mod phase_history;
 #[path = "worker_assembly/phase_host.rs"]
 mod phase_host;
+#[path = "worker_assembly/phase_terminal.rs"]
+mod phase_terminal;
 async fn read_frame(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
     let mut line = String::new();
     let n = tokio::time::timeout(
@@ -54,6 +56,11 @@ async fn actual_worker_phase_execution_launches_and_stops_actual_tmux_host() {
 async fn actual_worker_reads_history_after_withheld_first_execution_reply() {
     run_worker(Mode::LostExecutionReply).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires pinned actual worker/Git/tmux and qualified phase terminal owner"]
+async fn actual_worker_reports_real_host_lifecycle_and_persists_daemon_acknowledgments() {
+    run_worker(Mode::Terminal).await;
+}
 #[derive(Clone, Copy)]
 enum Mode {
     Legacy,
@@ -62,18 +69,20 @@ enum Mode {
     Execution,
     Host,
     LostExecutionReply,
+    Terminal,
 }
 async fn run_worker(mode: Mode) {
     let use_phase = !matches!(mode, Mode::Legacy);
     let prepare_phase_inputs = matches!(
         mode,
-        Mode::Inputs | Mode::Execution | Mode::Host | Mode::LostExecutionReply
+        Mode::Inputs | Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal
     );
     let execute_phase = matches!(
         mode,
-        Mode::Execution | Mode::Host | Mode::LostExecutionReply
+        Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal
     );
-    let host = matches!(mode, Mode::Host);
+    let host = matches!(mode, Mode::Host | Mode::Terminal);
+    let terminal = matches!(mode, Mode::Terminal);
     let history_loss = matches!(mode, Mode::LostExecutionReply);
     let mut a = setup_actual_unpublished().await;
     let case = &mut a.case;
@@ -87,6 +96,10 @@ async fn run_worker(mode: Mode) {
             }
             if host {
                 config["synthetic_host"] = phase_host::configuration();
+            }
+            if terminal {
+                phase_terminal::configure(case).await;
+                config["report_terminal"] = json!(true);
             }
         }
         (Some(config), inventory_qualification)
@@ -142,9 +155,6 @@ async fn run_worker(mode: Mode) {
         } else {
             routes
         });
-        if history_loss {
-            app = app.merge(phase_history::routes(case.env.env.state.clone()));
-        }
     }
     let app = app.layer(axum::middleware::from_fn(
         move |request: axum::extract::Request, next: axum::middleware::Next| {
@@ -292,6 +302,9 @@ async fn run_worker(mode: Mode) {
         phase::verify(case, &worker_root, &identity, &result).await;
         if host {
             phase_host::verify(&worker_root, &result);
+            if terminal {
+                phase_terminal::verify(case, &worker_root, &result).await;
+            }
         } else {
             assert!(result.get("host_started").is_none());
         }
