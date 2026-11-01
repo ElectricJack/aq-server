@@ -178,3 +178,30 @@ readiness condition is false before the issuer. A separate ordinary current-stor
 entrypoint must use actual Store startup and already-applied migrations. The
 runtime guard, historical32→33 helper behavior, default timers and Git profile
 remain unchanged. This failure supplies no accepted-output or production proof.
+
+## Sixth attempt: genuine current Store, fresh Prepare conflict
+
+Source `b0020c7` adds a separate `current_store_...` entrypoint using ordinary
+Store startup and recognizes the exact compiled current version in the fixture
+helper, preserving the historical32→33 path. It changes no runtime guard or
+database metadata. Its focused no-run build passed5.01s; test binary SHA256 was
+`8e56447edcaa437917c0ffcbf5981c693d1916888d262cd50c14d06ef5b44e26`.
+
+The single changed static case had21,890,113,536B available and ran10.37s.
+Both accepts and all source hydration reads returned200. The storage503 was
+resolved: execution Prepare entered the current owner and returned409/399ms.
+The exact Prepare conflict category was not yet captured, because the fixture
+middleware observed that extension only on acceptance. Journal revision26 again
+had no issued execution, execution deadline, baseline, Running, Stopped, ECHILD
+or ACK. No matching pinned child process remained afterward, with no stop-proof
+inference. See the [bounded log](current-store-prepare-negative.log) and
+[structured evidence](current-store-prepare-negative.json).
+
+The fresh phase owner reads current project/Graph/source/private-file and locked
+inventory/principal/availability facts for the accepted exact choice. Source
+inspection does not show a call to the original selection's2s clock fence in
+that owner. It would therefore be incorrect to attribute this new409 to the
+expired admission budget without observing the actual branch. The next bounded
+instrumentation observes the existing fixed extension for Prepare as well and
+classifies its two exact static conflict literals. No unchanged retry, source
+restamp, TTL extension, guard weakening or provider call follows from this run.
