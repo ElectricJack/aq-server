@@ -1,0 +1,18 @@
+   Compiling aq-server v0.1.0 (/tmp/aq08-presence-isolation/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.06s
+     Running tests/native_initial_grant.rs (/tmp/aq08-native-producer-target/debug/deps/native_initial_grant-d7a833cd4412f572)
+
+running 4 tests
+test published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress ... ok
+test published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity ... ok
+test published::presence::isolation::independent_same_node_storage_heads_keep_other_present_after_one_missing ... ok
+test published::presence::isolation::occupied_presence_pg_connections_do_not_consume_renewal_pool ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 6.44s
+
+     Running tests/schema31_presence_barrier.rs (/tmp/aq08-native-producer-target/debug/deps/schema31_presence_barrier-71a87a90ffd54dcd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

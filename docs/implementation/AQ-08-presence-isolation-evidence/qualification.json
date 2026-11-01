@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "source_commit": "b71bdf05cbaf62b6f7071183bf107d6a8e70ae6c",
+  "base_commit": "c3f2df1",
+  "passed": 7,
+  "failed": 0,
+  "ignored": 0,
+  "isolated_http_storage_seconds": 6.44,
+  "schema31_seconds": 0.97,
+  "strict_all_target_all_feature_server_clippy": "passed",
+  "format": "passed",
+  "commands": [
+    "CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test native_initial_grant published::presence::isolation --test schema31_presence_barrier",
+    "CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test schema31_presence_barrier",
+    "CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo fmt --package aq-server --check"
+  ],
+  "source_files": [
+    {
+      "path": "crates/aq-server/src/store.rs",
+      "sha256": "8189e8a1dd394a2647a3ebc9e7d8cb84278064b4988a747344ed3e3af18f874d",
+      "bytes": 29178
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/presence.rs",
+      "sha256": "f6ef0f58fbfd625ec292c211496b40818f7c95dfb28f0a7a8877d6b50164dfdb",
+      "bytes": 18298
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/presence/isolation.rs",
+      "sha256": "78e6c7baa99283350a0267746f4df7c19e3a7bbeb49385d81d67dcfb312cc190",
+      "bytes": 14573
+    },
+    {
+      "path": "crates/aq-server/tests/schema31_presence_barrier.rs",
+      "sha256": "494c5cb461ca6df72da71b0377746fcd167fe1d19dcb419abea85989b9f21954",
+      "bytes": 4488
+    },
+    {
+      "path": "docs/implementation/AQ-08-presence-isolation-checkpoint.md",
+      "sha256": "bfb5685e88ba21dde3b98af661675f03049bfe096372e1449a94e506fd5bb9cf",
+      "bytes": 2020
+    },
+    {
+      "path": "docs/implementation/AQ-08-scoped-material-presence-plan.md",
+      "sha256": "1a46156234c5226ba415f888f87f2d5b5068f0e4809c3fcf0f1c114a438bc0e0",
+      "bytes": 10941
+    }
+  ],
+  "logs": [
+    {
+      "path": "isolation-tests.log",
+      "sha256": "b7245c057f9ffba5a23e20f2863787a3aca9de878eefd377e08010b5780c6789",
+      "bytes": 1085
+    },
+    {
+      "path": "schema31-tests.log",
+      "sha256": "0fdb11034b3680dd55c404d1a6bc6f27a800dcdc8bd50dc33123447270f33131",
+      "bytes": 559
+    },
+    {
+      "path": "clippy.log",
+      "sha256": "2b0ee2ec98e45ce34456c2e4435c165704cbd6a0eed001c31c620b37fbaeae7e",
+      "bytes": 2433
+    },
+    {
+      "path": "format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "qualification_boundary": [
+    "A actual server-issued scope, B synthetic non-runnable relational storage scope on same node",
+    "Held request-body barriers and PG connections, not fleet throughput",
+    "No public multi-slot placement, physical worker or provider qualification",
+    "No wire/migration changes; narrow Store validator only production delta"
+  ]
+}

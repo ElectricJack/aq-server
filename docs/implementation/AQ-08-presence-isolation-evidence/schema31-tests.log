@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/schema31_presence_barrier.rs (/tmp/aq08-native-producer-target/debug/deps/schema31_presence_barrier-71a87a90ffd54dcd)
+
+running 3 tests
+test actual30_collision_rolls_back31_and_retry_upgrades ... ok
+test semantic_projection_ignores_order_and_observation_clocks_but_not_bindings ... ok
+test current31_missing_binding_column_or_function_refuses_reopen_without_repair ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
