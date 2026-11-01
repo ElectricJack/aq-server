@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "status": "qualified bounded initial-grant budget and installed-material receipt retention; native runtime/physical installation remains separately qualified",
+  "source_revision": "f5814b5d0a586f46dcf559f22d43af98cd93dfa0",
+  "base_revision": "44ba03d51882bbc2a91acf664d3a417d7be08e03",
+  "recorded_at": "2026-11-01T01:18:54.472954+00:00",
+  "scope": [
+    "initial execution deadline capped by actual pinned remaining lineage elapsed-time policy",
+    "atomic exact installed MaterialReceipt JSONB/operation/digest retention in schema10 table",
+    "exact replay requires actual retained identical receipt; missing or changed rows refuse without reconstruction",
+    "shared Accept/Grant actual retained lease/response/receipt JSONB-text byte quota"
+  ],
+  "qualification": {
+    "native_integration_targets": 7,
+    "native_passed": 57,
+    "native_failed": 0,
+    "native_ignored": 0,
+    "actual_git_cases_included": 2,
+    "continuation_policy_unit_passed": 2,
+    "new_receipt_cases": 4,
+    "new_receipt_cases_are_subset_of_native57": true,
+    "strict_server_all_targets_all_features_clippy": true,
+    "format_and_source_diff": true,
+    "commands": [
+      "DATABASE_URL=<scripts/test-db disposable> AQ_TEST_GIT_CANDIDATE=/home/jkern/dev/aq-git/target/debug/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p aq-server --test native_reconciliation --test native_initial_grant --test native_expiry --test native_offers --test native_preparation --test never_granted --test native_material_issuance --locked --offline -- --include-ignored --test-threads=2",
+      "DATABASE_URL=<scripts/test-db disposable> CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p aq-server --lib continuation_policy --locked --offline",
+      "CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+      "cargo fmt --package aq-server --check",
+      "git diff --check"
+    ],
+    "source_association": "qualified working bytes frozen unchanged in source_revision; inventory independently verified with git show",
+    "environment": "scripts/test-db disposable PostgreSQL; bounded synthetic local graph/material/worker claims; real pinned Git cases"
+  },
+  "git_binary": {
+    "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "producer_revision": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+    "git_executable": "/usr/bin/git",
+    "git_version": "2.43.0"
+  },
+  "receipt_semantics": {
+    "operation_id": "exact original MaterialReceipt.operation_id, not Prepare operation_id",
+    "digest": "canonical aq_selection::digest of exact typed receipt",
+    "private_binding": "aq.private-material/{lease_id}@1 exact original claim",
+    "reader": "initial_grant::load_installed_receipt_locked(tx,&MaterialLease,original_issued_ms)",
+    "historical_clock": "retained original grant clock; no current retrieval-lease expiry inference",
+    "authority": "server verifies retained backing bytes/current owners; worker private-file installation remains a qualified-worker claim, not remotely observed physical proof"
+  },
+  "quota_semantics": {
+    "shared_lock": "aq-native-preparation-quota-v1",
+    "global_bytes": 67108864,
+    "node_bytes": 4194304,
+    "representation": "actual octet_length(JSONB::text), receipts joined to leases for node ownership",
+    "new_receipt": "insert inside grant transaction before shared aggregate; included exactly once; exact existing row adds no second row",
+    "rollback": "late Prepare-ledger trigger failure and quota refusal leave new installation receipt absent with original ungranted state"
+  },
+  "development": [
+    {
+      "log": "development-immutable-profile-refusal.log",
+      "description": "Initial budget fixture tried to change an already published v2 profile identity; immutable owner correctly refused. Fixed fixture publishes a distinct immutable v3 catalog/profile."
+    },
+    {
+      "log": "immutable-profile-v3-preflight.log",
+      "description": "Positive corrected budget preflight passes; also included in final57."
+    }
+  ],
+  "not_qualified": [
+    "native worker physical installation/host launch",
+    "provider or notification delivery",
+    "full native end-to-end process execution",
+    "runtime deployment or production data mutation",
+    "physical database storage size or high-load performance"
+  ],
+  "source_inventory": [
+    {
+      "path": "Cargo.lock",
+      "bytes": 88659,
+      "sha256": "19456997cb1f8959a6d14d6393320a3b33d880a5f562cbdd71e1415bc4b1acfe"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 2574,
+      "sha256": "42bcbada166090885b1fd7c5da190aa8022bcedf1770885b6f0c111e1f1ef6cc"
+    },
+    {
+      "path": "crates/aq-admission/src/lib.rs",
+      "bytes": 18840,
+      "sha256": "53b9246f421e467e644cb585ed6742478f73ef9b07e1b70cd738cbacff315e46"
+    },
+    {
+      "path": "crates/aq-admission/src/transport.rs",
+      "bytes": 35252,
+      "sha256": "4f19c6c0bb728e781fb6349c4a994e28c31b0ff665fe11628c70169df9ceea50"
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "bytes": 2420,
+      "sha256": "0b8c43d24cbcac69bff95ee26514a07a274fa0343071bf8d49ae7d67163d1354"
+    },
+    {
+      "path": "crates/aq-server/migrations/0010_profiled_authority.sql",
+      "bytes": 9204,
+      "sha256": "5c8abce1c3b06db1b90afe728247341442723ef113e6527e1cd0266893326909"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution.rs",
+      "bytes": 797,
+      "sha256": "8abae4f2851f1f99bcf8559b63405e8d03595fd15834218454779cd88916b1d8"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/continuation_policy.rs",
+      "bytes": 6806,
+      "sha256": "6ef3ffd88a688a6c64c1584ad64be5dc63c871d94abd22f76270bbd20bfefd61"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant.rs",
+      "bytes": 26074,
+      "sha256": "6a04e13e6c7f59718158c6fce3cacfe9127eb19bf3dc1ade3ecfdf9fa858c112"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant/graph.rs",
+      "bytes": 4978,
+      "sha256": "4fe4e76b8850ff44e4d1300100860a79ef4d0433cafb40c279c74ba69b7dddb4"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant/history.rs",
+      "bytes": 2179,
+      "sha256": "37d2f25f2f1ce12364bf63994bc37559aafecca33d15abe9dbfa9c990c224ed6"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant/material_receipts.rs",
+      "bytes": 3310,
+      "sha256": "776e59d69e97df356e64771d17f2255f7c8848817ce7a979dee19362d85b53b0"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/material.rs",
+      "bytes": 10415,
+      "sha256": "97453ff8a06edfc45d2f06a02acd82251095d1c1b7535ebce351e8ad68f206e7"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/preparation.rs",
+      "bytes": 19079,
+      "sha256": "70f0a1e720a9c4348357d61d0efd677116a10ee627d9f0d1d76b41ac6c7b8014"
+    },
+    {
+      "path": "crates/aq-server/tests/fixtures/selection-v2.json",
+      "bytes": 20998,
+      "sha256": "e51c800c0ca88bd1dd070429573264a6291488124c268a61f3bff2f22d979ad1"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant.rs",
+      "bytes": 5887,
+      "sha256": "c4877420ea07e623accc272c4091afebc78254f1c6ffc6bfe5c530580f576e29"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published.rs",
+      "bytes": 27476,
+      "sha256": "d56b4ad35522e39b69048f2b78dd02f552948dfa78579fe11e5f94115afd38d4"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git.rs",
+      "bytes": 10398,
+      "sha256": "ecd392e9cb2fbb6e92128777932ee452180db9eebc339a2b35029efbd3303767"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/material_receipts.rs",
+      "bytes": 6278,
+      "sha256": "f6f216bcdf3bc59ce89700ce53f75ceafad5198e6f950fda7639ef3950cffc4a"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/checks.json",
+      "bytes": 522,
+      "sha256": "cea0413b21a8eb81d1604cd16779fc43032b1afaf8d54b9bfe2781c8fc143d73"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/clippy.log",
+      "bytes": 2511,
+      "sha256": "8589f28ff8e817f743d5e50f724520d4c00f8a6e5d0764f863870ec98e246d63"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/development-immutable-profile-refusal.log",
+      "bytes": 5246,
+      "sha256": "5036e08d2783669899e08623c8ae86d16075c24d52d7798fbbc2c491aaa635b0"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/focused-material-receipts.log",
+      "bytes": 838,
+      "sha256": "7453e219c1911b18d8c5843ccfe8360985d77b3ae5349b04c488a59dad81c419"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/immutable-profile-v3-preflight.log",
+      "bytes": 491,
+      "sha256": "615850bc5173dd682b6f6068eb1bca4d60a0efe50439ce75b4281ea201c4d3a2"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/native-suite.log",
+      "bytes": 7002,
+      "sha256": "868eee218768aed86e8846310f69a61754e67fda1a18fab2813259e8409d8604"
+    },
+    {
+      "path": "docs/implementation/evidence/initial-budget-material-f5814b5/policy.log",
+      "bytes": 691,
+      "sha256": "35fcff98a81a1fac9d35f797451280de056c113e64246ab3bfc033f659bd3e28"
+    }
+  ]
+}

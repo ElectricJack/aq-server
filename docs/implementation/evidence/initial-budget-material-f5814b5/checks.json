@@ -1,0 +1,28 @@
+{
+  "source_revision": "f5814b5d0a586f46dcf559f22d43af98cd93dfa0",
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "aq-server",
+        "--check"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "git_binary_sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39"
+}

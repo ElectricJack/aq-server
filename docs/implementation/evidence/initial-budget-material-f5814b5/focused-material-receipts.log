@@ -1,0 +1,12 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.98s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-fe0d68512c7bfa0b)
+
+running 4 tests
+test published::material_receipts::grant_failure_rolls_back_new_installation_receipt_with_authority ... ok
+test published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row ... ok
+test published::material_receipts::retained_installation_json_bytes_refuse_new_grant_under_shared_budget ... ok
+test published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 12.25s
+

@@ -1,0 +1,64 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-native-initial-budget/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq-native-initial-budget/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-native-initial-budget/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-session-api)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-lifecycle-api)
+   Compiling aq-playbooks-runner v0.1.2 (/tmp/aq-native-initial-budget/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.1 (/tmp/aq-native-initial-budget/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.2 (/tmp/aq-native-initial-budget/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.2 (/tmp/aq-native-initial-budget/crates/aq-playbook-host)
+   Compiling aq-notifications v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-notifications)
+   Compiling aq-selection v0.1.2 (/tmp/aq-native-initial-budget/crates/aq-selection)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-observation-api)
+   Compiling aq-accounting v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-accounting)
+   Compiling aq-admission v0.1.8 (/tmp/aq-native-initial-budget/crates/aq-admission)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-observation-admission)
+   Compiling aq-review-protocol v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-native-initial-budget/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-native-initial-budget/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-server)
+   Compiling aq-playbooks-compiler v0.1.0 (/tmp/aq-native-initial-budget/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 49s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-fe0d68512c7bfa0b)
+
+running 17 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation ... ok
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... ok
+test published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time ... FAILED
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+
+failures:
+
+---- published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time stdout ----
+
+thread 'published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time' (168385) panicked at crates/aq-server/tests/native_initial_grant/published.rs:672:5:
+assertion `left == right` failed: {"error":"conflict","message":"immutable profile identity changed"}
+  left: 409
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time
+
+test result: FAILED. 14 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 24.12s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

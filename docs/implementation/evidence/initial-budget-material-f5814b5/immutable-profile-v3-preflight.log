@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-initial-budget/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.86s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-fe0d68512c7bfa0b)
+
+running 1 test
+test published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 1.85s
+
