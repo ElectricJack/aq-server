@@ -145,7 +145,9 @@ async fn access(state: &AppState, r: &ReadRuntime, actor: User, project: Uuid) -
     let mut view = state.clone();
     view.store.pool = r.pool.clone();
     let record = project_bindings::current(&view, project).await?;
-    if record.binding.graph_workspace_id.is_nil() {
+    if record.binding.graph_workspace_id.is_nil()
+        || record.binding.graph_adapter_reference != "aq.graph.configured"
+    {
         return Err(unavailable());
     }
     Ok(Access {

@@ -194,3 +194,60 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
         StatusCode::FORBIDDEN
     );
 }
+#[tokio::test]
+async fn unsupported_saved_graph_adapter_is_refused_before_upstream_io() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let hits = Arc::new(AtomicUsize::new(0));
+    let observed = hits.clone();
+    let graph = axum::Router::new().fallback(move || {
+        let observed = observed.clone();
+        async move {
+            observed.fetch_add(1, Ordering::SeqCst);
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, graph).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("token");
+    std::fs::write(&token, "graph-adapter-scope-fixture-service-token").unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+    f.state.agent_access = Some(Arc::new(
+        Runtime::new(&AgentAccessConfig {
+            graph_url: origin,
+            graph_token_file: token,
+            mutation_actor_id: None,
+            credential_ttl_ms: 120000,
+        })
+        .await
+        .unwrap(),
+    ));
+    let project = f.selection.lineage.project_id;
+    let pool = f.db.pool().await;
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{graph_adapter_reference}','\"other.graph.adapter\"'::jsonb),revision=revision+1 WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let path = format!("/api/human/projects/{project}/tasks");
+    assert_eq!(
+        read(&app, &path, "owner@localhost").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "unsupported adapter must not read configured Graph"
+    );
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{graph_adapter_reference}','\"aq.graph.configured\"'::jsonb),revision=revision+1 WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
+    assert_eq!(
+        read(&app, &path, "owner@localhost").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "supported adapter reaches the configured upstream"
+    );
+    server.abort();
+}
