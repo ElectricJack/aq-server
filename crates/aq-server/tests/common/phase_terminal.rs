@@ -140,3 +140,37 @@ pub fn started_request(f: &Prepared, execution: &ExecutionReceipt) -> wire::Star
     request.validate_for(&c).unwrap();
     request
 }
+
+/// Synthetic stopped/ECHILD observation; actual phase owner and prior journal
+/// relation are retained, with no claim to physical process qualification.
+pub fn stop_request(previous: &wire::StartedRequest) -> wire::StoppedRequest {
+    let started = &previous.original;
+    let mut original: aq_admission::stopped::Request = serde_json::from_str(include_str!(
+        "../../../aq-admission/artifacts/stopped.fixture.json"
+    ))
+    .unwrap();
+    original.evidence.binding = started.binding.clone();
+    original.evidence.guardian_id = started.guardian_id;
+    original.evidence.launch_id = started.launch_id;
+    original.evidence.stop_operation_id = Uuid::new_v4();
+    original.evidence.journal = aq_admission::transport::JournalEvidence::Recorded {
+        revision: started.journal_revision + 1,
+        digest: Digest::of(b"explicit synthetic phase Stopped journal snapshot"),
+    };
+    original.reservation_id = started.reservation_id;
+    original.runtime = started.runtime.clone();
+    original.qualification = started.qualification.clone();
+    original.proof.observation.guardian = started.observation.guardian.clone();
+    original.proof.observation.pane = started.observation.pane.clone();
+    original.evidence.disposition = aq_admission::transport::StopDisposition::Stopped {
+        grant_id: started.grant_id,
+        stop_receipt_digest: original.proof.digest().unwrap(),
+    };
+    original.validate_after(started).unwrap();
+    wire::StoppedRequest {
+        schema_version: 1,
+        negotiation: previous.negotiation.clone(),
+        origin: previous.origin.clone(),
+        original,
+    }
+}
