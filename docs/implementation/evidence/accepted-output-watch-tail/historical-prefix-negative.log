@@ -1,6 +1,6 @@
 
 running 1 test
-test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ... 
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ...
 thread 'published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop' (781717) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs:27:5:
 assertion `left == right` failed
   left: 32

@@ -263,6 +263,10 @@ async fn run_worker(mode: Mode) {
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
     let mut result = read_frame(&mut output).await;
     let watch = if relay_output {
+        if result["phase"] != "terminal_registered" {
+            phase::diagnostics(case).await;
+            phase_output::refusal_diagnostics(&worker_root, &result, &http_statuses);
+        }
         let watched = phase_output::watch(case, &result).await;
         input.write_all(b"{\"continue\":true}\n").await.unwrap();
         result = read_frame(&mut output).await;

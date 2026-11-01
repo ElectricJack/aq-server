@@ -1,0 +1,16 @@
+
+running 1 test
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ...
+thread 'published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop' (786594) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase_output.rs:114:5:
+assertion `left == right` failed
+  left: String("refused")
+ right: "terminal_registered"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 13.29s

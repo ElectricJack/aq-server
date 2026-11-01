@@ -24,7 +24,7 @@ UploadAck, frame delivery or process-cleanup proof follows from this attempt.
 
 The source-only correction makes that helper compare against the existing
 `fixture_store_state_version()` selection:32 within the supported historical
-scope and current35 otherwise. Store startup, schema guards, old fixture setup
+scope and the current crate format otherwise (35 in this source snapshot). Store startup, schema guards, old fixture setup
 and normal current-format expectations remain intact. Compilation and rerun of
 the correction are pending the next explicit shared test lease.
 
@@ -33,3 +33,21 @@ smoke binary pin is `1dc17e7b25b8f572d4e242b97382df07248c454885f1073045b661fb8b1
 Server source candidate `ed0cf8c` changes only the existing process fixture and
 output verifier. No runtime eligibility or production credential-isolation claim
 is made.
+
+
+## Second attempt: worker refusal before Watch
+
+The historical-prefix correction compiled successfully in4.81s. The one additional
+authorized static case ran13.29s, then received the independent worker's
+`phase=refused` frame before `terminal_registered`. No admin Watch, node pull,
+accepted upload or read-tail assertion was reached. The
+[exact second negative record](worker-refusal-negative.log) is retained.
+
+The existing Watch helper printed only the phase mismatch and discarded the
+constant refusal stage. No exact worker cause or physical cleanup result is
+inferred from that incomplete diagnostic. Source-only diagnostics now preserve
+that constant stage through output-error cleanup, and print bounded stage/HTTP
+status/selected history booleans before the assertion. They do not dump raw error
+chains, credentials, material or arbitrary journal content. No timeout, lease,
+DDL, provider route or actual Codex execution is changed. Compilation and another
+actual static attempt require separate lease/authorization; none has run yet.
