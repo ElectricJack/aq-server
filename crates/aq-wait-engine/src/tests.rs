@@ -974,3 +974,50 @@ fn restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_membe
         "a recomputed digest cannot replace retained member source facts"
     );
 }
+fn rehash_outcome(encoded: &mut serde_json::Value) {
+    let mut payload = encoded["outcome"].clone();
+    payload["outcome"].as_object_mut().unwrap().remove("digest");
+    payload.sort_all_objects();
+    encoded["outcome"]["outcome"]["digest"] =
+        serde_json::to_value(wire::Digest::of(&serde_json::to_vec(&payload).unwrap())).unwrap();
+}
+#[test]
+fn restored_unsupported_terminal_kinds_early_deadline_and_cancelled_resume_are_refused() {
+    let (plan, fence) = begin(1, false);
+    let mut source = FakeSource::new();
+    source.unavailable = true;
+    let unavailable = respond(&plan, &fence, &mut source, 1001);
+    let deadline = unavailable
+        .next
+        .step(Input::Drive, &fence, unavailable.next.deadline_ms())
+        .unwrap();
+    for kind in ["source_unavailable", "manual_override"] {
+        let mut encoded = serde_json::to_value(&deadline.next).unwrap();
+        encoded["outcome"]["kind"] = serde_json::json!(kind);
+        if kind == "manual_override" {
+            encoded["outcome"]["unresolved_predicate"] =
+                serde_json::to_value(deadline.next.registration().predicate_digest.clone())
+                    .unwrap();
+        }
+        rehash_outcome(&mut encoded);
+        let wire_outcome: wire::WaitOutcome =
+            serde_json::from_value(encoded["outcome"].clone()).unwrap();
+        wire_outcome
+            .validate_for(&deadline.next.registration().predicate)
+            .unwrap();
+        assert!(
+            Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err(),
+            "wire-valid kind requires an implemented trusted reducer transition"
+        );
+    }
+    let mut encoded = serde_json::to_value(&deadline.next).unwrap();
+    encoded["outcome"]["recorded_at_ms"] = serde_json::json!(1002);
+    rehash_outcome(&mut encoded);
+    assert!(Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+    let mut current = fence.clone();
+    current.task_cancelled = true;
+    let cancelled = plan.next.step(Input::Drive, &current, 1001).unwrap();
+    let mut encoded = serde_json::to_value(&cancelled.next).unwrap();
+    encoded["resume_allowed"] = serde_json::json!(true);
+    assert!(Snapshot::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+}

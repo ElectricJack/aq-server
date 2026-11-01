@@ -658,6 +658,20 @@ impl Snapshot {
                     && outcome.recorded_at_ms >= self.created
                     && outcome.recorded_at_ms <= self.logical_now,
             )?;
+            match outcome.kind {
+                wire::WaitOutcomeKind::Satisfied | wire::WaitOutcomeKind::SourceFailed => {
+                    require(
+                        self.members.iter().all(|m| m.original.is_some())
+                            && outcome.recorded_at_ms < self.deadline,
+                    )?;
+                }
+                wire::WaitOutcomeKind::DeadlineReached => {
+                    require(outcome.recorded_at_ms >= self.deadline)?
+                }
+                wire::WaitOutcomeKind::Cancelled => require(!self.resume_allowed)?,
+                wire::WaitOutcomeKind::SourceUnavailable
+                | wire::WaitOutcomeKind::ManualOverride => return Err(Error::Invalid),
+            }
             require(
                 outcome.members
                     == self
