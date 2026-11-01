@@ -410,3 +410,18 @@ fn v2_decoder_never_falls_back_to_legacy_or_different_schema() {
         assert!(decode(&serde_json::to_vec(&v).unwrap()).is_err());
     }
 }
+
+#[test]
+fn accepted_phase_requires_explicit_new_worker_duration_bound() {
+    let mut c = case();
+    assert_eq!(c.accept.original.reservation_remaining_ms, 500);
+    c.accepted.validate_for(&c.accept, &c.proposal).unwrap();
+    c.accept.hold.maximum_preparation_ms = 1000;
+    c.accepted.lease.hold = c.accept.hold.clone();
+    c.accepted.request_digest = c.accept.digest().unwrap();
+    assert!(c.accepted.validate_for(&c.accept, &c.proposal).is_err());
+    for n in [0, 30001, u64::MAX] {
+        c.accept.hold.maximum_preparation_ms = n;
+        assert!(c.accept.validate_for(&c.proposal).is_err());
+    }
+}

@@ -1944,6 +1944,13 @@
     "PreparationV2ResourceHold": {
       "additionalProperties": false,
       "properties": {
+        "maximum_preparation_ms": {
+          "description": "Explicit newly negotiated no-launch phase duration; the original proposal\nremaining time stays historical and is never extended/reinterpreted.",
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "reservation": {
           "$ref": "#/$defs/NoLaunchReservation"
         },
@@ -1960,6 +1967,7 @@
         }
       },
       "required": [
+        "maximum_preparation_ms",
         "reservation",
         "resources",
         "source_profile",

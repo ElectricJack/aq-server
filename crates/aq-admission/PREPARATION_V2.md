@@ -8,7 +8,9 @@ worker journal, HTTP route or host adapter is activated by this package.
 
 The original proposal and source clocks remain immutable history. Timely Accept
 links an exact operation/request digest and original no-launch resource hold to a
-separate accepted lease. Its maximum lifetime is 120 seconds, further capped by
+separate accepted lease. The worker explicitly requests a new bounded no-launch
+phase duration in ResourceHold.maximum_preparation_ms; legacy proposal remaining
+time remains history and cannot authorize a phase transition by itself. Its maximum lifetime is 120 seconds, further capped by
 policy, original inline artifact retention and material retrieval deadlines.
 Accepted delivery may arrive after proposal expiry; it cannot retime the proposal.
 

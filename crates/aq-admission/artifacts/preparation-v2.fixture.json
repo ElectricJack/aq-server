@@ -1,6 +1,7 @@
 {
   "accept": {
     "hold": {
+      "maximum_preparation_ms": 30000,
       "reservation": {
         "reservation_id": "00000000-0000-0000-0000-000000000064",
         "reservation_journal_digest": "c0d03c1239e01842d73cf046314bdc7de6e5d3280afc9776262f78be40a95bab",
@@ -21,7 +22,7 @@
     },
     "negotiation": {
       "contract": {
-        "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+        "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
         "id": "aq.admission.preparation-v2-contract",
         "version": "1"
       },
@@ -90,7 +91,7 @@
       "reservation_remaining_ms": 500,
       "schema_version": 1
     },
-    "proposal_digest": "009e583daf2830feea1ade1b0770cb3fec9c8e23504576a255a6b7a5642f5169",
+    "proposal_digest": "0f10b2f683f957e84636af78a9feabb953a016590023156333e5635a35fbadc1",
     "schema_version": 2
   },
   "accepted": {
@@ -116,6 +117,7 @@
       "expires_at_ms": 31500,
       "guardian_id": "00000000-0000-0000-0000-000000000067",
       "hold": {
+        "maximum_preparation_ms": 30000,
         "reservation": {
           "reservation_id": "00000000-0000-0000-0000-000000000064",
           "reservation_journal_digest": "c0d03c1239e01842d73cf046314bdc7de6e5d3280afc9776262f78be40a95bab",
@@ -179,12 +181,12 @@
         }
       ],
       "policy_digest": "c86c14af0e7ce6c2dc14987cc9153ee9f6349849e0cedd70baecaa0b08c79fab",
-      "proposal_digest": "009e583daf2830feea1ade1b0770cb3fec9c8e23504576a255a6b7a5642f5169",
+      "proposal_digest": "0f10b2f683f957e84636af78a9feabb953a016590023156333e5635a35fbadc1",
       "revision": 1
     },
     "negotiation": {
       "contract": {
-        "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+        "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
         "id": "aq.admission.preparation-v2-contract",
         "version": "1"
       },
@@ -195,7 +197,7 @@
       ]
     },
     "operation_id": "00000000-0000-0000-0000-000000000066",
-    "request_digest": "1a1a9040060314fcd6813f33e3772f0d2048c9f5fb0092efd34fa88f6e78945d",
+    "request_digest": "216604552e05df0c031bb24657234edfd33e6e3fef81fb5710128bc3d903e833",
     "schema_version": 2,
     "versions": {
       "authority_revision": 2,
@@ -215,9 +217,9 @@
       "nonce": "00000000-0000-0000-0000-0000000003e8"
     },
     "receipt": {
-      "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+      "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
       "confirmation": {
-        "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+        "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
         "checked_at_ms": 30000,
         "confirmation_id": "00000000-0000-0000-0000-000000000320",
         "facts": [
@@ -751,7 +753,7 @@
             }
           }
         ],
-        "prepare_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+        "prepare_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
         "schema_version": 2
       },
       "execution_deadline_ms": 90000,
@@ -779,7 +781,7 @@
       "issued_at_ms": 30000,
       "negotiation": {
         "contract": {
-          "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+          "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
           "id": "aq.admission.preparation-v2-contract",
           "version": "1"
         },
@@ -790,7 +792,7 @@
         ]
       },
       "operation_id": "00000000-0000-0000-0000-0000000002bc",
-      "request_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+      "request_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
       "schema_version": 2,
       "versions": {
         "authority_revision": 3,
@@ -868,7 +870,7 @@
         "full_context_digest": "88fb82c51e0325039e7ed7bf1bda8c84a1d76313179511a013cff28b5ef69d16",
         "negotiation": {
           "contract": {
-            "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+            "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
             "id": "aq.admission.preparation-v2-contract",
             "version": "1"
           },
@@ -1498,6 +1500,7 @@
     {
       "body": {
         "hold": {
+          "maximum_preparation_ms": 30000,
           "reservation": {
             "reservation_id": "00000000-0000-0000-0000-000000000064",
             "reservation_journal_digest": "c0d03c1239e01842d73cf046314bdc7de6e5d3280afc9776262f78be40a95bab",
@@ -1518,7 +1521,7 @@
         },
         "negotiation": {
           "contract": {
-            "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+            "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
             "id": "aq.admission.preparation-v2-contract",
             "version": "1"
           },
@@ -1587,7 +1590,7 @@
           "reservation_remaining_ms": 500,
           "schema_version": 1
         },
-        "proposal_digest": "009e583daf2830feea1ade1b0770cb3fec9c8e23504576a255a6b7a5642f5169",
+        "proposal_digest": "0f10b2f683f957e84636af78a9feabb953a016590023156333e5635a35fbadc1",
         "schema_version": 2
       },
       "kind": "accept"
@@ -1616,6 +1619,7 @@
           "expires_at_ms": 31500,
           "guardian_id": "00000000-0000-0000-0000-000000000067",
           "hold": {
+            "maximum_preparation_ms": 30000,
             "reservation": {
               "reservation_id": "00000000-0000-0000-0000-000000000064",
               "reservation_journal_digest": "c0d03c1239e01842d73cf046314bdc7de6e5d3280afc9776262f78be40a95bab",
@@ -1679,12 +1683,12 @@
             }
           ],
           "policy_digest": "c86c14af0e7ce6c2dc14987cc9153ee9f6349849e0cedd70baecaa0b08c79fab",
-          "proposal_digest": "009e583daf2830feea1ade1b0770cb3fec9c8e23504576a255a6b7a5642f5169",
+          "proposal_digest": "0f10b2f683f957e84636af78a9feabb953a016590023156333e5635a35fbadc1",
           "revision": 1
         },
         "negotiation": {
           "contract": {
-            "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+            "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
             "id": "aq.admission.preparation-v2-contract",
             "version": "1"
           },
@@ -1695,7 +1699,7 @@
           ]
         },
         "operation_id": "00000000-0000-0000-0000-000000000066",
-        "request_digest": "1a1a9040060314fcd6813f33e3772f0d2048c9f5fb0092efd34fa88f6e78945d",
+        "request_digest": "216604552e05df0c031bb24657234edfd33e6e3fef81fb5710128bc3d903e833",
         "schema_version": 2,
         "versions": {
           "authority_revision": 2,
@@ -1707,11 +1711,11 @@
     },
     {
       "body": {
-        "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+        "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
         "expected_preparation_revision": 1,
         "negotiation": {
           "contract": {
-            "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+            "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
             "id": "aq.admission.preparation-v2-contract",
             "version": "1"
           },
@@ -1911,7 +1915,7 @@
     },
     {
       "body": {
-        "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+        "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
         "checked_at_ms": 30000,
         "confirmation_id": "00000000-0000-0000-0000-000000000320",
         "facts": [
@@ -2445,16 +2449,16 @@
             }
           }
         ],
-        "prepare_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+        "prepare_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
         "schema_version": 2
       },
       "kind": "confirmation"
     },
     {
       "body": {
-        "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+        "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
         "confirmation": {
-          "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
           "checked_at_ms": 30000,
           "confirmation_id": "00000000-0000-0000-0000-000000000320",
           "facts": [
@@ -2988,7 +2992,7 @@
               }
             }
           ],
-          "prepare_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+          "prepare_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
           "schema_version": 2
         },
         "execution_deadline_ms": 90000,
@@ -3016,7 +3020,7 @@
         "issued_at_ms": 30000,
         "negotiation": {
           "contract": {
-            "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+            "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
             "id": "aq.admission.preparation-v2-contract",
             "version": "1"
           },
@@ -3027,7 +3031,7 @@
           ]
         },
         "operation_id": "00000000-0000-0000-0000-0000000002bc",
-        "request_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+        "request_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
         "schema_version": 2,
         "versions": {
           "authority_revision": 3,
@@ -3048,9 +3052,9 @@
           "nonce": "00000000-0000-0000-0000-0000000003e8"
         },
         "receipt": {
-          "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
           "confirmation": {
-            "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+            "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
             "checked_at_ms": 30000,
             "confirmation_id": "00000000-0000-0000-0000-000000000320",
             "facts": [
@@ -3584,7 +3588,7 @@
                 }
               }
             ],
-            "prepare_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+            "prepare_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
             "schema_version": 2
           },
           "execution_deadline_ms": 90000,
@@ -3612,7 +3616,7 @@
           "issued_at_ms": 30000,
           "negotiation": {
             "contract": {
-              "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+              "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
               "id": "aq.admission.preparation-v2-contract",
               "version": "1"
             },
@@ -3623,7 +3627,7 @@
             ]
           },
           "operation_id": "00000000-0000-0000-0000-0000000002bc",
-          "request_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+          "request_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
           "schema_version": 2,
           "versions": {
             "authority_revision": 3,
@@ -3637,9 +3641,9 @@
     }
   ],
   "execution": {
-    "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+    "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
     "confirmation": {
-      "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+      "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
       "checked_at_ms": 30000,
       "confirmation_id": "00000000-0000-0000-0000-000000000320",
       "facts": [
@@ -4173,7 +4177,7 @@
           }
         }
       ],
-      "prepare_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+      "prepare_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
       "schema_version": 2
     },
     "execution_deadline_ms": 90000,
@@ -4201,7 +4205,7 @@
     "issued_at_ms": 30000,
     "negotiation": {
       "contract": {
-        "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+        "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
         "id": "aq.admission.preparation-v2-contract",
         "version": "1"
       },
@@ -4212,7 +4216,7 @@
       ]
     },
     "operation_id": "00000000-0000-0000-0000-0000000002bc",
-    "request_digest": "20dfbee9c55a5d2c2f9ed1a35c66fe57f780a2db83f58c10659cf2b8f388ce77",
+    "request_digest": "927e9ae842bd959a2014b0eb2a176613fb0db4a8e81450d447f97a498fbfb9b1",
     "schema_version": 2,
     "versions": {
       "authority_revision": 3,
@@ -4221,11 +4225,11 @@
     }
   },
   "prepare": {
-    "accepted_receipt_digest": "2459e751d837bf46675760b9fe0d1fb5344787b912acff74fcd99f9866bdce33",
+    "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
     "expected_preparation_revision": 1,
     "negotiation": {
       "contract": {
-        "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+        "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
         "id": "aq.admission.preparation-v2-contract",
         "version": "1"
       },
@@ -4487,7 +4491,7 @@
     "full_context_digest": "88fb82c51e0325039e7ed7bf1bda8c84a1d76313179511a013cff28b5ef69d16",
     "negotiation": {
       "contract": {
-        "digest": "82d9e8f553e390dc878adbc2c85cb7c67f4587d7cc5f6535f49b45293ef33f2e",
+        "digest": "ff60400da09f3de166b7931bc386c89218cb76a6c9e5276dff37c5fce28ca3e5",
         "id": "aq.admission.preparation-v2-contract",
         "version": "1"
       },
