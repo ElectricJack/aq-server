@@ -33,6 +33,22 @@ async fn actual32_open_owner_history_survives_registered33_upgrade() {
 async fn current33_missing_mandatory_objects_refuses_reopen_without_repair() {
     for (remove, absent) in [
         (
+            "DROP FUNCTION profiled_phase_unqualified_result_guard() CASCADE",
+            "SELECT to_regprocedure('profiled_phase_unqualified_result_guard()') IS NULL",
+        ),
+        (
+            "ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_phase_unqualified_result_guard",
+            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_unqualified_result_guard' AND tgrelid='profiled_result_reports'::regclass AND tgenabled='D')",
+        ),
+        (
+            "ALTER TABLE profiled_verified_releases DISABLE TRIGGER profiled_phase_unqualified_release_guard",
+            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_unqualified_release_guard' AND tgrelid='profiled_verified_releases'::regclass AND tgenabled='D')",
+        ),
+        (
+            "ALTER TABLE profiled_started_receipts DISABLE TRIGGER profiled_phase_terminal_origin_guard",
+            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_terminal_origin_guard' AND tgrelid='profiled_started_receipts'::regclass AND tgenabled='D')",
+        ),
+        (
             "ALTER TABLE profiled_launch_closures DROP COLUMN legacy_origin_operation_id CASCADE",
             "SELECT NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='profiled_launch_closures' AND column_name='legacy_origin_operation_id')",
         ),
