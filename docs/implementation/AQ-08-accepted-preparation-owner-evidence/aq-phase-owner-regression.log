@@ -1,0 +1,121 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-admission v0.1.9 (/tmp/aq-accepted-preparation-owner/crates/aq-admission)
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 24s
+     Running tests/native_accepted_preparation.rs (/tmp/aq-phase-owner-target/debug/deps/native_accepted_preparation-bee3d72b9007997b)
+
+running 11 tests
+test absent_policy_has_no_route_and_invalid_policy_refuses_configuration ... ok
+test changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts ... ok
+test changed_current_project_and_private_bytes_cannot_deliver_inputs ... ok
+test failure_after_actual_material_insert_rolls_back_entire_admission ... ok
+test legacy_and_v2_accept_share_one_actual_owner_and_material_scope ... ok
+test mixed_candidate_schema_is_corruption_not_older_profile ... ok
+test mounted_v2_routes_require_machine_auth_negotiation_and_physical_nonce ... ok
+test observed_node_wait_charges_expiry_before_any_new_accept_commit ... ok
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... ok
+test real_timed_accept_retains_independent_lease_and_exact_replay ... ok
+test shared_bytes_quota_rolls_back_new_accept_but_never_forgets_exact_replay ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.04s
+
+     Running tests/native_initial_grant.rs (/tmp/aq-phase-owner-target/debug/deps/native_initial_grant-1904c9301f88acce)
+
+running 32 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::worker_assembly::actual_worker_downloads_installs_hydrates_and_prepares_against_real_daemon ... ignored, requires explicit pinned native worker smoke binary and actual aq-git/Git
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation ... ok
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... ok
+test published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time ... ok
+test published::material_receipts::grant_failure_rolls_back_new_installation_receipt_with_authority ... ok
+test published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row ... ok
+test published::material_receipts::retained_installation_json_bytes_refuse_new_grant_under_shared_budget ... ok
+test published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused ... ok
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+test published::renewal::changed_private_material_and_revoked_agent_scope_cannot_extend_a_permit ... ok
+test published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority ... ok
+test published::renewal::expired_server_permit_cannot_be_resurrected_by_fresh_observations ... ok
+test published::renewal::missing_actual_installation_receipt_cannot_be_reconstructed_from_preparation ... ok
+test published::renewal::newer_unavailable_inventory_cannot_be_rewritten_by_original_installation ... ok
+test published::renewal::original_cold_inventory_actual_installation_can_renew_without_retiming_originals ... ok
+test published::renewal::races::changed_task_cas_and_content_refuse_without_reusing_admission_observation ... ok
+test published::renewal::races::delayed_actual_started_keeps_physical_checkpoint_separate_from_latest_renew_counter ... ok
+test published::renewal::races::observed_final_quota_wait_crossing_old_expiry_rolls_back_extension_and_receipt ... ok
+test published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed ... ok
+
+test result: ok. 29 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 44.96s
+
+     Running tests/native_material_issuance.rs (/tmp/aq-phase-owner-target/debug/deps/native_material_issuance-1b4ce754c3428fe0)
+
+running 1 test
+test selected_account_node_and_current_private_bytes_are_required ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/native_preparation.rs (/tmp/aq-phase-owner-target/debug/deps/native_preparation-858e7f3d1fa36028)
+
+running 11 tests
+test accept_missing_nonce_unknown_and_duplicate_fields_and_body_bound_are_typed_failures ... ok
+test actual_original_plan_lease_mapping_reserved_journal_and_exact_replay_without_grant ... ok
+test changed_private_file_never_admits_lease_or_reservation_journal ... ok
+test concurrent_exact_accept_can_reconcile_original_receipt_without_duplicate_leases ... ok
+test credential_rotation_during_actual_git_io_never_admits_preparation ... ok
+test expiry_after_observed_node_lock_wait_never_commits_preparation ... ok
+test incoming_preparation_bytes_cannot_overshoot_retained_storage_limit ... ok
+test extra_known_worker_capabilities_and_missing_durable_journal_never_qualify_preparation ... ok
+test issued_grant_cannot_be_discounted_as_an_owned_ungranted_reservation ... ok
+test journal_storage_failure_rolls_back_lease_mapping_hot_and_receipt_atomically ... ok
+test mounted_accept_and_actual_private_material_fetch_keep_preparation_separate_from_grant ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.39s
+
+     Running tests/native_reconciliation.rs (/tmp/aq-phase-owner-target/debug/deps/native_reconciliation-2695ce3f1f130b2e)
+
+running 7 tests
+test actual_started_and_stopped_receipts_remain_readable_after_launch_configuration_retires ... ok
+test actual_publication_and_preparation_are_read_without_adopting_input_journal ... ok
+test credential_rotation_during_observed_node_lock_wait_refuses_old_authentication ... ok
+test expired_snapshot_does_not_close_and_actual_never_granted_receipt_is_required ... ok
+test explicit_scope_owner_refusals_and_cursor_progress_do_not_leak_other_bindings ... ok
+test mounted_contract_requires_current_auth_exact_nonce_and_bounded_strict_body ... ok
+test unsupported_history_advances_cursor_without_synthesizing_missing_receipts ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.63s
+
+     Running tests/native_source.rs (/tmp/aq-phase-owner-target/debug/deps/native_source-07cc04bfddf98d38)
+
+running 6 tests
+test actual_source_owner_retains_typed_bytes_without_relabeling_context_proposal ... ok
+test credential_rotation_during_git_io_refuses_already_authenticated_read ... ok
+test offer_expiry_during_git_io_refuses_preflight_authority ... ok
+test current_auth_source_status_and_exact_chunks_are_bounded_without_grant_or_receipt_side_effect ... ok
+test version_range_unknown_fields_auth_and_symlink_fail_with_bounded_typed_errors ... ok
+test preparing_and_granted_source_reads_use_original_plan_and_current_authority ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+
+     Running tests/never_granted.rs (/tmp/aq-phase-owner-target/debug/deps/never_granted-522ef5b335b90c40)
+
+running 7 tests
+test contradictory_effects_are_never_absence_proofs ... ok
+test missing_or_unsupported_empty_material_plan_is_unknown_not_fake_preparation_authority ... ok
+test offline_expired_offer_closes_without_guardian_and_preserves_history_budget_and_replay ... ok
+test observed_node_lock_race_issued_authority_wins_and_closure_cannot_erase_it ... ok
+test preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_closes ... ok
+test repeated_unissued_offers_keep_lineage_generation_and_finite_retry_budget ... ok
+test queued_mail_becomes_stale_but_received_or_unknown_mail_refuses_closure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s
+

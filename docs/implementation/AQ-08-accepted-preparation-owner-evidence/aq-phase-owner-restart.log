@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.62s
+     Running tests/native_accepted_preparation.rs (/tmp/aq-phase-owner-target/debug/deps/native_accepted_preparation-bee3d72b9007997b)
+
+running 1 test
+test reopened_store_and_reloaded_protected_policy_replay_exact_accepted_receipt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 1.54s
+

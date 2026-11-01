@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "source_revision": "940b0611d47f7352340fd2089590f704326b1861",
+  "production_source_revision": "9121809",
+  "test_followup_revision": "940b061",
+  "state_format_version": 28,
+  "migration_030": "candidate manually applied only; unregistered pending ordered029 then030",
+  "qualification": {
+    "phase_tests": 13,
+    "baseline_seven_targets": {
+      "passed": 72,
+      "ignored": 3
+    },
+    "explicit_actual_git": 2,
+    "restart_scope": "new Store pools and fresh AppState/Auth plus actual protected private-registry reload and Definition deserialize; not OS-process restart",
+    "production_code_unchanged_since_seven_target_run": true,
+    "test_only_followup_passed": true
+  },
+  "public_dependency": {
+    "package": "aq-admission",
+    "version": "0.1.9",
+    "source_revision": "b9451cb81972e80acbcc61119bb65592f594b15b",
+    "archive_sha256": "30f4cfca11ff6840eab325026dfea33dd55c23e25099dedb303b52a1ede75b49",
+    "comparison": "workspace package files byte-identical to frozen joint source; this server run uses workspace source, not an extracted server package"
+  },
+  "git": {
+    "executable": "/tmp/aq-wrk08-git-pin/aq-git",
+    "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "producer_revision": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+    "git_executable": "/usr/bin/git",
+    "version": "2.43.0",
+    "scope": "unchanged legacy source/grant regressions only; expired-proposal v2 source owner uses synthetic configured Git peer"
+  },
+  "commands": [
+    "DATABASE_URL=<scripts/test-db disposableURL> CARGO_TARGET_DIR=/tmp/aq-phase-owner-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p aq-server --test native_accepted_preparation --locked --offline -- --test-threads=2",
+    "same environment cargo test -p aq-server --test native_accepted_preparation --test native_preparation --test native_material_issuance --test native_source --test native_initial_grant --test native_reconciliation --test never_granted --locked --offline -- --test-threads=2",
+    "same environment plus AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git cargo test -p aq-server --test native_initial_grant published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export --locked --offline -- --exact --ignored --test-threads=2",
+    "same Git environment cargo test -p aq-server --test native_initial_grant published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation --locked --offline -- --exact --ignored --test-threads=2",
+    "CARGO_TARGET_DIR=/tmp/aq-phase-owner-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings",
+    "cargo fmt --package aq-server --check",
+    "git diff --check",
+    "git diff --exit-code b9451cb -- crates/aq-admission"
+  ],
+  "limitations": [
+    "Default inactive; no production runtime qualification or deployment",
+    "030 ordered chain not qualified; metadata28 plus manual030 candidate only",
+    "Newv2 actual aq-git expired-proposal retrieval remains unqualified; synthetic configured peer explicitly used",
+    "No new execution Grant or worker phase driver; legacy grant rejectsv2 origin",
+    "No phase-aware expiry cleanup/renewal/closure or OS-process restart claim; expiredunknown staysheld",
+    "No provider/Discord/host process calls; PB04 and cold-workload completion not claimed"
+  ],
+  "source_files": [
+    {
+      "path": "Cargo.lock",
+      "bytes": 88659,
+      "sha256": "401c007635de6429e0af9721ee41c8ed20fe2472fd9e70b4c2e7b209f5c65d15"
+    },
+    {
+      "path": "crates/aq-admission/Cargo.toml",
+      "bytes": 522,
+      "sha256": "ee0e77431669f3d3a3ae68416025067aa5e4e24f26a855e33bb499fe33185452"
+    },
+    {
+      "path": "crates/aq-server/Cargo.toml",
+      "bytes": 2420,
+      "sha256": "6b35511647dce1ad7c070e1e8657f99ea5a256a4a5b41362f0d3aeadd0580d70"
+    },
+    {
+      "path": "crates/aq-server/migrations/0030_accepted_preparation_v2.sql",
+      "bytes": 1843,
+      "sha256": "45b8d617a1ffac53094fcb3b5073419a1a7886326ab6337e80dd9f2afc9f6698"
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/resolver.rs",
+      "bytes": 22347,
+      "sha256": "c47c6a508d09671a571939814b8fb32fe020124d9f1e12e28dad1c717f6c4ba1"
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "bytes": 15554,
+      "sha256": "f562031acdf4e247e67d4336fd3bf77f9cf13e9556f71c1114ee290207157a7b"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution.rs",
+      "bytes": 863,
+      "sha256": "6c657c7701615c94c7ec192e3980ce3e9b26d88d68835a108181d55b938850d3"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation.rs",
+      "bytes": 4849,
+      "sha256": "bf1a97ba11c438dd1015c422299d9315734725a9d7ebcc68f998bfc9dc3dcfd0"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/accept.rs",
+      "bytes": 11141,
+      "sha256": "f38c52a354451aa3ba6def7fac8dca157f886a402f6d09ca0ad7b85e3669b974"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/api.rs",
+      "bytes": 1649,
+      "sha256": "b9f65a06bd8a25ad0a43b43629eaa2a4e26b64d900096a0076c51035b6e0f8a5"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/authority.rs",
+      "bytes": 13978,
+      "sha256": "d6e328ff0c06fd9aaf5256dcaafe7002c8b99eaed2d60d70af03c86b0624a6a2"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/policy.rs",
+      "bytes": 4276,
+      "sha256": "b53d0c85705510db2abeb5746896718b0855059d2915e681fd6ad7f73d08b977"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/accepted_preparation/proposal.rs",
+      "bytes": 7563,
+      "sha256": "dfd9dd974c9c1dff7f94eb5b08f692a726e14e93a0e90a2e6808ea33e622a7a1"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/artifact_api.rs",
+      "bytes": 7103,
+      "sha256": "aa960ac4b7741b476e3a35cdee8658310091915eeff2b5cd5e2b1b3388fdb72e"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/config.rs",
+      "bytes": 9087,
+      "sha256": "37c75b1017a3d3172c3b54cbf80f706b878966dd5897c22deed05c5f8279ed63"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/material_api.rs",
+      "bytes": 11815,
+      "sha256": "29b3bfd71cee41215bf5178fe0e0abe8a86df33ae9b9ec9c6ff25650c4133212"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/preparation.rs",
+      "bytes": 19601,
+      "sha256": "01f8b9e38c89f88372905b4fa3230a959fca50b21e9f2add265081cc24b5cf60"
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source_api.rs",
+      "bytes": 13524,
+      "sha256": "f6eca5af514a3357274b93f50610276ff8abd69069c08a7aca4c475a6f018d16"
+    },
+    {
+      "path": "crates/aq-server/tests/native_accepted_preparation.rs",
+      "bytes": 29932,
+      "sha256": "17d59a99d1322708cddaea870b196a0c49893626496a6d2ce4749d4e99a5977c"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-plan.md",
+      "bytes": 5085,
+      "sha256": "a2f969dba1a266d674c46a49de1267507f86720eb40236b78a62f9f73de3eece"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner.md",
+      "bytes": 4284,
+      "sha256": "850a6aac9fc3e0f64c22e15abd108046ec69fe0748ca7b514aa0309e52fbd82a"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-tests7.log",
+      "bytes": 1433,
+      "sha256": "ed48e012f188ee982d4643f173c73e53c9bcf0ab88fa5ac207bd2d6f09f09bb4",
+      "result": "13 actual PostgreSQL/HTTP passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-regression.log",
+      "bytes": 9114,
+      "sha256": "4a1a69f9f3d75fe5c25896f968f6badcd1c320765de4afb1a1f099b423988c54",
+      "result": "72 actual PostgreSQL tests passed;3 declared ignores (actual worker process not run)"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-restart.log",
+      "bytes": 492,
+      "sha256": "be4e368edaa3cf67fbe71d7b3eeba4d8f692cf05bffc87f0f5e15fcb8a3959c7",
+      "result": "focused actual Store close/reopen replay passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-actual-git1.log",
+      "bytes": 409,
+      "sha256": "ce6aa86d0d2f38cd7c4bf3a049be93e279fbbf8a63273c4feb77856ae03d7325",
+      "result": "1 explicit pinned actual Git legacy source/grant case passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-actual-git2.log",
+      "bytes": 407,
+      "sha256": "8a53417adfaf93b32ce63947a926748af0b273f63d41ce1d77dbeb512e296269",
+      "result": "1 explicit pinned actual Git released-source case passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-clippy-final.log",
+      "bytes": 157,
+      "sha256": "d077831ab4b7bfc7550c9cec2892d417bf32802768852214e738d556e1b243a6",
+      "result": "strict server all-target/all-feature lint passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "package format passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-diff.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "diff whitespace passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-public-source-parity.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "exact joint published package source parity passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-tests1.log",
+      "bytes": 10895,
+      "sha256": "d724b702109889921124a1ecb9e95c5f14e41d9a3aae400952d455fc3f536c40",
+      "result": "superseded test import compilation errors"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-tests3.log",
+      "bytes": 1023,
+      "sha256": "551fbd057d6d84b4ab0de4b71795df191624792298c7de4017e6500e7db97acb",
+      "result": "superseded test fixture deadlock: second serial fixture opened before dropping first; intentionally terminated then fixed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-tests5.log",
+      "bytes": 1831,
+      "sha256": "afcf7e5256aca8aa21d5331596d690a12ddf358f8e05c1452872ccd886315bb3",
+      "result": "superseded admin-listener fixture expected404 but omitted existing CSRF headers, got403; fixture corrected"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-clippy1.log",
+      "bytes": 5035,
+      "sha256": "35d10e1445023cb162433e5c480a319fab95692cc0f7f36076372db3478eeb4c",
+      "result": "superseded large enum lint finding"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-owner-evidence/aq-phase-owner-clippy2.log",
+      "bytes": 1249,
+      "sha256": "a82593a816dce3d69d1521febc43d4fa8cd2d92d28de3bc74f51b03f83a5930c",
+      "result": "superseded box constructor compile error"
+    }
+  ]
+}

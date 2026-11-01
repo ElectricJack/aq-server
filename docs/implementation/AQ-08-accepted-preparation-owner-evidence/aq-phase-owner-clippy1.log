@@ -1,0 +1,92 @@
+    Checking const-oid v0.9.6
+    Checking libm v0.2.16
+    Checking digest v0.10.7
+    Checking sha2 v0.10.9
+    Checking aq-session-protocol v0.1.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-session-protocol-0.1.0)
+    Checking num-traits v0.2.19
+    Checking bitflags v2.13.2
+    Checking chrono v0.4.45
+    Checking aq-lifecycle-protocol v0.1.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking num-integer v0.1.47
+    Checking spin v0.9.9
+    Checking lazy_static v1.5.1
+    Checking aq-playbooks-model v0.1.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+    Checking base64ct v1.8.3
+    Checking pem-rfc7468 v0.7.0
+    Checking nix v0.29.0
+    Checking aq-session-api v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-session-api)
+    Checking hmac v0.12.1
+    Checking sqlx-core v0.8.6
+    Checking hkdf v0.12.4
+    Checking aq-playbooks-runner v0.1.2 (/tmp/aq-accepted-preparation-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+    Checking der v0.7.10
+    Checking aq-lifecycle-api v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-lifecycle-api)
+    Checking tower-http v0.6.11
+    Checking num-bigint v0.4.8
+    Checking aq-agent-api v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-agent-api)
+    Checking atoi v2.0.0
+    Checking md-5 v0.10.6
+    Checking sqlx-postgres v0.8.6
+    Checking aq-profiles v0.1.1 (/tmp/aq-accepted-preparation-owner/crates/aq-profiles)
+    Checking simple_asn1 v0.6.4
+    Checking reqwest v0.12.28
+    Checking aq-playbooks-postgres v0.1.2 (/tmp/aq-accepted-preparation-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+    Checking spki v0.7.3
+    Checking sharded-slab v0.1.7
+    Checking aq-terminal-relay-protocol v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-terminal-relay-protocol)
+    Checking tracing-subscriber v0.3.23
+    Checking aq-terminal-relay v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-terminal-relay)
+    Checking aq-release v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-release)
+    Checking jsonwebtoken v9.3.1
+    Checking aq-notifications v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-notifications)
+    Checking pkcs8 v0.10.2
+    Checking aq-playbook-host v0.1.2 (/tmp/aq-accepted-preparation-owner/crates/aq-playbook-host)
+    Checking sqlx v0.8.6
+    Checking aq-selection v0.1.2 (/tmp/aq-accepted-preparation-owner/crates/aq-selection)
+    Checking aq-observation-api v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-observation-api)
+    Checking aq-observation-admission v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-observation-admission)
+    Checking aq-admission v0.1.9 (/tmp/aq-accepted-preparation-owner/crates/aq-admission)
+    Checking aq-accounting v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-accounting)
+    Checking num-iter v0.1.46
+    Checking aq-protocol v0.1.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-protocol-0.1.0)
+    Checking aq-review-protocol v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-review-protocol)
+    Checking aq-worker-protocol v0.2.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-worker-protocol-0.2.0)
+    Checking linux-raw-sys v0.12.1
+    Checking rustix v1.1.6
+    Checking num-bigint-dig v0.8.6
+    Checking pkcs1 v0.7.5
+    Checking signature v2.2.0
+    Checking fastrand v2.5.0
+    Checking tempfile v3.27.0
+    Checking rsa v0.9.10
+    Checking aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Checking aq-playbooks-compiler v0.1.0 (/tmp/aq-accepted-preparation-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+error: large size difference between variants
+   --> crates/aq-server/src/profiled_execution/accepted_preparation/authority.rs:210:1
+    |
+210 | /   pub enum PreparationAuthority {
+211 | | /     Legacy {
+212 | | |         plan: aq_admission::transport::PreparationPlan,
+213 | | |         receipt_digest: aq_admission::Digest,
+214 | | |     },
+    | | |_____- the largest variant contains at least 384 bytes
+215 | | /     AcceptedV2 {
+216 | | |         proposal: Box<Proposal>,
+217 | | |         request: Box<AcceptRequest>,
+218 | | |         receipt: Box<AcceptedReceipt>,
+219 | | |         receipt_digest: aq_admission::Digest,
+220 | | |     },
+    | | |_____- the second-largest variant contains at least 48 bytes
+221 | |   }
+    | |___^ the entire enum is at least 384 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+212 -         plan: aq_admission::transport::PreparationPlan,
+212 +         plan: Box<aq_admission::transport::PreparationPlan>,
+    |
+
+error: could not compile `aq-server` (lib) due to 1 previous error

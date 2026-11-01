@@ -1,0 +1,15 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+     Running tests/native_accepted_preparation.rs (/tmp/aq-phase-owner-target/debug/deps/native_accepted_preparation-bee3d72b9007997b)
+
+running 7 tests
+test absent_policy_has_no_route_and_invalid_policy_refuses_configuration ... ok
+test changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts ... ok
+test mixed_candidate_schema_is_corruption_not_older_profile ... ok
+test observed_node_wait_charges_expiry_before_any_new_accept_commit ... ok
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... ok
+test real_timed_accept_retains_independent_lease_and_exact_replay ... ok
+error: test failed, to rerun pass `-p aq-server --test native_accepted_preparation`
+
+Caused by:
+  process didn't exit successfully: `/tmp/aq-phase-owner-target/debug/deps/native_accepted_preparation-bee3d72b9007997b` (signal: 15, SIGTERM: termination signal)

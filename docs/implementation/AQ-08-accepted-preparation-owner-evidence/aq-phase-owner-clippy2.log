@@ -1,0 +1,17 @@
+    Checking aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+error[E0308]: mismatched types
+   --> crates/aq-server/src/profiled_execution/accepted_preparation/authority.rs:269:42
+    |
+269 |   return Ok(PreparationAuthority::Legacy{plan,receipt_digest:aq_selection::digest(&raw).map_err(|_|AppError::Internal)?})
+    |                                          ^^^^ expected `Box<PreparationPlan>`, found `PreparationPlan`
+    |
+    = note: expected struct `std::boxed::Box<aq_admission::transport::PreparationPlan>`
+               found struct `aq_admission::transport::PreparationPlan`
+    = note: for more on the distinction between the stack and the heap, read https://doc.rust-lang.org/book/ch15-01-box.html, https://doc.rust-lang.org/rust-by-example/std/box.html, and https://doc.rust-lang.org/std/boxed/index.html
+help: store this in the heap by calling `Box::new`
+    |
+269 |   return Ok(PreparationAuthority::Legacy{plan: Box::new(plan),receipt_digest:aq_selection::digest(&raw).map_err(|_|AppError::Internal)?})
+    |                                          +++++++++++++++    +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `aq-server` (lib) due to 1 previous error
