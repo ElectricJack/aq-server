@@ -1,0 +1,28 @@
+{
+  "source_commit": "639f622668b73cc0d5c7327cc1893d4b2c7deda0",
+  "tests": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "actual_git_cases": 2,
+    "test_process_seconds": 24.02
+  },
+  "strict_affected_all_feature_clippy": 0,
+  "workspace_format": 0,
+  "aq_git": {
+    "source": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+    "binary_sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39"
+  },
+  "git": {
+    "version": "git version 2.43.0",
+    "binary_sha256": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201"
+  },
+  "scope": [
+    "Actual local aq-git process, repo sync, checkpoint retention, native publication, scoped ranged source downloads, bundle verification and initial grant/replay.",
+    "Actual transfer retention release denies grant and preserves preparation.",
+    "Real wall clock throughout new cases; no timestamp retiming or widened preparation deadlines.",
+    "Graph, qualified runtime and material installation evidence remain synthetic; no physical worker/model launch.",
+    "Original initial grant only validates original bounded Graph provenance; fresh pre-grant Graph read is a separate pending correctness fix.",
+    "No native worker hydration, release or fleet performance claim."
+  ]
+}

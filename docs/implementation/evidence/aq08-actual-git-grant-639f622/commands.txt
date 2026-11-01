@@ -1,0 +1,4 @@
+DATABASE_URL=<local disposable PostgreSQL> AQ_TEST_GIT_CANDIDATE=/home/jkern/dev/aq-git/target/debug/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test -p aq-server --test native_initial_grant --locked --offline -- --include-ignored --test-threads=1
+CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo clippy -p aq-server --test native_initial_grant --all-features --locked --offline -- -D warnings
+cargo fmt --all -- --check
+All final commands exit0. Preflight only selected2 actualGit cases before bounded download-loop correction; final14 qualifies frozen source.
