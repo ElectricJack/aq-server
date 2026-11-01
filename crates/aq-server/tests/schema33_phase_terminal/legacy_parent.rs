@@ -100,7 +100,7 @@ async fn actual_current33_legacy_closure_retains_parent_against_delete_and_key_u
             .await
             .unwrap();
     assert_eq!(version, aq_server::STATE_FORMAT_VERSION.to_string());
-    assert!(aq_server::STATE_FORMAT_VERSION >= 33);
+    const { assert!(aq_server::STATE_FORMAT_VERSION >= 33) };
     let keys:(Option<Uuid>,Option<Uuid>)=sqlx::query_as("SELECT legacy_origin_operation_id,phase_origin_operation_id FROM profiled_launch_closures WHERE attempt_id=$1").bind(request.binding.attempt_id).fetch_one(pool).await.unwrap();
     assert_eq!(keys, (Some(c.request.operation_id), None));
     for statement in [
