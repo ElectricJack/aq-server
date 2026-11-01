@@ -134,6 +134,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-central-authority"
+version = "0.1.0"
+dependencies = [
+ "aq-session-protocol",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-human-http"
 version = "0.1.0"
 dependencies = [

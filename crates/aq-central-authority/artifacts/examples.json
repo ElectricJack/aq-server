@@ -1,133 +1,709 @@
 {
-  "plan": {
-    "document": "plan",
+  "commit_start_event": {
     "data": {
-      "schema_version": 1,
-      "subject": {
-        "kind": "central_conversation",
-        "actor_id": "00000000-0000-0000-0000-000000000001",
-        "conversation_id": "00000000-0000-0000-0000-000000000002",
-        "conversation_revision": 1,
-        "policy": {
-          "id": "central-supervisor-policy",
-          "version": "1",
-          "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261"
-        }
-      },
-      "session": {
-        "kind": "central",
-        "authority_id": "00000000-0000-0000-0000-000000000003",
-        "session_id": "00000000-0000-0000-0000-000000000004",
-        "generation": 1
-      },
-      "generation": 1,
-      "profiles": {
-        "catalog": {
-          "id": "catalog",
-          "version": "1",
-          "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57"
-        },
-        "agent": {
-          "id": "agent",
-          "version": "1",
-          "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824"
-        },
-        "intelligence": {
-          "id": "intelligence",
-          "version": "1",
-          "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509"
-        },
-        "execution": {
-          "id": "execution",
-          "version": "1",
-          "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e"
-        },
-        "composition": {
-          "id": "composition",
-          "version": "1",
-          "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0"
-        },
-        "selection": {
-          "id": "selection",
-          "version": "1",
-          "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886"
-        },
-        "host_plan": {
-          "id": "host_plan",
-          "version": "1",
-          "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969"
-        },
-        "adapter": {
-          "id": "adapter",
-          "version": "1",
-          "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d"
-        },
-        "environment": {
-          "id": "environment",
-          "version": "1",
-          "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d"
-        },
-        "renderer": {
-          "id": "renderer",
-          "version": "1",
-          "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c"
-        },
-        "startup": {
-          "id": "startup",
-          "version": "1",
-          "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768"
-        }
-      },
-      "batch": {
-        "conversation_id": "00000000-0000-0000-0000-000000000002",
-        "through_cursor": 2,
-        "messages": [
-          {
-            "message_id": "00000000-0000-0000-0000-000000000005",
-            "cursor": 1,
-            "payload_digest": "46313c32691b3bc4baf07c6836e3c0f82c824d55259ff4bc0fd40fca1e65ec41"
+      "dispatch": {
+        "batch_digest": "54b789419bf1574fc7a165c49bfe19cc9b0e14455b6a41a41b506b9e62b89399",
+        "dispatch_id": "00000000-0000-0000-0000-000000000007",
+        "host_operation_id": "00000000-0000-0000-0000-000000000008",
+        "permit": {
+          "binding": {
+            "generation": 1,
+            "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+            "session": {
+              "authority_id": "00000000-0000-0000-0000-000000000003",
+              "generation": 1,
+              "kind": "central",
+              "session_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "subject": {
+              "actor_id": "00000000-0000-0000-0000-000000000001",
+              "conversation_id": "00000000-0000-0000-0000-000000000002",
+              "conversation_revision": 1,
+              "kind": "central_conversation",
+              "policy": {
+                "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+                "id": "central-supervisor-policy",
+                "version": "1"
+              }
+            }
           },
-          {
-            "message_id": "00000000-0000-0000-0000-000000000006",
-            "cursor": 2,
-            "payload_digest": "601b16d08ecfc4b8685dfeed59a6ec9e63a35dd6405427f0c00cd9a8abe8e23e"
-          }
-        ]
+          "expires_boot_ms": 121000,
+          "issued_boot_ms": 1000,
+          "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+          "sequence": 1
+        }
       },
+      "kind": "commit_start",
+      "launch": {
+        "binding": {
+          "generation": 1,
+          "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+          "session": {
+            "authority_id": "00000000-0000-0000-0000-000000000003",
+            "generation": 1,
+            "kind": "central",
+            "session_id": "00000000-0000-0000-0000-000000000004"
+          },
+          "subject": {
+            "actor_id": "00000000-0000-0000-0000-000000000001",
+            "conversation_id": "00000000-0000-0000-0000-000000000002",
+            "conversation_revision": 1,
+            "kind": "central_conversation",
+            "policy": {
+              "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+              "id": "central-supervisor-policy",
+              "version": "1"
+            }
+          }
+        },
+        "intent": {
+          "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+          "id": "host_plan",
+          "version": "1"
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000064"
+      }
+    },
+    "document": "event"
+  },
+  "dispatch": {
+    "data": {
+      "batch_digest": "54b789419bf1574fc7a165c49bfe19cc9b0e14455b6a41a41b506b9e62b89399",
       "dispatch_id": "00000000-0000-0000-0000-000000000007",
       "host_operation_id": "00000000-0000-0000-0000-000000000008",
-      "wall_time_ms": 300000,
-      "max_permit_ms": 120000
-    }
+      "permit": {
+        "binding": {
+          "generation": 1,
+          "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+          "session": {
+            "authority_id": "00000000-0000-0000-0000-000000000003",
+            "generation": 1,
+            "kind": "central",
+            "session_id": "00000000-0000-0000-0000-000000000004"
+          },
+          "subject": {
+            "actor_id": "00000000-0000-0000-0000-000000000001",
+            "conversation_id": "00000000-0000-0000-0000-000000000002",
+            "conversation_revision": 1,
+            "kind": "central_conversation",
+            "policy": {
+              "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+              "id": "central-supervisor-policy",
+              "version": "1"
+            }
+          }
+        },
+        "expires_boot_ms": 121000,
+        "issued_boot_ms": 1000,
+        "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+        "sequence": 1
+      }
+    },
+    "document": "dispatch"
   },
   "permit": {
-    "document": "permit",
     "data": {
       "binding": {
+        "generation": 1,
+        "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+        "session": {
+          "authority_id": "00000000-0000-0000-0000-000000000003",
+          "generation": 1,
+          "kind": "central",
+          "session_id": "00000000-0000-0000-0000-000000000004"
+        },
         "subject": {
-          "kind": "central_conversation",
           "actor_id": "00000000-0000-0000-0000-000000000001",
           "conversation_id": "00000000-0000-0000-0000-000000000002",
           "conversation_revision": 1,
+          "kind": "central_conversation",
           "policy": {
+            "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
             "id": "central-supervisor-policy",
-            "version": "1",
-            "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261"
+            "version": "1"
+          }
+        }
+      },
+      "expires_boot_ms": 121000,
+      "issued_boot_ms": 1000,
+      "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+      "sequence": 1
+    },
+    "document": "permit"
+  },
+  "plan": {
+    "data": {
+      "batch": {
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "messages": [
+          {
+            "cursor": 1,
+            "message_id": "00000000-0000-0000-0000-000000000005",
+            "payload_digest": "46313c32691b3bc4baf07c6836e3c0f82c824d55259ff4bc0fd40fca1e65ec41"
+          },
+          {
+            "cursor": 2,
+            "message_id": "00000000-0000-0000-0000-000000000006",
+            "payload_digest": "601b16d08ecfc4b8685dfeed59a6ec9e63a35dd6405427f0c00cd9a8abe8e23e"
+          }
+        ],
+        "through_cursor": 2
+      },
+      "dispatch_id": "00000000-0000-0000-0000-000000000007",
+      "generation": 1,
+      "host_operation_id": "00000000-0000-0000-0000-000000000008",
+      "max_permit_ms": 120000,
+      "profiles": {
+        "adapter": {
+          "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d",
+          "id": "adapter",
+          "version": "1"
+        },
+        "agent": {
+          "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824",
+          "id": "agent",
+          "version": "1"
+        },
+        "catalog": {
+          "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
+          "id": "catalog",
+          "version": "1"
+        },
+        "composition": {
+          "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0",
+          "id": "composition",
+          "version": "1"
+        },
+        "environment": {
+          "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d",
+          "id": "environment",
+          "version": "1"
+        },
+        "execution": {
+          "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "id": "execution",
+          "version": "1"
+        },
+        "host_plan": {
+          "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+          "id": "host_plan",
+          "version": "1"
+        },
+        "intelligence": {
+          "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509",
+          "id": "intelligence",
+          "version": "1"
+        },
+        "renderer": {
+          "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c",
+          "id": "renderer",
+          "version": "1"
+        },
+        "selection": {
+          "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+          "id": "selection",
+          "version": "1"
+        },
+        "startup": {
+          "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768",
+          "id": "startup",
+          "version": "1"
+        }
+      },
+      "schema_version": 1,
+      "session": {
+        "authority_id": "00000000-0000-0000-0000-000000000003",
+        "generation": 1,
+        "kind": "central",
+        "session_id": "00000000-0000-0000-0000-000000000004"
+      },
+      "subject": {
+        "actor_id": "00000000-0000-0000-0000-000000000001",
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "conversation_revision": 1,
+        "kind": "central_conversation",
+        "policy": {
+          "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+          "id": "central-supervisor-policy",
+          "version": "1"
+        }
+      },
+      "wall_time_ms": 300000
+    },
+    "document": "plan"
+  },
+  "prepared_state": {
+    "data": {
+      "admitted": {
+        "boot_ms": 1000,
+        "machine_boot_id": "00000000-0000-0000-0000-000000000009"
+      },
+      "association": null,
+      "cancellation": null,
+      "dispatch": {
+        "kind": "not_attempted"
+      },
+      "guardian": null,
+      "host_observation": null,
+      "last_clock": {
+        "boot_ms": 1000,
+        "machine_boot_id": "00000000-0000-0000-0000-000000000009"
+      },
+      "launch": null,
+      "original_deadline_boot_ms": 301000,
+      "permit": null,
+      "phase": "prepared",
+      "plan": {
+        "batch": {
+          "conversation_id": "00000000-0000-0000-0000-000000000002",
+          "messages": [
+            {
+              "cursor": 1,
+              "message_id": "00000000-0000-0000-0000-000000000005",
+              "payload_digest": "46313c32691b3bc4baf07c6836e3c0f82c824d55259ff4bc0fd40fca1e65ec41"
+            },
+            {
+              "cursor": 2,
+              "message_id": "00000000-0000-0000-0000-000000000006",
+              "payload_digest": "601b16d08ecfc4b8685dfeed59a6ec9e63a35dd6405427f0c00cd9a8abe8e23e"
+            }
+          ],
+          "through_cursor": 2
+        },
+        "dispatch_id": "00000000-0000-0000-0000-000000000007",
+        "generation": 1,
+        "host_operation_id": "00000000-0000-0000-0000-000000000008",
+        "max_permit_ms": 120000,
+        "profiles": {
+          "adapter": {
+            "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d",
+            "id": "adapter",
+            "version": "1"
+          },
+          "agent": {
+            "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824",
+            "id": "agent",
+            "version": "1"
+          },
+          "catalog": {
+            "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
+            "id": "catalog",
+            "version": "1"
+          },
+          "composition": {
+            "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0",
+            "id": "composition",
+            "version": "1"
+          },
+          "environment": {
+            "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d",
+            "id": "environment",
+            "version": "1"
+          },
+          "execution": {
+            "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+            "id": "execution",
+            "version": "1"
+          },
+          "host_plan": {
+            "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+            "id": "host_plan",
+            "version": "1"
+          },
+          "intelligence": {
+            "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509",
+            "id": "intelligence",
+            "version": "1"
+          },
+          "renderer": {
+            "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c",
+            "id": "renderer",
+            "version": "1"
+          },
+          "selection": {
+            "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+            "id": "selection",
+            "version": "1"
+          },
+          "startup": {
+            "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768",
+            "id": "startup",
+            "version": "1"
           }
         },
+        "schema_version": 1,
         "session": {
-          "kind": "central",
           "authority_id": "00000000-0000-0000-0000-000000000003",
-          "session_id": "00000000-0000-0000-0000-000000000004",
-          "generation": 1
+          "generation": 1,
+          "kind": "central",
+          "session_id": "00000000-0000-0000-0000-000000000004"
         },
-        "generation": 1,
-        "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809"
+        "subject": {
+          "actor_id": "00000000-0000-0000-0000-000000000001",
+          "conversation_id": "00000000-0000-0000-0000-000000000002",
+          "conversation_revision": 1,
+          "kind": "central_conversation",
+          "policy": {
+            "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+            "id": "central-supervisor-policy",
+            "version": "1"
+          }
+        },
+        "wall_time_ms": 300000
       },
-      "machine_boot_id": "00000000-0000-0000-0000-000000000009",
-      "sequence": 1,
-      "issued_boot_ms": 1000,
-      "expires_boot_ms": 121000
-    }
+      "stop": null,
+      "uncertain_report": null
+    },
+    "document": "state"
+  },
+  "start_transition": {
+    "data": {
+      "decision": {
+        "kind": "applied"
+      },
+      "state": {
+        "admitted": {
+          "boot_ms": 1000,
+          "machine_boot_id": "00000000-0000-0000-0000-000000000009"
+        },
+        "association": {
+          "batch_digest": "54b789419bf1574fc7a165c49bfe19cc9b0e14455b6a41a41b506b9e62b89399",
+          "dispatch_id": "00000000-0000-0000-0000-000000000007",
+          "host_operation_id": "00000000-0000-0000-0000-000000000008",
+          "permit": {
+            "binding": {
+              "generation": 1,
+              "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+              "session": {
+                "authority_id": "00000000-0000-0000-0000-000000000003",
+                "generation": 1,
+                "kind": "central",
+                "session_id": "00000000-0000-0000-0000-000000000004"
+              },
+              "subject": {
+                "actor_id": "00000000-0000-0000-0000-000000000001",
+                "conversation_id": "00000000-0000-0000-0000-000000000002",
+                "conversation_revision": 1,
+                "kind": "central_conversation",
+                "policy": {
+                  "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+                  "id": "central-supervisor-policy",
+                  "version": "1"
+                }
+              }
+            },
+            "expires_boot_ms": 121000,
+            "issued_boot_ms": 1000,
+            "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+            "sequence": 1
+          }
+        },
+        "cancellation": null,
+        "dispatch": {
+          "kind": "intent_committed"
+        },
+        "guardian": null,
+        "host_observation": null,
+        "last_clock": {
+          "boot_ms": 1000,
+          "machine_boot_id": "00000000-0000-0000-0000-000000000009"
+        },
+        "launch": {
+          "binding": {
+            "generation": 1,
+            "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+            "session": {
+              "authority_id": "00000000-0000-0000-0000-000000000003",
+              "generation": 1,
+              "kind": "central",
+              "session_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "subject": {
+              "actor_id": "00000000-0000-0000-0000-000000000001",
+              "conversation_id": "00000000-0000-0000-0000-000000000002",
+              "conversation_revision": 1,
+              "kind": "central_conversation",
+              "policy": {
+                "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+                "id": "central-supervisor-policy",
+                "version": "1"
+              }
+            }
+          },
+          "intent": {
+            "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+            "id": "host_plan",
+            "version": "1"
+          },
+          "launch_id": "00000000-0000-0000-0000-000000000064"
+        },
+        "original_deadline_boot_ms": 301000,
+        "permit": {
+          "binding": {
+            "generation": 1,
+            "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809",
+            "session": {
+              "authority_id": "00000000-0000-0000-0000-000000000003",
+              "generation": 1,
+              "kind": "central",
+              "session_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "subject": {
+              "actor_id": "00000000-0000-0000-0000-000000000001",
+              "conversation_id": "00000000-0000-0000-0000-000000000002",
+              "conversation_revision": 1,
+              "kind": "central_conversation",
+              "policy": {
+                "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+                "id": "central-supervisor-policy",
+                "version": "1"
+              }
+            }
+          },
+          "expires_boot_ms": 121000,
+          "issued_boot_ms": 1000,
+          "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+          "sequence": 1
+        },
+        "phase": "start_committed",
+        "plan": {
+          "batch": {
+            "conversation_id": "00000000-0000-0000-0000-000000000002",
+            "messages": [
+              {
+                "cursor": 1,
+                "message_id": "00000000-0000-0000-0000-000000000005",
+                "payload_digest": "46313c32691b3bc4baf07c6836e3c0f82c824d55259ff4bc0fd40fca1e65ec41"
+              },
+              {
+                "cursor": 2,
+                "message_id": "00000000-0000-0000-0000-000000000006",
+                "payload_digest": "601b16d08ecfc4b8685dfeed59a6ec9e63a35dd6405427f0c00cd9a8abe8e23e"
+              }
+            ],
+            "through_cursor": 2
+          },
+          "dispatch_id": "00000000-0000-0000-0000-000000000007",
+          "generation": 1,
+          "host_operation_id": "00000000-0000-0000-0000-000000000008",
+          "max_permit_ms": 120000,
+          "profiles": {
+            "adapter": {
+              "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d",
+              "id": "adapter",
+              "version": "1"
+            },
+            "agent": {
+              "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824",
+              "id": "agent",
+              "version": "1"
+            },
+            "catalog": {
+              "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
+              "id": "catalog",
+              "version": "1"
+            },
+            "composition": {
+              "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0",
+              "id": "composition",
+              "version": "1"
+            },
+            "environment": {
+              "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d",
+              "id": "environment",
+              "version": "1"
+            },
+            "execution": {
+              "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "id": "execution",
+              "version": "1"
+            },
+            "host_plan": {
+              "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+              "id": "host_plan",
+              "version": "1"
+            },
+            "intelligence": {
+              "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509",
+              "id": "intelligence",
+              "version": "1"
+            },
+            "renderer": {
+              "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c",
+              "id": "renderer",
+              "version": "1"
+            },
+            "selection": {
+              "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+              "id": "selection",
+              "version": "1"
+            },
+            "startup": {
+              "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768",
+              "id": "startup",
+              "version": "1"
+            }
+          },
+          "schema_version": 1,
+          "session": {
+            "authority_id": "00000000-0000-0000-0000-000000000003",
+            "generation": 1,
+            "kind": "central",
+            "session_id": "00000000-0000-0000-0000-000000000004"
+          },
+          "subject": {
+            "actor_id": "00000000-0000-0000-0000-000000000001",
+            "conversation_id": "00000000-0000-0000-0000-000000000002",
+            "conversation_revision": 1,
+            "kind": "central_conversation",
+            "policy": {
+              "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+              "id": "central-supervisor-policy",
+              "version": "1"
+            }
+          },
+          "wall_time_ms": 300000
+        },
+        "stop": null,
+        "uncertain_report": null
+      }
+    },
+    "document": "transition"
+  },
+  "successor_history": {
+    "data": {
+      "actor_id": "00000000-0000-0000-0000-000000000001",
+      "conversation_id": "00000000-0000-0000-0000-000000000002",
+      "entries": [
+        {
+          "disposition": {
+            "kind": "no_prior_dispatch"
+          },
+          "message": {
+            "cursor": 3,
+            "message_id": "00000000-0000-0000-0000-000000000069",
+            "payload_digest": "ce7005e3bcf6db9e0a45dd0215a33b556a7508ea1ed3e5fd86f8723fb3be0538"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "disposition": {
+            "kind": "unused"
+          },
+          "operation_id": "00000000-0000-0000-0000-00000000006b"
+        },
+        {
+          "disposition": {
+            "kind": "unused"
+          },
+          "operation_id": "00000000-0000-0000-0000-00000000006c"
+        }
+      ],
+      "schema_version": 1,
+      "source_snapshot": {
+        "digest": "47beca5a040c3c6cdd2c2a3f398b251ee8533fb1fcb38888885fa66eb4a0e3ff",
+        "id": "retained-history-query",
+        "version": "1"
+      },
+      "through_generation": 1
+    },
+    "document": "history"
+  },
+  "successor_plan": {
+    "data": {
+      "batch": {
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "messages": [
+          {
+            "cursor": 3,
+            "message_id": "00000000-0000-0000-0000-000000000069",
+            "payload_digest": "ce7005e3bcf6db9e0a45dd0215a33b556a7508ea1ed3e5fd86f8723fb3be0538"
+          }
+        ],
+        "through_cursor": 3
+      },
+      "dispatch_id": "00000000-0000-0000-0000-00000000006b",
+      "generation": 2,
+      "host_operation_id": "00000000-0000-0000-0000-00000000006c",
+      "max_permit_ms": 120000,
+      "profiles": {
+        "adapter": {
+          "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d",
+          "id": "adapter",
+          "version": "1"
+        },
+        "agent": {
+          "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824",
+          "id": "agent",
+          "version": "1"
+        },
+        "catalog": {
+          "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
+          "id": "catalog",
+          "version": "1"
+        },
+        "composition": {
+          "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0",
+          "id": "composition",
+          "version": "1"
+        },
+        "environment": {
+          "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d",
+          "id": "environment",
+          "version": "1"
+        },
+        "execution": {
+          "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "id": "execution",
+          "version": "1"
+        },
+        "host_plan": {
+          "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969",
+          "id": "host_plan",
+          "version": "1"
+        },
+        "intelligence": {
+          "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509",
+          "id": "intelligence",
+          "version": "1"
+        },
+        "renderer": {
+          "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c",
+          "id": "renderer",
+          "version": "1"
+        },
+        "selection": {
+          "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+          "id": "selection",
+          "version": "1"
+        },
+        "startup": {
+          "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768",
+          "id": "startup",
+          "version": "1"
+        }
+      },
+      "schema_version": 1,
+      "session": {
+        "authority_id": "00000000-0000-0000-0000-000000000003",
+        "generation": 2,
+        "kind": "central",
+        "session_id": "00000000-0000-0000-0000-000000000068"
+      },
+      "subject": {
+        "actor_id": "00000000-0000-0000-0000-000000000001",
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "conversation_revision": 1,
+        "kind": "central_conversation",
+        "policy": {
+          "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261",
+          "id": "central-supervisor-policy",
+          "version": "1"
+        }
+      },
+      "wall_time_ms": 300000
+    },
+    "document": "plan"
   }
 }

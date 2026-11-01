@@ -1,628 +1,1326 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AQ central authority neutral data v1",
-  "oneOf": [
-    {
-      "type": "object",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
       "properties": {
-        "document": {
-          "const": "plan"
+        "digest": {
+          "$ref": "#/$defs/Digest"
         },
-        "data": {
-          "type": "object",
-          "properties": {
-            "schema_version": {
-              "const": 1
-            },
-            "subject": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "const": "central_conversation"
-                },
-                "actor_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "conversation_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "conversation_revision": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "policy": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "kind",
-                "actor_id",
-                "conversation_id",
-                "conversation_revision",
-                "policy"
-              ],
-              "additionalProperties": false
-            },
-            "session": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "const": "central"
-                },
-                "authority_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "session_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "generation": {
-                  "type": "integer",
-                  "minimum": 1
-                }
-              },
-              "required": [
-                "kind",
-                "authority_id",
-                "session_id",
-                "generation"
-              ],
-              "additionalProperties": false
-            },
-            "generation": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "profiles": {
-              "type": "object",
-              "properties": {
-                "catalog": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "agent": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "intelligence": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "composition": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "selection": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "host_plan": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "adapter": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "environment": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "renderer": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                },
-                "startup": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "version",
-                    "digest"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "catalog",
-                "agent",
-                "intelligence",
-                "execution",
-                "composition",
-                "selection",
-                "host_plan",
-                "adapter",
-                "environment",
-                "renderer",
-                "startup"
-              ],
-              "additionalProperties": false
-            },
-            "batch": {
-              "type": "object",
-              "properties": {
-                "conversation_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "through_cursor": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "messages": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": 16,
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "message_id": {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      "cursor": {
-                        "type": "integer",
-                        "minimum": 1
-                      },
-                      "payload_digest": {
-                        "type": "string",
-                        "pattern": "^[0-9a-f]{64}$"
-                      }
-                    },
-                    "required": [
-                      "message_id",
-                      "cursor",
-                      "payload_digest"
-                    ],
-                    "additionalProperties": false
-                  }
-                }
-              },
-              "required": [
-                "conversation_id",
-                "through_cursor",
-                "messages"
-              ],
-              "additionalProperties": false
-            },
-            "dispatch_id": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "host_operation_id": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "wall_time_ms": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 3600000
-            },
-            "max_permit_ms": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 120000
-            }
-          },
-          "required": [
-            "schema_version",
-            "subject",
-            "session",
-            "generation",
-            "profiles",
-            "batch",
-            "dispatch_id",
-            "host_operation_id",
-            "wall_time_ms",
-            "max_permit_ms"
-          ],
-          "additionalProperties": false
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
         }
       },
       "required": [
-        "document",
-        "data"
+        "id",
+        "version",
+        "digest"
       ],
-      "additionalProperties": false
+      "type": "object"
     },
-    {
-      "type": "object",
+    "CancelReason": {
+      "enum": [
+        "operator",
+        "authority_revoked",
+        "permit_expired",
+        "wall_deadline",
+        "host_lost"
+      ],
+      "type": "string"
+    },
+    "CentralBinding": {
+      "additionalProperties": false,
       "properties": {
-        "document": {
-          "const": "permit"
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
-        "data": {
-          "type": "object",
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralSubject"
+        }
+      },
+      "required": [
+        "subject",
+        "session",
+        "generation",
+        "plan_digest"
+      ],
+      "type": "object"
+    },
+    "CentralPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "batch": {
+          "$ref": "#/$defs/MailBatch"
+        },
+        "dispatch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "host_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "max_permit_ms": {
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "profiles": {
+          "$ref": "#/$defs/ProfilePins"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralSubject"
+        },
+        "wall_time_ms": {
+          "format": "uint64",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "subject",
+        "session",
+        "generation",
+        "profiles",
+        "batch",
+        "dispatch_id",
+        "host_operation_id",
+        "wall_time_ms",
+        "max_permit_ms"
+      ],
+      "type": "object"
+    },
+    "CentralSubject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central_conversation",
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "actor_id",
+            "conversation_id",
+            "conversation_revision",
+            "policy"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Clock": {
+      "additionalProperties": false,
+      "properties": {
+        "boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "machine_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_boot_id",
+        "boot_ms"
+      ],
+      "type": "object"
+    },
+    "Decision": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "replayed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "refused",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Refusal"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "DispatchAssociation": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "dispatch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "host_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit": {
+          "$ref": "#/$defs/PermitData"
+        }
+      },
+      "required": [
+        "dispatch_id",
+        "host_operation_id",
+        "batch_digest",
+        "permit"
+      ],
+      "type": "object"
+    },
+    "DispatchState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "not_attempted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "intent_committed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/UncertaintyReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/$defs/HandoffEvidence"
+            },
+            "kind": {
+              "const": "resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dispatch": {
+              "$ref": "#/$defs/DispatchAssociation"
+            },
+            "kind": {
+              "const": "commit_start",
+              "type": "string"
+            },
+            "launch": {
+              "$ref": "#/$defs/HostLaunchRef"
+            }
+          },
+          "required": [
+            "kind",
+            "launch",
+            "dispatch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "running",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/HostObservationRef"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "renew",
+              "type": "string"
+            },
+            "permit": {
+              "$ref": "#/$defs/PermitData"
+            }
+          },
+          "required": [
+            "kind",
+            "permit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "cancel",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/CancelReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "tick",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "stop_uncertain",
+              "type": "string"
+            },
+            "observation": {
+              "$ref": "#/$defs/HostObservationRef"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "binding": {
-              "type": "object",
-              "properties": {
-                "subject": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "const": "central_conversation"
-                    },
-                    "actor_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "conversation_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "conversation_revision": {
-                      "type": "integer",
-                      "minimum": 1
-                    },
-                    "policy": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 512
-                        },
-                        "version": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 512
-                        },
-                        "digest": {
-                          "type": "string",
-                          "pattern": "^[0-9a-f]{64}$"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "version",
-                        "digest"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "actor_id",
-                    "conversation_id",
-                    "conversation_revision",
-                    "policy"
-                  ],
-                  "additionalProperties": false
-                },
-                "session": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "const": "central"
-                    },
-                    "authority_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "session_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "generation": {
-                      "type": "integer",
-                      "minimum": 1
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "authority_id",
-                    "session_id",
-                    "generation"
-                  ],
-                  "additionalProperties": false
-                },
-                "generation": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "plan_digest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
-                }
-              },
-              "required": [
-                "subject",
-                "session",
-                "generation",
-                "plan_digest"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/CentralBinding"
             },
-            "machine_boot_id": {
-              "type": "string",
-              "format": "uuid"
+            "kind": {
+              "const": "host_lost",
+              "type": "string"
             },
-            "sequence": {
-              "type": "integer",
-              "minimum": 1
+            "launch_id": {
+              "format": "uuid",
+              "type": "string"
             },
-            "issued_boot_ms": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "expires_boot_ms": {
-              "type": "integer",
-              "minimum": 1
+            "report": {
+              "$ref": "#/$defs/ArtifactRef"
             }
           },
           "required": [
+            "kind",
             "binding",
-            "machine_boot_id",
-            "sequence",
-            "issued_boot_ms",
-            "expires_boot_ms"
+            "launch_id",
+            "report"
           ],
-          "additionalProperties": false
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/$defs/StopEvidenceRef"
+            },
+            "kind": {
+              "const": "stopped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/$defs/HandoffEvidence"
+            },
+            "kind": {
+              "const": "handoff",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/$defs/HandoffEvidence"
+            },
+            "kind": {
+              "const": "reconcile_handoff",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "association": {
+              "$ref": "#/$defs/DispatchAssociation"
+            },
+            "kind": {
+              "const": "report_unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "association"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HandoffDisposition": {
+      "enum": [
+        "handed_off",
+        "not_handed_off"
+      ],
+      "type": "string"
+    },
+    "HandoffEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "association": {
+          "$ref": "#/$defs/DispatchAssociation"
+        },
+        "disposition": {
+          "$ref": "#/$defs/HandoffDisposition"
+        },
+        "receipt": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "association",
+        "disposition",
+        "receipt"
+      ],
+      "type": "object"
+    },
+    "HistoryDisposition": {
+      "description": "Aggregated over ALL retained generations by a future authenticated owner.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "no_prior_dispatch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/$defs/HandoffEvidence"
+            },
+            "kind": {
+              "const": "retryable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "association": {
+              "$ref": "#/$defs/DispatchAssociation"
+            },
+            "kind": {
+              "const": "held",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/MailHoldReason"
+            }
+          },
+          "required": [
+            "kind",
+            "association",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HostLaunchRef": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/CentralBinding"
+        },
+        "intent": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "launch_id",
+        "intent"
+      ],
+      "type": "object"
+    },
+    "HostObservationRef": {
+      "additionalProperties": false,
+      "description": "A reference to an owner's evidence. Shape validation cannot authenticate it.",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/CentralBinding"
+        },
+        "guardian": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "observation": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "binding",
+        "launch_id",
+        "guardian",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "MailBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/MailRef"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "through_cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "through_cursor",
+        "messages"
+      ],
+      "type": "object"
+    },
+    "MailHistoryFence": {
+      "additionalProperties": false,
+      "description": "Bounded candidate query results, not a proof that the source was authenticated.",
+      "properties": {
+        "actor_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/MessageHistory"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "operations": {
+          "description": "Candidate dispatch and host-input UUIDs share a per-actor operation namespace.",
+          "items": {
+            "$ref": "#/$defs/OperationHistory"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "source_snapshot": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "through_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "actor_id",
+        "conversation_id",
+        "through_generation",
+        "source_snapshot",
+        "entries",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "MailHoldReason": {
+      "enum": [
+        "pending",
+        "unknown",
+        "handed_off"
+      ],
+      "type": "string"
+    },
+    "MailRef": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "message_id",
+        "cursor",
+        "payload_digest"
+      ],
+      "type": "object"
+    },
+    "MessageHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/HistoryDisposition"
+        },
+        "message": {
+          "$ref": "#/$defs/MailRef"
+        }
+      },
+      "required": [
+        "message",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "OperationDisposition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "association_digest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "used",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/OperationRole"
+            }
+          },
+          "required": [
+            "kind",
+            "generation",
+            "role",
+            "association_digest"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/OperationDisposition"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "OperationRole": {
+      "enum": [
+        "dispatch",
+        "host_input"
+      ],
+      "type": "string"
+    },
+    "PermitData": {
+      "additionalProperties": false,
+      "description": "Structural permit metadata; this is NOT the physical host's authority object.",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/CentralBinding"
+        },
+        "expires_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issued_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "machine_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "binding",
+        "machine_boot_id",
+        "sequence",
+        "issued_boot_ms",
+        "expires_boot_ms"
+      ],
+      "type": "object"
+    },
+    "Phase": {
+      "enum": [
+        "prepared",
+        "start_committed",
+        "running_reported",
+        "stop_requested",
+        "stop_uncertain",
+        "stopped_reported",
+        "cancelled_before_start"
+      ],
+      "type": "string"
+    },
+    "ProfilePins": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "agent": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "composition": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "environment": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "execution": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "host_plan": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "intelligence": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "renderer": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "selection": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "startup": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "catalog",
+        "agent",
+        "intelligence",
+        "execution",
+        "composition",
+        "selection",
+        "host_plan",
+        "adapter",
+        "environment",
+        "renderer",
+        "startup"
+      ],
+      "type": "object"
+    },
+    "Refusal": {
+      "enum": [
+        "clock",
+        "binding",
+        "phase",
+        "inactive",
+        "sequence",
+        "conflict",
+        "deadline",
+        "needs_reconciliation",
+        "known_outcome",
+        "batch_held"
+      ],
+      "type": "string"
+    },
+    "ReplyAssociation": {
+      "additionalProperties": false,
+      "description": "Future reply association only; no sender authentication or mailbox mutation.",
+      "properties": {
+        "body_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "dispatch": {
+          "$ref": "#/$defs/DispatchAssociation"
+        },
+        "reply_message_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reply_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dispatch",
+        "reply_message_id",
+        "reply_operation_id",
+        "body_digest"
+      ],
+      "type": "object"
+    },
+    "Run": {
+      "additionalProperties": false,
+      "description": "Serialized model state, not signed authority, physical proof or a grant.",
+      "properties": {
+        "admitted": {
+          "$ref": "#/$defs/Clock"
+        },
+        "association": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DispatchAssociation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancellation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CancelReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dispatch": {
+          "$ref": "#/$defs/DispatchState"
+        },
+        "guardian": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostObservationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_clock": {
+          "$ref": "#/$defs/Clock"
+        },
+        "launch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostLaunchRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_deadline_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermitData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "plan": {
+          "$ref": "#/$defs/CentralPlan"
+        },
+        "stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopEvidenceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertain_report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "plan",
+        "admitted",
+        "last_clock",
+        "original_deadline_boot_ms",
+        "phase",
+        "dispatch"
+      ],
+      "type": "object"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StopEvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostObservationRef"
+        },
+        "stopped_writers": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "host",
+        "stopped_writers"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Transition": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "state": {
+          "$ref": "#/$defs/Run"
+        }
+      },
+      "required": [
+        "state",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "UncertaintyReason": {
+      "enum": [
+        "cancellation",
+        "expiry",
+        "host_lost",
+        "reported"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:agent-q:central-authority:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralPlan"
+        },
+        "document": {
+          "const": "plan",
+          "type": "string"
         }
       },
       "required": [
         "document",
         "data"
       ],
-      "additionalProperties": false
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PermitData"
+        },
+        "document": {
+          "const": "permit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/DispatchAssociation"
+        },
+        "document": {
+          "const": "dispatch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Event"
+        },
+        "document": {
+          "const": "event",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Run"
+        },
+        "document": {
+          "const": "state",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Transition"
+        },
+        "document": {
+          "const": "transition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ReplyAssociation"
+        },
+        "document": {
+          "const": "reply",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/MailHistoryFence"
+        },
+        "document": {
+          "const": "history",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
     }
   ],
-  "x-max-wire-bytes": 65536,
+  "title": "AQ central authority neutral data v1",
   "x-execution-authority": false,
-  "description": "Structural data only. Referenced facts must be authenticated by future owners; runtime capabilities remain unavailable."
+  "x-max-wire-bytes": 65536
 }
