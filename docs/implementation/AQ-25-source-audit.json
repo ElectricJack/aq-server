@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "status": "source_audit_and_proposal_only_parent_review_before_implementation",
+  "base": "33dcc41",
+  "no_ddl_number_allocated": true,
+  "no_sql_or_runtime_code_written": true,
+  "no_tests_or_live_operations_run": true,
+  "no_new_dependencies": true,
+  "files": [
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-lifecycle-api/src/waits.rs",
+      "sha256_full_file": "2148f676712715cf6415b9faef975c4ce3563a91038992b1b7ed07961a14593e",
+      "read_scope": "Closed wait/source-boundary/outcome DTOs and validation"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-lifecycle-api/src/lib.rs",
+      "sha256_full_file": "a501d1f57880a582e425fd314980856da03bf7af56484d9966f4dac66c484167",
+      "read_scope": "Capabilities, Request/Response and separate operator/ack contract"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-lifecycle-api/src/peer.rs",
+      "sha256_full_file": "2c1597225aa7edf2432f53a7c85068a106ad6c15bd5baf57be5cb85c54bd78c6",
+      "read_scope": "Fake conformance peer only; not runtime source verification"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-admission/src/transport.rs",
+      "sha256_full_file": "4f19c6c0bb728e781fb6349c4a994e28c31b0ff665fe11628c70169df9ceea50",
+      "read_scope": "lifecycle_binding and stable task_lineage_id"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/src/agent_access/messaging.rs",
+      "sha256_full_file": "6f16e458389b663a14b85e5e50ae974778be5a176fb50d627c0e1f609c611cf0",
+      "read_scope": "append, mailbox head, inbox and exact scoped sender/recipient"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/migrations/0005_messaging.sql",
+      "sha256_full_file": "07fa84e6557172caf38aaeba6b4a631ca9fdfc15e1e133781ff07b96b6938716",
+      "read_scope": "Transactional cursor/head identity and task/session delivery storage"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/src/agent_access/graph.rs",
+      "sha256_full_file": "b69c5c098a076a75dd94cd139ee5a34d36e0bbf58239abfac1c092ab1e8e3f3a",
+      "read_scope": "Scoped exact node/edge projections and bounded HTTP transport"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/src/agent_access/scheduling.rs",
+      "sha256_full_file": "faa361905283d8940924650c7c10bbb6915e4a7f8e6c4bba2ea356dad6d75aec",
+      "read_scope": "Bounded revisioned Graph scheduling observation stamps, not source replay"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/migrations/0007_graph_mutations.sql",
+      "sha256_full_file": "0ec5317b0e54466b5a88aef05fc951827a7b4e156ecdfca6e60d1a5dd75faa64",
+      "read_scope": "Operation idempotency/outbox; BIGSERIAL not commit watermark"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/src/playbooks/service.rs",
+      "sha256_full_file": "ade830de6082612b7401cd4256b2241525a0b31b2740d813e150c6effa76325f",
+      "read_scope": "Existing bounded domain receipt/outbox owner/copy pattern"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "crates/aq-server/src/execution/authority.rs",
+      "sha256_full_file": "16623c20a7b1ee847f6e015d1217411f402acbdf37c0126336be1ed048cc573c",
+      "read_scope": "Current authority and retained immutable selection joins"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "docs/architecture/0004-session-operations-waits-and-notifications.md",
+      "sha256_full_file": "4964e98e5629729401d41a2ee4d089aba6b0f61fb66b3120bb548984e3305378",
+      "read_scope": "Wait, subscription, parking, wake and callback ownership requirements"
+    },
+    {
+      "repo": "agent-q",
+      "revision": "33dcc41",
+      "path": "docs/plans/0001-v2-milestones.json",
+      "sha256_full_file": "8512ec30cca43a1ccf3eba8fe36defe6f820dbdf0df266ee212607d402f3b254",
+      "read_scope": "AQ25/AQ26/WRK16 acceptance and dependencies"
+    },
+    {
+      "repo": "aq-graph",
+      "revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+      "path": "src/store.rs",
+      "sha256_full_file": "ae09f36102ddf0b14484883b3b0eb00d56e9ec8f254b2fd23145acbea70cd46d",
+      "read_scope": "History/node revision reads; DURABLE_FIELDS includes task_state/deleted"
+    },
+    {
+      "repo": "aq-graph",
+      "revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+      "path": "src/service.rs",
+      "sha256_full_file": "74818256053900c2baf06d8ffc9389eae110c1f309c05f0a7dc746ab1bcb72d2",
+      "read_scope": "Exposed routes lack committed subscription/replay proof"
+    },
+    {
+      "repo": "aq-graph",
+      "revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+      "path": "migrations/0001_initial.sql",
+      "sha256_full_file": "afe4a2f9a97d33887275c7670c219985160699a9277e1a9bd07dd512fd9fe712",
+      "read_scope": "History GENERATED IDENTITY allocation is not commit order"
+    },
+    {
+      "repo": "aq-graph",
+      "revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+      "path": "README.md",
+      "sha256_full_file": "3b13fb295e78dfadf82454663ea2d994fa2552980790b161cfcdab7de8df718b",
+      "read_scope": "Unified logical revision includes lifecycle and structural relationships"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "src/waits/registry.py",
+      "sha256_full_file": "49219dc2cf7dec9c391672e741e6a4bb80b051506dfedcc944324529049ff7e9",
+      "read_scope": "Frozen typed condition adapter registry"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "src/database/queries/wait_queries.py",
+      "sha256_full_file": "8cad75a95a62c909937e88b974cbd208df0dd9b3cb837854922ca2ff48d5f46d",
+      "read_scope": "Bounded excerpts: register_wait subscribe/reobserve and original receipt"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "src/waits/dispatcher.py",
+      "sha256_full_file": "a94ba6c9a466a1f5728a4a2c41dd2e06ec5ebfe53dc11f145174d75ca8dd1e57",
+      "read_scope": "Bounded excerpt: prepare/commit reobserve + source/owner fences"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "src/waits/source_sql.py",
+      "sha256_full_file": "3d2be887f6e599e12405aa05ccb0fba302673ed849477c08945363801feb3e14",
+      "read_scope": "Shared allocation fence before identity + NOTIFY hint only"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "src/database/queries/wait_source_queries.py",
+      "sha256_full_file": "4b31586d2991019cf7404f581b96b693d334641c0cf3f07d96f18dfdd9b33e7a",
+      "read_scope": "Committed watermark fence and bounded retention contract"
+    },
+    {
+      "repo": "agent-queue2",
+      "revision": "9a9b8e8ef992d1ff699755a9383ed3c91e2844ea",
+      "path": "tests/test_wait_faults.py",
+      "sha256_full_file": "b469a35c5db8bd00b26ec5c871f95d61f26d0c73a1e39b9aa119c9d1db1d63b2",
+      "read_scope": "Bounded excerpts108-174: early resolution and crash/double-dispatch obligations; not run"
+    }
+  ],
+  "limitations": [
+    "Bounded selected bodies read, not full parity audit or executed v1 proof",
+    "Frozen CON03 fake unavailable policy must not become production retry behavior",
+    "Real Graph source boundary unimplemented; ordinary history polling insufficient",
+    "Actual AQ08 scheduling holds, WRK16 parking and AQ26 wake not qualified",
+    "Initial content-only revision inference corrected after direct Graph DURABLE_FIELDS/README review"
+  ]
+}
