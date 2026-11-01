@@ -2233,7 +2233,7 @@
       "repo": "aq-dashboard",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "UI-13",
         "UI-06",
@@ -2254,7 +2254,9 @@
         "Execute the applicable slices and dual functional/visual checks in aq-dashboard/docs/plans/0003-live-dashboard-delivery.md; planned paths or mock-only pages are not live completion evidence."
       ],
       "out_of_scope": [],
-      "evidence": []
+      "evidence": [
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "REL-01",
@@ -3012,7 +3014,12 @@
         "Model judgment execution",
         "Replacing the review owner"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/API-04-review-inbox.md",
+        "../implementation/API-04-browser/README.md",
+        "../implementation/API-04-browser/actions.md",
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "API-05",
@@ -3040,7 +3047,10 @@
         "Pretending configured bindings establish an unimplemented activation owner",
         "Completing AQ-12 through AQ-16 pilots"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/API-05-playbooks-inspection.md",
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "API-06",
@@ -3162,7 +3172,7 @@
       "repo": "agent-q",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "API-03",
         "AQ-07"
@@ -3183,7 +3193,9 @@
         "Client-owned readiness or scheduling",
         "Implicit task creation from comments"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "API-11",
@@ -3327,7 +3339,9 @@
         "Model judgment execution",
         "Treating approval as merge or deployment"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-08",
@@ -3356,7 +3370,9 @@
         "Arbitrary workflow editor",
         "Implicit policy compilation/installation from source editing"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "UI-09",
@@ -3455,7 +3471,7 @@
       "repo": "aq-dashboard",
       "milestone": "M6",
       "kind": "implementation",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "UI-13",
         "CON-03",
@@ -3480,7 +3496,9 @@
         "Claiming account quota from usage",
         "Full terminal rendering/control"
       ],
-      "evidence": []
+      "evidence": [
+        "../implementation/dashboard-qualified-status-2026-11-01.md"
+      ]
     },
     {
       "id": "WRK-17",

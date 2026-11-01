@@ -179,7 +179,7 @@ Requirements name implementation responsibility, not passing test coverage. E re
 | [PB-02](#pb-02): Establish the playbook storage and scheduling operating envelope | aq-playbooks | [PB-01](#pb-01) | complete |
 | [API-02](#api-02): Expose task, attempt and workflow explanation views | agent-q | [AQ-10](#aq-10), [AQ-11](#aq-11), [AQ-12](#aq-12), [AQ-18](#aq-18), [AQ-20](#aq-20), [API-03](#api-03), [API-04](#api-04), [API-05](#api-05), [API-06](#api-06), [API-07](#api-07), [API-08](#api-08), [API-09](#api-09), [API-10](#api-10), [API-11](#api-11), [API-12](#api-12) | in_progress |
 | [UI-01](#ui-01): Create the independent dashboard application and mock suite | aq-dashboard | [UI-05](#ui-05), [UI-06](#ui-06), [UI-11](#ui-11), [UI-12](#ui-12) | in_progress |
-| [UI-02](#ui-02): Implement pending-safe actions and browser compatibility | aq-dashboard | [UI-13](#ui-13), [UI-06](#ui-06), [UI-07](#ui-07), [API-10](#api-10) | planned |
+| [UI-02](#ui-02): Implement pending-safe actions and browser compatibility | aq-dashboard | [UI-13](#ui-13), [UI-06](#ui-06), [UI-07](#ui-07), [API-10](#api-10) | in_progress |
 | [REL-01](#rel-01): Version the composite product manifest and component inventory | agent-q | [INT-01](#int-01), [GRAPH-01](#graph-01), [GIT-01](#git-01), [PB-01](#pb-01) | planned |
 | [REL-02](#rel-02): Implement multi-component update and recovery orchestration | agent-q | [REL-01](#rel-01), [GATE-05](#gate-05) | planned |
 | [REL-03](#rel-03): Package and verify the dashboard in the server release | agent-q | [REL-01](#rel-01), [UI-02](#ui-02), [UI-03](#ui-03), [UI-04](#ui-04), [API-02](#api-02), [UI-01](#ui-01), [UI-07](#ui-07), [UI-08](#ui-08), [UI-09](#ui-09), [UI-10](#ui-10), [UI-11](#ui-11) | planned |
@@ -204,7 +204,7 @@ Requirements name implementation responsibility, not passing test coverage. E re
 | [API-07](#api-07): Own global supervisor conversation history and dispatch association | agent-q | [AQ-11](#aq-11), [AQ-19](#aq-19) | planned |
 | [API-08](#api-08): Populate scoped Overview and Search from actual owners | agent-q | [API-13](#api-13), [API-04](#api-04), [API-06](#api-06), [AQ-24](#aq-24), [AQ-20](#aq-20) | planned |
 | [API-09](#api-09): Collect and expose supported provider account quota | agent-q | [AQ-20](#aq-20) | planned |
-| [API-10](#api-10): Expose typed human task and knowledge commands with recovery | agent-q | [API-03](#api-03), [AQ-07](#aq-07) | planned |
+| [API-10](#api-10): Expose typed human task and knowledge commands with recovery | agent-q | [API-03](#api-03), [AQ-07](#aq-07) | in_progress |
 | [API-11](#api-11): Retain result media and evaluate capture requirements | agent-q | [API-06](#api-06), [AQ-09](#aq-09) | planned |
 | [API-12](#api-12): Own result comments and explicit feedback task creation | agent-q | [API-11](#api-11), [API-10](#api-10) | planned |
 | [UI-05](#ui-05): Complete shared dashboard composition and visual baselines | aq-dashboard | [UI-13](#ui-13) | in_progress |
@@ -214,7 +214,7 @@ Requirements name implementation responsibility, not passing test coverage. E re
 | [UI-09](#ui-09): Deliver Results metadata, media and feedback in usable increments | aq-dashboard | [UI-14](#ui-14), [UI-18](#ui-18), [UI-19](#ui-19) | planned |
 | [UI-10](#ui-10): Deliver docked full-page and mobile supervisor conversation | aq-dashboard | [UI-16](#ui-16), [AQ-17](#aq-17) | planned |
 | [UI-11](#ui-11): Complete Overview composition real summaries and provider strip | aq-dashboard | [UI-15](#ui-15), [API-08](#api-08), [API-09](#api-09) | planned |
-| [UI-12](#ui-12): Connect existing worker profile observation and notification panels | aq-dashboard | [UI-13](#ui-13), [CON-03](#con-03), [AQ-24](#aq-24) | planned |
+| [UI-12](#ui-12): Connect existing worker profile observation and notification panels | aq-dashboard | [UI-13](#ui-13), [CON-03](#con-03), [AQ-24](#aq-24) | in_progress |
 | [UI-13](#ui-13): Freeze reusable dashboard layout and component interfaces | aq-dashboard | [AQ-01](#aq-01) | in_progress |
 | [UI-14](#ui-14): Deliver live result metadata and exact revision inspection | aq-dashboard | [UI-13](#ui-13), [API-06](#api-06) | in_progress |
 | [API-13](#api-13): Expose early bounded Overview task and project contributions | agent-q | [API-03](#api-03) | planned |
@@ -1396,7 +1396,7 @@ Evidence: [UI-01-live-dashboard.md](../implementation/UI-01-live-dashboard.md), 
 
 **Implement pending-safe actions and browser compatibility**
 
-Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: planned.
+Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: in_progress.
 
 Hard prerequisites: [UI-13](#ui-13), [UI-06](#ui-06), [UI-07](#ui-07), [API-10](#api-10).
 
@@ -1409,6 +1409,8 @@ Acceptance:
 - Execute the applicable slices and dual functional/visual checks in aq-dashboard/docs/plans/0003-live-dashboard-delivery.md; planned paths or mock-only pages are not live completion evidence.
 
 Requirement links: U3, U4, U5, U6, U8.
+
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
 
 ### REL-01
 
@@ -1801,6 +1803,8 @@ Requirement links: U2, U3, U4, U5.
 
 Outside this task: Model judgment execution; Replacing the review owner.
 
+Evidence: [API-04-review-inbox.md](../implementation/API-04-review-inbox.md), [README.md](../implementation/API-04-browser/README.md), [actions.md](../implementation/API-04-browser/actions.md), [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
+
 ### API-05
 
 **Expose configured playbook discovery and pinned run views**
@@ -1819,6 +1823,8 @@ Acceptance:
 Requirement links: U2, U3, U4.
 
 Outside this task: New workflow editor; Pretending configured bindings establish an unimplemented activation owner; Completing AQ-12 through AQ-16 pilots.
+
+Evidence: [API-05-playbooks-inspection.md](../implementation/API-05-playbooks-inspection.md), [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
 
 ### API-06
 
@@ -1900,7 +1906,7 @@ Outside this task: Requiring all providers before other dashboard reads; Unquali
 
 **Expose typed human task and knowledge commands with recovery**
 
-Owner: `agent-q`. Milestone: M6. Kind: implementation. Status: planned.
+Owner: `agent-q`. Milestone: M6. Kind: implementation. Status: in_progress.
 
 Hard prerequisites: [API-03](#api-03), [AQ-07](#aq-07).
 
@@ -1914,6 +1920,8 @@ Acceptance:
 Requirement links: D5, D6, U4, U5.
 
 Outside this task: Browser impersonation of agents; Client-owned readiness or scheduling; Implicit task creation from comments.
+
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
 
 ### API-11
 
@@ -2013,6 +2021,8 @@ Requirement links: U1, U2, U3, U4, U5, U6.
 
 Outside this task: Model judgment execution; Treating approval as merge or deployment.
 
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
+
 ### UI-08
 
 **Build live playbook discovery and run timelines**
@@ -2031,6 +2041,8 @@ Acceptance:
 Requirement links: U1, U2, U3, U4, U6.
 
 Outside this task: Arbitrary workflow editor; Implicit policy compilation/installation from source editing.
+
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
 
 ### UI-09
 
@@ -2093,7 +2105,7 @@ Outside this task: Heartbeat-derived capacity or eligibility; Fabricated quota p
 
 **Connect existing worker profile observation and notification panels**
 
-Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: planned.
+Owner: `aq-dashboard`. Milestone: M6. Kind: implementation. Status: in_progress.
 
 Hard prerequisites: [UI-13](#ui-13), [CON-03](#con-03), [AQ-24](#aq-24).
 
@@ -2107,6 +2119,8 @@ Acceptance:
 Requirement links: U1, U2, U3, U6, U9, U12, U14.
 
 Outside this task: New hibernation/stall lifecycle owners; Claiming account quota from usage; Full terminal rendering/control.
+
+Evidence: [dashboard-qualified-status-2026-11-01.md](../implementation/dashboard-qualified-status-2026-11-01.md).
 
 ### WRK-17
 
