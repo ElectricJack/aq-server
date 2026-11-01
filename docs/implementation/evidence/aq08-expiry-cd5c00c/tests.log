@@ -1,0 +1,44 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/tmp/aq-native-expiry/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+     Running tests/native_expiry.rs (/home/jkern/dev/agent-q/target/debug/deps/native_expiry-405850062cfa44b7)
+
+running 5 tests
+test fresh_offer_remains_held_then_cursor_wrap_closes_exact_expired_owner_once ... ok
+test configured_runtime_closes_offline_offer_and_obeys_shutdown ... ok
+test granted_without_started_remains_held_even_after_grant_and_wall_expiry ... ok
+test unconfigured_runtime_returns_without_closing_fixture_claims ... ok
+test node_lock_refusal_advances_cursor_and_does_not_drop_claim_or_poison_pool ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.06s
+
+     Running tests/native_preparation.rs (/home/jkern/dev/agent-q/target/debug/deps/native_preparation-888bc2e07883003d)
+
+running 11 tests
+test accept_missing_nonce_unknown_and_duplicate_fields_and_body_bound_are_typed_failures ... ok
+test actual_original_plan_lease_mapping_reserved_journal_and_exact_replay_without_grant ... ok
+test changed_private_file_never_admits_lease_or_reservation_journal ... ok
+test concurrent_exact_accept_can_reconcile_original_receipt_without_duplicate_leases ... ok
+test credential_rotation_during_actual_git_io_never_admits_preparation ... ok
+test expiry_after_observed_node_lock_wait_never_commits_preparation ... ok
+test incoming_preparation_bytes_cannot_overshoot_retained_storage_limit ... ok
+test extra_known_worker_capabilities_and_missing_durable_journal_never_qualify_preparation ... ok
+test issued_grant_cannot_be_discounted_as_an_owned_ungranted_reservation ... ok
+test journal_storage_failure_rolls_back_lease_mapping_hot_and_receipt_atomically ... ok
+test mounted_accept_and_actual_private_material_fetch_keep_preparation_separate_from_grant ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.81s
+
+     Running tests/never_granted.rs (/home/jkern/dev/agent-q/target/debug/deps/never_granted-df86675ed3622e2c)
+
+running 7 tests
+test contradictory_effects_are_never_absence_proofs ... ok
+test missing_or_unsupported_empty_material_plan_is_unknown_not_fake_preparation_authority ... ok
+test observed_node_lock_race_issued_authority_wins_and_closure_cannot_erase_it ... ok
+test offline_expired_offer_closes_without_guardian_and_preserves_history_budget_and_replay ... ok
+test preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_closes ... ok
+test repeated_unissued_offers_keep_lineage_generation_and_finite_retry_budget ... ok
+test queued_mail_becomes_stale_but_received_or_unknown_mail_refuses_closure ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.33s
+

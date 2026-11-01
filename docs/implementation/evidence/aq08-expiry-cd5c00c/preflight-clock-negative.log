@@ -1,0 +1,49 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-native-expiry/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq-native-expiry/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-native-expiry/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-native-expiry/crates/aq-session-api)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq-native-expiry/crates/aq-lifecycle-api)
+   Compiling aq-playbooks-runner v0.1.2 (/tmp/aq-native-expiry/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-native-expiry/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.1 (/tmp/aq-native-expiry/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.2 (/tmp/aq-native-expiry/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-native-expiry/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/tmp/aq-native-expiry/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq-native-expiry/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.2 (/tmp/aq-native-expiry/crates/aq-playbook-host)
+   Compiling aq-notifications v0.1.0 (/tmp/aq-native-expiry/crates/aq-notifications)
+   Compiling aq-selection v0.1.2 (/tmp/aq-native-expiry/crates/aq-selection)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq-native-expiry/crates/aq-observation-api)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq-native-expiry/crates/aq-observation-admission)
+   Compiling aq-accounting v0.1.0 (/tmp/aq-native-expiry/crates/aq-accounting)
+   Compiling aq-admission v0.1.7 (/tmp/aq-native-expiry/crates/aq-admission)
+   Compiling aq-review-protocol v0.1.0 (/tmp/aq-native-expiry/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-native-expiry/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-native-expiry/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-playbooks-compiler v0.1.0 (/tmp/aq-native-expiry/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+   Compiling aq-server v0.1.0 (/tmp/aq-native-expiry/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 28s
+     Running tests/native_expiry.rs (/home/jkern/dev/agent-q/target/debug/deps/native_expiry-405850062cfa44b7)
+
+running 5 tests
+test fresh_offer_remains_held_then_cursor_wrap_closes_exact_expired_owner_once ... ok
+test granted_without_started_remains_held_even_after_grant_and_wall_expiry ... ok
+test node_lock_refusal_advances_cursor_and_does_not_drop_claim_or_poison_pool ... ok
+test unconfigured_runtime_returns_without_closing_fixture_claims ... ok
+test configured_runtime_closes_offline_offer_and_obeys_shutdown ... FAILED
+
+failures:
+
+---- configured_runtime_closes_offline_offer_and_obeys_shutdown stdout ----
+
+thread 'configured_runtime_closes_offline_offer_and_obeys_shutdown' (122727) panicked at crates/aq-server/tests/native_expiry.rs:129:6:
+called `Result::unwrap()` on an `Err` value: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    configured_runtime_closes_offline_offer_and_obeys_shutdown
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s
+
+error: test failed, to rerun pass `-p aq-server --test native_expiry`

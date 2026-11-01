@@ -1,0 +1,34 @@
+{
+  "source_revision": "cd5c00c963274ee0137c2173a469add5d5e6aec9",
+  "tests": {
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0
+  },
+  "checks": {
+    "focused_tests_exit": 0,
+    "strict_affected_allfeatures_clippy_exit": 0,
+    "workspace_format_exit": 0
+  },
+  "source_sha256": {
+    "crates/aq-server/src/lib.rs": "29949db069ef93511bc101573bb4088b9436542df24e17ae018d9c6e5baf5b48",
+    "crates/aq-server/src/profiled_execution.rs": "c0e0b8a32264496edee299b4ba3b38aa46fae97e8626ead90cf4d82154766107",
+    "crates/aq-server/src/profiled_execution/expiry.rs": "6ce8aff07fdad3b1c9e13e0eeedffcdfc68a436004ac16f0ededde62e5183853",
+    "crates/aq-server/src/profiled_execution/no_grant.rs": "4438f3ce25f7013e1f6435d18497cedf37506d649e688828bc05aff49b841531",
+    "crates/aq-server/tests/native_expiry.rs": "7e681b23b739555ced5e9f6f41bbf0b969126ca88a10c48e1f35ba4a173e5b35",
+    "docs/implementation/AQ-08-ungranted-expiry-runtime.md": "510b1d53887a562f4e8159e8db1c1f4724b76c2a27dd683b42696dd74b1f940f"
+  },
+  "review": "Independent read-only review by session_api found no authority blocker; query scan and pool-acquisition limits explicitly retained.",
+  "commands": [
+    "DATABASE_URL=<disposable-loopback-postgres> CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test -p aq-server --test native_expiry --test never_granted --test native_preparation --locked --offline -- --test-threads=2",
+    "CARGO_TARGET_DIR=/home/jkern/dev/agent-q/target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo clippy -p aq-server --lib --test native_expiry --test never_granted --test native_preparation --all-features --locked --offline -- -D warnings",
+    "cargo fmt --all -- --check"
+  ],
+  "limits": [
+    "Actual disposablePostgreSQL with synthetic runtime/source/graph fixture facts; no hostprocesses orproviders.",
+    "Firstconfigured-runtime test incorrectly set the actual fixture clock to unrelated static epoch; timedout4pass/1fail. Corrected toadvance itsownclock30000ms. Retained negative notincluded in23 finalpasses.",
+    "Firstpreflight wasnotfinalsource: rate-limited operational warning added beforefinalrerun.",
+    "No ever-granted closure/physicalstop/localworkspace release. Existing NeverGranted owner remainsproofauthority.",
+    "Finite page/time bounds do not qualify SQLscan cost or fleetcleanup latency."
+  ]
+}
