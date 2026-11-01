@@ -9,7 +9,25 @@ fn parent(child: &Artifact) -> Artifact {
     content.playbook.purpose =
         "Labelled development browser workflow with an actual child run".into();
     content.playbook.entries.get_mut("main").unwrap().start = "call".into();
+    content
+        .playbook
+        .entries
+        .get_mut("main")
+        .unwrap()
+        .outcomes
+        .insert("error".into(), Schema::Null);
     content.playbook.steps.remove("send");
+    content.playbook.steps.insert(
+        "failed".into(),
+        Step {
+            op: Operation::Return {
+                outcome: "error".into(),
+                output: Expr::literal(Value::Null),
+            },
+            edges: BTreeMap::new(),
+            on_error: None,
+        },
+    );
     content.playbook.steps.insert(
         "call".into(),
         Step {
@@ -21,7 +39,7 @@ fn parent(child: &Artifact) -> Artifact {
                 bind: "child_result".into(),
             },
             edges: BTreeMap::from([("ok".into(), "done".into())]),
-            on_error: None,
+            on_error: Some("failed".into()),
         },
     );
     content.dependencies.insert(
@@ -36,7 +54,11 @@ fn parent(child: &Artifact) -> Artifact {
             dependencies: BTreeSet::new(),
         },
     );
-    Artifact::seal(content).unwrap()
+    let artifact = Artifact::seal(content).unwrap();
+    artifact
+        .verify()
+        .expect("valid development parent artifact");
+    artifact
 }
 
 #[tokio::test]
@@ -47,6 +69,10 @@ async fn actual_protected_run_and_child_reach_compiled_playbooks_page() {
     let bundle =
         std::env::var_os("AQ_TEST_PLAYBOOK_DASHBOARD_DIR").expect("explicit compiled bundle");
     let mut s = setup().await;
+    s.text = s.text.replace(
+        &format!("name=\"activation-{}\"", s.namespace),
+        "name=\"Development Playbooks browser fixture\"",
+    );
     s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
     let runtime = aq_server::playbooks::runtime::Runtime::start(
         &s.f.state,
@@ -101,6 +127,7 @@ async fn actual_protected_run_and_child_reach_compiled_playbooks_page() {
     }
     let actual = admitted.expect("actual completed parent and child required");
     assert_eq!(actual.run.artifact, caller.digest);
+    assert_eq!(actual.run.outcome.as_deref(), Some("ok"));
     assert_eq!(actual.run.children.len(), 1);
     let actual_child = runtime
         .driver
