@@ -1,10 +1,11 @@
-//! Fresh phase execution owner. No production route is mounted by this slice.
+//! Fresh phase execution owner with separately gated bounded worker transport.
 mod current;
 mod facts;
 pub(crate) mod history;
 mod observations;
 mod pinned;
 pub(super) mod policy;
+pub mod transport;
 use crate::{AppState, error::AppError};
 use aq_admission::{ArtifactRef, Digest};
 pub use policy::ExecutionQualification;
@@ -82,7 +83,7 @@ async fn require_schema(tx: &mut Transaction<'_, Postgres>) -> Result<(), AppErr
     Ok(())
 }
 
-/// Explicit fixture/internal owner entry point. No production route is mounted.
+/// Owning issuer entry point. Transport independently gates the qualified profile.
 /// A new execution receipt is issued only from actual current owning facts.
 pub async fn prepare(
     state: &AppState,

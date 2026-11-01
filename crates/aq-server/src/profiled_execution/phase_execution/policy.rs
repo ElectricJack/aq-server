@@ -97,3 +97,35 @@ pub(super) fn current(
     }
     Err(refused())
 }
+
+/// Production transport requires a coherent explicitly installed launch/cleanup
+/// profile set. It does not advertise or select any runtime on its own.
+pub(super) fn transport_enabled(state: &AppState) -> bool {
+    let Some(c) = state.config.profiled_execution.as_ref() else {
+        return false;
+    };
+    if validate_catalog(c).is_err() {
+        return false;
+    }
+    let mut found = false;
+    for d in &c.definition_bodies {
+        if !d.artifact().id.as_str().starts_with(PREFIX) {
+            continue;
+        }
+        let Ok(q) = serde_json::from_str::<ExecutionQualification>(d.body()) else {
+            return false;
+        };
+        if !matches!(
+            super::super::phase_terminal::qualification::profile(
+                c,
+                &q.runtime,
+                &q.runtime_qualification
+            ),
+            Ok(Some(_))
+        ) {
+            return false;
+        }
+        found = true;
+    }
+    found
+}

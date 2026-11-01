@@ -61,6 +61,24 @@ pub(crate) fn validate_catalog(c: &super::super::config::ProfiledConfig) -> Resu
     }
     Ok(())
 }
+pub(crate) fn profile(
+    c: &super::super::config::ProfiledConfig,
+    runtime: &ArtifactRef,
+    qualification: &ArtifactRef,
+) -> Result<Option<ArtifactRef>, String> {
+    validate_catalog(c)?;
+    for d in &c.definition_bodies {
+        if !d.artifact().id.as_str().starts_with(PREFIX) {
+            continue;
+        }
+        let q: TerminalQualification =
+            serde_json::from_str(d.body()).map_err(|_| "terminal qualification body")?;
+        if &q.runtime == runtime && &q.runtime_qualification == qualification {
+            return Ok(Some(d.artifact().clone()));
+        }
+    }
+    Ok(None)
+}
 pub(super) fn for_history(
     state: &AppState,
     h: &RegistrationHistory,
@@ -70,19 +88,9 @@ pub(super) fn for_history(
         .profiled_execution
         .as_ref()
         .ok_or_else(conflict)?;
-    validate_catalog(c).map_err(|_| conflict())?;
-    for d in &c.definition_bodies {
-        if !d.artifact().id.as_str().starts_with(PREFIX) {
-            continue;
-        }
-        let q: TerminalQualification = serde_json::from_str(d.body()).map_err(|_| conflict())?;
-        if q.runtime == h.metadata.request.runtime
-            && q.runtime_qualification == h.metadata.qualification
-        {
-            return Ok(d.artifact().clone());
-        }
-    }
-    Err(conflict())
+    profile(c, &h.metadata.request.runtime, &h.metadata.qualification)
+        .map_err(|_| conflict())?
+        .ok_or_else(conflict)
 }
 
 #[cfg(test)]
