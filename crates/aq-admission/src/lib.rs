@@ -521,3 +521,5 @@ pub mod result_record;
 pub mod startup;
 
 pub mod control;
+
+pub mod granted_closure;

@@ -1,0 +1,780 @@
+{
+  "receipt": {
+    "$defs": {
+      "Digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "Disposition": {
+        "enum": [
+          "launch_closed_awaiting_settlement"
+        ],
+        "type": "string"
+      },
+      "LaunchBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attempt_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "execution_spec_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "graph_access_profile_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "launch_manifest_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "offer_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/SessionIdentity"
+          }
+        },
+        "required": [
+          "session",
+          "schema_version",
+          "offer_id",
+          "attempt_id",
+          "assignment_generation",
+          "execution_spec_digest",
+          "launch_manifest_digest",
+          "graph_access_profile_digest"
+        ],
+        "type": "object"
+      },
+      "SessionIdentity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assignment_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "boot_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "const": "remote",
+                "type": "string"
+              },
+              "node_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "session_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "node_id",
+              "boot_id",
+              "attempt_id",
+              "assignment_generation",
+              "session_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "authority_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "central",
+                "type": "string"
+              },
+              "session_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "authority_id",
+              "session_id",
+              "generation"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "authority_revision_at_record": {
+        "format": "uint64",
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "binding": {
+        "$ref": "#/$defs/LaunchBinding"
+      },
+      "disposition": {
+        "$ref": "#/$defs/Disposition"
+      },
+      "grant_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "operation_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "recorded_at_ms": {
+        "format": "uint64",
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "request_digest": {
+        "$ref": "#/$defs/Digest"
+      },
+      "schema_version": {
+        "const": 1,
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "schema_version",
+      "operation_id",
+      "binding",
+      "grant_id",
+      "request_digest",
+      "recorded_at_ms",
+      "authority_revision_at_record",
+      "disposition"
+    ],
+    "title": "Receipt",
+    "type": "object",
+    "x-max-encoded-bytes": 32768
+  },
+  "request": {
+    "$defs": {
+      "ArtifactRef": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "id": {
+            "$ref": "#/$defs/Text"
+          },
+          "version": {
+            "$ref": "#/$defs/Text"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "Digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "DriverIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "$ref": "#/$defs/LaunchBinding"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "guardian_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "host": {
+            "$ref": "#/$defs/LaunchIntent"
+          },
+          "journal": {
+            "$ref": "#/$defs/JournalCheckpoint"
+          },
+          "reservation_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "binding",
+          "grant_id",
+          "guardian_id",
+          "reservation_id",
+          "host",
+          "journal"
+        ],
+        "type": "object"
+      },
+      "Evidence": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "suppressed",
+                "type": "string"
+              },
+              "record": {
+                "$ref": "#/$defs/SuppressionRecord"
+              },
+              "record_digest": {
+                "$ref": "#/$defs/Digest"
+              }
+            },
+            "required": [
+              "kind",
+              "record",
+              "record_digest"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "driver_intent": {
+                "$ref": "#/$defs/DriverIntent"
+              },
+              "kind": {
+                "const": "host_stopped",
+                "type": "string"
+              },
+              "proof": {
+                "$ref": "#/$defs/HostStoppedProof"
+              },
+              "proof_digest": {
+                "$ref": "#/$defs/Digest"
+              }
+            },
+            "required": [
+              "kind",
+              "driver_intent",
+              "proof",
+              "proof_digest"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GuardianIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "intent": {
+            "$ref": "#/$defs/LaunchIntent"
+          },
+          "machine_boot_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "nonce": {
+            "description": "Physical guardian nonce allocated by aq-session-host after permission to\nlaunch. This is distinct from Request.guardian_id's pre-grant owner.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "pid_namespace": {
+            "$ref": "#/$defs/Label"
+          },
+          "process": {
+            "$ref": "#/$defs/ProcessEvidence"
+          }
+        },
+        "required": [
+          "intent",
+          "nonce",
+          "process",
+          "machine_boot_id",
+          "pid_namespace"
+        ],
+        "type": "object"
+      },
+      "HostStoppedProof": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "$ref": "#/$defs/StoppedObservation"
+          }
+        },
+        "required": [
+          "observation"
+        ],
+        "type": "object"
+      },
+      "JournalCheckpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "revision": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "Label": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "LaunchBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attempt_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "execution_spec_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "graph_access_profile_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "launch_manifest_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "offer_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "$ref": "#/$defs/SessionIdentity"
+          }
+        },
+        "required": [
+          "session",
+          "schema_version",
+          "offer_id",
+          "attempt_id",
+          "assignment_generation",
+          "execution_spec_digest",
+          "launch_manifest_digest",
+          "graph_access_profile_digest"
+        ],
+        "type": "object"
+      },
+      "LaunchIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "launch_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "manifest_digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "session": {
+            "$ref": "#/$defs/SessionIdentity"
+          }
+        },
+        "required": [
+          "launch_id",
+          "session",
+          "manifest_digest",
+          "configuration_digest"
+        ],
+        "type": "object"
+      },
+      "PaneIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "pane": {
+            "$ref": "#/$defs/ProcessEvidence"
+          },
+          "pane_id": {
+            "$ref": "#/$defs/Label"
+          },
+          "server": {
+            "$ref": "#/$defs/ProcessEvidence"
+          },
+          "session_name": {
+            "$ref": "#/$defs/Label"
+          }
+        },
+        "required": [
+          "server",
+          "pane",
+          "pane_id",
+          "session_name"
+        ],
+        "type": "object"
+      },
+      "ProcessEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "pid": {
+            "format": "uint32",
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "start_ticks": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pid",
+          "start_ticks"
+        ],
+        "type": "object"
+      },
+      "SessionIdentity": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assignment_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "boot_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "const": "remote",
+                "type": "string"
+              },
+              "node_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "session_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "node_id",
+              "boot_id",
+              "attempt_id",
+              "assignment_generation",
+              "session_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "authority_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "central",
+                "type": "string"
+              },
+              "session_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "authority_id",
+              "session_id",
+              "generation"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StoppedObservation": {
+        "additionalProperties": false,
+        "description": "Exact host JSON shape with legitimately absent pre-start identities. No\nplaceholder pane/root status or invented positive reap count is permitted.",
+        "properties": {
+          "guardian": {
+            "$ref": "#/$defs/GuardianIdentity"
+          },
+          "kernel_wait_echild": {
+            "const": true,
+            "type": "boolean"
+          },
+          "observed_boot_ms": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pane": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PaneIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permit_deadline_boot_ms": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "permit_sequence": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/$defs/StoppedPhase"
+          },
+          "reaped_count": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root_status": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Label"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "guardian",
+          "phase",
+          "permit_sequence",
+          "permit_deadline_boot_ms",
+          "observed_boot_ms",
+          "reaped_count",
+          "kernel_wait_echild",
+          "pane",
+          "root_status",
+          "stop_reason"
+        ],
+        "type": "object"
+      },
+      "StoppedPhase": {
+        "enum": [
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "SuppressionRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "$ref": "#/$defs/LaunchBinding"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "guardian_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "launch_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "original_kernel_boot_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "previous": {
+            "$ref": "#/$defs/JournalCheckpoint"
+          },
+          "recording_kernel_boot_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reservation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "suppression_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "terminal_revision": {
+            "format": "uint64",
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "operation_id",
+          "suppression_id",
+          "binding",
+          "grant_id",
+          "guardian_id",
+          "launch_id",
+          "reservation_id",
+          "original_kernel_boot_id",
+          "recording_kernel_boot_id",
+          "previous",
+          "terminal_revision"
+        ],
+        "type": "object"
+      },
+      "Text": {
+        "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "binding": {
+        "$ref": "#/$defs/LaunchBinding"
+      },
+      "evidence": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "grant_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "guardian_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "journal": {
+        "$ref": "#/$defs/JournalCheckpoint"
+      },
+      "launch_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "operation_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "qualification": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "reservation_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "runtime": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "schema_version": {
+        "const": 1,
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "schema_version",
+      "operation_id",
+      "binding",
+      "grant_id",
+      "guardian_id",
+      "launch_id",
+      "reservation_id",
+      "runtime",
+      "qualification",
+      "journal",
+      "evidence"
+    ],
+    "title": "Request",
+    "type": "object",
+    "x-max-encoded-bytes": 32768
+  }
+}
