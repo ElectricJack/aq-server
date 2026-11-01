@@ -1,12 +1,49 @@
 //! Actual output-only terminal registration, human Watch and retained literal tail.
 use super::*;
 use aq_session_protocol::Validate;
-use aq_terminal_relay::api::{MutationReply, TerminalInfo};
+use aq_terminal_relay::{
+    api::{MutationReply, TerminalInfo},
+    draft::{Effect, Envelope, PeerUpload, UploadAck},
+};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
+
+/// Observation only: requests still pass unchanged through the actual router.
+/// The worker validates the real response; this test independently binds it to
+/// the exact published frames and authorized human tail.
+#[derive(Clone)]
+pub(super) struct UploadExchange {
+    request: PeerUpload,
+    status: StatusCode,
+}
+pub(super) async fn capture_upload_request(
+    request: axum::extract::Request,
+) -> (axum::extract::Request, Option<PeerUpload>) {
+    if request.uri().path() != "/v1/terminal-relay/upload" {
+        return (request, None);
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = to_bytes(body, 256 * 1024)
+        .await
+        .expect("bounded actual output upload");
+    let upload: PeerUpload = serde_json::from_slice(&bytes).unwrap();
+    upload.validate().unwrap();
+    (Request::from_parts(parts, Body::from(bytes)), Some(upload))
+}
+pub(super) fn record_upload(
+    observed: &Arc<std::sync::Mutex<Vec<UploadExchange>>>,
+    request: Option<PeerUpload>,
+    status: StatusCode,
+) {
+    if let Some(request) = request {
+        let mut observed = observed.lock().unwrap();
+        assert!(observed.len() < 8, "bounded output exchange observation");
+        observed.push(UploadExchange { request, status });
+    }
+}
 
 pub(super) async fn configure(case: &mut Case) {
     use aq_server::terminal::{
@@ -108,7 +145,46 @@ pub(super) async fn watch(case: &Case, ready: &Value) -> Watch {
     assert_eq!(subscription_id, subscription);
     Watch { info, subscription }
 }
-pub(super) async fn verify(case: &Case, watched: &Watch, result: &Value) {
+pub(super) async fn verify(
+    case: &Case,
+    watched: &Watch,
+    result: &Value,
+    observed: &Arc<std::sync::Mutex<Vec<UploadExchange>>>,
+) {
+    let exchanges = observed.lock().unwrap().clone();
+    assert_eq!(exchanges.len(), 1, "one actual accepted output exchange");
+    let exchange = &exchanges[0];
+    assert_eq!(exchange.status, StatusCode::OK);
+    let upload = &exchange.request;
+    let ack: UploadAck =
+        serde_json::from_value(result["phase_output"]["upload_ack"].clone()).unwrap();
+    ack.validate().unwrap();
+    assert_eq!(ack.version, upload.version);
+    assert_eq!(ack.capability, upload.capability);
+    assert_eq!(ack.peer, upload.peer);
+    assert_eq!(ack.exchange_id, upload.exchange_id);
+    assert_eq!(ack.cursor, upload.cursor);
+    assert!(ack.retirements.is_empty() && ack.dropped_output.is_empty());
+    assert!(
+        upload.receipts.is_empty()
+            && upload.epoch_receipts.is_empty()
+            && upload.resize_receipts.is_empty()
+            && upload.fence_acks.is_empty()
+            && upload.snapshots.is_empty()
+            && upload.gaps.is_empty()
+    );
+    assert!(!upload.frames.is_empty());
+    let pull: Envelope =
+        serde_json::from_value(result["phase_output"]["watch_pull"].clone()).unwrap();
+    pull.validate().unwrap();
+    assert_eq!(pull.peer, upload.peer);
+    assert_eq!(pull.effects.len(), 1);
+    let Effect::Watch(subscription) = &pull.effects[0] else {
+        panic!("real node-pulled Watch required")
+    };
+    assert_eq!(subscription.terminal, watched.info.terminal);
+    assert_eq!(subscription.subscription_id, watched.subscription);
+
     let path = format!(
         "/api/v1/terminals/{}/tail?subscription_id={}&after_sequence=0",
         watched.info.terminal.terminal_id, watched.subscription
@@ -130,19 +206,33 @@ pub(super) async fn verify(case: &Case, watched: &Watch, result: &Value) {
         assert_eq!(frame.terminal, watched.info.terminal);
         bytes.extend_from_slice(&frame.bytes);
     }
+    // No injected frame or invented accepted receipt: exact bytes, digests and
+    // sequence numbers match what the real worker sent through the HTTP owner.
+    assert_eq!(tail.frames, upload.frames);
+    assert!(tail.gaps.is_empty() && !tail.more);
+    assert_eq!(tail.next_sequence, upload.frames.last().unwrap().sequence);
+    let expected_bytes: Vec<u8> = upload.frames.iter().flat_map(|f| f.bytes.clone()).collect();
+    assert_eq!(bytes, expected_bytes);
+    // The admitted periodic C fixture writes these fixed CRLF lines. The
+    // pinned tmux PTY's ONLCR translates LF once more; no substring qualifies.
+    let tick = b"synthetic native fixture output tick\r\r\n";
+    let running = b"synthetic native fixture running\r\r\n";
+    let ticks = bytes.strip_prefix(running).unwrap_or(&bytes);
+    assert!(!ticks.is_empty() && ticks.chunks(tick.len()).all(|line| line == tick));
+    assert_eq!(upload.frames[0].sequence, 1);
     assert!(
-        String::from_utf8(bytes)
-            .unwrap()
-            .contains("synthetic native fixture output tick")
+        upload
+            .frames
+            .windows(2)
+            .all(|pair| pair[1].sequence == pair[0].sequence + 1)
     );
     assert_eq!(
         result["phase_output"]["terminal_info"]["terminal"],
         json!(tail.terminal)
     );
-    assert!(result["phase_output"]["upload_ack"].is_object());
     assert!(tail.next_sequence > 0);
     eprintln!(
-        "actual worker output: authenticated registration, human Watch, literal frames and disconnected tail after ECHILD; no Snapshot/input"
+        "actual worker output: real admin Watch, node pull, HTTP200 exact UploadAck, byte/digest/sequence-identical authorized tail after ECHILD; no Snapshot/input"
     );
     browser(case, watched).await;
 }

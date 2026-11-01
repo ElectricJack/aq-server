@@ -65,8 +65,10 @@ async fn actual_worker_reports_real_host_lifecycle_and_persists_daemon_acknowled
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned output-capable worker, periodic ELF, Git and tmux"]
-async fn actual_worker_output_reaches_authorized_tail_after_physical_stop() {
-    run_worker(Mode::Output).await;
+async fn historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop() {
+    // This frozen phase-terminal fixture starts at the genuine ordered32
+    // prefix and uses its existing33 setup. It is not latest-format startup.
+    aq_server::test_support::with_state32_store(Box::pin(run_worker(Mode::Output))).await;
 }
 #[derive(Clone, Copy)]
 enum Mode {
@@ -165,6 +167,8 @@ async fn run_worker(mode: Mode) {
     let address = listener.local_addr().unwrap();
     let http_statuses = Arc::new(std::sync::Mutex::new(Vec::<(String, u16, u128)>::new()));
     let observed = http_statuses.clone();
+    let output_exchanges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_output = output_exchanges.clone();
     let mut app = aq_server::build_worker_router(case.env.env.state.clone());
     if execute_phase && !terminal {
         let routes = phase::execution_routes(case.env.env.state.clone());
@@ -177,10 +181,13 @@ async fn run_worker(mode: Mode) {
     let app = app.layer(axum::middleware::from_fn(
         move |request: axum::extract::Request, next: axum::middleware::Next| {
             let observed = observed.clone();
+            let captured_output = captured_output.clone();
             async move {
                 let path = request.uri().path().to_owned();
                 let started = std::time::Instant::now();
+                let (request, output_upload) = phase_output::capture_upload_request(request).await;
                 let response = next.run(request).await;
+                phase_output::record_upload(&captured_output, output_upload, response.status());
                 let mut values = observed.lock().unwrap();
                 if values.len() < 160 {
                     values.push((
@@ -331,7 +338,7 @@ async fn run_worker(mode: Mode) {
             if terminal {
                 phase_terminal::verify(case, &worker_root, &result).await;
                 if let Some(watched) = &watch {
-                    phase_output::verify(case, watched, &result).await;
+                    phase_output::verify(case, watched, &result, &output_exchanges).await;
                 }
             }
         } else {
