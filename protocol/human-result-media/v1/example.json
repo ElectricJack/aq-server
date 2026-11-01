@@ -1,0 +1,82 @@
+{
+  "contract": "human-result-media-1",
+  "server_time_ms": 1793556060000,
+  "binding": {
+    "report_id": "00000000-0000-0000-0000-000000000001",
+    "report_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "project_id": "00000000-0000-0000-0000-000000000002",
+    "task_id": "00000000-0000-0000-0000-000000000003",
+    "attempt_id": "00000000-0000-0000-0000-000000000004",
+    "source": {
+      "repository_id": "00000000-0000-0000-0000-000000000005",
+      "base": {
+        "format": "sha1",
+        "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  },
+  "limits": {
+    "max_input_bytes": 1048576,
+    "max_render_bytes": 8388608,
+    "max_preview_bytes": 786432,
+    "max_pixels": 2000000,
+    "max_dimension": 4096,
+    "max_result_artifacts": 8,
+    "upload_ttl_ms": 1800000,
+    "retention_ms": 604800000
+  },
+  "items": [
+    {
+      "receipt": {
+        "schema_version": 1,
+        "artifact_id": "00000000-0000-0000-0000-000000000009",
+        "binding": {
+          "report_id": "00000000-0000-0000-0000-000000000001",
+          "report_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "project_id": "00000000-0000-0000-0000-000000000002",
+          "task_id": "00000000-0000-0000-0000-000000000003",
+          "attempt_id": "00000000-0000-0000-0000-000000000004",
+          "source": {
+            "repository_id": "00000000-0000-0000-0000-000000000005",
+            "base": {
+              "format": "sha1",
+              "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        },
+        "uploader_id": "00000000-0000-0000-0000-000000000006",
+        "input": {
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "bytes": 512,
+          "filename": "work-state.png"
+        },
+        "capture": null,
+        "rendering_policy": "aq.png.rgba8-srgb-v1",
+        "variants": {
+          "preview": {
+            "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "bytes": 128,
+            "mime": "image/png",
+            "width": 320,
+            "height": 200
+          },
+          "render": {
+            "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "bytes": 256,
+            "mime": "image/png",
+            "width": 320,
+            "height": 200
+          }
+        },
+        "retained_at_ms": 1793556000000,
+        "retain_until_ms": 1794160800000
+      },
+      "receipt_digest": "sha256:709e0ce41739a6a9cf8ff29dbb3f48f9228311d57c015c68ed4f7c87c4e62e50",
+      "availability": {
+        "state": "available",
+        "observed_at_ms": 1793556060000,
+        "reason": null
+      }
+    }
+  ]
+}

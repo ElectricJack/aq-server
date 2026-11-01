@@ -1,0 +1,774 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human supplemental exact-report PNG media v1 (proposed)",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/UploadCreate"
+    },
+    {
+      "$ref": "#/$defs/Empty"
+    },
+    {
+      "$ref": "#/$defs/UploadStatus"
+    },
+    {
+      "$ref": "#/$defs/MediaPage"
+    },
+    {
+      "$ref": "#/$defs/ContentFailure"
+    }
+  ],
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ReportRevision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ObjectId": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "const": "sha1"
+            },
+            "hex": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "format",
+            "hex"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "const": "sha256"
+            },
+            "hex": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "format",
+            "hex"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Capture": {
+      "type": "object",
+      "properties": {
+        "scenario": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "captured_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "viewport": {
+          "type": "object",
+          "properties": {
+            "width_css": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "height_css": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "dpr_milli": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 8000
+            }
+          },
+          "required": [
+            "width_css",
+            "height_css",
+            "dpr_milli"
+          ],
+          "additionalProperties": false
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "claimed_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scenario",
+        "captured_at_ms",
+        "viewport",
+        "environment",
+        "claimed_source"
+      ],
+      "additionalProperties": false
+    },
+    "Binding": {
+      "type": "object",
+      "properties": {
+        "report_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "report_revision": {
+          "$ref": "#/$defs/ReportRevision"
+        },
+        "project_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "repository_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "base": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          },
+          "required": [
+            "repository_id",
+            "base"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "report_id",
+        "report_revision",
+        "project_id",
+        "task_id",
+        "attempt_id",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "Input": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "digest",
+        "bytes",
+        "filename"
+      ],
+      "additionalProperties": false
+    },
+    "UploadCreate": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "input_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "input_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_digest",
+        "input_bytes",
+        "filename",
+        "capture"
+      ],
+      "additionalProperties": false
+    },
+    "Empty": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "Variant": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "mime": {
+          "const": "image/png"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        }
+      },
+      "required": [
+        "digest",
+        "bytes",
+        "mime",
+        "width",
+        "height"
+      ],
+      "additionalProperties": false
+    },
+    "PreviewVariant": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Variant"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 786432
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 384
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 384
+            }
+          }
+        }
+      ]
+    },
+    "Receipt": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "uploader_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "input": {
+          "$ref": "#/$defs/Input"
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rendering_policy": {
+          "const": "aq.png.rgba8-srgb-v1"
+        },
+        "variants": {
+          "type": "object",
+          "properties": {
+            "preview": {
+              "$ref": "#/$defs/PreviewVariant"
+            },
+            "render": {
+              "$ref": "#/$defs/Variant"
+            }
+          },
+          "required": [
+            "preview",
+            "render"
+          ],
+          "additionalProperties": false
+        },
+        "retained_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "retain_until_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "binding",
+        "uploader_id",
+        "input",
+        "capture",
+        "rendering_policy",
+        "variants",
+        "retained_at_ms",
+        "retain_until_ms"
+      ],
+      "additionalProperties": false
+    },
+    "Availability": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "available",
+            "expired",
+            "missing",
+            "withheld",
+            "failed"
+          ]
+        },
+        "observed_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "retention_expired",
+                "files_missing",
+                "owner_withheld",
+                "integrity_failed",
+                "storage_unavailable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "observed_at_ms",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        },
+        "receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "availability": {
+          "$ref": "#/$defs/Availability"
+        }
+      },
+      "required": [
+        "receipt",
+        "receipt_digest",
+        "availability"
+      ],
+      "additionalProperties": false
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "max_input_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_render_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "max_preview_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 786432
+        },
+        "max_pixels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000000
+        },
+        "max_dimension": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "max_result_artifacts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "upload_ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800000
+        },
+        "retention_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800000
+        }
+      },
+      "required": [
+        "max_input_bytes",
+        "max_render_bytes",
+        "max_preview_bytes",
+        "max_pixels",
+        "max_dimension",
+        "max_result_artifacts",
+        "upload_ttl_ms",
+        "retention_ms"
+      ],
+      "additionalProperties": false
+    },
+    "Recovery": {
+      "type": "object",
+      "properties": {
+        "put_allowed": {
+          "type": "boolean"
+        },
+        "finalize_allowed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "busy",
+                "expired",
+                "rejected",
+                "already_retained",
+                "access_changed",
+                "storage_changed",
+                "clock_regression",
+                "retry_budget_exhausted",
+                "input_required"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "put_allowed",
+        "finalize_allowed",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "UploadStatus": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "const": "human-result-media-1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "input": {
+          "$ref": "#/$defs/Input"
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "reserved",
+            "received",
+            "finalizing",
+            "retained",
+            "rejected",
+            "expired"
+          ]
+        },
+        "created_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "upload_expires_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "retain_until_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "recovery": {
+          "$ref": "#/$defs/Recovery"
+        },
+        "rejection": {
+          "anyOf": [
+            {
+              "enum": [
+                "invalid_png",
+                "unsupported_png",
+                "input_mismatch",
+                "pixel_limit",
+                "processing_limit",
+                "storage_failure"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Artifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        }
+      },
+      "required": [
+        "contract",
+        "operation_id",
+        "actor_id",
+        "request_digest",
+        "binding",
+        "input",
+        "capture",
+        "state",
+        "created_at_ms",
+        "upload_expires_at_ms",
+        "retain_until_ms",
+        "recovery",
+        "rejection",
+        "artifact",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "retained"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/Artifact"
+              },
+              "recovery": {
+                "type": "object",
+                "properties": {
+                  "put_allowed": {
+                    "const": false
+                  },
+                  "finalize_allowed": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "artifact": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "rejected",
+                  "expired"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "recovery": {
+                "type": "object",
+                "properties": {
+                  "put_allowed": {
+                    "const": false
+                  },
+                  "finalize_allowed": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MediaPage": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "const": "human-result-media-1"
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "required": [
+        "contract",
+        "server_time_ms",
+        "binding",
+        "limits",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "ContentFailure": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "const": "human-result-media-1"
+        },
+        "error": {
+          "enum": [
+            "media_expired",
+            "media_missing",
+            "media_withheld",
+            "media_failed"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "contract",
+        "error",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
