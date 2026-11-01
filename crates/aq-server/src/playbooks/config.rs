@@ -142,7 +142,6 @@ impl Configuration {
             || n.name.len() > 128
             || n.name.contains('\0')
             || !(250..=60000).contains(&self.drive_interval_ms)
-            || self.deployments.is_empty()
             || self.deployments.len() > 4
         {
             return Err("invalid playbook owner identity or bounds");

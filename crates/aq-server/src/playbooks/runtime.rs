@@ -159,14 +159,20 @@ impl Runtime {
                     .await
                     .map_err(|_| refused())?;
             }
-            driver
-                .record_loaded_definitions(
-                    config
-                        .deployments
-                        .iter()
-                        .map(|deployment| &deployment.artifact),
-                )
-                .map_err(|_| refused())?;
+            // The frozen startup-metadata profile represents 1..4 configured
+            // artifacts. An explicit empty deployment list mounts no historical
+            // snapshot; current catalog inspection remains independently owned.
+            // In particular, [] never clears already installed owner state.
+            if !config.deployments.is_empty() {
+                driver
+                    .record_loaded_definitions(
+                        config
+                            .deployments
+                            .iter()
+                            .map(|deployment| &deployment.artifact),
+                    )
+                    .map_err(|_| refused())?;
+            }
             driver.recover().await.map_err(|_| refused())?;
             Ok::<_, anyhow::Error>(())
         }

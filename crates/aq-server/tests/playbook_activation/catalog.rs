@@ -446,3 +446,243 @@ async fn held_catalog_read_pins_original_owner_binding_and_authorization_version
     runtime.shutdown().await.unwrap();
     assert!(!supported(&app, "owner@localhost").await);
 }
+
+fn explicit_empty_deployments(text: &str) -> String {
+    let (owner, _) = text.split_once("[[playbooks.deployments]]").unwrap();
+    owner.replace("[playbooks]\n", "[playbooks]\ndeployments=[]\n")
+}
+
+async fn no_work_counts(pool: &sqlx::PgPool) -> Vec<i64> {
+    let mut counts = vec![];
+    for table in [
+        "execution_attempts",
+        "playbook_admissions",
+        "playbook_effects",
+        "playbook_cancellations",
+        "playbook_outbox",
+        "human_graph_operations",
+        "agent_graph_operations",
+        "agent_graph_outbox",
+        "mailbox_messages",
+        "mailbox_deliveries",
+        "notification_messages",
+        "notification_deliveries",
+        "review_subjects",
+        "human_decision_requests",
+        "human_decision_finality",
+        "review_owner_outbox",
+        "observation_events",
+    ] {
+        counts.push(
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+        );
+    }
+    counts
+}
+
+async fn idle_quanta(runtime: &aq_server::playbooks::runtime::Runtime) {
+    for _ in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match runtime.driver.quantum().await {
+                    Err(Error::Overloaded) => tokio::task::yield_now().await,
+                    result => break result,
+                }
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["admissions_checked"], 0);
+        assert_eq!(result["events_checked"], 0);
+        assert_eq!(result["tick"]["transitions"], 0);
+    }
+}
+
+async fn no_startup_snapshot(app: &Router) {
+    let (status, bootstrap) = read(app, "owner@localhost", "/api/v1/bootstrap").await;
+    assert_eq!(status, 200);
+    let capabilities = bootstrap["data"]["capabilities"].as_array().unwrap();
+    for (name, expected) in [
+        ("playbooks.catalog.read", true),
+        ("playbooks.loaded-definitions.read", false),
+        ("playbooks.inspect", true),
+        ("decisions.read", true),
+    ] {
+        assert_eq!(
+            capabilities.iter().find(|cap| cap["name"] == name).unwrap()["enabled"],
+            expected,
+            "unexpected availability for {name}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_explicit_empty_owner_has_current_catalog_without_grants_or_startup_snapshot() {
+    let mut s = setup().await;
+    s.text = explicit_empty_deployments(&s.text);
+    // [] is an explicit operator choice. Omitting the field stays invalid.
+    assert!(toml::from_str::<Config>(&s.text.replace("deployments=[]\n", "")).is_err());
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let pool = s.f.db.pool().await;
+    let before = no_work_counts(&pool).await;
+    let mut previous_incarnation = None;
+    for _ in 0..2 {
+        let runtime = aq_server::playbooks::runtime::Runtime::start(
+            &s.f.state,
+            s.f.state.config.playbooks.clone().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(runtime.driver.catalog_supported());
+        assert!(!runtime.driver.loaded_definitions_available());
+        let app = aq_server::build_admin_router_with_policy_owners(
+            s.f.state.clone(),
+            Some(runtime.driver.clone()),
+            Some(runtime.reviews.clone()),
+        );
+        no_startup_snapshot(&app).await;
+        let mut current_incarnation = None;
+        for kind in ["definitions", "activations"] {
+            let (status, page) = read(
+                &app,
+                "owner@localhost",
+                &format!("/api/playbooks/inspection/catalog/{kind}"),
+            )
+            .await;
+            assert_eq!(status, 200);
+            assert_eq!(page["source"], "current_namespace_state");
+            assert_eq!(page["current_catalog"], true);
+            assert_eq!(page["namespace"]["id"], json!(s.namespace));
+            assert_eq!(page["items"], json!([]));
+            assert_eq!(page["next_cursor"], Value::Null);
+            let incarnation = page["incarnation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            assert!(current_incarnation.is_none_or(|value| value == incarnation));
+            current_incarnation = Some(incarnation);
+        }
+        if let Some(previous) = previous_incarnation {
+            assert_eq!(current_incarnation, Some(previous + 1));
+        }
+        previous_incarnation = current_incarnation;
+        for table in [
+            "playbook_grants",
+            "playbook_admissions",
+            "aq_playbooks.namespace_artifacts",
+            "aq_playbooks.artifacts",
+            "aq_playbooks.encrypted_artifacts",
+            "aq_playbooks.catalog_rows",
+        ] {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0,
+                "empty configuration created unexpected {table}"
+            );
+        }
+        idle_quanta(&runtime).await;
+        assert_eq!(no_work_counts(&pool).await, before);
+        runtime.shutdown().await.unwrap();
+        assert!(!supported(&app, "owner@localhost").await);
+    }
+    assert_eq!(no_work_counts(&pool).await, before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_empty_startup_preserves_installed_definitions_and_activations() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let pool = s.f.db.pool().await;
+    let before = no_work_counts(&pool).await;
+    let runtime = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(runtime.driver.loaded_definitions_available());
+    let app = aq_server::build_admin_router_with_playbooks(
+        s.f.state.clone(),
+        Some(runtime.driver.clone()),
+    );
+    let mut retained = vec![];
+    for kind in ["definitions", "activations"] {
+        let (status, page) = read(
+            &app,
+            "owner@localhost",
+            &format!("/api/playbooks/inspection/catalog/{kind}"),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        retained.push(page);
+    }
+    let grant: Value = sqlx::query_scalar("SELECT to_jsonb(g) FROM playbook_grants g")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    runtime.shutdown().await.unwrap();
+
+    // The old artifact file is deliberately absent: [] must neither reload it
+    // nor interpret absence from configuration as an uninstall instruction.
+    std::fs::remove_file(&s.artifact_path).unwrap();
+    s.text = explicit_empty_deployments(&s.text);
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let runtime = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router_with_policy_owners(
+        s.f.state.clone(),
+        Some(runtime.driver.clone()),
+        Some(runtime.reviews.clone()),
+    );
+    no_startup_snapshot(&app).await;
+    assert!(!runtime.driver.loaded_definitions_available());
+    for (kind, previous) in ["definitions", "activations"].into_iter().zip(retained) {
+        let (status, page) = read(
+            &app,
+            "owner@localhost",
+            &format!("/api/playbooks/inspection/catalog/{kind}"),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(page["items"], previous["items"]);
+        assert_eq!(page["source"], "current_namespace_state");
+        assert_eq!(page["current_catalog"], true);
+        assert_eq!(
+            page["incarnation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
+            previous["incarnation"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                + 1
+        );
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>("SELECT to_jsonb(g) FROM playbook_grants g")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        grant
+    );
+    idle_quanta(&runtime).await;
+    assert_eq!(no_work_counts(&pool).await, before);
+    runtime.shutdown().await.unwrap();
+    assert!(!supported(&app, "owner@localhost").await);
+}
