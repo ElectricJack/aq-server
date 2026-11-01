@@ -312,13 +312,14 @@ dependencies = [
 
 [[package]]
 name = "aq-profiles"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aq-agent-api",
  "aq-session-api",
  "aq-session-protocol",
  "clap",
  "nix",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -376,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "aq-selection"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aq-profiles",
  "aq-session-api",

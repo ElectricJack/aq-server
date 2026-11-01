@@ -24,7 +24,7 @@ pub enum ModuleKind {
     Behavior,
     Capability,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
     Startup,

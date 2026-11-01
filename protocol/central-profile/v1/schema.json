@@ -1,0 +1,943 @@
+{
+  "$defs": {
+    "ArtifactKind": {
+      "enum": [
+        "request",
+        "policy",
+        "compatibility",
+        "compiler",
+        "renderer",
+        "composition",
+        "mail_frame",
+        "startup"
+      ],
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "AuthorityState": {
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
+    "CentralBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "compiler": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "composition": {
+          "$ref": "#/$defs/CentralComposition"
+        },
+        "mail_frame": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "policy": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "renderer": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "request": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "startup": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        }
+      },
+      "required": [
+        "composition",
+        "request",
+        "policy",
+        "compatibility",
+        "compiler",
+        "renderer",
+        "mail_frame",
+        "startup",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "CentralCeilings": {
+      "additionalProperties": false,
+      "properties": {
+        "caller": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "execution": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "installation": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "maxItems": 128,
+          "type": "array"
+        }
+      },
+      "required": [
+        "installation",
+        "execution",
+        "caller"
+      ],
+      "type": "object"
+    },
+    "CentralCompatibility": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "catalog_digest": {
+          "type": "string"
+        },
+        "execution_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "intelligence_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "kind": {
+          "$ref": "#/$defs/CompatibilityKind"
+        },
+        "modules": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "catalog_digest",
+        "agent_profile",
+        "intelligence_profile",
+        "execution_profile",
+        "modules"
+      ],
+      "type": "object"
+    },
+    "CentralCompilation": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/AuthorityState"
+        },
+        "blocking_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CentralBundle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "catalog_valid": {
+          "type": "boolean"
+        },
+        "composition_valid": {
+          "type": "boolean"
+        },
+        "selection": {
+          "$ref": "#/$defs/SelectionState"
+        }
+      },
+      "required": [
+        "catalog_valid",
+        "composition_valid",
+        "blocking_reasons",
+        "selection",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "CentralCompileRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "available_adapters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "available_tools": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "ceilings": {
+          "$ref": "#/$defs/CentralCeilings"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/CentralCompatibility"
+        },
+        "context": {
+          "items": {
+            "$ref": "#/$defs/ContextInput"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "overrides": {
+          "items": {
+            "$ref": "#/$defs/Override"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "platform": {
+          "$ref": "#/$defs/ContextInput"
+        },
+        "policy": {
+          "$ref": "#/$defs/CentralPolicy"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralProfileSubject"
+        },
+        "turn": {
+          "$ref": "#/$defs/MailTurn"
+        }
+      },
+      "required": [
+        "schema_version",
+        "subject",
+        "policy",
+        "compatibility",
+        "ceilings",
+        "available_tools",
+        "available_adapters",
+        "harness",
+        "environment",
+        "platform",
+        "turn",
+        "context",
+        "overrides"
+      ],
+      "type": "object"
+    },
+    "CentralComposition": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "authority": {
+          "$ref": "#/$defs/AuthorityState"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "compiler": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "context_limit_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "type": "null"
+        },
+        "denied_requirements": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "effective_permissions": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "execution_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "instruction_order": {
+          "items": {
+            "$ref": "#/$defs/Instruction"
+          },
+          "type": "array"
+        },
+        "intelligence_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "mail_frame": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "modules": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "omissions": {
+          "items": {
+            "$ref": "#/$defs/Omission"
+          },
+          "type": "array"
+        },
+        "optional_startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "overrides": {
+          "items": {
+            "$ref": "#/$defs/OverrideExplanation"
+          },
+          "type": "array"
+        },
+        "reference_material": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "type": "array"
+        },
+        "renderer": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "request": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "requested_permissions": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "required_startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "selected_model": {
+          "type": "null"
+        },
+        "selection": {
+          "$ref": "#/$defs/SelectionState"
+        },
+        "startup": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralProfileSubject"
+        },
+        "token_count": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema_version",
+        "subject",
+        "request",
+        "catalog",
+        "compiler",
+        "compatibility",
+        "renderer",
+        "mail_frame",
+        "agent_profile",
+        "intelligence_profile",
+        "execution_profile",
+        "modules",
+        "harness",
+        "environment",
+        "instruction_order",
+        "requested_permissions",
+        "effective_permissions",
+        "denied_requirements",
+        "context_limit_bytes",
+        "required_startup_bytes",
+        "optional_startup_bytes",
+        "omissions",
+        "overrides",
+        "reference_material",
+        "startup",
+        "startup_bytes",
+        "selection",
+        "selected_model",
+        "token_count",
+        "cost",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "CentralPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "agent_profile": {
+          "type": "string"
+        },
+        "catalog_digest": {
+          "type": "string"
+        },
+        "compatibility_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "context_limit_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "conversation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/PolicyKind"
+        },
+        "permissions": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "actor_id",
+        "conversation_id",
+        "conversation_revision",
+        "revision",
+        "enabled",
+        "catalog_digest",
+        "agent_profile",
+        "compatibility_digest",
+        "permissions",
+        "context_limit_bytes"
+      ],
+      "type": "object"
+    },
+    "CentralProfileSubject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central_conversation",
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "actor_id",
+            "conversation_id",
+            "conversation_revision",
+            "policy"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CompatibilityKind": {
+      "enum": [
+        "central_conversation"
+      ],
+      "type": "string"
+    },
+    "ContextInput": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "omission_priority": {
+          "description": "Smaller values are omitted first; ties preserve input order.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "text",
+        "delivery",
+        "required",
+        "omission_priority"
+      ],
+      "type": "object"
+    },
+    "Delivery": {
+      "enum": [
+        "startup",
+        "on_demand"
+      ],
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "GeneratedArtifact": {
+      "additionalProperties": false,
+      "description": "Actual generated UTF-8 data, never retained storage or authenticated authority.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "utf8": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reference",
+        "utf8"
+      ],
+      "type": "object"
+    },
+    "Instruction": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "delivery",
+        "required",
+        "text"
+      ],
+      "type": "object"
+    },
+    "MailMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "body_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "message_id",
+        "cursor",
+        "payload_digest",
+        "body_digest",
+        "body"
+      ],
+      "type": "object"
+    },
+    "MailTurn": {
+      "additionalProperties": false,
+      "properties": {
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/MailMessage"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "through_cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "through_cursor",
+        "messages"
+      ],
+      "type": "object"
+    },
+    "Omission": {
+      "additionalProperties": false,
+      "properties": {
+        "reason_code": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "source",
+        "reason_code",
+        "required"
+      ],
+      "type": "object"
+    },
+    "Override": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "reason_code": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "field",
+        "value",
+        "source",
+        "reason_code"
+      ],
+      "type": "object"
+    },
+    "OverrideExplanation": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "reason_code": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "field",
+        "source",
+        "reason_code"
+      ],
+      "type": "object"
+    },
+    "Permission": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "scope_reference": {
+          "description": "Logical scope reference, never a physical credential or secret value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "scope_reference"
+      ],
+      "type": "object"
+    },
+    "PolicyKind": {
+      "enum": [
+        "central_profile_composition"
+      ],
+      "type": "string"
+    },
+    "SelectionState": {
+      "enum": [
+        "unresolved"
+      ],
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "digest",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "urn:agent-q:central-profile:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralPolicy"
+        },
+        "document": {
+          "const": "policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralCompatibility"
+        },
+        "document": {
+          "const": "compatibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralCompileRequest"
+        },
+        "document": {
+          "const": "request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralComposition"
+        },
+        "document": {
+          "const": "composition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralCompilation"
+        },
+        "document": {
+          "const": "compilation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "document": {
+          "const": "artifact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Document",
+  "x-artifact-maxBytes": 8388608,
+  "x-bundle-maxBytes": 16777216,
+  "x-execution-authority": false,
+  "x-request-maxBytes": 1048576,
+  "x-required-validation": "compile_central / verify_central plus independently authenticated owner facts"
+}

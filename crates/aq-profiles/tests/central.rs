@@ -382,7 +382,7 @@ fn strict_central_request_has_no_fake_task_selection_or_credential_surface() {
 #[test]
 fn generated_schema_stays_frozen() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../protocol/central-profile/v1/schema.json");
+        .join("tests/golden/central-schema-v1.json");
     let generated = schema();
     if std::env::var_os("AQ_UPDATE_CENTRAL_PROFILE_SCHEMA").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -391,6 +391,10 @@ fn generated_schema_stays_frozen() {
             format!("{}\n", serde_json::to_string_pretty(&generated).unwrap()),
         )
         .unwrap();
+        let public = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../protocol/central-profile/v1/schema.json");
+        std::fs::create_dir_all(public.parent().unwrap()).unwrap();
+        std::fs::copy(&path, public).unwrap();
     } else {
         let expected: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(generated, expected);

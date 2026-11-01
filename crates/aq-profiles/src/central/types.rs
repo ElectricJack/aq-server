@@ -18,6 +18,7 @@ pub enum PolicyKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralPolicy {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub kind: PolicyKind,
     pub actor_id: Uuid,
@@ -28,6 +29,7 @@ pub struct CentralPolicy {
     pub catalog_digest: String,
     pub agent_profile: String,
     pub compatibility_digest: Digest,
+    #[schemars(length(max = 128))]
     pub permissions: Vec<Permission>,
     pub context_limit_bytes: u64,
 }
@@ -39,19 +41,24 @@ pub enum CompatibilityKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralCompatibility {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub kind: CompatibilityKind,
     pub catalog_digest: String,
     pub agent_profile: Source,
     pub intelligence_profile: Source,
     pub execution_profile: Source,
+    #[schemars(length(max = 128))]
     pub modules: Vec<Source>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralCeilings {
+    #[schemars(length(max = 128))]
     pub installation: Vec<Permission>,
+    #[schemars(length(max = 128))]
     pub execution: Vec<Permission>,
+    #[schemars(length(max = 128))]
     pub caller: Vec<Permission>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -74,18 +81,23 @@ pub struct MailTurn {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralCompileRequest {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub subject: CentralProfileSubject,
     pub policy: CentralPolicy,
     pub compatibility: CentralCompatibility,
     pub ceilings: CentralCeilings,
+    #[schemars(length(max = 128))]
     pub available_tools: Vec<String>,
+    #[schemars(length(max = 128))]
     pub available_adapters: Vec<String>,
     pub harness: String,
     pub environment: String,
     pub platform: ContextInput,
     pub turn: MailTurn,
+    #[schemars(length(max = 128))]
     pub context: Vec<ContextInput>,
+    #[schemars(length(max = 16))]
     pub overrides: Vec<Override>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -135,6 +147,7 @@ pub enum AuthorityState {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CentralComposition {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub subject: CentralProfileSubject,
     pub request: ArtifactRef,
@@ -146,6 +159,7 @@ pub struct CentralComposition {
     pub agent_profile: Source,
     pub intelligence_profile: Source,
     pub execution_profile: Source,
+    #[schemars(length(max = 128))]
     pub modules: Vec<Source>,
     pub harness: String,
     pub environment: String,

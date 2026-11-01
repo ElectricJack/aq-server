@@ -9,7 +9,6 @@ use crate::{
 use aq_session_api::{Omission, OverrideExplanation, Permission, Source};
 use aq_session_protocol::Validate;
 use aq_session_protocol::{ArtifactRef, Text};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -533,6 +532,9 @@ pub fn schema() -> Value {
     let mut s = serde_json::to_value(schemars::schema_for!(Document)).expect("central schema");
     s["$id"] = json!("urn:agent-q:central-profile:1");
     s["x-execution-authority"] = json!(false);
+    s["x-request-maxBytes"] = json!(MAX_REQUEST_BYTES);
+    s["x-artifact-maxBytes"] = json!(MAX_ARTIFACT_BYTES);
+    s["x-bundle-maxBytes"] = json!(16 * 1024 * 1024);
     s["x-required-validation"] =
         json!("compile_central / verify_central plus independently authenticated owner facts");
     s
