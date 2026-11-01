@@ -31,7 +31,10 @@ pub fn reference(id: &str) -> ArtifactRef {
         digest: Digest::of(id.as_bytes()),
     }
 }
-pub async fn configure(c: &mut Case) {
+pub async fn configure(
+    c: &mut Case,
+    extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
+) {
     let mut config = (*c.env.env.state.config).clone();
     let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
     let r = p.qualified_runtimes[0].clone();
@@ -74,6 +77,7 @@ pub async fn configure(c: &mut Case) {
         "aq.phase-execution-qualification/test",
         execution.to_string(),
     ));
+    extra(&mut p);
     p.revision += 1;
     p.validate().unwrap();
     config.profiled_execution = Some(std::sync::Arc::new(p));
@@ -101,10 +105,18 @@ pub async fn auth(c: &Case) -> worker_api::AuthenticatedNode {
         .await
         .unwrap()
 }
-pub async fn setup_with_inventory(v2: bool) -> (Case, phase::Proposal, AcceptRequest) {
+pub fn setup_with_inventory(
+    v2: bool,
+) -> impl std::future::Future<Output = (Case, phase::Proposal, AcceptRequest)> {
+    setup_with_inventory_and_config(v2, |_| {})
+}
+pub async fn setup_with_inventory_and_config(
+    v2: bool,
+    extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
+) -> (Case, phase::Proposal, AcceptRequest) {
     let ready = presence_fixture::setup().await;
     let mut c = ready.c;
-    configure(&mut c).await;
+    configure(&mut c, extra).await;
     if v2 {
         let receipt = aq_server::profiled_execution::presence::inventory::record(
             &c.env.env.state,
@@ -182,8 +194,24 @@ pub struct Prepared {
     pub a: phase::AcceptedReceipt,
     pub prepared: phase::PrepareRequest,
 }
-pub async fn prepared(v2: bool) -> Prepared {
-    let (c, p, q) = setup_with_inventory(v2).await;
+pub fn prepared(v2: bool) -> impl std::future::Future<Output = Prepared> {
+    prepare_with_optional_config(v2, None)
+}
+#[allow(dead_code)] // Selected only by the path-imported qualified terminal fixture.
+pub fn prepared_with_config(
+    v2: bool,
+    extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
+) -> impl std::future::Future<Output = Prepared> {
+    prepare_with_optional_config(v2, Some(extra))
+}
+async fn prepare_with_optional_config(
+    v2: bool,
+    extra: Option<fn(&mut aq_server::profiled_execution::config::ProfiledConfig)>,
+) -> Prepared {
+    let (c, p, q) = match extra {
+        Some(extra) => setup_with_inventory_and_config(v2, extra).await,
+        None => setup_with_inventory(v2).await,
+    };
     let a = owner::accept(&c.env.env.state, &auth(&c).await, &q, Uuid::new_v4())
         .await
         .unwrap()
