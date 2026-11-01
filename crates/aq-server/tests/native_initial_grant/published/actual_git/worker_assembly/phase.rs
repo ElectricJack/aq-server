@@ -26,7 +26,7 @@ pub(super) async fn configure(case: &mut Case, execution: bool) -> (Value, Optio
             .unwrap();
     assert_eq!(
         version.parse::<u32>().unwrap(),
-        aq_server::STATE_FORMAT_VERSION
+        aq_server::test_support::fixture_store_state_version()
     );
     assert!(
         version.parse::<u32>().unwrap() >= 30,
