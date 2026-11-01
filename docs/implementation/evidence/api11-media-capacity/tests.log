@@ -1,0 +1,29 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-result-media-http-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 46.67s
+     Running tests/profiled_results.rs (/tmp/aq-native-union-target/debug/deps/profiled_results-e27377f0af236bdd)
+
+running 21 tests
+test media_http::actual_http_closed_requests_shared_csrf_and_read_only_upload_optin ... ok
+test media_http::actual_http_denied_during_failed_content_io_stays_auth_error_and_foreign_intent_hidden ... ok
+test media_http::actual_http_known_missing_corrupt_withheld_expired_and_unknown_scope_are_distinct ... ok
+test media_http::actual_http_reserves_replays_retains_lists_and_stream_frames_hold_all_guards ... ok
+test media_http::actual_http_retained_disposable_report_fixture_has_exact_metadata_and_no_media ... ok
+test media_http::actual_runtime_failed_initial_cleanup_refuses_mountable_success_and_preserves_charge ... ok
+test media_owner::media_actual_cleanup_absence_durability_failure_keeps_charge_and_retries ... ok
+test media_owner::media_actual_exact_put_replay_never_writes_or_renews_original_intent ... ok
+test media_owner::media_actual_expired_pending_cleanup_releases_report_slots_preserving_tombstone ... ok
+test media_owner::media_actual_fsync_rename_precommit_interruptions_recover_exact_one_generation ... ok
+test media_owner::media_actual_interrupted_publish_reuses_one_generation_and_root_swaps_fail ... ok
+test media_owner::media_actual_list_probes_outside_sql_and_body_hash_is_checked_only_on_content ... ok
+test media_owner::media_actual_live_physical_writer_blocks_expired_cleanup_budget_release ... ok
+test media_owner::media_actual_quota_race_reserves_before_io_and_cleanup_keeps_history ... ok
+test media_owner::media_actual_rejected_png_is_terminal_and_symlinked_content_never_read ... ok
+test media_owner::media_actual_replaced_lock_inode_cannot_start_second_owner ... ok
+test media_owner::media_actual_retention_exact_bytes_original_actor_replay_and_content ... ok
+test media_owner::media_actual_retention_expiry_waits_for_live_content_and_preserves_receipt ... ok
+test media_owner::media_actual_root_swap_after_receive_before_sql_commit_is_refused ... ok
+test media_owner::media_actual_sql_refuses_unleased_finalizing_and_backdated_expired_receipt ... ok
+test media_owner::media_actual_subject_rebinding_during_io_denies_email_only_change_recovers ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 24.61s
+

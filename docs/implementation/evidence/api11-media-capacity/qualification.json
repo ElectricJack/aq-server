@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "source_commit": "b455eb07caef267112aa478971fbe791cbc74af6",
+  "status": "owner_capacity_fix_qualified_read_only_promotion_review_only",
+  "state_format": 36,
+  "frozen36_ddl_sha256": "f07c43ea22ffaaaa37cdb0db0a7eccb04b871af9d973f3e87a77d669e3b67e99",
+  "changes": "Owner cleanup terminalizes eligible Reserved/Received/Finalizing to Expired at cleanup claim. Byte charges stay until confirmed physical absence. Retained/Rejected states and wire/schema stay unchanged.",
+  "actual_regression": {
+    "pending_cycles": [
+      6,
+      2
+    ],
+    "first_cycle_states": [
+      "reserved",
+      "received",
+      "finalizing_after_real_codec_interrupt"
+    ],
+    "ninth_pending_reserve_succeeds": true,
+    "retained_tombstone_row_and_count_unchanged": true,
+    "immutable_actor_request_source_policy_deadlines_exact": true,
+    "history_count_with_tombstone": 10,
+    "final_reserved_bytes": 10485760
+  },
+  "checks": {
+    "actual_owner_http_cases": 21,
+    "runtime_seconds": 24.61,
+    "compile_seconds": 46.67,
+    "strict_clippy_seconds": 22.1,
+    "default_binary_build_seconds": 38.25,
+    "affected_fmt_diff_clean": true
+  },
+  "binary": {
+    "path": "/tmp/aq-media-http-qualified/aq-server-b455eb0",
+    "sha256": "cdd658fda4e8ade56c9a85efab17b8ef931e8f3ae8e33fd064577bb8cd3a2e2f",
+    "source_revision": "b455eb07caef267112aa478971fbe791cbc74af6",
+    "default_features": true,
+    "test_support": false
+  },
+  "fixed_rehearsal": {
+    "readiness36_and_source_pin_verified": true,
+    "same_private_database_root_and_storage_binding": true,
+    "all_human_data_schema_sequences_preserved": true,
+    "only_control_delta": "notification dispatcher_id",
+    "uploads_enabled": false,
+    "media_intents": 0,
+    "canonical_still35_original_process": true
+  },
+  "limitations": [
+    "No retroactive relabelling of an already immutable old55 cleanupdone row; canonical has never had media state and known qualification stages have no affected history",
+    "No canonical cutover approved or executed",
+    "Uploader-enabled promotion remains gated on consistent node/result-before-intent lock ordering and its deterministic SQL proof"
+  ],
+  "source_sha256": {
+    "crates/aq-server/src/result_media/cleanup.rs": "775721765c9621d93dd4b90c4271c08ed9a63a99bee01a3228bb6a5ea2b261d1",
+    "crates/aq-server/tests/profiled_results/media_owner.rs": "f5a3eadec48b5113923e77d420e5358ade7e06374ec36bec87965d1d2b1361ad"
+  }
+}

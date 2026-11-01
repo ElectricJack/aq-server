@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "migration_and_backup_rollback_rehearsed_promotion_blocked_capacity_fix",
+  "status": "migration_rollback_and_fixed_capacity_rehearsed_parent_review_required",
   "private_artifact_directory": "/tmp/aq-media36-rehearsal-b600e6a570",
   "privacy": "All raw dumps/config/bootstrap/snapshot files remain private0600 under0700 directories; committed record contains counts and hashes only. Old executable copy is owner-only0500.",
   "candidate": {
@@ -9,7 +9,7 @@
     "binary_sha256": "49006758bfcf378f54a24343b6444563c55adf32cc214c0904c29ec3f58b30e8",
     "bundle_manifest_sha256": "af51fe1636a87934ff0ef85ad03336c8e3a0b3bffc97817e6b8087bb3d58c127",
     "promotion_approved": false,
-    "known_blocker": "Expired pending cleanup releases byte quota but previously left report slot states counted. Owner-only capacity fix and fixed binary qualification are required; frozen36DDL remains unchanged."
+    "known_blocker": "Baseline55 is superseded by qualified b455 capacity fix; parent must review final promotion and uploader lock-order gate."
   },
   "canonical": {
     "state_format": 35,
@@ -103,5 +103,25 @@
     "Canonical mail tables currently empty; every existing row bag and conversation singleton still checked",
     "No actual OS/power loss was injected",
     "No canonical promotion is authorized by this record"
-  ]
+  ],
+  "fixed_candidate": {
+    "path": "/tmp/aq-media-http-qualified/aq-server-b455eb0",
+    "sha256": "cdd658fda4e8ade56c9a85efab17b8ef931e8f3ae8e33fd064577bb8cd3a2e2f",
+    "source_revision": "b455eb07caef267112aa478971fbe791cbc74af6",
+    "default_features": true,
+    "test_support": false
+  },
+  "capacity_fix_qualification": "../api11-media-capacity/qualification.json",
+  "private_config_drafts": {
+    "base_config_sha256": "de60d617b02dbf7b2eac4c25c425239a5f85479a8d1d113f93996b559864d45e",
+    "resumed_config_sha256": "8b9d596e037311bbdf162c7508c7c626aec07dceca1a082dd3281d2dde8a6bf8",
+    "resumed_only_new_section": "result_media",
+    "quiesced_config_sha256": "b054d2cac22e5b9d684586360777ece76271b6369f90eb007656099299be11ec",
+    "quiesced_only_additional_section": "updates",
+    "all_original_semantic_config_values_preserved": true,
+    "uploads_enabled": false,
+    "drafts_mode": "0600",
+    "proposed_live_directories_created": false,
+    "canonical_config_changed": false
+  }
 }

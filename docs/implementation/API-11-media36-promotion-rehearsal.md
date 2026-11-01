@@ -1,11 +1,15 @@
 # AQ media state 35→36 promotion rehearsal and rollback draft
 
 **Review only. No canonical cutover performed.** The copied-database migration
-and backup-based format rollback passed. Candidate `55b1dc6` is now blocked for
-promotion by the expired-pending report-slot cleanup bug identified after that
-rehearsal. The owner-only fix, its actual capacity regression and a newly pinned
-fixed state36 binary must pass before this draft can become a cutover procedure.
-Frozen migration36 must not be rewritten to fix that runtime bug.
+and backup-based format rollback passed. Baseline `55b1dc6` is superseded by
+the qualified owner-only capacity fix `b455eb0`; frozen migration36 is unchanged.
+Twenty-one actual owner/HTTP cases passed in24.61s, strict Clippy in22.10s and
+the default binary build in38.25s. Its exact source pin, SHA and regression are in
+the [capacity qualification](evidence/api11-media-capacity/qualification.json).
+The private4214 rehearsal now runs that fixed binary on its original36
+database/root/storage binding; human data, schema and sequences remain exact.
+Parent review still precedes any canonical change. Uploader enablement also
+requires the separate result/node-before-intent lock-order proof/fix.
 
 The [counts/hash summary](evidence/api11-media36-rehearsal/summary.json) contains
 no message bodies, user names, credentials or raw conversation/actor IDs. Raw
@@ -64,6 +68,16 @@ This establishes data/schema preservation and backup-based format rollback. It
 does not qualify a full canonical operational configuration or authorize its
 enablement. The current copied mail tables are empty; their exact bags and all
 other existing data were nevertheless compared.
+
+Private `promotion-config.resumed.draft.toml` and
+`promotion-config.quiesced.draft.toml` are available inside the rehearsal artifact
+directory. Both preserve every original semantic setting. The resumed draft adds
+only media with uploads disabled; the quiesced draft additionally points at a
+dedicated maintenance spool. Their SHA values are recorded in the counts/hash
+summary. No proposed canonical root/spool directory has been created. At the
+approved cutover, create the private maintenance marker before starting the
+quiesced configuration and keep ingress/worker writers held through validation.
+Switching to the resumed configuration is itself a reviewed resume step.
 
 ## Proposed promotion protocol, after the capacity fix is accepted
 
