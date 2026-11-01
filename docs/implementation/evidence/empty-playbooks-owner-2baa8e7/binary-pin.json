@@ -1,0 +1,24 @@
+{
+  "binary": "/tmp/aq-empty-owner-qualified-2baa8e7/aq-server",
+  "sha256": "6f07dd8e98d3ae74e4886a6bf66b10b8f85a0a22c05756b77738543c7ec7da65",
+  "source_revision": "2baa8e7",
+  "source_commit": "2baa8e7b387b52717ccc9b97a6b970b447cf319b",
+  "base": "1111441",
+  "state_format": 37,
+  "default_features": true,
+  "test_support": false,
+  "permissions": "0500",
+  "bytes": 115844968,
+  "build_log_final_line": "    Finished `dev` profile [unoptimized] target(s) in 1m 01s",
+  "no_service_started": true,
+  "command": [
+    "cargo",
+    "build",
+    "-p",
+    "aq-server",
+    "--bin",
+    "aq-server",
+    "--locked",
+    "--offline"
+  ]
+}

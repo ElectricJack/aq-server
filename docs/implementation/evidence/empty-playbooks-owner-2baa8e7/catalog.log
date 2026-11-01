@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized] target(s) in 0.17s
+     Running tests/playbook_activation.rs (/tmp/aq-native-union-target/debug/deps/playbook_activation-eb573a9c755d1716)
+
+running 5 tests
+test catalog::current_catalog_refuses_foreign_scope_roles_bad_query_and_unmounted_owner ... ok
+test catalog::actual_current_catalog_tracks_later_install_and_activation_without_restamping_startup ... ok
+test catalog::actual_empty_startup_preserves_installed_definitions_and_activations ... ok
+test catalog::actual_explicit_empty_owner_has_current_catalog_without_grants_or_startup_snapshot ... ok
+test catalog::held_catalog_read_pins_original_owner_binding_and_authorization_version ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 1.89s
+

@@ -1,0 +1,22 @@
+{
+  "source_commit": "2baa8e7b387b52717ccc9b97a6b970b447cf319b",
+  "base": "1111441",
+  "actual_catalog_tests": {
+    "passed": 5,
+    "seconds": 1.89
+  },
+  "existing_startup_inert_tests": {
+    "passed": 3,
+    "seconds": 1.19
+  },
+  "existing_local_transport_config_guard_test": {
+    "passed": 1,
+    "seconds": 0.64
+  },
+  "strict_affected_lib_test_all_features_seconds": 34.34,
+  "owned_rustfmt": true,
+  "default_locked_offline_build_seconds": 61,
+  "new_namespace_tests": "Actual protected storage and HTTP; synthetic fixture forwarding explicitly retained, separate real-UDS acceptance available for composed37/0.1.3",
+  "frozen_startup_profile_changed": false,
+  "canonical_lifecycle_or_configuration_changed": false
+}

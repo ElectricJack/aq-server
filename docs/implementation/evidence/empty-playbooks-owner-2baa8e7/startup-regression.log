@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized] target(s) in 0.17s
+     Running tests/playbook_activation.rs (/tmp/aq-native-union-target/debug/deps/playbook_activation-eb573a9c755d1716)
+
+running 3 tests
+test definitions::inert_development_startup_and_quanta_create_no_work_or_delivery ... ok
+test definitions::loaded_definitions_refuse_foreign_scope_roles_unknown_query_and_absent_runtime ... ok
+test definitions::actual_startup_definitions_are_redacted_historical_and_do_not_read_engine_snapshot ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.19s
+
