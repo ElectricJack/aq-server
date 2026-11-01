@@ -66,7 +66,9 @@ macro_rules! endpoint {
                 super::$owner::$method(&state, &node, &q).await.map(Json)
             })
             .await
-            .map_err(|_| AppError::Maintenance("phase terminal ingress deadline exceeded".into()))?
+            .map_err(|_| {
+                AppError::Maintenance("phase terminal deadline exceeded; outcome unknown".into())
+            })?
         }
     };
 }

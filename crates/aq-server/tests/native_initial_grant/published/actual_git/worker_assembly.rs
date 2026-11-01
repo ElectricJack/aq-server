@@ -409,4 +409,14 @@ async fn run_worker(mode: Mode) {
     git_child.wait().await.unwrap();
     a.process.kill().await.unwrap();
     a.process.wait().await.unwrap();
+    if terminal && std::env::var("AQ_TEST_RETAIN_NATIVE_DEMO").as_deref() == Ok("1") {
+        // Explicit local preview only, after all assertions and physical cleanup.
+        // Retain the real database rather than fabricate dashboard receipt rows.
+        let name: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+        std::mem::forget(case.env.env.db.clone());
+        eprintln!("retained_native_demo_database={name}");
+    }
 }
