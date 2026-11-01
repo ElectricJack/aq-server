@@ -525,3 +525,5 @@ pub mod control;
 pub mod granted_closure;
 
 pub mod preparation_v2;
+
+pub mod scoped_presence;

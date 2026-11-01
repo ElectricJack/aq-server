@@ -1,0 +1,45 @@
+{
+  "identity": {
+    "boot_id": "00000000-0000-0000-0000-00000000000c",
+    "node_id": "00000000-0000-0000-0000-00000000000b"
+  },
+  "negotiation": {
+    "protocol": "aq.scoped-material-presence.v1",
+    "qualification": {
+      "digest": "c2052ee3327235ae79e9b4e232a11a0c6fd4f7f5a79550311bac1ea04f89ca2f",
+      "id": "aq.scoped-material-presence-qualification/fixture",
+      "version": "1"
+    }
+  },
+  "operation_id": "00000000-0000-0000-0000-00000000005a",
+  "provisionable_only": [
+    {
+      "profile": {
+        "digest": "cadd9b19c2abc6f2cdcaadbf3bb3dffe057f84a7e1b6859dc536598388dbd867",
+        "id": "credential-profile",
+        "version": "1"
+      },
+      "revision": 1
+    }
+  ],
+  "qualifications": [
+    {
+      "digest": "8fedd117ebb14418de94c122cc375bc1c49c9945513df2a733bb3c49f5066996",
+      "id": "fixture-harness",
+      "version": "1"
+    }
+  ],
+  "runtime": {
+    "digest": "8ca1dbdf9a94a5bec8cddda37f8dcce6ad179da7e25e899cc80226a44672f047",
+    "id": "fixture-runtime",
+    "version": "1"
+  },
+  "runtime_qualification": {
+    "digest": "d7349ff668312670482b68b310221abdeb6261e6ec72ae2ebcf49fbc751bf793",
+    "id": "fixture-runtime-qualification",
+    "version": "1"
+  },
+  "schema_version": 1,
+  "sequence": 2,
+  "ttl_ms": 30000
+}

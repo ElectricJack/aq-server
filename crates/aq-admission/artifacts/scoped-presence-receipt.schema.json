@@ -1,0 +1,320 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string",
+      "x-utf8-byte-limit": 64
+    },
+    "Disposition": {
+      "enum": [
+        "recorded"
+      ],
+      "type": "string"
+    },
+    "InventoryIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sequence": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "snapshot_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "operation_id",
+        "sequence",
+        "revision",
+        "request_digest",
+        "snapshot_digest"
+      ],
+      "type": "object"
+    },
+    "LaunchBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "assignment_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "execution_spec_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "graph_access_profile_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "launch_manifest_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        }
+      },
+      "required": [
+        "session",
+        "schema_version",
+        "offer_id",
+        "attempt_id",
+        "assignment_generation",
+        "execution_spec_digest",
+        "launch_manifest_digest",
+        "graph_access_profile_digest"
+      ],
+      "type": "object"
+    },
+    "Negotiation": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef",
+          "properties": {
+            "id": {
+              "pattern": "^aq[.]scoped-material-presence-qualification/.+"
+            }
+          }
+        }
+      },
+      "required": [
+        "protocol",
+        "qualification"
+      ],
+      "type": "object"
+    },
+    "Protocol": {
+      "enum": [
+        "aq.scoped-material-presence.v1"
+      ],
+      "type": "string"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "remote",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-byte-limit": 512
+    },
+    "WorkerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "node_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "boot_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "binding": {
+      "$ref": "#/$defs/LaunchBinding"
+    },
+    "disposition": {
+      "$ref": "#/$defs/Disposition"
+    },
+    "expires_at_ms": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "grant_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "identity": {
+      "$ref": "#/$defs/WorkerIdentity"
+    },
+    "inventory_at_record": {
+      "$ref": "#/$defs/InventoryIdentity"
+    },
+    "lease_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "negotiation": {
+      "$ref": "#/$defs/Negotiation"
+    },
+    "operation_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "recorded_at_ms": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "request_digest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "schema_version": {
+      "const": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 9223372036854775807,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "operation_id",
+    "identity",
+    "negotiation",
+    "binding",
+    "grant_id",
+    "lease_id",
+    "sequence",
+    "request_digest",
+    "inventory_at_record",
+    "recorded_at_ms",
+    "expires_at_ms",
+    "disposition"
+  ],
+  "title": "PresenceReceipt",
+  "type": "object",
+  "x-max-document-bytes": 4096,
+  "x-relational-validation-required": true
+}
