@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "migration_rollback_and_fixed_capacity_rehearsed_parent_review_required",
+  "status": "migration_rollback_capacity_and_lock_order_fixed36_rehearsed_parent_review_required",
   "private_artifact_directory": "/tmp/aq-media36-rehearsal-b600e6a570",
   "privacy": "All raw dumps/config/bootstrap/snapshot files remain private0600 under0700 directories; committed record contains counts and hashes only. Old executable copy is owner-only0500.",
   "candidate": {
@@ -9,7 +9,7 @@
     "binary_sha256": "49006758bfcf378f54a24343b6444563c55adf32cc214c0904c29ec3f58b30e8",
     "bundle_manifest_sha256": "af51fe1636a87934ff0ef85ad03336c8e3a0b3bffc97817e6b8087bb3d58c127",
     "promotion_approved": false,
-    "known_blocker": "Baseline55 is superseded by qualified b455 capacity fix; parent must review final promotion and uploader lock-order gate."
+    "known_blocker": "Baseline55 superseded by final capacity+lock-order fixed36; no canonical cutover approved."
   },
   "canonical": {
     "state_format": 35,
@@ -105,9 +105,9 @@
     "No canonical promotion is authorized by this record"
   ],
   "fixed_candidate": {
-    "path": "/tmp/aq-media-http-qualified/aq-server-b455eb0",
-    "sha256": "cdd658fda4e8ade56c9a85efab17b8ef931e8f3ae8e33fd064577bb8cd3a2e2f",
-    "source_revision": "b455eb07caef267112aa478971fbe791cbc74af6",
+    "path": "/tmp/aq-media-http-qualified/aq-server-4800aab",
+    "sha256": "88e6a28251afd30bc8629ff05195656331643da072393ca21c5ca0f2ce9870b0",
+    "source_revision": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
     "default_features": true,
     "test_support": false
   },
@@ -123,5 +123,21 @@
     "drafts_mode": "0600",
     "proposed_live_directories_created": false,
     "canonical_config_changed": false
+  },
+  "previous_capacity_candidate": {
+    "path": "/tmp/aq-media-http-qualified/aq-server-b455eb0",
+    "sha256": "cdd658fda4e8ade56c9a85efab17b8ef931e8f3ae8e33fd064577bb8cd3a2e2f",
+    "source_revision": "b455eb07caef267112aa478971fbe791cbc74af6",
+    "default_features": true,
+    "test_support": false
+  },
+  "lock_order_qualification": "../api11-media-lock-order/qualification.json",
+  "final_fixed_rehearsal": {
+    "same_config_root_storage_binding": true,
+    "identity_data_schema_sequences_exact": true,
+    "only_control_delta": "notification dispatcher_id",
+    "media_intents": 0,
+    "uploads_enabled": false,
+    "canonical_unchanged": true
   }
 }

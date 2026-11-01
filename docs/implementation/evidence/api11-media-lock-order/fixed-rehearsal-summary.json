@@ -1,0 +1,17 @@
+{
+  "source_revision": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
+  "binary_sha256": "88e6a28251afd30bc8629ff05195656331643da072393ca21c5ca0f2ce9870b0",
+  "only_rehearsal_table_delta": [
+    "notification_budget"
+  ],
+  "normalized_control_exact": true,
+  "all_human_identity_data_schema_sequences_exact": true,
+  "media_intents": 0,
+  "storage_rows": 1,
+  "installation_budget_rows": 1,
+  "canonical35_all109_table_bags_sequences_and_schema_exact": true,
+  "canonical_original_pid_binary_bundle_unchanged": true,
+  "uploads_enabled": false,
+  "schema36_objects": 2045,
+  "canonical35_objects": 1919
+}

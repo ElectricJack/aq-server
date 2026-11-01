@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_commit": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
   "state_format": 36,
-  "status": "owner_lock_order_qualified_no_canonical_promotion",
+  "status": "owner_lock_order_and_fixed36_private_rehearsal_qualified_parent_review_only",
   "frozen36_ddl_sha256": "f07c43ea22ffaaaa37cdb0db0a7eccb04b871af9d973f3e87a77d669e3b67e99",
   "changes": [
     "Operation-only methods discover only immutable original-actor/report/storage scope with a bounded nonlocking PK lookup.",
@@ -23,7 +23,8 @@
     "compile_seconds": 40.98,
     "strict_clippy_seconds": 20.8,
     "affected_fmt_diff_clean": true,
-    "whole_workspace_fmt": "Unchanged pre-existing review_inbox module ordering in profiled_results.rs differs; changed files pass rustfmt."
+    "whole_workspace_fmt": "Unchanged pre-existing review_inbox module ordering in profiled_results.rs differs; changed files pass rustfmt.",
+    "default_binary_build_seconds": 49.07
   },
   "commands": {
     "tests": "cargo test -p aq-server --test profiled_results media_ -- --test-threads=1",
@@ -31,12 +32,38 @@
     "environment": "Shared existing SERVER target; jobs2, dev debug0, incremental0; actual disposable PostgreSQL17 and managed filesystem fixtures."
   },
   "remaining_gates": [
-    "Independent source acceptance",
-    "New pinned default-feature state36 binary and private same-root rehearsal refresh",
     "Parent review and any required full canonical operational configuration checks",
     "Fresh quiesced35 backup and reviewed cutover; none performed here"
   ],
   "canonical_changed": false,
-  "private_rehearsal_changed": false,
-  "provider_or_external_calls": 0
+  "private_rehearsal_changed": true,
+  "provider_or_external_calls": 0,
+  "independent_source_review": {
+    "accepted": true,
+    "source_commit": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
+    "scope": "Owner lock-order changed source; reviewer ran no build/SQL"
+  },
+  "binary": {
+    "path": "/tmp/aq-media-http-qualified/aq-server-4800aab",
+    "sha256": "88e6a28251afd30bc8629ff05195656331643da072393ca21c5ca0f2ce9870b0",
+    "source_revision": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
+    "default_features": true,
+    "test_support": false,
+    "offline_build": true
+  },
+  "fixed_rehearsal": {
+    "same_private_database_config_root_marker_and_storage_binding": true,
+    "all_human_identity_data_schema_sequences_exact": true,
+    "only_control_delta": "notification_budget dispatcher_id",
+    "readiness_source_pin_and_state36_verified": true,
+    "health_bootstrap_results_status": 200,
+    "unknown_report_media_status": 404,
+    "media_intents": 0,
+    "uploads_enabled": false,
+    "canonical35_config_binary_bundle_all109_table_bags_schema_sequences_exact": true,
+    "ports": [
+      4214,
+      4215
+    ]
+  }
 }

@@ -6,13 +6,21 @@ the qualified owner-only capacity fix `b455eb0`; frozen migration36 is unchanged
 Twenty-one actual owner/HTTP cases passed in24.61s, strict Clippy in22.10s and
 the default binary build in38.25s. Its exact source pin, SHA and regression are in
 the [capacity qualification](evidence/api11-media-capacity/qualification.json).
-The private4214 rehearsal now runs that fixed binary on its original36
-database/root/storage binding; human data, schema and sequences remain exact.
+The private4214 rehearsal initially ran that fixed binary on its original36
+database/root/storage binding; human data, schema and sequences remained exact.
 Parent review still precedes any canonical change. The subsequent owner-only
 result/node-before-intent fix `4800aab` passed the
 [actual lock-order qualification](evidence/api11-media-lock-order/qualification.json).
-Its new binary and rehearsal refresh are still required before promotion; the
-running private rehearsal remains the earlier capacity-qualified binary.
+Independent source review accepted it. The offline default-feature build passed
+in49.07s and is pinned as `/tmp/aq-media-http-qualified/aq-server-4800aab`, SHA256
+`88e6a28251afd30bc8629ff05195656331643da072393ca21c5ca0f2ce9870b0`.
+The current private rehearsal runs this final fixed36 binary with the same
+configuration, database, root/marker identity and storage binding. Readiness,
+health, bootstrap and empty Results discovery return200; unknown-report media
+returns404. Uploads remain disabled and no media intents were created. All
+human identity/data/schema/sequence comparisons remain exact; only dispatcher
+identity rotates. Canonical's original35 process/config/binary/bundle and all109
+table bags, sequence states and1,919 schema objects remain exact.
 
 The [counts/hash summary](evidence/api11-media36-rehearsal/summary.json) contains
 no message bodies, user names, credentials or raw conversation/actor IDs. Raw
