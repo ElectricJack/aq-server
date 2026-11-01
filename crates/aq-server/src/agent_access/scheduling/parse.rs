@@ -2,7 +2,7 @@
 //! the stricter integer-only agent envelope parser is a different boundary.
 use serde::Deserialize;
 use serde_json::Value;
-pub(super) fn parse(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+pub(in crate::agent_access) fn parse(bytes: &[u8]) -> Result<Value, serde_json::Error> {
     #[derive(Debug)]
     struct GraphValue(Value);
     impl<'de> Deserialize<'de> for GraphValue {
