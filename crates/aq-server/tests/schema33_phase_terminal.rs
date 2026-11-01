@@ -235,3 +235,6 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
 
 #[path = "schema33_phase_terminal/legacy_parent.rs"]
 mod legacy_parent;
+
+#[path = "schema33_phase_terminal/ordered.rs"]
+mod ordered;
