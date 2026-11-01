@@ -158,6 +158,7 @@ async fn snapshot(
     if session_id != row.get::<Uuid, _>("session_id") {
         return Err(invalid());
     }
+    super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
     let hot: HotState = serde_json::from_value(row.get("hot")).map_err(|_| invalid())?;
     hot.validate_against(&binding).map_err(|_| invalid())?;
     if let Some(expected) = expected

@@ -122,6 +122,17 @@ pub(super) async fn load_locked(
         initial_authority::InitialAuthorityHistory::PhaseExecution(h) => h,
         _ => return Err(conflict()),
     };
+    let issued = &history.receipt;
+    if hot.execution_deadline_ms != Some(issued.execution_deadline_ms)
+        || hot.owner.as_ref().is_none_or(|o| {
+            o.guardian_id != history.request.original.guardian_id
+                || o.launch_id != history.request.original.launch_id
+                || o.reservation_id != history.request.original.reservation.reservation_id
+        })
+        || hot.grant.as_ref() != Some(&issued.grant)
+    {
+        return Err(conflict());
+    }
     let registration =
         closure::history::load_locked(tx, history.provenance.registration_id).await?;
     let prepared = JournalCheckpoint {
@@ -149,4 +160,69 @@ pub(super) async fn load_locked(
     };
     loaded.context().validate().map_err(|_| conflict())?;
     Ok(loaded)
+}
+
+/// Fresh local start fence only. Never reuses proposal/retrieval expiry, makes
+/// provider calls, or resamples the independent execution deadline.
+pub(super) async fn require_start_open_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    loaded: &Loaded,
+) -> Result<(), AppError> {
+    let binding = &loaded.history.receipt.grant.binding;
+    let runtime = super::super::registration::current_runtime_locked(
+        state,
+        tx,
+        loaded.registration.metadata.request.identity.node_id,
+        loaded.registration.metadata.request.identity.boot_id,
+    )
+    .await?;
+    if runtime.runtime != loaded.registration.metadata.request.runtime
+        || runtime.qualification != loaded.registration.metadata.qualification
+    {
+        return Err(conflict());
+    }
+    super::super::closure::ensure_launch_open_locked(tx, binding).await?;
+    let p = &loaded.history.provenance.project;
+    let row = sqlx::query(
+        "SELECT revision,binding FROM project_execution_bindings WHERE project_id=$1 FOR SHARE",
+    )
+    .bind(loaded.view.project_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(database)?
+    .ok_or_else(conflict)?;
+    let current: crate::project_bindings::domain::ProjectBinding =
+        serde_json::from_value(row.get("binding")).map_err(|_| conflict())?;
+    if row.get::<i64, _>("revision") != p.project.revision as i64
+        || !current.enabled
+        || canonical(&current)? != canonical(&p.project.binding)?
+        || aq_profiles::digest(&state.config.projects).map_err(|_| AppError::Internal)?
+            != p.worker_membership_digest
+    {
+        return Err(conflict());
+    }
+    let (revision, active): (i64, Option<String>) = sqlx::query_as(
+        "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    if revision != p.catalog_activation_revision as i64
+        || active.as_deref() != Some(current.catalog_digest.as_str())
+    {
+        return Err(conflict());
+    }
+    crate::intelligence::fence_current_registry(state, tx).await?;
+    let decision: uuid::Uuid = sqlx::query_scalar(
+        "SELECT decision_id FROM profiled_launches WHERE attempt_id=$1 FOR SHARE",
+    )
+    .bind(binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    crate::intelligence::fence_continuing_principal(state, tx, decision, loaded.view.project_id)
+        .await?;
+    loaded.view.active_at(now(state)?)?;
+    Ok(())
 }

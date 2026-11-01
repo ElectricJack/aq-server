@@ -95,6 +95,7 @@ pub async fn record(
     {
         return Err(conflict());
     }
+    super::initial_authority::require_legacy_origin_locked(&mut tx, binding).await?;
     let original=sqlx::query("SELECT request_bytes,request_digest,receipt_bytes FROM profiled_started_receipts WHERE attempt_id=$1 FOR SHARE")
         .bind(binding.attempt_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(conflict)?;
     let original_bytes: Vec<u8> = original.get("request_bytes");

@@ -226,7 +226,7 @@ async fn record_inner(
     let incoming = incoming
         .checked_add((request_bytes.len() + context_bytes.len() + receipt_bytes.len()) as i64)
         .ok_or_else(conflict)?;
-    let (n,b,pn,pb):(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)),0),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)) FILTER(WHERE node_id=$1),0) FROM profiled_launch_closures").bind(node.id()).fetch_one(&mut *tx).await.map_err(database)?;
+    let (n,b,pn,pb):(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)),0),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)) FILTER(WHERE node_id=$1),0) FROM profiled_launch_closures WHERE NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=profiled_launch_closures.attempt_id)").bind(node.id()).fetch_one(&mut *tx).await.map_err(database)?;
     if n >= 4096 || pn >= 256 || b + incoming > 67108864 || pb + incoming > 4194304 {
         return Err(AppError::Conflict(
             "closure retained capacity exhausted".into(),

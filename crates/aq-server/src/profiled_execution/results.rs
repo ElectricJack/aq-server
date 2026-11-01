@@ -72,6 +72,7 @@ pub async fn record(
     {
         return Err(conflict());
     }
+    super::initial_authority::require_legacy_origin_locked(&mut tx, binding).await?;
     let stop=sqlx::query("SELECT request_bytes,request_digest,receipt_bytes FROM profiled_stopped_receipts WHERE attempt_id=$1 FOR SHARE")
         .bind(binding.attempt_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(conflict)?;
     let stop_bytes: Vec<u8> = stop.get("request_bytes");
@@ -281,6 +282,7 @@ pub async fn load_locked(
     {
         return Err(AppError::Internal);
     }
+    super::initial_authority::require_legacy_origin_locked(tx, &report.binding).await?;
     let stopped=sqlx::query("SELECT request_bytes,request_digest,receipt_bytes,proof_bytes,proof_digest FROM profiled_stopped_receipts WHERE attempt_id=$1 FOR SHARE")
         .bind(report.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(db)?.ok_or(AppError::Internal)?;
     let stop_bytes: Vec<u8> = stopped.get("request_bytes");
