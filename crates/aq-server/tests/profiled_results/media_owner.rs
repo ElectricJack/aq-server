@@ -826,3 +826,97 @@ async fn media_actual_cleanup_absence_durability_failure_keeps_charge_and_retrie
     .unwrap();
     assert_eq!(charge, 0);
 }
+#[tokio::test]
+async fn media_actual_expired_pending_cleanup_releases_report_slots_preserving_tombstone() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let tombstone = retained(&owner, &actor, report.report_id, &revision).await;
+    let receipt = owner
+        .status(&actor, tombstone)
+        .await
+        .unwrap()
+        .artifact
+        .unwrap()
+        .receipt;
+    let mut at = receipt.retain_until_ms;
+    f.time.store(at as i64, Ordering::SeqCst);
+    assert_eq!(owner.cleanup(16).await.unwrap(), 1);
+    let pool = f.db.pool().await;
+    let tombstone_before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(tombstone)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(tombstone_before["state"], "retained");
+    assert_eq!(tombstone_before["cleanup_state"], "done");
+    let mut abandoned = Vec::new();
+    for (cycle, count) in [6, 2].into_iter().enumerate() {
+        let mut ids = Vec::new();
+        for index in 0..count {
+            let id = Uuid::new_v4();
+            owner
+                .reserve(&actor, report.report_id, &revision, &request(id))
+                .await
+                .unwrap();
+            if cycle == 0 && index < 2 {
+                owner.put(&actor, id, png()).await.unwrap();
+            }
+            if cycle == 0 && index == 1 {
+                owner
+                    .set_test_hook(Some(Arc::new(|name| {
+                        if name == "before_receipt_commit" {
+                            Err(Error::Storage)
+                        } else {
+                            Ok(())
+                        }
+                    })))
+                    .unwrap();
+                assert!(matches!(
+                    owner.finalize(&actor, id).await,
+                    Err(Error::Storage)
+                ));
+                owner.set_test_hook(None).unwrap();
+            }
+            ids.push(id);
+        }
+        let before:serde_json::Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(i)-ARRAY['state','transition_at_ms','reserved_bytes','retained_bytes','lease_id','lease_expires_at_ms','cleanup_state','cleanup_generation','cleanup_completed_at_ms'] ORDER BY operation_id) FROM result_media_intents i WHERE operation_id=ANY($1)").bind(&ids).fetch_one(&pool).await.unwrap();
+        at += media::MAX_UPLOAD_TTL_MS + 1;
+        f.time.store(at as i64, Ordering::SeqCst);
+        assert_eq!(owner.cleanup(16).await.unwrap(), count);
+        let after:serde_json::Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(i)-ARRAY['state','transition_at_ms','reserved_bytes','retained_bytes','lease_id','lease_expires_at_ms','cleanup_state','cleanup_generation','cleanup_completed_at_ms'] ORDER BY operation_id) FROM result_media_intents i WHERE operation_id=ANY($1)").bind(&ids).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            before, after,
+            "original actor/raw request/source/policy/deadlines stay immutable"
+        );
+        let expired:i64=sqlx::query_scalar("SELECT count(*) FROM result_media_intents WHERE operation_id=ANY($1) AND state='expired' AND cleanup_state='done' AND reserved_bytes=0 AND retained_bytes=0").bind(&ids).fetch_one(&pool).await.unwrap();
+        assert_eq!(expired, count as i64);
+        abandoned.extend(ids);
+    }
+    assert_eq!(abandoned.len(), 8);
+    let ninth = Uuid::new_v4();
+    assert_eq!(
+        owner
+            .reserve(&actor, report.report_id, &revision, &request(ninth))
+            .await
+            .unwrap()
+            .state,
+        media::UploadState::Reserved
+    );
+    let tombstone_after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(tombstone)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        tombstone_before, tombstone_after,
+        "retained tombstone/receipt is neither relabelled nor freed"
+    );
+    let counted:i64=sqlx::query_scalar("SELECT count(*) FROM result_media_intents WHERE report_id=$1 AND state IN ('reserved','received','finalizing','retained')").bind(report.report_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        counted, 2,
+        "one retained tombstone and the new ninth pending operation still count"
+    );
+    let (reserved,retained,history):(i64,i64,i64)=sqlx::query_as("SELECT reserved_bytes,retained_bytes,historical_intents FROM result_media_budgets WHERE scope_key='installation'").fetch_one(&pool).await.unwrap();
+    assert_eq!((reserved, retained, history), (10_485_760, 0, 10));
+}

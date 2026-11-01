@@ -38,7 +38,10 @@ impl Owner {
                 continue;
             }
             let generation = Uuid::new_v4();
-            sqlx::query("UPDATE result_media_intents SET cleanup_state='running',cleanup_generation=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$3 WHERE operation_id=$1")
+            // Expired unretained work no longer owns an attachment slot. Its
+            // byte reservation remains charged until physical absence is
+            // confirmed below. Retained receipts/tombstones stay Retained.
+            sqlx::query("UPDATE result_media_intents SET state=CASE WHEN state IN ('reserved','received','finalizing') THEN 'expired' ELSE state END,cleanup_state='running',cleanup_generation=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$3 WHERE operation_id=$1")
                 .bind(id).bind(generation).bind(at as i64).execute(&mut *tx).await.map_err(sql)?;
             tx.commit().await.map_err(sql)?;
             let root = self.root.clone();
