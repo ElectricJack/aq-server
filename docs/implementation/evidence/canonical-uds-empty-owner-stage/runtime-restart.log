@@ -1,0 +1,5 @@
+2026-11-01T23:04:37.143847Z  INFO aq_server: connecting to database host="localhost" database="aq_canonical_stage_49fac61d0492413b843281873437b0e7"
+2026-11-01T23:04:37.150704Z  INFO sqlx::postgres::notice: relation "schema_migrations" already exists, skipping
+2026-11-01T23:04:37.231650Z  INFO aq_server: listening admin=127.0.0.1:4218 worker=127.0.0.1:4219
+2026-11-01T23:04:37.285850Z  INFO postgres::config: NOTICE: schema "aq_playbooks" already exists, skipping
+2026-11-01T23:04:37.285908Z  INFO postgres::config: NOTICE: relation "schema_migrations" already exists, skipping

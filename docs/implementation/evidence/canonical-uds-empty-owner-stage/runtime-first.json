@@ -1,0 +1,498 @@
+{
+  "ready": {
+    "version": "0.1.0",
+    "source_revision": "2baa8e7",
+    "state_format": 37,
+    "protocol_min": 1,
+    "protocol_max": 1,
+    "database": "ok",
+    "auth_mode": "dev"
+  },
+  "bootstrap": {
+    "api_version": "dashboard-read-1",
+    "request_id": "260e13a2-7e43-4463-a069-b82d48863afe",
+    "server_time": "2026-11-01T23:03:42.001Z",
+    "scope": {
+      "kind": "all_authorized"
+    },
+    "data": {
+      "principal": {
+        "id": "f4c33664-c524-4395-815f-5af6109a418b",
+        "display_name": "owner@localhost",
+        "authorization_revision": "266683367553016329454686406843694971669"
+      },
+      "product": {
+        "version": "0.1.0",
+        "dashboard_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663"
+      },
+      "contracts": [
+        {
+          "name": "dashboard-read",
+          "version": "dashboard-read-1",
+          "digest": "sha256:a02ddfafafa5c492ae962f3132bdd0dd463978101628e93cf12ff2ef1cd612f8"
+        }
+      ],
+      "capabilities": [
+        {
+          "name": "dashboard.overview",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "sessions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.usage.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.events.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "projects.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "status.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "workers.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "notifications.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "human.graph.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "human.overview.tasks.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "tasks.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "tasks.create",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "knowledge.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "search.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "decisions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "decisions.resolve",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "provider.quota",
+          "version": "1",
+          "enabled": false,
+          "reason": "Provider account usage is unavailable"
+        },
+        {
+          "name": "supervisor.history.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.message.enqueue",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.conversation",
+          "version": "1",
+          "enabled": false,
+          "reason": "The global supervisor is not connected yet"
+        },
+        {
+          "name": "terminal.watch",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "terminal.control",
+          "version": "1",
+          "enabled": false,
+          "reason": "Terminal control is not connected to this dashboard yet"
+        },
+        {
+          "name": "dashboard.actions",
+          "version": "1",
+          "enabled": false,
+          "reason": "Dashboard actions are not connected yet"
+        },
+        {
+          "name": "results.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "results.media.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental images require an owner account and mounted media storage"
+        },
+        {
+          "name": "results.media.upload",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental image uploads require an owner account and enabled uploads"
+        },
+        {
+          "name": "playbooks.inspect",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "playbooks.loaded-definitions.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Loaded definitions require the configured runtime namespace owner"
+        },
+        {
+          "name": "playbooks.catalog.read",
+          "version": "1",
+          "enabled": true
+        }
+      ],
+      "limits": {
+        "page_size": 25,
+        "max_page_size": 100,
+        "snapshot_members": 256,
+        "snapshot_ttl_ms": 30000
+      },
+      "default_scope": {
+        "kind": "all_authorized"
+      },
+      "global_supervisor": {
+        "status": "unconfigured",
+        "conversation_id": null,
+        "reason": "The global supervisor is not connected yet"
+      }
+    },
+    "observation": {
+      "observed_at": "2026-11-01T23:03:42.001Z",
+      "fresh_until": "2026-11-01T23:03:47.001Z",
+      "source": "aq_dashboard_read",
+      "quality": "reported",
+      "coverage": "complete"
+    },
+    "pending_operations": [],
+    "coverage": {
+      "state": "complete"
+    }
+  },
+  "metadata": {
+    "aq_state": "37",
+    "component_schema": 4,
+    "engine": {
+      "namespace": "aq/2ae9605f-5277-4c58-aad8-61ad8121fcac/1",
+      "revision": 3,
+      "incarnation": 3,
+      "owned": true,
+      "owner_backend_pid": 2077
+    },
+    "grants": 0,
+    "artifacts": 0,
+    "clients": [
+      {
+        "application_name": "aq-canonical-stage-core",
+        "datname": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+        "unix_connection": true,
+        "connections": 4
+      },
+      {
+        "application_name": "aq-dashboard-read",
+        "datname": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-bridge",
+        "datname": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-owner",
+        "datname": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+        "unix_connection": true,
+        "connections": 1
+      },
+      {
+        "application_name": "aq-terminal",
+        "datname": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+        "unix_connection": true,
+        "connections": 2
+      }
+    ]
+  },
+  "api_reads": {
+    "definitions": {
+      "api_version": "playbooks-current-catalog-1",
+      "component_api_version": "playbooks-catalog-1",
+      "source": "current_namespace_state",
+      "current_catalog": true,
+      "namespace": {
+        "id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+        "generation": "1",
+        "name": "Local development project Playbooks owner",
+        "project_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "server_time_ms": 1793574222014,
+      "kind": "definitions",
+      "state_revision": "3",
+      "incarnation": "3",
+      "metadata_revision": "1",
+      "items": [],
+      "next_cursor": null
+    },
+    "activations": {
+      "api_version": "playbooks-current-catalog-1",
+      "component_api_version": "playbooks-catalog-1",
+      "source": "current_namespace_state",
+      "current_catalog": true,
+      "namespace": {
+        "id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+        "generation": "1",
+        "name": "Local development project Playbooks owner",
+        "project_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "server_time_ms": 1793574222025,
+      "kind": "activations",
+      "state_revision": "3",
+      "incarnation": "3",
+      "metadata_revision": "1",
+      "items": [],
+      "next_cursor": null
+    },
+    "runs": {
+      "api_version": "playbooks-inspection-1",
+      "namespace": {
+        "id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+        "generation": "1",
+        "name": "Local development project Playbooks owner",
+        "project_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "server_time_ms": 1793574222034,
+      "revision": "3",
+      "items": [],
+      "next_cursor": null
+    },
+    "admissions": {
+      "api_version": "playbooks-inspection-1",
+      "namespace": {
+        "id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+        "generation": "1",
+        "name": "Local development project Playbooks owner",
+        "project_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "server_time_ms": 1793574222039,
+      "revision": null,
+      "items": [],
+      "next_cursor": null
+    },
+    "decisions": {
+      "api_version": "review-inbox-1",
+      "server_time_ms": 1793574222045,
+      "items": [],
+      "next_cursor": null,
+      "sampled": true
+    },
+    "projects": {
+      "items": [
+        {
+          "binding": {
+            "allowed_agent_profiles": [
+              "reviewer@2"
+            ],
+            "allowed_environments": [
+              "confined-worktree"
+            ],
+            "allowed_execution_profiles": [
+              "confined-development@2"
+            ],
+            "allowed_intelligence_profiles": [
+              "engineering@2"
+            ],
+            "allowed_node_ids": [],
+            "allowed_worker_groups": [
+              "engineering"
+            ],
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "ceilings": {
+              "context_bytes": 8192,
+              "cost_limit_microunits": null,
+              "cpu_millis": 60000,
+              "currency": null,
+              "memory_bytes": 268435456,
+              "permissions": [
+                {
+                  "operation": "task.read",
+                  "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+                },
+                {
+                  "operation": "knowledge.read",
+                  "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+                },
+                {
+                  "operation": "source.write",
+                  "scope_reference": "repository:00000000-0000-0000-0000-000000000029"
+                }
+              ],
+              "process_limit": 8,
+              "require_hard_cost_enforcement": false,
+              "wall_time_ms": 60000
+            },
+            "context": [],
+            "enabled": true,
+            "graph_adapter_reference": "aq.graph.configured",
+            "graph_workspace_id": "00000000-0000-0000-0000-000000000003",
+            "name": "Example project",
+            "policy": {
+              "digest": "868ef4f0e538ea921fadeeb7d2d25d0723d232d4cb7a9e7941abc14e7c7b5f0c",
+              "identity": "native-test-policy",
+              "revision": "1"
+            },
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "repository_adapter_reference": "aq.git.configured",
+            "repository_binding_generation": 1,
+            "repository_id": "00000000-0000-0000-0000-000000000002",
+            "schema_version": 1
+          },
+          "revision": 2,
+          "validated_at_ms": 1793518233880,
+          "validation": {
+            "expires_at_ms": 1793518263880,
+            "graph": "verified",
+            "graph_adapter_reference": "aq.graph.configured",
+            "graph_workspace_id": "00000000-0000-0000-0000-000000000003",
+            "observed_at_ms": 1793518233880,
+            "repository": "verified",
+            "repository_adapter_reference": "aq.git.configured",
+            "repository_generation": 1,
+            "repository_id": "00000000-0000-0000-0000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "work_counts": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "original_table_changes": [
+    {
+      "table": "public.meta",
+      "before": {
+        "table": "public.meta",
+        "rows": 4,
+        "digest": "4d28c9926d7319613ee0514eb623c119"
+      },
+      "after": {
+        "table": "public.meta",
+        "rows": 4,
+        "digest": "5e477e7527a6784ad578f1d4c3c482ff"
+      }
+    },
+    {
+      "table": "public.notification_budget",
+      "before": {
+        "table": "public.notification_budget",
+        "rows": 1,
+        "digest": "299730d99d335129fe664e5663de05aa"
+      },
+      "after": {
+        "table": "public.notification_budget",
+        "rows": 1,
+        "digest": "b921e5bba012e31cc5de0675dce121e1"
+      }
+    },
+    {
+      "table": "public.playbook_namespaces",
+      "before": {
+        "table": "public.playbook_namespaces",
+        "rows": 0,
+        "digest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      "after": {
+        "table": "public.playbook_namespaces",
+        "rows": 1,
+        "digest": "2d876c99baf90b342625671b294f99ae"
+      }
+    },
+    {
+      "table": "public.schema_migrations",
+      "before": {
+        "table": "public.schema_migrations",
+        "rows": 35,
+        "digest": "e4d753d9f67d406ffe56430d6867b682"
+      },
+      "after": {
+        "table": "public.schema_migrations",
+        "rows": 37,
+        "digest": "7cbf220a6d97ec301ec64e09ceca4b55"
+      }
+    },
+    {
+      "table": "public.terminal_sessions",
+      "before": {
+        "table": "public.terminal_sessions",
+        "rows": 1,
+        "digest": "00079e112661800be909c52b8ecc82d2"
+      },
+      "after": {
+        "table": "public.terminal_sessions",
+        "rows": 1,
+        "digest": "450ae54389be59fb0075f251d7fc439c"
+      }
+    }
+  ]
+}

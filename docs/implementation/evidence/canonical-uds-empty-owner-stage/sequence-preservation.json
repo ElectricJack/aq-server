@@ -1,0 +1,67 @@
+[
+  {
+    "cycle": false,
+    "data_type": "bigint",
+    "max_value": 9223372036854775807,
+    "min_value": 1,
+    "cache_size": 1,
+    "last_value": null,
+    "schemaname": "public",
+    "start_value": 1,
+    "increment_by": 1,
+    "sequencename": "agent_graph_operations_operation_seq_seq",
+    "sequenceowner": "postgres"
+  },
+  {
+    "cycle": false,
+    "data_type": "bigint",
+    "max_value": 9223372036854775807,
+    "min_value": 1,
+    "cache_size": 1,
+    "last_value": null,
+    "schemaname": "public",
+    "start_value": 1,
+    "increment_by": 1,
+    "sequencename": "notification_deliveries_sequence_seq",
+    "sequenceowner": "postgres"
+  },
+  {
+    "cycle": false,
+    "data_type": "bigint",
+    "max_value": 9223372036854775807,
+    "min_value": 1,
+    "cache_size": 1,
+    "last_value": null,
+    "schemaname": "public",
+    "start_value": 1,
+    "increment_by": 1,
+    "sequencename": "notification_messages_sequence_seq",
+    "sequenceowner": "postgres"
+  },
+  {
+    "cycle": false,
+    "data_type": "bigint",
+    "max_value": 9223372036854775807,
+    "min_value": 1,
+    "cache_size": 1,
+    "last_value": null,
+    "schemaname": "public",
+    "start_value": 1,
+    "increment_by": 1,
+    "sequencename": "playbook_outbox_sequence_seq",
+    "sequenceowner": "postgres"
+  },
+  {
+    "cycle": false,
+    "data_type": "bigint",
+    "max_value": 9223372036854775807,
+    "min_value": 1,
+    "cache_size": 1,
+    "last_value": 4,
+    "schemaname": "public",
+    "start_value": 1,
+    "increment_by": 1,
+    "sequencename": "terminal_outbox_outbox_id_seq",
+    "sequenceowner": "postgres"
+  }
+]

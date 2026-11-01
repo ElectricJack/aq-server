@@ -1,0 +1,71 @@
+{
+  "passed": true,
+  "scope": "Private consistent canonical snapshot and NEW DB restore only; no stage service started",
+  "root": "/tmp/aq-private-uds-n8vgb39f/canonical-stage-d70d3bfad6ca434cb8b1900c112b496f",
+  "database": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+  "source_process_id": 874715,
+  "source_database": "aq_test_d2942959309042a3ad3e087dec11e03e",
+  "source_system_identifier": "7702509189573074990",
+  "target_identity": {
+    "database": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+    "system_identifier": "7703296609124593685",
+    "collation": "en_US.utf8",
+    "ctype": "en_US.utf8",
+    "aq_state": "35",
+    "namespace_absent": true
+  },
+  "source_config_sha256": "de60d617b02dbf7b2eac4c25c425239a5f85479a8d1d113f93996b559864d45e",
+  "stage_config_sha256": "fc04681458f829591704bef9041e18ad04acdd01b9190b6b925d5831340e1d68",
+  "original_config_semantics_preserved_except_server_and_new_optional_owner": true,
+  "protected_runtime_env_keys": [
+    "AQ_PRIVATE_VALUE_KEY_K1"
+  ],
+  "protected_values_printed": false,
+  "backup_sha256": "6999eb1b0b2e14ef3816eb6c3b87c5d5cd3a389577e061c79766550b02186642",
+  "backup_bytes": 547201,
+  "backup_snapshot": "00000001-00004633-1",
+  "table_count": 109,
+  "restored_rows": 215,
+  "all_table_fingerprints_equal": true,
+  "all_sequences_equal": true,
+  "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "workspace_id": "00000000-0000-0000-0000-000000000003",
+  "namespace_id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+  "generation": 1,
+  "configured_deployments": 0,
+  "grant_count": 0,
+  "artifact_count": 0,
+  "stage_ports": [
+    4218,
+    4219
+  ],
+  "canonical_config_changed": false,
+  "canonical_database_writes": false,
+  "canonical_lifecycle_changed": false,
+  "binary_pin": {
+    "binary": "/tmp/aq-empty-owner-qualified-2baa8e7/aq-server",
+    "sha256": "6f07dd8e98d3ae74e4886a6bf66b10b8f85a0a22c05756b77738543c7ec7da65",
+    "source_revision": "2baa8e7",
+    "source_commit": "2baa8e7b387b52717ccc9b97a6b970b447cf319b",
+    "base": "1111441",
+    "state_format": 37,
+    "default_features": true,
+    "test_support": false,
+    "permissions": "0500",
+    "bytes": 115844968,
+    "build_log_final_line": "    Finished `dev` profile [unoptimized] target(s) in 1m 01s",
+    "no_service_started": true,
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "aq-server",
+      "--bin",
+      "aq-server",
+      "--locked",
+      "--offline"
+    ]
+  },
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663"
+}

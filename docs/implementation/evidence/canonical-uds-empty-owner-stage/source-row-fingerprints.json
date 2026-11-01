@@ -1,0 +1,547 @@
+[
+  {
+    "table": "public.admission_artifacts",
+    "rows": 37,
+    "digest": "9be0270904d8d9bcf6eccf02091b623a"
+  },
+  {
+    "table": "public.admission_inline_receipts",
+    "rows": 37,
+    "digest": "725994d0c37242cd308847f94b8a5fb2"
+  },
+  {
+    "table": "public.admission_material_leases",
+    "rows": 1,
+    "digest": "87463f28524e2233bf21a955d75f5361"
+  },
+  {
+    "table": "public.admission_material_receipts",
+    "rows": 1,
+    "digest": "b46a68d2d66ab9d22edd88c47bfcbf28"
+  },
+  {
+    "table": "public.admission_source_observations",
+    "rows": 1,
+    "digest": "a62401553af7b1e03f78cf98972282f3"
+  },
+  {
+    "table": "public.admission_source_policies",
+    "rows": 1,
+    "digest": "d7c010da01c654cfeea267b74ccf1f5e"
+  },
+  {
+    "table": "public.agent_created_records",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.agent_graph_operations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.agent_graph_outbox",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.agent_launch_bindings",
+    "rows": 1,
+    "digest": "586fbe8845814a684430a0a1ada3cb3a"
+  },
+  {
+    "table": "public.agent_operation_cursors",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.agent_read_cursors",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.enrollment_codes",
+    "rows": 1,
+    "digest": "64c7b694bd4991aec597ec712ce31f79"
+  },
+  {
+    "table": "public.execution_attempts",
+    "rows": 1,
+    "digest": "b1a9cdc635517bd5ed142a6bc89fec6b"
+  },
+  {
+    "table": "public.execution_directives",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.execution_nodes",
+    "rows": 1,
+    "digest": "2ff6c601bf358e09a0fc1c62a868c1c1"
+  },
+  {
+    "table": "public.execution_receipts",
+    "rows": 2,
+    "digest": "15ee2fe2cd4f600da151fdc6d54802b2"
+  },
+  {
+    "table": "public.execution_reports",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.global_supervisor_conversation",
+    "rows": 1,
+    "digest": "2daf37a7adb3bdbcde003b44afeebc5a"
+  },
+  {
+    "table": "public.human_decision_finality",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.human_decision_requests",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.human_graph_operations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.intelligence_attempt_selections",
+    "rows": 1,
+    "digest": "78af6dfe73eec1955605879c8402c961"
+  },
+  {
+    "table": "public.intelligence_credential_definitions",
+    "rows": 3,
+    "digest": "ddd7bf056b2552fb752ff92a2e03caf7"
+  },
+  {
+    "table": "public.intelligence_decisions",
+    "rows": 2,
+    "digest": "06a0303b99c552164eed079d01e27cab"
+  },
+  {
+    "table": "public.intelligence_node_snapshots",
+    "rows": 1,
+    "digest": "19637da6c079ff58cc76751fd8a8269d"
+  },
+  {
+    "table": "public.intelligence_observations",
+    "rows": 1,
+    "digest": "59a625af91aebc92fafd6b43239b5779"
+  },
+  {
+    "table": "public.intelligence_operations",
+    "rows": 2,
+    "digest": "86d8e3b53363a779d57aa0d827322489"
+  },
+  {
+    "table": "public.intelligence_registry",
+    "rows": 1,
+    "digest": "1bb765cae3a34b5358b04a38c289c694"
+  },
+  {
+    "table": "public.mailbox_deliveries",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.mailbox_heads",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.mailbox_messages",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.mailbox_operations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.mailbox_receipts",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.meta",
+    "rows": 4,
+    "digest": "4d28c9926d7319613ee0514eb623c119"
+  },
+  {
+    "table": "public.native_registration_receipts",
+    "rows": 2,
+    "digest": "9d087cf2ee4c66db79f0e75c1f07c59e"
+  },
+  {
+    "table": "public.nodes",
+    "rows": 1,
+    "digest": "31926b75423e19dcde18b4326dc8be11"
+  },
+  {
+    "table": "public.notification_budget",
+    "rows": 1,
+    "digest": "299730d99d335129fe664e5663de05aa"
+  },
+  {
+    "table": "public.notification_deliveries",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.notification_destinations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.notification_messages",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.notification_operations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.notification_routes",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_attempt_projections",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_call_heads",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_events",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_facts",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_nodes",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_packets",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_projections",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_sources",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_transport_owners",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.observation_transport_receipts",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_admissions",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_cancellations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_effects",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_grants",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_namespaces",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.playbook_outbox",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profile_catalog_artifacts",
+    "rows": 2,
+    "digest": "81d0cfc012e382fb9936edcd4469ecb2"
+  },
+  {
+    "table": "public.profile_catalog_operations",
+    "rows": 2,
+    "digest": "9ecbc6fbbe18dac0a1ebb7d2cfc5a6e1"
+  },
+  {
+    "table": "public.profile_catalog_registry",
+    "rows": 1,
+    "digest": "2c2b8cc78f4bfaac8b8a034b65e4d68c"
+  },
+  {
+    "table": "public.profiled_authority_hot",
+    "rows": 1,
+    "digest": "9c4c370e2e8b0b9fcd61ebd19f70e820"
+  },
+  {
+    "table": "public.profiled_execution_receipts",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_inventory_semantic_heads",
+    "rows": 1,
+    "digest": "a14e0fa4c8d478f652ca5769e5c51d33"
+  },
+  {
+    "table": "public.profiled_launch_artifacts",
+    "rows": 36,
+    "digest": "4889d8785064765e158fb0854fe5201c"
+  },
+  {
+    "table": "public.profiled_launch_closures",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_launches",
+    "rows": 1,
+    "digest": "9e333455bb67d066b8a93a704a2abcba"
+  },
+  {
+    "table": "public.profiled_launch_materials",
+    "rows": 1,
+    "digest": "1e14716b5651e59e29bc6ab69ea4f826"
+  },
+  {
+    "table": "public.profiled_launch_registrations",
+    "rows": 1,
+    "digest": "9ed78a4329c9393d04ab17f2c171a979"
+  },
+  {
+    "table": "public.profiled_launch_source_exports",
+    "rows": 1,
+    "digest": "4563f1bb2811afdd319767008efb881e"
+  },
+  {
+    "table": "public.profiled_material_presence_heads",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_native_registration_history",
+    "rows": 2,
+    "digest": "a01eb684e07aa906c2ca4d162d9e78ab"
+  },
+  {
+    "table": "public.profiled_never_granted_closures",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_owner_journals",
+    "rows": 1,
+    "digest": "4a98ad76f10ac0aef9a2d3f093d459c9"
+  },
+  {
+    "table": "public.profiled_phase_execution_grants",
+    "rows": 1,
+    "digest": "3a36ab71311ba186de62d17823325aaa"
+  },
+  {
+    "table": "public.profiled_phase_terminal_capacity",
+    "rows": 1,
+    "digest": "07698d3be694149cc194fb0c2fc8e585"
+  },
+  {
+    "table": "public.profiled_presence_node_storage",
+    "rows": 1,
+    "digest": "8ae2a4f3f90323efc0f76f5c7d5c3df9"
+  },
+  {
+    "table": "public.profiled_presence_operations",
+    "rows": 1,
+    "digest": "bf505bba4a37c4855baa09affd7dafd8"
+  },
+  {
+    "table": "public.profiled_presence_storage",
+    "rows": 1,
+    "digest": "07eb7741980f8832341677e1734e8a38"
+  },
+  {
+    "table": "public.profiled_result_heads",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_result_reports",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.profiled_source_exports",
+    "rows": 1,
+    "digest": "19e2d3e5f9025aae6f6ff490fb4dfd11"
+  },
+  {
+    "table": "public.profiled_started_receipts",
+    "rows": 1,
+    "digest": "a87cc59f501e9d60cad8d02ecd454b50"
+  },
+  {
+    "table": "public.profiled_stopped_receipts",
+    "rows": 1,
+    "digest": "25e6101a5f3182bc98cedb8be1ad43a1"
+  },
+  {
+    "table": "public.profiled_v2_accepts",
+    "rows": 1,
+    "digest": "611702eecb80229c5a6567f1358ef8d3"
+  },
+  {
+    "table": "public.profiled_v2_proposals",
+    "rows": 1,
+    "digest": "7d0e08c6ee82f212637630d8ae7729e1"
+  },
+  {
+    "table": "public.profiled_verified_releases",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.project_execution_binding_history",
+    "rows": 2,
+    "digest": "269693043b974dee82bf1913c7e782ff"
+  },
+  {
+    "table": "public.project_execution_bindings",
+    "rows": 1,
+    "digest": "d817eeeeefb5663f7a658d89842b07ac"
+  },
+  {
+    "table": "public.project_execution_operations",
+    "rows": 2,
+    "digest": "9c2aeb6a441a5f05c61604e836b51dfa"
+  },
+  {
+    "table": "public.review_lineage_budget",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.review_owner_budget",
+    "rows": 1,
+    "digest": "9e95dfd4bc18b00e154f5755c39e7fe6"
+  },
+  {
+    "table": "public.review_owner_outbox",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.review_subjects",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.scheduler_cursor",
+    "rows": 1,
+    "digest": "cecbd70fee1ca483b724d2929aa4df8e"
+  },
+  {
+    "table": "public.scheduler_projects",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.schema_migrations",
+    "rows": 35,
+    "digest": "e4d753d9f67d406ffe56430d6867b682"
+  },
+  {
+    "table": "public.session_inspection_acl",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.source_bases",
+    "rows": 1,
+    "digest": "cc175b971c68c5f55ec7cda1c7f8f5f1"
+  },
+  {
+    "table": "public.source_transfer_operations",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.source_transfers",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.terminal_control_acl",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.terminal_input_receipts",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.terminal_operations",
+    "rows": 5,
+    "digest": "f96ec0f25314d2ec6293a19fc8a57ee7"
+  },
+  {
+    "table": "public.terminal_outbox",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.terminal_sessions",
+    "rows": 1,
+    "digest": "00079e112661800be909c52b8ecc82d2"
+  },
+  {
+    "table": "public.terminal_subscriptions",
+    "rows": 0,
+    "digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "table": "public.users",
+    "rows": 2,
+    "digest": "1093e84d779d11656a1f4b326362b984"
+  }
+]

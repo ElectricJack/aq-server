@@ -1,0 +1,131 @@
+{
+  "passed": true,
+  "elapsed_ms": 53358,
+  "stage_origin": "http://127.0.0.1:4218",
+  "binary_sha256": "6f07dd8e98d3ae74e4886a6bf66b10b8f85a0a22c05756b77738543c7ec7da65",
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "database": "aq_canonical_stage_49fac61d0492413b843281873437b0e7",
+  "namespace_id": "2ae9605f-5277-4c58-aad8-61ad8121fcac",
+  "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "actual_unix_socket": true,
+  "synthetic_forwarding": false,
+  "current_definitions": 0,
+  "current_activations": 0,
+  "grants": 0,
+  "artifacts": 0,
+  "loaded_definitions_capability": false,
+  "incarnations": [
+    3,
+    4
+  ],
+  "work_counts_before": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "work_counts_after": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "original_table_changes": [
+    {
+      "table": "public.meta",
+      "before": {
+        "table": "public.meta",
+        "rows": 4,
+        "digest": "4d28c9926d7319613ee0514eb623c119"
+      },
+      "after": {
+        "table": "public.meta",
+        "rows": 4,
+        "digest": "804d7fa06de0c3bde73383d354058b7d"
+      }
+    },
+    {
+      "table": "public.notification_budget",
+      "before": {
+        "table": "public.notification_budget",
+        "rows": 1,
+        "digest": "299730d99d335129fe664e5663de05aa"
+      },
+      "after": {
+        "table": "public.notification_budget",
+        "rows": 1,
+        "digest": "bac572540b7674fcb20e6aa09dd2796e"
+      }
+    },
+    {
+      "table": "public.playbook_namespaces",
+      "before": {
+        "table": "public.playbook_namespaces",
+        "rows": 0,
+        "digest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      "after": {
+        "table": "public.playbook_namespaces",
+        "rows": 1,
+        "digest": "a0dedfd489a434df8eba21b12682f45e"
+      }
+    },
+    {
+      "table": "public.schema_migrations",
+      "before": {
+        "table": "public.schema_migrations",
+        "rows": 35,
+        "digest": "e4d753d9f67d406ffe56430d6867b682"
+      },
+      "after": {
+        "table": "public.schema_migrations",
+        "rows": 37,
+        "digest": "7cbf220a6d97ec301ec64e09ceca4b55"
+      }
+    },
+    {
+      "table": "public.terminal_sessions",
+      "before": {
+        "table": "public.terminal_sessions",
+        "rows": 1,
+        "digest": "00079e112661800be909c52b8ecc82d2"
+      },
+      "after": {
+        "table": "public.terminal_sessions",
+        "rows": 1,
+        "digest": "16cf49663453fb7df2782a054ac9a37a"
+      }
+    }
+  ],
+  "same_principal_identity_preserved": true,
+  "mvcc_authorization_revision_may_change": true,
+  "canonical_changes": false,
+  "stage_left_running": true,
+  "stage_pid": 895935
+}

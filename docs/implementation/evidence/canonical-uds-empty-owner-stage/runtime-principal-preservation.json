@@ -1,0 +1,15 @@
+{
+  "source_principal": {
+    "id": "f4c33664-c524-4395-815f-5af6109a418b",
+    "display_name": "owner@localhost",
+    "authorization_revision": "269518051025618533862702072141756277171"
+  },
+  "stage_principal": {
+    "id": "f4c33664-c524-4395-815f-5af6109a418b",
+    "display_name": "owner@localhost",
+    "authorization_revision": "266683367553016329454686406843694971669"
+  },
+  "id_issuer_subject_role_email_identical": true,
+  "authorization_revision_changed_on_restore": true,
+  "expected_mvcc_change_not_rebound_principal": true
+}

@@ -1,0 +1,25 @@
+{
+  "operator_glue_diagnostics": [
+    {
+      "kind": "snapshot client stdin",
+      "detail": "Initial read-only exported-snapshot probe omitted docker exec -i. It exited before dump, target DB creation or AQ startup. Retained private empty preparation directory only."
+    },
+    {
+      "kind": "core URL encoding",
+      "detail": "Generated stage URL initially treated postgres as hostname, so peer authentication refused default OS user jkern before migrations. Corrected stage-only URL to reviewed helper form postgres://postgres@localhost/<newDB>?host=<actual private socket>. No authentication/socket policy weakening; same intended postgres identity, no canonical config change."
+    },
+    {
+      "kind": "SQL output parsing",
+      "detail": "First actual owner startup stopped cleanly after probe failed parsing a SET command tag. Next stopped cleanly after an over-broad single-line JSON workaround mishandled multi-line PostgreSQL json_agg. Final parser strips only the explicit SET tag and preserves full JSON. No product/source/config/key/namespace changes or resets."
+    }
+  ],
+  "engine_incarnations": {
+    "diagnostic_starts": [
+      1,
+      2
+    ],
+    "qualified_start": 3,
+    "qualified_restart_left_up": 4
+  },
+  "no_dump_restore_or_row_deletion_to_hide_diagnostics": true
+}

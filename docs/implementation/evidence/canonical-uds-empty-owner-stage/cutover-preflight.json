@@ -1,0 +1,85 @@
+{
+  "observed_at_ms": 1793574377187,
+  "attempts_total": 1,
+  "held_task_claims": 1,
+  "attempt_statuses": [
+    {
+      "kind": "profiled_v1",
+      "status": "offered",
+      "holds_task": true,
+      "count": 1
+    }
+  ],
+  "node_count": 1,
+  "unrevoked_nodes_seen_last60s": 0,
+  "newest_node_heartbeat": "2026-11-01T07:30:33.71236+00:00",
+  "material_leases_total": 1,
+  "unexpired_material_leases": 0,
+  "playbook_namespaces": 0,
+  "grants": 0,
+  "phase_execution_grants": 1,
+  "profiled_started_receipts": 1,
+  "profiled_authority_statuses": [
+    {
+      "status": "finished",
+      "count": 1
+    }
+  ],
+  "terminal_pending_bytes": 0,
+  "terminal_controller_principals": 0,
+  "terminal_outbox": 0,
+  "notification_deliveries": 0,
+  "source_transfers": 0,
+  "clients": [
+    {
+      "application_name": "",
+      "backend_type": "client backend",
+      "connections": 9
+    },
+    {
+      "application_name": "aq-dashboard-read",
+      "backend_type": "client backend",
+      "connections": 2
+    },
+    {
+      "application_name": "aq-human-graph-read",
+      "backend_type": "client backend",
+      "connections": 2
+    },
+    {
+      "application_name": "aq-supervisor-conversation",
+      "backend_type": "client backend",
+      "connections": 1
+    },
+    {
+      "application_name": "aq-terminal",
+      "backend_type": "client backend",
+      "connections": 2
+    }
+  ],
+  "additional_process": {
+    "pid": 675372,
+    "argv": [
+      "/tmp/aq-dashboard-combined-preview/aq-server-overview",
+      "serve",
+      "--vault",
+      "/tmp/aq-dashboard-combined-preview/vault"
+    ],
+    "server": {
+      "admin_bind": "127.0.0.1:4196",
+      "worker_bind": "127.0.0.1:4197",
+      "public_origin": "http://localhost:4196"
+    },
+    "config_sections": [
+      "format_version",
+      "environment",
+      "server",
+      "auth",
+      "bootstrap",
+      "enrollment",
+      "workers",
+      "agent_access"
+    ]
+  },
+  "central_reservation_tables_present_in_source35": false
+}

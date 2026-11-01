@@ -1,0 +1,12 @@
+{
+  "remaining_source_database_url_processes": [
+    {
+      "pid": 874715,
+      "executable": "/tmp/aq-dashboard-actions-promotion/aq-server-events"
+    }
+  ],
+  "additional4196_retired_by_root": true,
+  "observed_at": "2026-11-01",
+  "held_claim_disposition": "RETAIN_UNRESOLVED_UNCHANGED",
+  "no_new_authority_attempt_release_or_expiry_restamp": true
+}

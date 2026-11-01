@@ -1,0 +1,115 @@
+{
+  "passed": true,
+  "origin": "http://127.0.0.1:4218",
+  "conversation_id": "9da826a0-89d9-45e1-ae28-a26e0460dd04",
+  "actor_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "initial_human_rows": 0,
+  "phone_measurements": [
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844,
+        "name": "phone"
+      },
+      "initial_send": {
+        "x": 286.703125,
+        "y": 711,
+        "width": 74.296875,
+        "height": 44
+      },
+      "input": {
+        "x": 29,
+        "y": 647,
+        "width": 332,
+        "height": 56
+      },
+      "send": {
+        "x": 286.703125,
+        "y": 711,
+        "width": 74.296875,
+        "height": 44
+      },
+      "navigation_top": 787
+    },
+    {
+      "viewport": {
+        "width": 320,
+        "height": 740,
+        "name": "compact"
+      },
+      "initial_send": {
+        "x": 216.703125,
+        "y": 607,
+        "width": 74.296875,
+        "height": 44
+      },
+      "input": {
+        "x": 29,
+        "y": 543,
+        "width": 262,
+        "height": 56
+      },
+      "send": {
+        "x": 216.703125,
+        "y": 607,
+        "width": 74.296875,
+        "height": 44
+      },
+      "navigation_top": 683
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 530,
+        "name": "reduced"
+      },
+      "initial_send": {
+        "x": 286.703125,
+        "y": 459.578125,
+        "width": 74.296875,
+        "height": 44
+      },
+      "input": {
+        "x": 29,
+        "y": 333,
+        "width": 332,
+        "height": 56
+      },
+      "send": {
+        "x": 286.703125,
+        "y": 397,
+        "width": 74.296875,
+        "height": 44
+      },
+      "navigation_top": 473
+    }
+  ],
+  "keyboard_scope": "reduced viewport focus, Shift+Enter and composition event guard; physical OS keyboard not qualified",
+  "admitted": null,
+  "scope_switch_performed": true,
+  "runtime": {
+    "state": "unavailable",
+    "binding": null,
+    "reason": "central_runtime_not_connected"
+  },
+  "references": [
+    "04-supervisor-chat.png",
+    "09-supervisor-full-desktop.png",
+    "12-supervisor-mobile.png"
+  ],
+  "visual_subset": "full-page global human-message history and pending-safe text composer; docking deferred",
+  "served_bundle_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "explicit_enqueue_requests": 0,
+  "page_errors": 0,
+  "captures": [
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/desktop-conversation-history.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/phone-conversation-history.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/phone-text-composer.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/compact-conversation-history.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/compact-text-composer.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/reduced-conversation-history.png",
+    "/tmp/aq-empty-owner-qualified-2baa8e7/stage-supervisor/reduced-text-composer.png"
+  ],
+  "elapsed_ms": 1536,
+  "note": "Actual mailbox owner and SQL history; optional single enqueue uses the disposable synthetic owner fixture. Queued only, no delivery/runtime/provider/worker claim or fabricated replies. No interception or body storage."
+}

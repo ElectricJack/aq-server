@@ -1,0 +1,31 @@
+{
+  "database": "aq_test_d2942959309042a3ad3e087dec11e03e",
+  "system_identifier": "7702509189573074990",
+  "version": "17.11 (Debian 17.11-1.pgdg12+2)",
+  "encoding": "UTF8",
+  "database_bytes": 14612147,
+  "dbmeta": {
+    "owner": "postgres",
+    "datcollate": "en_US.utf8",
+    "datctype": "en_US.utf8",
+    "datlocprovider": "c",
+    "datcollversion": "2.36",
+    "datacl": null
+  },
+  "dbrole_settings": 0,
+  "aq_state": "35",
+  "component_present": false,
+  "owner_exists": 1,
+  "namespace_count": 0,
+  "grants": 0,
+  "notification_messages": 0,
+  "notification_deliveries": 0,
+  "notification_destinations": 0,
+  "terminal_outbox": 0,
+  "roles": [
+    "postgres"
+  ],
+  "extensions": [
+    "plpgsql"
+  ]
+}

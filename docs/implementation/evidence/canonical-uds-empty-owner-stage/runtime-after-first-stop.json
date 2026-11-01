@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "aq_state": "37",
+    "component_schema": 4,
+    "engine": {
+      "namespace": "aq/2ae9605f-5277-4c58-aad8-61ad8121fcac/1",
+      "revision": 3,
+      "incarnation": 3,
+      "owned": false,
+      "owner_backend_pid": null
+    },
+    "grants": 0,
+    "artifacts": 0,
+    "clients": []
+  },
+  "counts": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  }
+}

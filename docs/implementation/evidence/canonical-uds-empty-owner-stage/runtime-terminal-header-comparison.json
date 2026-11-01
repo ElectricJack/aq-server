@@ -1,0 +1,81 @@
+{
+  "source": [
+    {
+      "key_id": "actual-output-test",
+      "boot_id": "bdbfe42d-0629-45dc-8fb2-b7b490cd8f3e",
+      "node_id": "368300e0-f275-4d61-bb5f-a4ae7867315a",
+      "identity": {
+        "epoch": 1,
+        "session": {
+          "kind": "remote",
+          "boot_id": "bdbfe42d-0629-45dc-8fb2-b7b490cd8f3e",
+          "node_id": "368300e0-f275-4d61-bb5f-a4ae7867315a",
+          "attempt_id": "38a3fe3a-5e17-589c-87fa-893754037804",
+          "session_id": "9767942b-b7f8-5ae4-be04-136f81509cce",
+          "assignment_generation": 1
+        },
+        "terminal_id": "e0e2f83e-f5ed-4147-8aad-2f4a076b6229"
+      },
+      "attempt_id": "38a3fe3a-5e17-589c-87fa-893754037804",
+      "input_mode": "finite_v1",
+      "runtime_id": "8b8480e4-fde0-4af9-a0e9-cd54de9249c8",
+      "session_id": "9767942b-b7f8-5ae4-be04-136f81509cce",
+      "terminal_id": "e0e2f83e-f5ed-4147-8aad-2f4a076b6229",
+      "pending_bytes": 0,
+      "observed_at_ms": 1793518241405,
+      "terminal_epoch": 1,
+      "ledger_revision": 7,
+      "operation_count": 4,
+      "last_output_at_ms": 1793518241417,
+      "authority_revision": 4,
+      "protection_version": 1,
+      "controller_principal": null,
+      "last_output_sequence": 3,
+      "assignment_generation": 1,
+      "controller_generation": 0,
+      "execution_spec_digest": "9200ec768d8fa534261451bc8e0b79196e5ba23f69245cd633640a0254162e46",
+      "launch_manifest_digest": "3eb5902f1e99c783fcdd3175e50079cc8f7dacac2e6302eb6af57eac584772f5"
+    }
+  ],
+  "stage": [
+    {
+      "key_id": "actual-output-test",
+      "boot_id": "bdbfe42d-0629-45dc-8fb2-b7b490cd8f3e",
+      "node_id": "368300e0-f275-4d61-bb5f-a4ae7867315a",
+      "identity": {
+        "epoch": 1,
+        "session": {
+          "kind": "remote",
+          "boot_id": "bdbfe42d-0629-45dc-8fb2-b7b490cd8f3e",
+          "node_id": "368300e0-f275-4d61-bb5f-a4ae7867315a",
+          "attempt_id": "38a3fe3a-5e17-589c-87fa-893754037804",
+          "session_id": "9767942b-b7f8-5ae4-be04-136f81509cce",
+          "assignment_generation": 1
+        },
+        "terminal_id": "e0e2f83e-f5ed-4147-8aad-2f4a076b6229"
+      },
+      "attempt_id": "38a3fe3a-5e17-589c-87fa-893754037804",
+      "input_mode": "finite_v1",
+      "runtime_id": "51bc5206-c9b7-4728-b6ed-f95111d1c1ff",
+      "session_id": "9767942b-b7f8-5ae4-be04-136f81509cce",
+      "terminal_id": "e0e2f83e-f5ed-4147-8aad-2f4a076b6229",
+      "pending_bytes": 0,
+      "observed_at_ms": 1793518241405,
+      "terminal_epoch": 1,
+      "ledger_revision": 7,
+      "operation_count": 4,
+      "last_output_at_ms": 1793518241417,
+      "authority_revision": 4,
+      "protection_version": 1,
+      "controller_principal": null,
+      "last_output_sequence": 3,
+      "assignment_generation": 1,
+      "controller_generation": 0,
+      "execution_spec_digest": "9200ec768d8fa534261451bc8e0b79196e5ba23f69245cd633640a0254162e46",
+      "launch_manifest_digest": "3eb5902f1e99c783fcdd3175e50079cc8f7dacac2e6302eb6af57eac584772f5"
+    }
+  ],
+  "changed_fields": [
+    "runtime_id"
+  ]
+}
