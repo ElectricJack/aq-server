@@ -18,3 +18,5 @@ cargo test -p aq-server --test profiled_results \
 ```
 
 Without these explicit browser inputs, the ordinary owner test requires no sibling dashboard, Node or browser. The listener uses the same identity/capability/CSRF/maintenance construction as the configured human admin router. A labelled local test fixture supplies the source-retention peer and native result inputs; this does not qualify actual Git transfer, a real model, production data, decision actions or full mockup fidelity. Full artifact media/discussion and richer task titles remain separate owners.
+
+A separate [disposable browser action qualification](actions.md) now covers actual approve/reject double clicks and exact-receipt recovery after a committed response is truncated. The read-only proof above remains separately scoped.

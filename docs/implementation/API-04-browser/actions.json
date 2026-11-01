@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "disposable_fixture": true,
+  "approve_doubleclick_posts": 1,
+  "reject_doubleclick_posts": 1,
+  "committed_response_dropped": true,
+  "explicit_retry_same_bytes": true,
+  "replay_exact_receipt": true,
+  "source_subject_pins_unchanged": true,
+  "observed_resolve_posts": 4,
+  "decision_ids": [
+    "0bfbc679-4f33-46e5-bafc-59f3e091ce75",
+    "2db42ef8-8654-418d-b534-d4b3a82811a8",
+    "cf931382-f20a-418b-9181-0e3406a23688"
+  ],
+  "browser_interception": false,
+  "task_completion_or_merge_claim": false,
+  "screenshot": "/tmp/aq-decisions-action-evidence/recorded-disposable-answer.png"
+}
