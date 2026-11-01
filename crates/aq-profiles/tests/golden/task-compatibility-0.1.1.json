@@ -1,0 +1,4709 @@
+{
+  "captured_compiler": "aq-profiles0.1.1",
+  "cases": {
+    "base": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "296302e2f9629cbd0a30506d72e4f131b3da63ce6d643c00f5995658c1cb4e1f",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "18ecfca65af058c9ab335343a1d2174368f8655a1e033f0de9f0623dcf306f06",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 413,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "d697d82305c1ff651bd20d0f752ae602d41059a202a8e153543823d08f3523d4"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "changed_context": {
+      "draft": {
+        "error": "invalid profile catalog: context bytes do not match source digest"
+      },
+      "input_digest": "98af7ee5715683452519051b0f7eb2c9aa83e6919f7a356af1ced136ccf72498",
+      "legacy": {
+        "error": "invalid profile catalog: context bytes do not match source digest"
+      }
+    },
+    "denied_ceiling_0": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "55d5a37db972ca418ae5bf4644feb4ff5b3dfc9d35c9733f0bc29d2f3cc57256",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_permission_denied:knowledge.read",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 303,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "dcbbadfe14b20358f95b7fb65ad7a083ed726bfc250096caf8c384b921e2a407"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "denied_ceiling_1": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "df36f88a205ea381713a60af00560957b3feebff13a08e6f0f76402102b979d5",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_permission_denied:knowledge.read",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 303,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "cfdfc9fc892c5f447ac819f526912f064de6cd6c47f25a1e4e6ef6dcde3a51e6"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "denied_ceiling_2": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "06b940cd082e06f9e78d4d7f351a10a35ca744b9c71e065641ee4060773e79ba",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_permission_denied:knowledge.read",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 303,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "b3d396b189c7bbd64f39113576ace9821b8a6c032b9ceb3402bd92561392e1a8"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "denied_ceiling_3": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "383530e522e9addde6b9c4a46a25e6372cdbb6560b8ec14aa3fe8f7a39855507",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_permission_denied:knowledge.read",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 303,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "b2a16275e79b2243b32d459cb4d37438a3797ddb426c19901fc295b1d2fa80b1"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "denied_ceiling_4": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "51cafcbead6b7e599f584ba97e82d9a2cdb174c7b7ba33e554b434c4248d06a7",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "required module aq-work@1:required_operation_denied",
+            "required module source-editing@1:required_operation_denied"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_permission_denied:knowledge.read",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "required_operation_denied",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 303,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "d3358926b370143e46606d65b215c893c6e5e98237d047d09faf3cfcf2becb08"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "missing_adapters": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [
+            "unavailable adapter:codex"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_valid": false
+        }
+      },
+      "input_digest": "6d34f0190326e3a66fd5957c3e2cd50a857839ffcb2e2cdd5216884a840ad6d9",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [
+            "unavailable adapter:codex"
+          ],
+          "catalog_valid": true,
+          "composition": null,
+          "composition_digest": null,
+          "composition_valid": false,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 413,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "0c0b5e54c29ff946f5457be86fa883c61a3044195d358f0d42f8bf82b5fe9a1e"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "narrowed": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 4096,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "ac42770a5771f1f17668e179e9bb62e66c1da574777f5bbdf05ff8f893a90f04",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 4096,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "4c30ec223746c187eb19837de8d06353e3baea72a14bb16f9cd116af3095a779",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 413,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "6e5e7b2272a86989bce4c94d82d658d249de3e57a3b8a742091423b121270b61"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "native_input": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "8705b48533268023b20d692b0e5fb2c6cc9ed0e6ecc7c3a9e1ffe7ed585c8f7c",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "2e13e9c5bdb85bc33f6cbfd5be9d7db9348be2def1ef00992f26cbffcc49406c",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "b56143b5333718779363c9849496f6ed968ac26c9ae03d1bf2cdaa0f343857ac",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "b17f9dcc9975e2d903130d29a00ae9682424eff368a55401631d9448bd8f403b",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "affcdc0189f50d7759f113765bc36d7778d91493bf438899357ba292fc0fcbd4",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "1609a2e91fe50ace4a6f0c5fa9a50e56530d5290c65de60fca97e7dc874f4a5b",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "8705b48533268023b20d692b0e5fb2c6cc9ed0e6ecc7c3a9e1ffe7ed585c8f7c",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "2e13e9c5bdb85bc33f6cbfd5be9d7db9348be2def1ef00992f26cbffcc49406c",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "b56143b5333718779363c9849496f6ed968ac26c9ae03d1bf2cdaa0f343857ac",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "b17f9dcc9975e2d903130d29a00ae9682424eff368a55401631d9448bd8f403b",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "affcdc0189f50d7759f113765bc36d7778d91493bf438899357ba292fc0fcbd4",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "2056451e831db212a4dec02c0a96e37f5b2e2b03a69e9e42ed207a301aafcb2b",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "2e13e9c5bdb85bc33f6cbfd5be9d7db9348be2def1ef00992f26cbffcc49406c",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "b56143b5333718779363c9849496f6ed968ac26c9ae03d1bf2cdaa0f343857ac",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "b17f9dcc9975e2d903130d29a00ae9682424eff368a55401631d9448bd8f403b",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "affcdc0189f50d7759f113765bc36d7778d91493bf438899357ba292fc0fcbd4",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "8705b48533268023b20d692b0e5fb2c6cc9ed0e6ecc7c3a9e1ffe7ed585c8f7c",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+              }
+            ],
+            "required_bytes": 413,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "c30a94b97d3f50a98e64be6b3330167f3e79c4831daed32da9c5e6a79816abab"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "native_sealed": {
+      "composition": {
+        "agent_profile": {
+          "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+          "identity": "agent:implementer@1",
+          "revision": "1"
+        },
+        "catalog_digest": "8705b48533268023b20d692b0e5fb2c6cc9ed0e6ecc7c3a9e1ffe7ed585c8f7c",
+        "context_limit_bytes": 8192,
+        "effective_permissions": [
+          {
+            "operation": "task.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "knowledge.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "source.write",
+            "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+          }
+        ],
+        "environment": "confined-worktree",
+        "execution_profile": {
+          "digest": "2e13e9c5bdb85bc33f6cbfd5be9d7db9348be2def1ef00992f26cbffcc49406c",
+          "identity": "execution:confined-development@1",
+          "revision": "1"
+        },
+        "graph_access_policy_digest": "710be82de965c848a3da1ca912f74d3d2d52cb659e85cd2f14f7b2268bb2393b",
+        "graph_access_policy_kind": "preselection_graph_access_policy_v1",
+        "harness": "codex",
+        "instruction_order": [
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+              "identity": "platform:1",
+              "revision": "1"
+            },
+            "text": "Platform requirements.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+              "identity": "module:engineering@1",
+              "revision": "1"
+            },
+            "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+              "identity": "module:reporting@1",
+              "revision": "1"
+            },
+            "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "b56143b5333718779363c9849496f6ed968ac26c9ae03d1bf2cdaa0f343857ac",
+              "identity": "module:aq-work@1",
+              "revision": "1"
+            },
+            "text": "Use scoped AQ task reads and updates under current authorization.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": false,
+            "source": {
+              "digest": "b17f9dcc9975e2d903130d29a00ae9682424eff368a55401631d9448bd8f403b",
+              "identity": "module:aq-knowledge@1",
+              "revision": "1"
+            },
+            "text": "Retrieve only permitted revision-labelled knowledge.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "affcdc0189f50d7759f113765bc36d7778d91493bf438899357ba292fc0fcbd4",
+              "identity": "module:source-editing@1",
+              "revision": "1"
+            },
+            "text": "Edit only explicitly granted source scopes.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+              "identity": "project:1",
+              "revision": "1"
+            },
+            "text": "Project conventions.\n"
+          },
+          {
+            "delivery": "startup",
+            "required": true,
+            "source": {
+              "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+              "identity": "assignment:1",
+              "revision": "1"
+            },
+            "text": "Exact assigned outcome.\n"
+          }
+        ],
+        "intelligence_profile": {
+          "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+          "identity": "intelligence:engineering@1",
+          "revision": "1"
+        },
+        "omissions": [],
+        "overrides": [],
+        "project_binding_id": "00000000-0000-0000-0000-000000000001",
+        "project_revision": 1,
+        "requested_permissions": [
+          {
+            "operation": "task.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "knowledge.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "source.write",
+            "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+          }
+        ],
+        "schema_version": 2,
+        "task_context_revision": "task:1"
+      },
+      "graph_policy": {
+        "context_digest": "25405d3be4c6d0966deab10cc9b964182795eab633d88378746b6f856ba75dc7",
+        "effective_permissions": [
+          {
+            "operation": "task.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "knowledge.read",
+            "scope_reference": "project:00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "operation": "source.write",
+            "scope_reference": "repository:00000000-0000-0000-0000-000000000002"
+          }
+        ],
+        "instructions_digest": "b04269aa1ebb252f06c03a7c37640a84e7d901f0186dfc79db232c03eb76812a",
+        "kind": "preselection_graph_access_policy_v1",
+        "project_binding_id": "00000000-0000-0000-0000-000000000001",
+        "project_revision": 1,
+        "schema_version": 1,
+        "scope": {
+          "edge_types": [],
+          "record_ids": [
+            "00000000-0000-0000-0000-000000000003"
+          ],
+          "repository_id": "00000000-0000-0000-0000-000000000002",
+          "task_id": "00000000-0000-0000-0000-000000000003",
+          "workspace_id": "00000000-0000-0000-0000-000000000004"
+        },
+        "source_context_revision": "task:1",
+        "tool_policy_digest": "1f2d1891d4adbb4c63c8165801aa816723cbbba96835248f65c3939d7ee29567"
+      }
+    },
+    "nil_task_binding": {
+      "draft": {
+        "error": "invalid profile catalog: nil identity"
+      },
+      "input_digest": "95ba97f91d6a1551acc18fea6f6a4d924c73afd5ac9aaeb692d1bc8de98e0d02",
+      "legacy": {
+        "error": "invalid profile catalog: nil identity"
+      }
+    },
+    "optional_budget_order": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 663,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "aaebc35c4c4e2cc7ac7c65812a7fa476d807b9f3fc60d478dfe098ceeb122321",
+                  "identity": "context:late",
+                  "revision": "1"
+                },
+                "text": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5",
+                  "identity": "context:early",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "2133a3c936753f9a73a153f28d8569c7ebef3abe7bacb587f5069ba4c5486f93",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 663,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                  "identity": "module:source-editing@1",
+                  "revision": "1"
+                },
+                "text": "Edit only explicitly granted source scopes.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "aaebc35c4c4e2cc7ac7c65812a7fa476d807b9f3fc60d478dfe098ceeb122321",
+                  "identity": "context:late",
+                  "revision": "1"
+                },
+                "text": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5",
+                  "identity": "context:early",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "04ce308a678075cbdf965798cf2acfe242c4c0f57f032319535faf2bcbb98dba",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "1313995fbcbf6254caad023ff41a9d11634eb658de74a14cea977aca1d8f4bef",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              },
+              {
+                "digest": "ce45dd82e052189f46d75ba390ee7093ca0ec11c05a109f308b0988d6a0e3686",
+                "identity": "module:source-editing@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5",
+                  "identity": "context:early",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 200,
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "source.write",
+                "scope_reference": "repository:example"
+              }
+            ],
+            "required_bytes": 413,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "8e7f314a2414751cd42756fb0b1cdb0b317d984955c4f837db818dfe65558dd7"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "optional_dependency_budget": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "86811eae70abfe12362d593aae6abf8a3d01738efa4aeefe8653e79ebd71855f",
+            "context_limit_bytes": 149,
+            "effective_permissions": [],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "eb71f12d197b0261b20d8cc8702164bba3d74c0beb4f17c2c4faa3a6af4c70d0",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "9be0b08e37818d6b2665cbe7fec291783a818b99b374a4fbe4b398fce497d415",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "86811eae70abfe12362d593aae6abf8a3d01738efa4aeefe8653e79ebd71855f",
+            "context_limit_bytes": 149,
+            "effective_permissions": [],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "eb71f12d197b0261b20d8cc8702164bba3d74c0beb4f17c2c4faa3a6af4c70d0",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "efa35cf312c3334cc128cb342b1eeed89cd809c20c83532491c05e222ee6b3f2",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "eb71f12d197b0261b20d8cc8702164bba3d74c0beb4f17c2c4faa3a6af4c70d0",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "eb71f12d197b0261b20d8cc8702164bba3d74c0beb4f17c2c4faa3a6af4c70d0",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "optional_context_budget",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 0,
+            "overrides": [
+              {
+                "field": "context_limit_bytes",
+                "reason_code": "capture",
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "86811eae70abfe12362d593aae6abf8a3d01738efa4aeefe8653e79ebd71855f",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "required_bytes": 148,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "0a4070f711164e7a1df70c585704e80f0e48a31a37c16fd5611f990be20246df"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "optional_dependency_missing": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "f99a266d9d75ec2d0ab4f1c49c418866e5977c543d87d162319b2df93976fad7",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "adapter_unavailable:[\"missing-adapter\"]",
+                "required": false,
+                "source": {
+                  "digest": "bef934061e2f718716fb3683267d3dcae8c2ac84b33918ac85fcb4f9763b5b48",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "7113d3ee9e583ec76383884f7b5d0cb2017844c5fb4ee8fa29372f664d386824",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "f99a266d9d75ec2d0ab4f1c49c418866e5977c543d87d162319b2df93976fad7",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+                  "identity": "agent:implementer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the implementer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [
+              {
+                "reason_code": "adapter_unavailable:[\"missing-adapter\"]",
+                "required": false,
+                "source": {
+                  "digest": "bef934061e2f718716fb3683267d3dcae8c2ac84b33918ac85fcb4f9763b5b48",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "b43f7b50563914421c96a8dccde0c8c438d197899a95260cd1196c09d918c453",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "c2cc1c89ddc74058d44464203e4d6f41b56a3834d5649312d7065ee2fd3b165c",
+              "identity": "agent:implementer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "bef934061e2f718716fb3683267d3dcae8c2ac84b33918ac85fcb4f9763b5b48",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [
+              {
+                "reason_code": "adapter_unavailable:[\"missing-adapter\"]",
+                "required": false,
+                "source": {
+                  "digest": "bef934061e2f718716fb3683267d3dcae8c2ac84b33918ac85fcb4f9763b5b48",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "bd1a0227313b783947f1394c30f5de6e9acd9b30635a24a9b4024252d2796e45",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                }
+              },
+              {
+                "reason_code": "dependency_unavailable",
+                "required": false,
+                "source": {
+                  "digest": "044dec43ae7179173fb081f78a4b920be5be199dd38bbb96e7243bd7b2db4a31",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                }
+              }
+            ],
+            "optional_bytes": 0,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "implementer@1",
+              "catalog_digest": "f99a266d9d75ec2d0ab4f1c49c418866e5977c543d87d162319b2df93976fad7",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "required_bytes": 148,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "8b794b631d5181672fbc3210c3d983d5891cc0183bd5c90860ccc55a7c9e335c"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "protected_override": {
+      "draft": {
+        "error": "invalid profile catalog: protected or undeclared override"
+      },
+      "input_digest": "a20a610ac82c914fd4c6f4ebf0bd54bed5bbc025cb90e220a2f9a884d0221c9c",
+      "legacy": {
+        "error": "invalid profile catalog: protected or undeclared override"
+      }
+    },
+    "required_overflow": {
+      "draft": {
+        "error": "invalid profile catalog: required context overflow: 413>1; sources:platform:1,agent:implementer@1,module:engineering@1,module:reporting@1,module:aq-work@1,module:source-editing@1,project:1,assignment:1"
+      },
+      "input_digest": "7f90496ceb15d3260721ccfd967b10630fe4708c2f3d30c0c2c2070c1987e464",
+      "legacy": {
+        "error": "invalid profile catalog: required context overflow: 413>1; sources:platform:1,agent:implementer@1,module:engineering@1,module:reporting@1,module:aq-work@1,module:source-editing@1,project:1,assignment:1"
+      }
+    },
+    "role_researcher": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "0402887eda03a527cdce44a90456afa58bd609454721f92b3fce2178729c3503",
+              "identity": "agent:researcher@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0402887eda03a527cdce44a90456afa58bd609454721f92b3fce2178729c3503",
+                  "identity": "agent:researcher@1",
+                  "revision": "1"
+                },
+                "text": "Act as the researcher; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "865a4d4b2e55e0f91f5aeae3ed34dbd773820049386e3de4c0d17a61c8cedde6",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "0402887eda03a527cdce44a90456afa58bd609454721f92b3fce2178729c3503",
+              "identity": "agent:researcher@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0402887eda03a527cdce44a90456afa58bd609454721f92b3fce2178729c3503",
+                  "identity": "agent:researcher@1",
+                  "revision": "1"
+                },
+                "text": "Act as the researcher; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "76a109b8795f8626223d5b3759bcf71fcac557122605cc45eab9721138ad61d5",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "0402887eda03a527cdce44a90456afa58bd609454721f92b3fce2178729c3503",
+              "identity": "agent:researcher@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "researcher@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "required_bytes": 368,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "487a50b0e4c37ff1650546d012a257938f08ab7715f99e30e1451e9c5dc5c7ef"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "role_reviewer": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "8695119b6cf747e011a00c4b8ac7724e81a4e59554c7dd77f22bb9d5f2857879",
+              "identity": "agent:reviewer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "8695119b6cf747e011a00c4b8ac7724e81a4e59554c7dd77f22bb9d5f2857879",
+                  "identity": "agent:reviewer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the reviewer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "64a1e827419004b2ffec9de9477b721987c207a243ca2589a1b3d23b483412aa",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "8695119b6cf747e011a00c4b8ac7724e81a4e59554c7dd77f22bb9d5f2857879",
+              "identity": "agent:reviewer@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "8695119b6cf747e011a00c4b8ac7724e81a4e59554c7dd77f22bb9d5f2857879",
+                  "identity": "agent:reviewer@1",
+                  "revision": "1"
+                },
+                "text": "Act as the reviewer; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "5beba15a9ce23fedbe3b1229908511fce0aa82db63ed154c952b90f81b842b48",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "8695119b6cf747e011a00c4b8ac7724e81a4e59554c7dd77f22bb9d5f2857879",
+              "identity": "agent:reviewer@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "reviewer@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "required_bytes": 366,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "3497b6ca84fab6d2f9ac3edc4b321b7902447678e1aa8ba738d4833045c02a98"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "role_supervisor": {
+      "draft": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2fea8c67c876592c6fcf83f9b677636d1c18f3f66fe067daa79cc7c4ea14c43",
+              "identity": "agent:supervisor@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2fea8c67c876592c6fcf83f9b677636d1c18f3f66fe067daa79cc7c4ea14c43",
+                  "identity": "agent:supervisor@1",
+                  "revision": "1"
+                },
+                "text": "Act as the supervisor; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "task_context_revision": "task:1"
+          },
+          "composition_valid": true
+        }
+      },
+      "input_digest": "92356183ad6ff9f1a4a24f4cd83ac3df01a8d1e6ae0a682962f6f199d44eacc9",
+      "legacy": {
+        "ok": {
+          "blocking_reasons": [],
+          "catalog_valid": true,
+          "composition": {
+            "agent_profile": {
+              "digest": "c2fea8c67c876592c6fcf83f9b677636d1c18f3f66fe067daa79cc7c4ea14c43",
+              "identity": "agent:supervisor@1",
+              "revision": "1"
+            },
+            "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+            "context_limit_bytes": 8192,
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "environment": "confined-worktree",
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harness": "codex",
+            "instruction_order": [
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eb9867571fe5dede45b09365b95180f99621de44f6dd3b4bd447b4e1407185be",
+                  "identity": "platform:1",
+                  "revision": "1"
+                },
+                "text": "Platform requirements.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "c2fea8c67c876592c6fcf83f9b677636d1c18f3f66fe067daa79cc7c4ea14c43",
+                  "identity": "agent:supervisor@1",
+                  "revision": "1"
+                },
+                "text": "Act as the supervisor; fulfill the exact scoped assignment and report evidence."
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                  "identity": "module:engineering@1",
+                  "revision": "1"
+                },
+                "text": "Implement bounded changes. Preserve existing behavior and report uncertainty.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                  "identity": "module:reporting@1",
+                  "revision": "1"
+                },
+                "text": "Verify relevant behavior and report evidence with exact revision references.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                  "identity": "module:aq-work@1",
+                  "revision": "1"
+                },
+                "text": "Use scoped AQ task reads and updates under current authorization.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": false,
+                "source": {
+                  "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                  "identity": "module:aq-knowledge@1",
+                  "revision": "1"
+                },
+                "text": "Retrieve only permitted revision-labelled knowledge.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "60a1738d8b931d102813987d7fb4c1643cf55e7932efa8368e8bc1b910a6ac3a",
+                  "identity": "project:1",
+                  "revision": "1"
+                },
+                "text": "Project conventions.\n"
+              },
+              {
+                "delivery": "startup",
+                "required": true,
+                "source": {
+                  "digest": "451e7fdb6e58750c58c2db858b1c5290af95a54f1bbba424005e9401d8fdbadb",
+                  "identity": "assignment:1",
+                  "revision": "1"
+                },
+                "text": "Exact assigned outcome.\n"
+              }
+            ],
+            "intelligence_profile": {
+              "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+              "identity": "intelligence:engineering@1",
+              "revision": "1"
+            },
+            "omissions": [],
+            "overrides": [],
+            "project_binding_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "schema_version": 1,
+            "task_context_revision": "task:1"
+          },
+          "composition_digest": "b2f69f272c3a8c2552a5653fb02a09e8595f6ad4825ff7eeae6dcbb69eafc6e9",
+          "composition_valid": true,
+          "explanation": {
+            "agent_profile": {
+              "digest": "c2fea8c67c876592c6fcf83f9b677636d1c18f3f66fe067daa79cc7c4ea14c43",
+              "identity": "agent:supervisor@1",
+              "revision": "1"
+            },
+            "denied_requirements": [],
+            "effective_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "estimated_tokens": null,
+            "execution_profile": {
+              "digest": "066b1b587623894f5d89cfd334a8b5b843f978c3905efcb9c33ef3a1017ea7c6",
+              "identity": "execution:confined-development@1",
+              "revision": "1"
+            },
+            "flattened_modules": [
+              {
+                "digest": "69c3ccf53b4dec0bc473c06681f3d2eaf65abdddad985d3b7c71659240303a24",
+                "identity": "module:engineering@1",
+                "revision": "1"
+              },
+              {
+                "digest": "0eba0ce567c1d676796c8a179ef7bbf903d2a0b1715d3012739e2314671e8856",
+                "identity": "module:reporting@1",
+                "revision": "1"
+              },
+              {
+                "digest": "eee8d433a88f8356e503f40fd47b77b526f16999d454f3a9488d86ee293f214f",
+                "identity": "module:aq-work@1",
+                "revision": "1"
+              },
+              {
+                "digest": "57f6c12d05dc43e8c04dff3716548a4eb8b84e32466401290186c6b8acf5e4b3",
+                "identity": "module:aq-knowledge@1",
+                "revision": "1"
+              }
+            ],
+            "graph_access_profile_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "omissions": [],
+            "optional_bytes": 53,
+            "overrides": [],
+            "reference_material": [],
+            "request": {
+              "agent_profile": "supervisor@1",
+              "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+              "expected_project_revision": 1,
+              "project_binding_id": "00000000-0000-0000-0000-000000000001",
+              "task_context_revision": "task:1"
+            },
+            "requested_permissions": [
+              {
+                "operation": "task.read",
+                "scope_reference": "project:example"
+              },
+              {
+                "operation": "knowledge.read",
+                "scope_reference": "project:example"
+              }
+            ],
+            "required_bytes": 368,
+            "schema_version": 1,
+            "selection": {
+              "candidates": [
+                {
+                  "candidate_id": "configuration-required",
+                  "eligibility": "stale_unknown",
+                  "harness": "codex",
+                  "model": "configuration-required",
+                  "observations": [],
+                  "provider": "configuration-required",
+                  "reason_codes": [
+                    "selection_pending"
+                  ],
+                  "reasoning_configuration_reference": "configuration-required:1"
+                }
+              ],
+              "decision_trace": [
+                "selection_pending:AQ-20 must authorize observations and choose concrete model"
+              ],
+              "intelligence_profile": {
+                "digest": "7e45452cb63bdb367330b3da688683e95474db57d00990c9eb20dd045f57b026",
+                "identity": "intelligence:engineering@1",
+                "revision": "1"
+              },
+              "selected_candidate_id": null,
+              "snapshot_digest": "dd00b64d9855c279897ee6a11920cffeda5cafe4eeb286203c982a376e1b9f0a"
+            },
+            "tokenizer_version": null,
+            "valid": false
+          },
+          "selection_pending": true
+        }
+      }
+    },
+    "wrong_catalog": {
+      "draft": {
+        "error": "invalid profile catalog: request catalog digest mismatch"
+      },
+      "input_digest": "5411786e2d21757d47dabb41da57febf8f7c1b7897ba15c50d01df2bc785e652",
+      "legacy": {
+        "error": "invalid profile catalog: request catalog digest mismatch"
+      }
+    }
+  },
+  "compiler_source_digest": "379f629b618243e324b5b34414bb816f71577809b1c6e9ff445b0663c5fec31b"
+}
