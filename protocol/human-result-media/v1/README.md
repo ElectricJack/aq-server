@@ -81,9 +81,11 @@ an arbitrary response URL. HTTP routes and headers are mediated by AQ.
   scale=min(1,384/max(width,height)), with deterministic nearest samples. No
   upscale, implicit crop, EXIF/color profile, second frame or source replacement.
   Final encoder settings are perceptual sRGB, Compression::Fast then
-  Filter::NoFilter, pinned dependency bytes, and no copied metadata. Source sample
+  Filter::Sub, pinned dependency bytes, and no copied metadata. Source sample
   selection for preview pixel(x,y) is floor(x×source_width/preview_width),
   floor(y×source_height/preview_height), with checked integer arithmetic.
+  The pinned Fast encoder's stored/no-filter size fallback is part of the policy;
+  both stored-small and actually-Sub-filtered vectors have golden digests.
 - All item bindings equal MediaPage.binding, artifact IDs are unique and sorted
   by stable UUID. This is an attachment list, not chronological result Latest.
 - Availability reason is null only for available. Other states have their
@@ -94,6 +96,10 @@ an arbitrary response URL. HTTP routes and headers are mediated by AQ.
   bound and the schema's hard maxima. Every byte/file/metadata reservation is
   accounted before writing, including pending/orphan staging until confirmed
   cleanup. No lookup or repeated finalize silently extends a deadline.
+  UploadStatus.limits is the original pinned admission policy; MediaPage.limits
+  is current retrieval policy. Lowering configuration cannot rewrite an existing
+  intent's deadlines or immutable receipt. Unsupported native-report coverage
+  is rejected; every binding explicitly declares recorded_legacy_native_only.
 
 ## Storage and migration review
 

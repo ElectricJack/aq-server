@@ -1,0 +1,15 @@
+[package]
+name = "aq-result-media"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+png = "=0.18.1"
+# Already a PNG transitive dependency; exact bounded zlib-stream validation.
+flate2 = "=1.1.10"
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true

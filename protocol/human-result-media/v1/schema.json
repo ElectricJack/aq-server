@@ -139,6 +139,9 @@
     "Binding": {
       "type": "object",
       "properties": {
+        "coverage": {
+          "const": "recorded_legacy_native_only"
+        },
         "report_id": {
           "$ref": "#/$defs/Id"
         },
@@ -172,6 +175,7 @@
         }
       },
       "required": [
+        "coverage",
         "report_id",
         "report_revision",
         "project_id",

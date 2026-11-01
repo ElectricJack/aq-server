@@ -1,0 +1,37 @@
+From 8330c2c6fc91c56fb8c4bb0cd6ea65994027f15e Mon Sep 17 00:00:00 2001
+From: Mrmaxmeier <3913977+Mrmaxmeier@users.noreply.github.com>
+Date: Fri, 24 Apr 2026 22:25:01 +0200
+Subject: [PATCH] reject malformed PLTE chunks (#682)
+
+---
+ src/decoder/stream.rs            | 4 ++++
+ src/decoder/transform/palette.rs | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/decoder/stream.rs b/src/decoder/stream.rs
+index 95f959e7..8b50757e 100644
+--- a/src/decoder/stream.rs
++++ b/src/decoder/stream.rs
+@@ -1275,6 +1275,10 @@ impl StreamingDecoder {
+             Err(DecodingError::Format(
+                 FormatErrorInner::DuplicateChunk { kind: chunk::PLTE }.into(),
+             ))
++        } else if self.current_chunk.raw_bytes.len() % 3 != 0 {
++            Err(DecodingError::Format(
++                FormatErrorInner::ChunkLengthWrong { kind: chunk::PLTE }.into(),
++            ))
+         } else {
+             info.palette = Some(Cow::Owned(self.current_chunk.raw_bytes.clone()));
+             Ok(())
+diff --git a/src/decoder/transform/palette.rs b/src/decoder/transform/palette.rs
+index 75089134..bf44f732 100644
+--- a/src/decoder/transform/palette.rs
++++ b/src/decoder/transform/palette.rs
+@@ -71,6 +71,7 @@ fn create_rgba_palette(info: &Info) -> [[u8; 4]; 256] {
+             rgba_iter = &mut rgba_iter[1..];
+         }
+         if !palette_iter.is_empty() {
++            assert_eq!(palette_iter.len(), 3, "chunk is checked in parse_plte");
+             rgba_iter[0][0..3].copy_from_slice(&palette_iter[0..3]);
+         }
+     }

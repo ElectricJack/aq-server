@@ -21,6 +21,7 @@ CREATE TABLE result_media_intents (
  report_binding JSONB NOT NULL,
  storage_id UUID NOT NULL,
  rendering_policy TEXT NOT NULL CHECK(rendering_policy='aq.png.rgba8-srgb-v1'),
+ admission_limits JSONB NOT NULL,
  request_bytes BYTEA NOT NULL CHECK(octet_length(request_bytes) BETWEEN 1 AND 16384),
  request_digest TEXT NOT NULL CHECK(request_digest='sha256:' || encode(sha256(request_bytes),'hex')),
  input_digest TEXT NOT NULL CHECK(input_digest ~ '^sha256:[0-9a-f]{64}$'),

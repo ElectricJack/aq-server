@@ -72,6 +72,11 @@ chunks. The strict subset is declared as a limit, not general PNG compatibility.
 
 Fully decode under the PNG decoder's resource limits and separately bounded
 caller-owned buffers; IHDR/signature checks alone cannot finalize an image.
+First validate the complete concatenated IDAT zlib stream with the already-used
+flate2 dependency, at most a 1 MiB compressed copy and fixed 8 KiB output scratch.
+Require exactly `(width*channels+1)*height` inflated scanline bytes, actual stream
+end and full compressed consumption; stop at expected+1 to reject excess/bombs.
+This is independent of png::Reader's intentional discard of surplus row data.
 The full-raster RGBA buffer is at most 8,000,000 bytes; preview RGBA is at most
 589,824 bytes. Configure a 16 MiB decoder scratch budget and bound encoding
 output separately. Only two processing jobs may be active; acquire the permit
@@ -86,7 +91,10 @@ alpha to RGB, and preserves RGBA samples; it performs no ICC color conversion.
 Write a fresh static RGBA8 PNG with sRGB marking and no copied metadata. Retain
 the input privately for digest/provenance, but expose only canonical variants.
 Encoder final settings are RGBA8, noninterlaced, perceptual sRGB marking,
-`Compression::Fast` followed by `Filter::NoFilter`, and no optional metadata.
+`Compression::Fast` followed by `Filter::Sub`, and no optional metadata.
+The pinned encoder can use its deterministic stored/no-filter fallback when
+compression would enlarge a tiny/incompressible stream; that behavior is part of
+the pinned policy and is covered by separate small/stored and filtered goldens.
 Pin exact dependency bytes and golden vectors; changing those settings requires
 a new rendering-policy identity. These are supported by the upstream
 [encoder](https://docs.rs/png/0.18.1/png/struct.Encoder.html),
