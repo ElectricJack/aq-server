@@ -5,6 +5,11 @@ addition, filesystem write API or dashboard uploader is implemented here.
 The [bounded design](../specs/result-media-png.md) and
 [closed contract](../../protocol/human-result-media/v1/README.md) govern this slice.
 
+Pure-core step 2 is now implemented and qualified in source `a3b2ead`; see
+[the core-only qualification](API-11-core-qualification.md). Storage, HTTP,
+authorization, migration registration and UI remain unimplemented. No pure test
+is evidence that PNG bytes have already been retained by the daemon.
+
 ## Source ownership and sequence
 
 1. Freeze schema/examples, storage/receipt identity, narrow PNG policy and quota/

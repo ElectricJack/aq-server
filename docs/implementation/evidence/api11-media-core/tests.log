@@ -1,0 +1,49 @@
+   Compiling aq-result-media v0.1.0 (/tmp/aq-result-media-v2/crates/aq-result-media)
+    Finished `test` profile [unoptimized] target(s) in 0.71s
+     Running unittests src/lib.rs (/tmp/aq-native-union-target/debug/deps/aq_result_media-85417fba994acea5)
+
+running 1 test
+test codec::output_tests::known_crc_vector_and_encoding_bound ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec.rs (/tmp/aq-native-union-target/debug/deps/codec-4118c1334c7101a0)
+
+running 13 tests
+test patched_direct_decoder_rejects_upstream_malformed_palette_without_panic ... ok
+test bounded_structural_mutation_corpus_never_panics ... ok
+test apng_profiles_text_palettes_interlace_and_chunk_flood_are_rejected_before_decode ... ok
+test malformed_deflate_and_adler_fail_after_structural_preflight ... ok
+test concatenated_or_trailing_compressed_streams_are_rejected ... ok
+test consecutive_one_byte_idat_chunks_keep_pixels_and_variant_identity ... ok
+test rgb_expansion_is_in_place_and_opaque ... ok
+test rgba_pixels_alpha_and_separate_content_identities_are_preserved ... ok
+test surplus_decompressed_image_data_is_rejected ... ok
+test signature_truncation_crc_trailing_and_chunk_order_are_not_images ... ok
+test rendering_is_repeatable_and_has_a_frozen_golden_digest ... ok
+test preview_geometry_and_sample_locations_cover_asymmetric_images ... ok
+test maximum_full_raster_and_checked_geometry_boundaries ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running tests/domain.rs (/tmp/aq-native-union-target/debug/deps/domain-b0669ee58f731807)
+
+running 10 tests
+test raw_request_digest_is_independent_of_typed_equivalence ... ok
+test identifiers_digests_filenames_and_capture_are_bounded_without_path_interpretation ... ok
+test positional_nested_struct_sequences_do_not_bypass_closed_object_contract ... ok
+test lowered_admission_policy_cannot_validate_a_larger_frozen_input ... ok
+test unsupported_native_coverage_and_missing_coverage_cannot_be_empty_media_success ... ok
+test unknown_duplicate_missing_nullable_and_oversized_json_are_rejected ... ok
+test terminal_status_and_exact_intent_receipt_cannot_offer_replay_or_another_task ... ok
+test availability_is_distinct_from_receipt_and_current_policy_limits ... ok
+test closed_example_roundtrips_and_receipt_digest_uses_exact_canonical_object ... ok
+test receipt_and_page_scope_variant_and_digest_mismatches_fail_closed ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/qualify_peak.rs (/tmp/aq-native-union-target/debug/examples/qualify_peak-a9aab7698faf6cf9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
