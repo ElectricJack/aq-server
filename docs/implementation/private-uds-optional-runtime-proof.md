@@ -1,6 +1,6 @@
 # Private PostgreSQL UDS optional-runtime proof
 
-Status: reviewable provisioning/recipe patch, before executing provisioning.
+Status: source 371c7b0 reviewed; one actual isolated transport provision and independent inspect now passed. Actual AQ/optional-runtime startup remains a separate reviewed phase.
 This prepares an isolated proof only. Existing canonical AQ/Graph data, binary,
 vault, container on 55432, socket permissions, proxy settings and security policy
 are outside this helper's inputs and remain untouched. No Rust build is needed.
@@ -125,3 +125,7 @@ Only isolated evidence is authorized here. Any later canonical cutover must
 separately review database identity/state, complete current data preservation,
 private keys, optional owner effects, served assets/binary and rollback. A new
 private PG proof cannot silently change canonical's old cluster/pool pointer.
+
+## Actual transport checkpoint
+
+The [retained actual proof](evidence/private-uds-transport/README.md) now verifies one cached-image instance with unchanged reviewed policy. Real peer UID/GID 1000, 0700 directory/0600 socket, peer auth and cluster identity passed. Separate private Core/engine DSN metadata agrees; actual AQ and engine clients/runtime have not started. Existing55432/canonical 4188 configuration and optional capability state remain unchanged.

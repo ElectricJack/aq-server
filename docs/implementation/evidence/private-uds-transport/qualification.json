@@ -1,0 +1,83 @@
+{
+  "status": "isolated_transport_qualified_runtime_not_started",
+  "provisioning_source": "371c7b0",
+  "helper": {
+    "path": "scripts/private-uds-postgres-proof.py",
+    "sha256": "b0ec19a7ed6987f366f93698c6d538ddfddd34946d9148e7202c3998a403607d"
+  },
+  "private_root": "/tmp/aq-private-uds-n8vgb39f",
+  "container_name": "aq-private-uds-931c7bf1-3f42-4d5b-b101-490f2991bd2f",
+  "container_id": "aaca77f508c794f0e078f5d5062e8b27903378cf71357125c34dff977f018819",
+  "created_containers": 1,
+  "image_id": "sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+  "image_repo_digest": "postgres@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5",
+  "uid": 1000,
+  "gid": 1000,
+  "container_policy": {
+    "network": "none",
+    "published_ports": false,
+    "tcp_listener": false,
+    "rootfs_readonly": true,
+    "cap_drop": "ALL",
+    "no_new_privileges": true,
+    "memory": "512MiB",
+    "cpus": 1,
+    "pids": 128,
+    "binds": "new private data/socket writable; minimal passwd/group readonly; private tmpfs scratch"
+  },
+  "configured_aq_engine_same_endpoint_database": true,
+  "actual_aq_and_engine_connections_verified": false,
+  "private_file_metadata": [
+    {
+      "name": "aq-database-url",
+      "uid": 1000,
+      "mode": "0600",
+      "links": 1,
+      "contents_retained_in_evidence": false
+    },
+    {
+      "name": "engine-connection",
+      "uid": 1000,
+      "mode": "0600",
+      "links": 1,
+      "contents_retained_in_evidence": false
+    },
+    {
+      "name": "passwd",
+      "uid": 1000,
+      "mode": "0600",
+      "links": 1,
+      "contents_retained_in_evidence": false
+    },
+    {
+      "name": "group",
+      "uid": 1000,
+      "mode": "0600",
+      "links": 1,
+      "contents_retained_in_evidence": false
+    }
+  ],
+  "peer_pid_limit": "SO_PEERCRED reports pid0 across this namespace boundary; UID/GID1000 is verified, no peer-PID/process-attestation claim",
+  "postgres_system_identifier": "7703296609124593685",
+  "aq_runtime_started": false,
+  "namespace_or_workflow_admitted": false,
+  "canonical_unchanged": {
+    "test_db_container_id": "25258fa3d830370a81a200daf1be0ef21b08e1c06849d445c0e2fde6eff3698c",
+    "test_db_mounts": [],
+    "test_db_host_port": 55432,
+    "dashboard_digest": "sha256:5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+    "optional_decisions_playbooks_caps_enabled": false
+  },
+  "source_observations": [
+    "Local cached image metadata and public entrypoint read only",
+    "Helper create then independent inspect succeeded without policy/permission adjustment",
+    "No canonical user data restored/copied, no AQ/engine keys generated",
+    "No Rust/app build or canonical config/runtime change"
+  ],
+  "remaining_gates": [
+    "Review fresh structural fixture context with unavailable external checks before any AQ runtime startup",
+    "Run both actual AQ and engine clients against this same cluster/database",
+    "Fresh retained namespace/grant/key/deadline pins, inert Return-only/no-admission/count/restart checks",
+    "Any actual optional-runtime canonical cutover remains separate"
+  ]
+}
