@@ -160,17 +160,16 @@ async fn snapshot(
     }
     let hot: HotState = serde_json::from_value(row.get("hot")).map_err(|_| invalid())?;
     hot.validate_against(&binding).map_err(|_| invalid())?;
-    if let Some(expected) = expected {
-        if expected.binding != binding
+    if let Some(expected) = expected
+        && (expected.binding != binding
             || hot.owner.as_ref().is_some_and(|o| {
                 o.guardian_id != expected.guardian_id || o.launch_id != expected.launch_id
             })
             || expected
                 .last_grant_id
-                .is_some_and(|id| hot.grant.as_ref().is_none_or(|g| g.grant_id != id))
-        {
-            return Err(invalid());
-        }
+                .is_some_and(|id| hot.grant.as_ref().is_none_or(|g| g.grant_id != id)))
+    {
+        return Err(invalid());
     }
     let versions = Versions {
         record_revision: row
