@@ -1,0 +1,176 @@
+COMMAND ["cargo", "test", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2/Cargo.toml", "--locked", "--offline"]
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-session-protocol-0.1.0)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-agent-api-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-session-api-0.1.0)
+   Compiling aq-profiles v0.1.2 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2)
+    Finished `test` profile [unoptimized] target(s) in 4.74s
+     Running unittests src/lib.rs (/tmp/aq-native-union-target/debug/deps/aq_profiles-72d6624f73c95ba4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/tmp/aq-native-union-target/debug/deps/aq-29a2e96c02ba83fc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/central.rs (/tmp/aq-native-union-target/debug/deps/central-9029a2cf11d007f2)
+
+running 14 tests
+test generated_schema_stays_frozen ... ok
+test task_only_legacy_recipe_is_not_central_merely_because_it_is_named_supervisor ... ok
+test subject_policy_conversation_and_original_body_mismatches_refuse ... ok
+test narrowing_override_cannot_forge_a_catalog_or_unprovided_source ... ok
+test strict_central_request_has_no_fake_task_selection_or_credential_surface ... ok
+test exact_two_lf_utf8_budget_and_optional_priority_share_the_common_engine ... ok
+test compatibility_defaults_to_denial_and_pins_every_exact_definition ... ok
+test on_demand_sources_are_not_startup_or_zero_token_readiness ... ok
+test every_explicit_ceiling_and_tool_support_is_intersected ... ok
+test literal_markdown_and_mail_never_expand_shell_or_task_templates ... ok
+test source_identity_spoofing_nul_and_digest_tampering_refuse ... ok
+test optional_dependency_omission_removes_its_capability_grants ... ok
+test actual_catalog_sources_shared_fragments_and_real_generated_artifacts_are_deterministic ... ok
+test large_complete_mail_turn_is_never_silently_truncated_and_limits_precede_encoding ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/cli.rs (/tmp/aq-native-union-target/debug/deps/cli-977bdca26a2c4f8a)
+
+running 3 tests
+test request_fifo_refuses_without_waiting_for_a_writer ... ok
+test canonical_artifact_export_is_not_an_activation ... ok
+test requested_aq_profile_commands_work_without_db_and_separate_selection_pending ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/compiler.rs (/tmp/aq-native-union-target/debug/deps/compiler-1b0fede77eea39c8)
+
+running 11 tests
+test explicit_narrowing_override_is_explained_and_cannot_broaden ... ok
+test cycles_missing_refs_conflicting_versions_and_protected_overrides_refuse ... ok
+test required_context_overflow_refuses_optional_context_drops_in_declared_order ... ok
+test golden_composition_is_deterministic_and_shared_rules_appear_once ... ok
+test untrusted_content_never_changes_structured_grants_and_provenance_is_checked ... ok
+test adding_candidates_does_not_duplicate_role_or_module_text ... ok
+test each_permission_ceiling_and_required_tool_support_is_enforced ... ok
+test required_dependents_transitively_require_optional_dependencies ... ok
+test optional_dependency_failure_and_budget_omission_remove_dependents_and_grants ... ok
+test adapters_and_optional_wait_pack_never_claim_working_support ... ok
+test roles_and_harnesses_reuse_module_identity_without_prompt_copies ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/registry.rs (/tmp/aq-native-union-target/debug/deps/registry-1152ad6744e9db8a)
+
+running 8 tests
+test fifo_and_nonregular_catalog_inputs_refuse_without_blocking ... ok
+test duplicate_artifact_maps_and_mutation_fields_are_not_canonicalized_away ... ok
+test pre_selection_policy_artifact_roundtrips_identically_and_policy_edits_need_new_identity ... ok
+test oversized_catalog_and_deep_graphs_refuse_before_activation ... ok
+test artifact_identity_hashes_cannot_be_forged ... ok
+test atomic_revision_activation_keeps_last_good_and_rejects_changed_identity ... ok
+test retained_attempts_keep_exact_catalog_across_activation_and_rollback ... ok
+test catalog_loader_refuses_paths_hooks_symlinks_and_partial_edits ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/task_baseline.rs (/tmp/aq-native-union-target/debug/deps/task_baseline-37b6fee5c5d62ac3)
+
+running 1 test
+test task_wire_and_errors_match_precentral_011_capture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests aq_profiles
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+COMMAND ["cargo", "clippy", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2/Cargo.toml", "--all-targets", "--locked", "--offline", "--", "-D", "warnings"]
+    Checking aq-session-protocol v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-session-protocol-0.1.0)
+    Checking aq-agent-api v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-agent-api-0.1.0)
+    Checking aq-session-api v0.1.0 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-session-api-0.1.0)
+    Checking aq-profiles v0.1.2 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2)
+    Finished `dev` profile [unoptimized] target(s) in 3.04s
+COMMAND ["cargo", "fmt", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2/Cargo.toml", "--check"]
+COMMAND ["cargo", "test", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-selection-0.1.4/Cargo.toml", "--locked", "--offline"]
+   Compiling aq-profiles v0.1.2 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2)
+   Compiling aq-selection v0.1.4 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-selection-0.1.4)
+    Finished `test` profile [unoptimized] target(s) in 4.85s
+     Running unittests src/lib.rs (/tmp/aq-native-union-target/debug/deps/aq_selection-0d5ec55551b6f88c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/central.rs (/tmp/aq-native-union-target/debug/deps/central-ba759ab7e1447b45)
+
+running 14 tests
+test actual_schema_and_normative_vectors_are_frozen ... ok
+test exact_rendered_startup_length_counts_separator_bytes ... ok
+test actual_central_compile_select_verify_has_exact_native_pins_and_no_execution_authority ... ok
+test fallback_and_input_reordering_share_existing_selector_semantics ... ok
+test closed_decode_rejects_unknown_and_duplicate_fields_without_a_dynamic_map ... ok
+test worker_feedback_and_worker_preparation_cannot_qualify_central ... ok
+test actual_required_native_capability_is_not_inferred_from_model_or_qualification ... ok
+test forged_snapshot_and_original_artifact_bytes_refuse_even_after_rehash ... ok
+test full_environment_pin_not_friendly_name_and_native_reasoning_output_are_required ... ok
+test accounting_or_monetary_requirements_never_become_zero_or_task_budget ... ok
+test account_endpoint_revision_scope_cannot_make_foreign_observations_authorize ... ok
+test original_deadline_registry_installation_and_credential_expiry_do_not_retime ... ok
+test each_real_policy_domain_is_independent_and_cannot_override_another ... ok
+test actual_intelligence_cost_policies_cannot_be_overridden_by_turn_permission ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/selection.rs (/tmp/aq-native-union-target/debug/deps/selection-189c4be79168567f)
+
+running 23 tests
+test installed_only_v010_snapshots_and_decisions_roundtrip_byte_semantics_unchanged ... ok
+test project_environment_allowlist_cannot_be_widened_by_installed_qualified_adapter ... ok
+test independent_matching_source_cannot_clear_another_sources_live_restriction ... ok
+test source_sequence_precedes_wall_clock_when_history_contains_clock_correction ... ok
+test cold_node_selects_only_explicit_owned_preparation_and_preserves_material_provenance ... ok
+test graph_policy_refuses_uncovered_mixed_context_and_wrong_owner_scope_before_selection ... ok
+test classified_worker_failure_is_bound_to_exact_sealed_choice_and_current_boot ... ok
+test worker_failure_cannot_claim_account_wide_availability_or_survive_boot_reuse ... ok
+test stable_order_chooses_exact_native_configuration_without_equating_reasoning_controls ... ok
+test fallback_unsupported_is_explicit_and_provider_specific_reasoning_remains_native ... ok
+test unknown_availability_can_only_allow_bounded_attempt_with_present_credentials ... ok
+test lineage_retry_cost_and_replacement_budgets_cannot_reset_on_fallback ... ok
+test two_models_on_one_harness_share_acyclic_policy_but_resolve_distinct_actual_profiles ... ok
+test unknown_cost_never_bypasses_known_exhaustion_or_incompatible_currency ... ok
+test explicit_fallback_and_cooldown_do_not_implicitly_downgrade ... ok
+test arbitrary_node_delivery_claims_cannot_manufacture_keys_owner_identity_or_current_boot ... ok
+test missing_policy_old_catalog_is_explicitly_ineligible_and_snapshots_are_bound ... ok
+test ledger_unknown_is_not_zero_and_hard_cost_requires_qualified_provider_and_adapter ... ok
+test observations_scope_account_endpoint_model_node_and_credential_revision_exactly ... ok
+test published_human_selection_preserves_exact_provenance_and_refuses_changed_decisions ... ok
+test installed_credential_and_central_authorization_are_independent ... ok
+test native_policy_binding_does_not_allow_rehashed_instruction_or_permission_forgery ... ok
+test stale_node_and_unsupported_native_settings_never_become_unknown_availability_attempts ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/task_baseline.rs (/tmp/aq-native-union-target/debug/deps/task_baseline-e2cc9030422347c1)
+
+running 1 test
+test task_selection_wire_errors_match_untouched_013 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+   Doc-tests aq_selection
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+COMMAND ["cargo", "clippy", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-selection-0.1.4/Cargo.toml", "--all-targets", "--locked", "--offline", "--", "-D", "warnings"]
+    Checking aq-profiles v0.1.2 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-profiles-0.1.2)
+    Checking aq-selection v0.1.4 (/tmp/aq-central-profile-closure-ai1rlnyt/aq-selection-0.1.4)
+    Finished `dev` profile [unoptimized] target(s) in 2.86s
+COMMAND ["cargo", "fmt", "--manifest-path", "/tmp/aq-central-profile-closure-ai1rlnyt/aq-selection-0.1.4/Cargo.toml", "--check"]
+Qualified exact extracted central profile closure at /tmp/aq-central-profile-closure-ai1rlnyt

@@ -90,3 +90,20 @@ migration number is allocated here. Do not overload task intelligence_decisions.
 Deferred C owns subject-neutral HostPlan/permit/material, physical startup/stop,
 reply authority and lifetime accounting. API-07 runtime stays unavailable through
 A and B; no production eligibility follows from a pure selected model.
+
+## Completed pure increment
+
+Source `7014549` freezes selector0.1.4 after the actual untouched0.1.3 corpus
+commit `481252d`. Independent source review accepted the shared extraction and
+central policy boundary, including the correction requiring explicit unknown-cost
+permission from BOTH intelligence and central policy. All38 focused selector
+tests and strict all-target checks pass; old task errors/wire match23 captured
+cases. The new archive's27 tracked payload files byte-match frozen source.
+
+The independently extracted five-archive closure passes75 tests, strict checks
+and formatting offline. Four previous archives are reused without changes; old
+selector0.1.3 stays immutable. Actual schema/examples and package inventory live
+in `protocol/central-selection/v1`; durable commands, times, payload proof and
+limits live in `evidence/aq17-central-selection-7014549`. This completes A only.
+No authenticated owner/B migration, artifact retention, HostPlan, permit or
+runtime readiness follows from selection metadata.
