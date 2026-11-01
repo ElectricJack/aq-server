@@ -1,5 +1,14 @@
 # API-11 internal storage owner: migration 36 review boundary
 
+Frozen owner source `896d566` (on `fda0a9d`, `acc25ae`, `07dc814`) passed three
+actual migration/startup groups in 14.81 seconds and fourteen actual result-owner,
+PostgreSQL and managed-file cases in 16.20 seconds. The
+[qualification record](evidence/api11-media-storage/qualification.json) pins the
+source and scope; [test output](evidence/api11-media-storage/tests.log) retains the
+bounded invocation. These qualify the internal owner, not the public HTTP port.
+Affected strict Clippy passed in 23.51 seconds; its
+[output](evidence/api11-media-storage/clippy.log) is retained with the record.
+
 Internal owner qualification candidate. No HTTP/config/bootstrap/capability/UI
 exposure and no live database migration. Root reserves 36 after frozen conversation 35. This adds
 new canonical supplemental-media metadata to the existing PostgreSQL database;
@@ -78,6 +87,19 @@ without copying, then revalidate lease, same human authorization key, actual
 legacy result, root identity and original deadlines before receipt commit.
 Crashes preserve accounted files and explicit original-intent recovery. Late
 lease completion cannot publish or clear a newer operation's lease/busy state.
+Recovery repeats generation and both parent-directory fsyncs even when a prior
+rename is already visible. The tested durability checkpoint must precede receipt
+commit. Cleanup likewise fsyncs the parent on an already-absent generation,
+covering interrupted unlink recovery before it can release charge. Test hooks
+follow real file operations; they simulate interruption without claiming an
+actual power-loss test.
+
+PUT first validates original-bound byte length/SHA before acquiring a new lease.
+Exact Received/Retained replay returns the original status without a file write,
+lease/deadline mutation or second generation. A mismatched body conflicts with
+the complete original row unchanged. A final root/marker check after SQL waits
+refuses a root swap before Received commit; nonretained status also checks root
+identity before it can advertise recovery.
 
 Retained charge is at least logical input+variant bytes and covers observed
 allocated file/directory blocks within the reservation. Only confirmed absence

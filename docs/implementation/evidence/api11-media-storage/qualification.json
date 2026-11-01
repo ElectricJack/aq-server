@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "status": "qualified_internal_owner_only",
+  "source_commit": "896d566c7be494f6926622b71055dc35f89f7696",
+  "base_commit": "918559f",
+  "commit_chain": [
+    "fda0a9d",
+    "acc25ae",
+    "07dc814",
+    "896d566"
+  ],
+  "state_format": 36,
+  "database": "PostgreSQL 17.11, separate disposable TestDb per case",
+  "provider_calls": 0,
+  "checks": [
+    {
+      "name": "latest36_fresh_upgrade_old_reader_and_destructive_drift",
+      "command": "cargo test -p aq-server --lib --test profiled_results media -- --test-threads=1",
+      "passed": 3,
+      "seconds": 14.81
+    },
+    {
+      "name": "actual_legacy_result_sql_managed_files_and_codec",
+      "command": "same bounded invocation, profiled_results media_owner filter",
+      "passed": 14,
+      "seconds": 16.2
+    },
+    {
+      "name": "strict_affected_clippy",
+      "command": "cargo clippy -p aq-server --lib --test profiled_results -- -D warnings",
+      "passed": true,
+      "seconds": 23.51
+    },
+    {
+      "name": "affected_rustfmt_and_git_diff_check",
+      "passed": true
+    }
+  ],
+  "build": {
+    "profile": "unoptimized",
+    "jobs": 2,
+    "debug": 0,
+    "incremental": false,
+    "compile_seconds": 86
+  },
+  "fault_model": "Real file writes/fsync/rename with test-only barriers/errors at durable transition seams; actual process/power loss was not performed.",
+  "initial_failures_fixed": [
+    "PL/pgSQL cleanup CASE needed parentheses before any test assertions",
+    "tempfile default0755 was correctly refused; disposable fixture now explicitly creates0700"
+  ],
+  "qualification_limits": [
+    "No HTTP routes, runtime configuration, bootstrap capability, dashboard browser or worker upload qualification",
+    "Only existing recorded_legacy_native_only result owner; unsupported native coverage cannot become empty available media",
+    "Listing available means owned regular files observed at expected lengths; content verifies exact SHA before return",
+    "No server hard RSS or production throughput claim; pure codec resource evidence is separate"
+  ],
+  "sha256": {
+    "crates/aq-server/migrations/0036_result_media_owner.sql": "f07c43ea22ffaaaa37cdb0db0a7eccb04b871af9d973f3e87a77d669e3b67e99",
+    "crates/aq-server/src/result_media/cleanup.rs": "08a75077f37e423a1018aa6435783beaa258ee6cd8ca0619cb07b975b6a2d253",
+    "crates/aq-server/src/result_media/db.rs": "4c74a72d1a12679cd2c595df8809091c4f0fb77420b71f83fc8a22503cf7b9ba",
+    "crates/aq-server/src/result_media/files.rs": "a2791de4a53018b2cc65b4373986a444004dd0c6a739bc254eb4323e1c08fe27",
+    "crates/aq-server/src/result_media/mod.rs": "eae3c78dae9f12782b476863c488d94d82bebdf17b0138ae8df3d3e3aa7f04bf",
+    "crates/aq-server/src/result_media/processing.rs": "fbb375228ac7bd006babf1ccf3921a14680e9022449bf143377ebbf4da15f887",
+    "crates/aq-server/src/store/media36.rs": "490bf22a5b75f8c34f43dd3dd23dcebb0a3f3a597d1ddbfdaac5b15d76ee977f",
+    "crates/aq-server/src/store/media36_tests.rs": "6585318ad554760585c11520566d5451c1a61d443f4f6e9eae42ebfa6aceae9e",
+    "crates/aq-server/tests/profiled_results/media_owner.rs": "9407d1a3e8f3d069c6fae67b951c7a65146a769df848f3b19049e80178ff012a"
+  }
+}
