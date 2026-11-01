@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "cause": "Probe expected blank core application_name; actual retained URL explicitly uses aq-private-uds-proof. Product startup/catalog checks passed before assertion; graceful stop succeeded. Corrected probe only, retained same DB/config/grant/artifact.",
+  "aq_schema_after": 37,
+  "component_schema_after": 4,
+  "owner_incarnation": 3,
+  "side_effect_counts_unchanged": true
+}

@@ -1,0 +1,51 @@
+{
+  "metadata": {
+    "aq_state": "35",
+    "component_schema": 3,
+    "engine": {
+      "namespace": "aq/41c70feb-6234-4dc3-beac-c590b60088f8/1",
+      "revision": 5,
+      "owned": false,
+      "incarnation": 2,
+      "owner_backend_pid": null
+    },
+    "grants": [
+      {
+        "grant_id": "cff04b76-1100-4378-8ab6-42c12e237cbf",
+        "revision": 1,
+        "expires_at_ms": 1793568185308,
+        "revoked_at_ms": null,
+        "payload_digest": "sha256:306376883fb394f9698c6cef174d65e020fae2d37b86e2e766f97c29faee0ba6"
+      }
+    ],
+    "clients": []
+  },
+  "work_counts": {
+    "execution_attempts": 0,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "private_file_sha256": {
+    "development-inert-artifact.json": "eb8aec86aafb41ced748d13acb24fd45bf8b5497653b206f6b4f35b28a8d752f",
+    "runtime/vault/config.toml": "ca76b33088af3ec694ca1d762507007b1a267193102761a53d243aa91b0c9a1e",
+    "runtime/bridge-key": "8614a9adbc3c477e5c66662c2605a2c2e4e5ce4839fb39df2536d83402cad2fe",
+    "runtime/engine-keyring.json": "d0db89f9b9ec3b18cd2ab906fb25e3d8f742001a4b542e774b424c91c0387712",
+    "aq-database-url": "fe53ff1d6b62e28c6c5ecf894049b2e89d74a234e85a0f003ee19b4c9ef61c19",
+    "engine-connection": "0102de368b8efc23ffbce19c100c5aa0ba359cfb7b9d03475bef034f53b8de44"
+  },
+  "checked_at_ms": 1793573517706
+}

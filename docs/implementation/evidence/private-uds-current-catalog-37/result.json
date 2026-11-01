@@ -1,0 +1,66 @@
+{
+  "passed": true,
+  "elapsed_ms": 17712,
+  "binary_sha256": "56221fc3081666f302eccf779ddd102df0fd728111645246b46e79d967f626d0",
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "physical_system_identifier": "7703296609124593685",
+  "database": "aq_uds_931c7bf13f424d5bb101490f2991bd2f",
+  "aq_schema_before": 35,
+  "aq_schema_after": 37,
+  "component_schema_before": 3,
+  "component_schema_after": 4,
+  "incarnations": [
+    2,
+    4,
+    5
+  ],
+  "expired_grant_identity_and_payload_preserved": true,
+  "grant_expires_at_ms": 1793568185308,
+  "execution_authority_claimed": false,
+  "metadata_source": "current_namespace_state",
+  "work_counts": {
+    "execution_attempts": 0,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "final_metadata": {
+    "aq_state": "37",
+    "component_schema": 4,
+    "engine": {
+      "namespace": "aq/41c70feb-6234-4dc3-beac-c590b60088f8/1",
+      "revision": 11,
+      "owned": false,
+      "incarnation": 5,
+      "owner_backend_pid": null
+    },
+    "grants": [
+      {
+        "grant_id": "cff04b76-1100-4378-8ab6-42c12e237cbf",
+        "revision": 1,
+        "expires_at_ms": 1793568185308,
+        "revoked_at_ms": null,
+        "payload_digest": "sha256:306376883fb394f9698c6cef174d65e020fae2d37b86e2e766f97c29faee0ba6"
+      }
+    ],
+    "clients": []
+  },
+  "retained_file_hashes_unchanged": true,
+  "real_unix_socket": true,
+  "synthetic_forwarding": false,
+  "canonical_changes": false,
+  "final_service_stopped": true
+}
