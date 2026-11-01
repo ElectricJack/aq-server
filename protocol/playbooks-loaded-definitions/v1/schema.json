@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DefinitionsPage",
+  "type": "object",
+  "properties": {
+    "api_version": {
+      "type": "string",
+      "const": "playbooks-loaded-definitions-1"
+    },
+    "captured_at_ms": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "current_catalog": {
+      "type": "boolean",
+      "const": false
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LoadedDefinition"
+      },
+      "maxItems": 4,
+      "minItems": 1
+    },
+    "namespace": {
+      "$ref": "#/$defs/LoadedNamespace"
+    },
+    "server_time_ms": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "source": {
+      "type": "string",
+      "const": "runtime_startup_configuration"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "namespace",
+    "server_time_ms",
+    "captured_at_ms",
+    "source",
+    "current_catalog",
+    "items"
+  ],
+  "$defs": {
+    "LoadedDefinition": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "compiler": {
+          "type": "string",
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "dependency_pins": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1
+        },
+        "executable_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "purpose": {
+          "description": "At most 4096 UTF-8 bytes; truncation is explicit and scalar-aligned.",
+          "type": "string",
+          "maxLength": 4096
+        },
+        "purpose_truncated": {
+          "type": "boolean"
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "executable_fingerprint",
+        "name",
+        "purpose",
+        "purpose_truncated",
+        "compiler",
+        "source_digest",
+        "entries",
+        "dependency_pins"
+      ]
+    },
+    "LoadedNamespace": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "generation",
+        "name",
+        "project_id"
+      ]
+    }
+  }
+}

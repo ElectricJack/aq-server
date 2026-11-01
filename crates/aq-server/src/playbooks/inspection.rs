@@ -21,6 +21,8 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+pub mod definitions;
+
 pub const VERSION: &str = "playbooks-inspection-1";
 const MAX_BYTES: usize = 262144;
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
@@ -307,6 +309,10 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         .route("/api/playbooks/inspection/runs", get(runs))
         .route("/api/playbooks/inspection/runs/{id}", get(detail))
         .route("/api/playbooks/inspection/admissions", get(admissions))
+        .route(
+            "/api/playbooks/inspection/loaded-definitions",
+            get(definitions::loaded_definitions),
+        )
         .layer(Extension(driver))
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(tokio::sync::Semaphore::new(2)),

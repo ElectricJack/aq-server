@@ -159,6 +159,14 @@ impl Runtime {
                     .await
                     .map_err(|_| refused())?;
             }
+            driver
+                .record_loaded_definitions(
+                    config
+                        .deployments
+                        .iter()
+                        .map(|deployment| &deployment.artifact),
+                )
+                .map_err(|_| refused())?;
             driver.recover().await.map_err(|_| refused())?;
             Ok::<_, anyhow::Error>(())
         }

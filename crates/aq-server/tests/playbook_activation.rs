@@ -828,3 +828,6 @@ async fn inspection_refuses_other_owner_viewer_and_absent_runtime() {
 
 #[path = "playbook_activation/browser.rs"]
 mod browser;
+
+#[path = "playbook_activation/definitions.rs"]
+mod definitions;

@@ -194,6 +194,8 @@ pub struct Driver {
     pub(super) owner: Owner,
     pub service: Service,
     pub(super) runtime: RuntimeOwner,
+    pub(super) loaded_definitions:
+        std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
     automatic: std::sync::atomic::AtomicU8,
     stopped_ack: std::sync::atomic::AtomicBool,
@@ -264,6 +266,7 @@ impl Driver {
             owner,
             service,
             runtime,
+            loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
             automatic: std::sync::atomic::AtomicU8::new(0),
             stopped_ack: std::sync::atomic::AtomicBool::new(false),

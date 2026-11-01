@@ -256,6 +256,11 @@ pub(super) async fn bootstrap(
             playbooks,
             "Playbook inspection requires the mounted runtime namespace owner",
         ),
+        capability(
+            "playbooks.loaded-definitions.read",
+            playbooks && mounted.playbook_loaded_definitions,
+            "Loaded definitions require the configured runtime namespace owner",
+        ),
     ];
     let bytes = contract::schema_bytes();
     let data = Bootstrap {
