@@ -1,0 +1,9 @@
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_reads_history_after_withheld_first_execution_reply ... bounded phase inputs: {"artifacts":38,"deadline_ns":169929935742978,"materials":1,"original_deadline_ns":169901380166235,"prepared_at_ns":169903023381235,"prepared_revision":26}
+actual withheld execution reply: server Granted, worker Prepared only, exact historical identity, no host
+bounded phase clocks: {"accepted_expiry_ms":1793513361997,"accepted_issued_ms":1793513332108,"journal_format":10,"journal_revision":26,"proposal_expiry_ms":1793513333642,"replay_server_ms":1793513332231}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out; finished in 5.85s
+
