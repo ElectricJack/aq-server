@@ -1,7 +1,7 @@
 # Current Playbooks catalog consumer source qualification
 
 Backend source is `6129bed` → `b5f226b` → `1be7cf0` → `056551f` on isolated
-base `ba65fbe` (state schema36); UI source is `555b76e` → `fd6e7ab` → `681691f`.
+base `ba65fbe` (state schema36); UI source is `555b76e` → `fd6e7ab` → `681691f` → `9adb81a`.
 The exact new component archive is vendored separately, with runner/Postgres/CLI
 0.1.3 and host0.1.3. All old source archives/closures remain unchanged. See
 [the route/design contract](../../API-05-current-catalog.md) and
@@ -28,6 +28,10 @@ verbatim final outputs. Other tool results in JSON are curated, not invented raw
 logs. Whole-workspace rustfmt finds the existing unmodified base's
 `profiled_results.rs` module order; the owned Rust paths pass and that unrelated
 root-owned test file was preserved.
+
+Independent scoped source review accepted backend056551f and UI681691f/9adb81a
+with no remaining concrete blocker; execution results are the author
+qualification recorded here, not reviewer-run tests.
 
 The pinned disposable test binary can serve the root-assembled compiled bundle
 through the actual protected owner. The browser probe verifies two real retained
