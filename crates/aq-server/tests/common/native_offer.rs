@@ -70,8 +70,14 @@ pub async fn setup() -> Case {
         let mut node = node.clone();
         let mode = peer_mode.load(Ordering::SeqCst);
         async move {
+            if mode == 4 {
+                node["body"] = json!("changed authorized root without CAS increment");
+            }
+            if mode == 5 {
+                node["metadata"] = json!({"private_daemon_note":"not part of startup"});
+            }
             let value = if uri.path().ends_with("/ready") {
-                json!({"items":[node],"next_cursor":null})
+                json!({"items":if mode == 3 { vec![] } else { vec![node] },"next_cursor":null})
             } else if uri.path().ends_with("/context") {
                 if mode == 1 {
                     node["version"] = json!(2);

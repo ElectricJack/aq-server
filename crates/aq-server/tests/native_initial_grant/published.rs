@@ -46,7 +46,11 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
     let clock = Arc::new(AtomicI64::new(plan.clock.server_time_ms as i64 + 1));
     let at = clock.clone();
     case.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
+        chrono::DateTime::from_timestamp_millis(
+            at.load(Ordering::SeqCst)
+                .max(chrono::Utc::now().timestamp_millis()),
+        )
+        .unwrap()
     });
     let mut artifacts = offer
         .offered
@@ -546,3 +550,42 @@ async fn mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_l
 
 #[path = "published/actual_git.rs"]
 mod actual_git;
+
+#[tokio::test]
+async fn graph_changes_during_preparation_refuse_without_retiming_original_inputs() {
+    let c = setup().await;
+    let original: Value = sqlx::query_scalar(
+        "SELECT graph_task_observation FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(c.request.binding.attempt_id)
+    .fetch_one(&c.case.env.env.pool)
+    .await
+    .unwrap();
+    for mode in [1, 2, 3, 4] {
+        c.case.mode.store(mode, Ordering::SeqCst);
+        assert!(grant(&c).await.is_err(), "mode {mode} admitted stale graph");
+        ungranted(&c).await;
+    }
+    // Private metadata is outside the authorized projection and cannot silently
+    // enter startup. A fresh unchanged authorized projection may still grant.
+    c.case.mode.store(5, Ordering::SeqCst);
+    let first = grant(&c).await.unwrap();
+    let retained: Value = sqlx::query_scalar(
+        "SELECT graph_task_observation FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(c.request.binding.attempt_id)
+    .fetch_one(&c.case.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(original, retained);
+    c.case.mode.store(4, Ordering::SeqCst);
+    assert!(grant(&c).await.is_err());
+    let grant_id: String = sqlx::query_scalar(
+        "SELECT state->'grant'->>'grant_id' FROM profiled_authority_hot WHERE attempt_id=$1",
+    )
+    .bind(c.request.binding.attempt_id)
+    .fetch_one(&c.case.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(grant_id, first.original.grant.grant_id.to_string());
+}

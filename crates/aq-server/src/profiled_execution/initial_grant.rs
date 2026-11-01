@@ -1,5 +1,6 @@
 //! Prepare is a separate, atomic authority transition. No Accept is reconstructed
 //! from its digest. Git/private-file observations run between fenced SQL phases.
+mod graph;
 mod history;
 use super::{artifacts, journal, material, registration, source_exports};
 use crate::{
@@ -96,6 +97,7 @@ async fn versions(tx: &mut Transaction<'_, Postgres>, attempt: Uuid) -> Result<V
 }
 struct Locked {
     offer: NativeOffer,
+    graph: graph::Input,
     plan: PreparationPlan,
     hot: HotState,
     source: source_exports::LinkedExport,
@@ -330,6 +332,8 @@ async fn locked(
     {
         return Err(refused());
     }
+    let graph_spec = graph::Input::spec(tx, request.binding.attempt_id).await?;
+    let mut graph_context = None;
     let mut expected = Vec::new();
     let mut ceiling = plan
         .clock
@@ -358,6 +362,9 @@ async fn locked(
         ceiling = ceiling.min(item.descriptor.retain_until_ms);
         if now(state)? < item.descriptor.retained_at_ms {
             return Err(refused());
+        }
+        if item.descriptor.artifact == graph_spec.task_context {
+            graph_context = Some(item.bytes.clone());
         }
         expected.push(ArtifactReceipt {
             artifact: item.descriptor.artifact.clone(),
@@ -412,6 +419,7 @@ async fn locked(
     Ok(Locked {
         material: lease.clone(),
         offer,
+        graph: graph::Input::new(graph_spec, graph_context.ok_or_else(refused)?)?,
         plan,
         hot,
         source,
@@ -439,6 +447,7 @@ pub async fn prepare(
     let mut tx = begin(state).await?;
     let before = locked(state, &mut tx, auth, request).await?;
     tx.commit().await.map_err(db)?;
+    let graph = graph::observe(state, &before.graph, &before.decision).await?;
     let retention = crate::source_retention::profiled_base::inspect_retained(
         state,
         before.source.token(),
@@ -468,6 +477,7 @@ pub async fn prepare(
     .map_err(|_| refused())?;
     let mut tx = begin(state).await?;
     let mut after = locked(state, &mut tx, auth, request).await?;
+    after.ceiling = after.ceiling.min(graph.expires_at_ms());
     if before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()?
         || !same(&before.material, &after.material)?
     {
@@ -475,6 +485,7 @@ pub async fn prepare(
     }
     retention.validate_for(after.source.token())?;
     let time = now(state)?;
+    graph.validate_for(&after.graph, time)?;
     if time < retention.observed_at_ms()
         || time >= retention.expires_at_ms()
         || time >= after.ceiling
@@ -482,6 +493,9 @@ pub async fn prepare(
         return Err(refused());
     }
     let grant = if let Some(old) = after.original.take() {
+        if old.body.grant.expires_at_ms > after.ceiling {
+            return Err(refused());
+        }
         old
     } else {
         // Shared retained-response byte budget and lock with Accept. No eviction,
@@ -493,6 +507,7 @@ pub async fn prepare(
         .await
         .map_err(db)?;
         let issued = now(state)?;
+        graph.validate_for(&after.graph, issued)?;
         let deadline = issued
             .checked_add(after.offer.offered.offer.manifest.resources.wall_time_ms)
             .filter(|v| *v <= i64::MAX as u64)
@@ -588,6 +603,7 @@ pub async fn prepare(
         .validate_for(request, &after.plan, &after.offer, nonce)
         .map_err(|_| refused())?;
     resolver::check_time(state, &after.decision)?;
+    graph.validate_for(&after.graph, now(state)?)?;
     if now(state)? >= after.ceiling || now(state)? >= retention.expires_at_ms() {
         return Err(refused());
     }
