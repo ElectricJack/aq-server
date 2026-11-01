@@ -1,0 +1,16 @@
+{
+  "contract": "human-task-create-1",
+  "operation_id": "00000000-0000-0000-0000-000000000010",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "actor_id": "00000000-0000-0000-0000-000000000005",
+  "task_id": "00000000-0000-0000-0000-000000000010",
+  "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": "unknown",
+  "effect": "possible",
+  "receipt": null,
+  "recovery": {
+    "allowed": true,
+    "reason": null
+  },
+  "created_at_ms": 1000000
+}

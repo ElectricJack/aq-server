@@ -1,0 +1,342 @@
+{
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "human-task-create-1"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "actor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "request_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "unknown",
+        "confirmed",
+        "conflict",
+        "rejected"
+      ]
+    },
+    "effect": {
+      "enum": [
+        "not_dispatched",
+        "possible",
+        "confirmed",
+        "not_applied"
+      ]
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "workspace_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "change_set_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "task_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            },
+            "content_revision": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "change_set_id",
+            "task_id",
+            "version",
+            "content_revision"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "allowed",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "created_at_ms": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "contract",
+    "operation_id",
+    "project_id",
+    "actor_id",
+    "task_id",
+    "request_digest",
+    "state",
+    "effect",
+    "receipt",
+    "recovery",
+    "created_at_ms"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human task create operation status v1",
+  "$defs": {
+    "Create": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "expected_project_revision": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "body": {
+          "type": "string",
+          "description": "At most32768 UTF8 bytes"
+        },
+        "acceptance_criteria": {
+          "type": "string",
+          "description": "At most8192 UTF8 bytes"
+        },
+        "labels": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "task_state": {
+          "enum": [
+            "draft",
+            "active"
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_project_revision",
+        "title",
+        "body",
+        "acceptance_criteria",
+        "labels",
+        "task_state"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "pending"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effect": {
+            "enum": [
+              "not_dispatched"
+            ]
+          },
+          "receipt": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effect": {
+            "enum": [
+              "possible"
+            ]
+          },
+          "receipt": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "confirmed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effect": {
+            "enum": [
+              "confirmed"
+            ]
+          },
+          "receipt": {
+            "type": "object",
+            "properties": {
+              "workspace_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "change_set_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "task_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              "content_revision": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              }
+            },
+            "required": [
+              "workspace_id",
+              "change_set_id",
+              "task_id",
+              "version",
+              "content_revision"
+            ],
+            "additionalProperties": false
+          },
+          "recovery": {
+            "properties": {
+              "allowed": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "conflict"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effect": {
+            "enum": [
+              "not_dispatched",
+              "not_applied"
+            ]
+          },
+          "receipt": {
+            "type": "null"
+          },
+          "recovery": {
+            "properties": {
+              "allowed": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "rejected"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effect": {
+            "enum": [
+              "not_applied"
+            ]
+          },
+          "receipt": {
+            "type": "null"
+          },
+          "recovery": {
+            "properties": {
+              "allowed": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

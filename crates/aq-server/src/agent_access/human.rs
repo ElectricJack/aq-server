@@ -1,4 +1,5 @@
 //! Owner-authorized read projection. Graph service credentials never leave AQ.
+mod commands;
 mod cursor;
 mod overview;
 use super::{Runtime, contract};
@@ -60,11 +61,26 @@ impl ReadRuntime {
         }
     }
 }
+pub fn task_create_available(state: &AppState) -> bool {
+    state
+        .agent_access
+        .as_deref()
+        .is_some_and(|rt| rt.mutation_actor.is_some())
+}
 pub fn routes(state: &AppState) -> Router<AppState> {
     let runtime = Arc::new(ReadRuntime::new(state));
     Router::new()
         .route("/api/human/overview/tasks", get(overview::read))
-        .route("/api/human/projects/{project}/tasks", get(tasks))
+        .route(
+            "/api/human/projects/{project}/tasks",
+            get(tasks).post(commands::create),
+        )
+        .route("/api/human/operations/{operation}", get(commands::lookup))
+        .route(
+            "/api/human/operations/{operation}/recover",
+            axum::routing::post(commands::recover),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(65536))
         .route("/api/human/projects/{project}/tasks/{node}", get(task))
         .route(
             "/api/human/projects/{project}/tasks/{node}/graph",
