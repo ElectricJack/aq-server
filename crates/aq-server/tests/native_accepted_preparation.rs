@@ -1,5 +1,5 @@
-//! Actual030 no-launch owner/SQL with synthetic Graph/Git/runtime qualification.
-//! No execution grant, host, provider or ordered030 migration claim.
+//! Actual ordered30 no-launch owner/SQL with synthetic Graph/Git/runtime qualification.
+//! No execution grant, host or provider claim.
 mod common;
 use aq_admission::{
     ArtifactKind, ArtifactRef, Digest, Resources, Text,
@@ -65,12 +65,17 @@ async fn configure(c: &mut Case) {
     config.profiled_execution = Some(std::sync::Arc::new(p));
     c.env.env.state.config = std::sync::Arc::new(config);
     policies::install(&c.env.env.state).await.unwrap();
-    sqlx::raw_sql(include_str!(
-        "../migrations/0030_accepted_preparation_v2.sql"
-    ))
-    .execute(&c.env.env.pool)
-    .await
-    .unwrap();
+    let format: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(format, aq_server::STATE_FORMAT_VERSION.to_string());
+    let present:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&c.env.env.pool).await.unwrap();
+    assert!(
+        present,
+        "current ordered schema must already contain both v2 tables"
+    );
 }
 async fn auth(c: &Case) -> worker_api::AuthenticatedNode {
     let mut h = axum::http::HeaderMap::new();
@@ -83,6 +88,11 @@ async fn auth(c: &Case) -> worker_api::AuthenticatedNode {
         .unwrap()
 }
 async fn setup() -> (Case, phase::Proposal, AcceptRequest) {
+    setup_with_functional_clock(false).await
+}
+async fn setup_with_functional_clock(
+    freeze_phase_clock: bool,
+) -> (Case, phase::Proposal, AcceptRequest) {
     let mut c = native_offer::setup().await;
     configure(&mut c).await;
     let (status, body) = native_offer::poll(&c).await;
@@ -93,6 +103,13 @@ async fn setup() -> (Case, phase::Proposal, AcceptRequest) {
     };
     assert_eq!(page.offers.len(), 1, "{body}");
     let offer = page.offers.remove(0);
+    if freeze_phase_clock {
+        // ONLY the route/auth/nonce fixture: actual NativeOffer publication and
+        // all original clocks stay unchanged. Freeze elapsed age before the first
+        // v2 Proposal/Accept. This cannot qualify real I/O freshness or latency.
+        let fixed = (c.env.env.state.clock)();
+        c.env.env.state.clock = std::sync::Arc::new(move || fixed);
+    }
     let negotiation = phase::Negotiation {
         contract: phase::contract_artifact().unwrap(),
         features: phase::required_features(),
@@ -527,7 +544,7 @@ async fn legacy_and_v2_accept_share_one_actual_owner_and_material_scope() {
 async fn mounted_v2_routes_require_machine_auth_negotiation_and_physical_nonce() {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
-    let (c, p, q) = setup().await;
+    let (c, p, q) = setup_with_functional_clock(true).await;
     let path = "/v1/worker/profiled-v2/accept";
     let app = aq_server::build_worker_router(c.env.env.state.clone());
     let response = app
@@ -787,4 +804,37 @@ async fn structurally_complete_v2_prepare_never_falls_back_to_legacy_execution_i
     let (granted,receipts):(bool,i64)=sqlx::query_as("SELECT state->'grant'<>'null'::jsonb,(SELECT count(*) FROM admission_material_receipts) FROM profiled_authority_hot WHERE attempt_id=$1").bind(q.original.acceptance.binding.attempt_id).fetch_one(&c.env.env.pool).await.unwrap();
     assert!(!granted);
     assert_eq!(receipts, 0);
+}
+#[tokio::test]
+async fn current30_missing_both_phase_tables_cannot_undercharge_legacy_admission() {
+    let (c, _, q) = setup().await;
+    sqlx::query("DROP TABLE profiled_v2_accepts")
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE profiled_v2_proposals")
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    let auth = auth(&c).await;
+    assert!(
+        aq_server::profiled_execution::preparation::accept(
+            &c.env.env.state,
+            &auth,
+            &q.original,
+            Uuid::new_v4()
+        )
+        .await
+        .is_err()
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM admission_material_leases")
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let state: Value = sqlx::query_scalar("SELECT state FROM profiled_authority_hot")
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(state["status"], "offered");
 }

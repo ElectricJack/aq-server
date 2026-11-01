@@ -79,15 +79,12 @@ async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposa
             .fetch_one(&c.env.env.pool)
             .await
             .unwrap();
-    if version.parse::<u32>().unwrap() < 30 {
-        // Temporary prerequisite profile only: final ordered030 removes this fixture branch.
-        sqlx::raw_sql(include_str!(
-            "../migrations/0030_accepted_preparation_v2.sql"
-        ))
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
-    }
+    assert_eq!(version, aq_server::STATE_FORMAT_VERSION.to_string());
+    let present:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&c.env.env.pool).await.unwrap();
+    assert!(
+        present,
+        "ordered current schema must own the proposal tables"
+    );
     let store = &c.env.env.state.store;
     let owner = store
         .list_users()

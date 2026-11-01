@@ -237,6 +237,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         29,
         include_str!("../migrations/0029_scoped_material_presence.sql"),
     ),
+    (
+        30,
+        include_str!("../migrations/0030_accepted_preparation_v2.sql"),
+    ),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
@@ -315,6 +319,14 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         return Err(StoreError::Corrupt(
             "state format metadata does not match applied migrations".into(),
         ));
+    }
+    if supported >= 30 {
+        let complete:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&mut *tx).await?;
+        if !complete {
+            return Err(StoreError::Corrupt(
+                "accepted preparation v2 storage missing from current schema".into(),
+            ));
+        }
     }
     tx.commit().await?;
     Ok(())

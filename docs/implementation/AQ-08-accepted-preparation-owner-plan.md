@@ -77,3 +77,14 @@ rollback/quota refusal without partial lease; no duplicate replay; legacy Grant
 refusal and expired/unknown held state. Retain all synthetic/actual boundaries.
 No provider, notification, process launch, deployment, PB04 or cold-workload closure
 claim follows from these tests.
+
+
+## Ordered registration follow-up
+
+The initial unregistered state28 candidate remains immutable historical evidence.
+Final ordered030 adds only its explicit meta30 transition to the same owner DDL,
+follows actual029, and updates source/readable/image metadata together. Current
+Store startup and already-open owner reads refuse missing v2 storage; no repair
+or permissive quota fallback is applied to current30. Runtime fixtures use actual
+Store migrations, not manual SQL. This registration still activates no owner or
+execution issuer by default.

@@ -27,3 +27,5 @@ CREATE FUNCTION refuse_profiled_v2_history_change() RETURNS trigger LANGUAGE plp
 BEGIN RAISE EXCEPTION 'immutable accepted preparation v2 history'; END $$;
 CREATE TRIGGER profiled_v2_proposal_immutable BEFORE UPDATE OR DELETE ON profiled_v2_proposals FOR EACH ROW EXECUTE FUNCTION refuse_profiled_v2_history_change();
 CREATE TRIGGER profiled_v2_accept_immutable BEFORE UPDATE OR DELETE ON profiled_v2_accepts FOR EACH ROW EXECUTE FUNCTION refuse_profiled_v2_history_change();
+
+UPDATE meta SET value='30' WHERE key='state_format_version';

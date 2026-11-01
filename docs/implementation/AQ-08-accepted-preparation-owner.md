@@ -1,9 +1,11 @@
 # Separately owned accepted preparation: candidate first slice
 
-Default inactive. Migration030 is an unregistered candidate, after scoped-presence
-029. Its manual-SQL tests do not qualify ordered installation or runtime adoption.
-The server consumes the exact joint admission0.1.9 source; older phase archives and
-module bytes remain unchanged. No new execution issuer or worker driver is added.
+Default inactive. Ordered schema030 follows scoped-presence029 and sets the
+updater/state metadata to30. Startup refuses a current profile missing either v2
+storage table. Earlier manually applied state28 candidate evidence is retained as
+historical; ordered upgrade/rollback/reopen qualification is separate. The server
+consumes exact joint admission0.1.9 source; older archives/module bytes stay
+unchanged. No new execution issuer or worker driver is added.
 
 A protected `Definition` whose identity begins `aq.accepted-preparation-policy/`
 contains a typed PolicyDefinition: exact contract/runtime/qualification artifacts,
@@ -43,7 +45,7 @@ the same global quota lock:64MiB/4096 material leases globally and4MiB/256 per n
 plus bounded retained proposal counts4096/256. Exact replay does not consume new
 admission quota. Histories are not pruned. Both new tables may be absent only on a
 supported older28/29 schema; partial tables, missing current tables or enabled v2
-operations without them refuse. Final ordered030 installation remains separate.
+operations without them refuse. The current30 profile requires both tables; startup never repairs missing storage.
 
 Artifact, material and source reads use an opaque internal PreparationAuthority
 with exact original receipt kind/digest and explicit Legacy or AcceptedV2 origin.

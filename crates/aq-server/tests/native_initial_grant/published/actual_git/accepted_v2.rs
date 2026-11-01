@@ -59,12 +59,17 @@ async fn configure(case: &mut Case) {
     aq_server::profiled_execution::policies::install(&case.env.env.state)
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/0030_accepted_preparation_v2.sql"
-    ))
-    .execute(&case.env.env.pool)
-    .await
-    .unwrap();
+    let format: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(format, aq_server::STATE_FORMAT_VERSION.to_string());
+    let present:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&case.env.env.pool).await.unwrap();
+    assert!(
+        present,
+        "current ordered schema must already contain both v2 tables"
+    );
 }
 async fn context(c: &Case) -> AuthenticatedNode {
     let mut h = axum::http::HeaderMap::new();
