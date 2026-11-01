@@ -47,6 +47,8 @@ pub struct Config {
     pub agent_access: Option<crate::agent_access::AgentAccessConfig>,
     #[serde(default)]
     pub source_retention: Option<crate::source_retention::SourceRetentionConfig>,
+    #[serde(default)]
+    pub result_media: Option<crate::result_media::config::MediaConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,6 +214,11 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
         return invalid("updates.spool_dir", "must be an absolute path".into());
     }
     c.projects.validate().map_err(|e| ("projects".into(), e))?;
+    if let Some(settings) = &c.result_media {
+        settings
+            .validate()
+            .map_err(|reason| ("result_media".into(), reason.into()))?;
+    }
     if let Some(settings) = &c.source_retention {
         settings
             .validate()
@@ -314,6 +321,7 @@ mod tests {
             updates: None,
             agent_access: None,
             source_retention: None,
+            result_media: None,
             terminals: None,
 
             intelligence: None,

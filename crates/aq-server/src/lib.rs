@@ -131,7 +131,9 @@ async fn harden(req: Request, next: Next) -> Response {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if h.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()) != Some("private, no-store") {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     resp
 }
 
@@ -199,11 +201,24 @@ fn build_admin_router_with_optional_dashboard(
     reviews: Option<Arc<reviews::Service>>,
     dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
 ) -> Router {
+    build_admin_router_with_optional_owners(state, playbooks, reviews, dashboard, None)
+}
+/// Explicit configured media injection alongside the existing human owners.
+/// Default constructors continue to mount no media endpoints.
+pub fn build_admin_router_with_optional_owners(
+    state: AppState,
+    playbooks: Option<Arc<playbooks::driver::Driver>>,
+    reviews: Option<Arc<reviews::Service>>,
+    dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
+    media: Option<Arc<result_media::runtime::Runtime>>,
+) -> Router {
     let mounted = dashboard_api::MountedOwners {
         graph: true,
         session_usage: true,
         session_events: true,
         results: true,
+        media_read: media.as_ref().is_some_and(|r| r.read_enabled()),
+        media_upload: media.as_ref().is_some_and(|r| r.uploads_enabled()),
         notifications: true,
         supervisor_conversation: true,
         reviews: reviews.is_some(),
@@ -216,6 +231,7 @@ fn build_admin_router_with_optional_dashboard(
     };
     let policy_routes = playbooks.map(playbooks::api::routes).unwrap_or_default();
     let review_routes = reviews.map(reviews::admin_routes).unwrap_or_default();
+    let media_routes = media.map(result_media::api::routes).unwrap_or_default();
     let app = Router::new()
         .merge(
             dashboard
@@ -225,6 +241,7 @@ fn build_admin_router_with_optional_dashboard(
         )
         .merge(policy_routes)
         .merge(review_routes)
+        .merge(media_routes)
         .merge(admin_api::admin_routes())
         .merge(dashboard_api::routes(state.clone()))
         .merge(agent_access::human::routes(&state))
@@ -359,8 +376,24 @@ async fn run_with_listeners_and_dashboard(
         .install(notification_dispatcher)
         .await?;
     let (tx, rx) = tokio::sync::watch::channel(false);
+    let media_runtime = match &state.config.result_media {
+        Some(settings) => {
+            Some(result_media::runtime::Runtime::start(state.clone(), settings).await?)
+        }
+        None => None,
+    };
     let mut policy_runtime = match state.config.playbooks.as_ref() {
-        Some(config) => Some(playbooks::runtime::Runtime::start(&state, config.clone()).await?),
+        Some(config) => match playbooks::runtime::Runtime::start(&state, config.clone()).await {
+            Ok(runtime) => Some(runtime),
+            Err(error) => {
+                if let Some(runtime) = &media_runtime
+                    && runtime.shutdown().await.is_err()
+                {
+                    return Err(error.context("media cleanup also failed during startup"));
+                }
+                return Err(error);
+            }
+        },
         None => None,
     };
     if let Some(runtime) = &mut policy_runtime {
@@ -381,11 +414,12 @@ async fn run_with_listeners_and_dashboard(
     let wait = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let admin_app = build_admin_router_with_optional_dashboard(
+    let admin_app = build_admin_router_with_optional_owners(
         state.clone(),
         policy_runtime.as_ref().map(|r| r.driver.clone()),
         policy_runtime.as_ref().map(|r| r.reviews.clone()),
         dashboard,
+        media_runtime.clone(),
     );
     let worker_app = build_worker_router(state);
     let serving = tokio::try_join!(
@@ -416,8 +450,13 @@ async fn run_with_listeners_and_dashboard(
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
     };
+    let media_shutdown = match media_runtime {
+        Some(runtime) => runtime.shutdown().await.map_err(anyhow::Error::from),
+        None => Ok(()),
+    };
     serving?;
     policy_shutdown?;
+    media_shutdown?;
     Ok(())
 }
 

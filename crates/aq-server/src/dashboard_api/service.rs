@@ -272,6 +272,16 @@ pub(super) async fn bootstrap(
             "Result inspection requires an owner account",
         ),
         capability(
+            "results.media.read",
+            mounted.media_read && a.owner,
+            "Supplemental images require an owner account and mounted media storage",
+        ),
+        capability(
+            "results.media.upload",
+            mounted.media_upload && a.owner,
+            "Supplemental image uploads require an owner account and enabled uploads",
+        ),
+        capability(
             "playbooks.inspect",
             playbooks,
             "Playbook inspection requires the mounted runtime namespace owner",

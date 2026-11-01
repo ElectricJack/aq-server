@@ -23,6 +23,8 @@ pub(crate) struct MountedOwners {
     pub(crate) session_usage: bool,
     pub(crate) session_events: bool,
     pub(crate) results: bool,
+    pub(crate) media_read: bool,
+    pub(crate) media_upload: bool,
     pub(crate) notifications: bool,
     pub(crate) supervisor_conversation: bool,
     pub(crate) reviews: bool,
