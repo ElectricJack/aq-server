@@ -1,14 +1,19 @@
 # AQ-08 native producer completion plan
 
-Historical planning baseline: source `0551d84`, state format20. Current task
-checkpoints include preparation `57584b8`, offer publication `2e59883`, and the
-separately integrated state27 schema. This is a task-level implementation
-plan for worker execution, subordinate to architecture0003/0004 and the
-[three-area completion scope](../plans/0002-execution-sessions-policy-completion.md).
-It supersedes the historical stage1-only AQ08 plan. None of the remaining routes
-or native producer transitions below are claimed installed by this document.
+Current delivery baseline: `1b7e4f5`, state format 33. The ordinary daemon now
+owns phase offer/preparation/Grant and qualified Started/Stopped/closure reports.
+Actual separate-worker/Git/tmux tests cover those owners; this does not qualify a
+real model or make the production worker command use the native path. The worker
+CLI still exposes foundation `Run` and protocol 2 synthetic `RunExecution`; its
+native physical adapter remains test-support-only. See the
+[native runner delivery delta](AQ-08-native-runner-delivery.md) for the next bounded
+increment. The older checkpoint narratives below remain historical, not a claim
+that current handlers are absent.
 
-## Current increments
+This task-level implementation plan is subordinate to architecture 0003/0004 and
+the [three-area completion scope](../plans/0002-execution-sessions-policy-completion.md).
+
+## Historical producer increments
 
 The qualified context projection/counting slice is5510d3d; byte-verifiable native
 startup delivery is c3f49fd with single-descriptor correction70e98fe. Their facts
