@@ -168,6 +168,34 @@ fn canonical(value: &impl Serialize) -> Result<Vec<u8>, crate::error::AppError> 
 }
 /// Trusted central owner only. Commits a finite quota reservation before it can
 /// return the opaque capability accepted by the private Git I/O owner.
+/// Historical original-ID reconciliation only. The trusted scheduler supplies
+/// its owned project; no current admission permission or new scope is minted.
+pub(crate) async fn recover_existing(
+    state: &crate::AppState,
+    operation: Uuid,
+    project: Uuid,
+) -> Result<Option<Reservation>, crate::error::AppError> {
+    if operation.is_nil() || project.is_nil() {
+        return Err(unavailable());
+    }
+    let raw: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT request_bytes FROM profiled_source_exports WHERE operation_id=$1 AND project_id=$2",
+    )
+    .bind(operation)
+    .bind(project)
+    .fetch_optional(&state.store.pool)
+    .await
+    .map_err(database)?;
+    let Some(raw) = raw else { return Ok(None) };
+    if raw.len() > 8192 {
+        return Err(unavailable());
+    }
+    let request: Request = serde_json::from_slice(&raw).map_err(|_| unavailable())?;
+    if request.operation_id != operation || request.project_id != project {
+        return Err(unavailable());
+    }
+    reserve(state, request).await.map(Some)
+}
 pub async fn reserve(
     state: &crate::AppState,
     request: Request,

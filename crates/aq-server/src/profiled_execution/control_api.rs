@@ -13,7 +13,7 @@ use axum::{
     routing::post,
 };
 use uuid::Uuid;
-struct Error(AppError);
+pub(crate) struct Error(AppError);
 impl From<AppError> for Error {
     fn from(value: AppError) -> Self {
         Self(value)

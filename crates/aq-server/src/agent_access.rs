@@ -3,6 +3,7 @@ mod contract;
 mod graph;
 pub(crate) mod messaging;
 mod mutations;
+pub(crate) mod native_binding;
 pub mod scheduling;
 use crate::{
     AppState,

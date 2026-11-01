@@ -204,6 +204,27 @@ pub async fn observe(
         bytes,
     })
 }
+/// Resolve the actual configured repository's logical identity, never a path or
+/// guessed UUID alias. The export owner subsequently verifies the exact name.
+pub(crate) async fn repository_identity(
+    state: &AppState,
+    repository: Uuid,
+    generation: u64,
+) -> Result<String, AppError> {
+    let value = read(state, repository, generation, "repo.show", json!({})).await?;
+    let identity = value["identity"].as_str().ok_or_else(refused)?;
+    if value["repository_id"] != repository.to_string()
+        || value["binding_generation"] != generation
+        || value["mode"] != "central"
+        || value["object_format"] != "sha1"
+        || identity.trim().is_empty()
+        || identity.len() > 512
+        || identity.chars().any(char::is_control)
+    {
+        return Err(refused());
+    }
+    Ok(identity.to_owned())
+}
 fn hex40(s: &str) -> bool {
     s.len() == 40
         && s.bytes().any(|b| b != b'0')

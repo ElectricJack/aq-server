@@ -60,7 +60,7 @@ fn record(row: sqlx::postgres::PgRow) -> Result<ProjectRecord> {
             .map_err(|_| AppError::Internal)?,
     })
 }
-async fn current(state: &AppState, id: Uuid) -> Result<ProjectRecord> {
+pub(crate) async fn current(state: &AppState, id: Uuid) -> Result<ProjectRecord> {
     if id.is_nil() {
         return Err(bad("nil project ID"));
     }
@@ -118,7 +118,7 @@ async fn list(
     };
     Ok(Json(json!({"items":items,"next_cursor":next})))
 }
-async fn active_catalog(state: &AppState) -> Result<(u64, Option<String>)> {
+pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<String>)> {
     let row =
         sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
             .fetch_one(&state.store.pool)

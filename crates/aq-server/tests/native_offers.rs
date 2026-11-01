@@ -1,0 +1,205 @@
+//! Actual synthetic-owner native publication and refusal cases. No provider calls.
+mod common;
+use aq_admission::{
+    Digest,
+    control::{ControlReply, decode_reply},
+};
+use common::native_offer::{poll, setup};
+use http_body_util::BodyExt;
+use serde_json::Value;
+use std::sync::atomic::Ordering;
+use tower::ServiceExt;
+use uuid::Uuid;
+#[tokio::test]
+async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without_grant() {
+    let c = setup().await;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    page.validate_for(&c.request).unwrap();
+    assert_eq!(page.offers.len(), 1);
+    let native = &page.offers[0];
+    let pool = &c.env.env.pool;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM execution_attempts WHERE kind='profiled_v1' AND holds_task"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let hot: Value = sqlx::query_scalar("SELECT state FROM profiled_authority_hot")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(hot["status"], "offered");
+    assert!(hot["grant"].is_null());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM agent_launch_bindings WHERE credential_verifier IS NULL AND credential_version=0").fetch_one(pool).await.unwrap(),1);
+    let original: Value =
+        sqlx::query_scalar("SELECT graph_task_observation FROM profiled_launches")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        original["native_offer"],
+        serde_json::to_value(native).unwrap()
+    );
+    let (status, replayed) = poll(&c).await;
+    assert_eq!(status, 200, "{replayed}");
+    let ControlReply::Poll(replayed) =
+        decode_reply(&serde_json::to_vec(&replayed).unwrap()).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        replayed.offers[0].offered.offer.binding,
+        native.offered.offer.binding
+    );
+    assert_eq!(
+        replayed.offers[0].offered.clock.expires_at_ms,
+        native.offered.clock.expires_at_ms
+    );
+    let accept = aq_admission::transport::Accept {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: c.request.identity.clone(),
+        acceptance: aq_session_protocol::ProfiledAcceptance {
+            binding: native.offered.offer.binding.clone(),
+            advertised_capabilities: native.offered.offer.required_capabilities.clone(),
+        },
+        reservation: aq_admission::transport::NoLaunchReservation {
+            reservation_id: Uuid::new_v4(),
+            reservation_operation_id: Uuid::new_v4(),
+            reservation_journal_digest: Digest::of(b"synthetic durable reservation"),
+        },
+        guardian_id: Uuid::new_v4(),
+        launch_id: Uuid::new_v4(),
+        journal_revision: 1,
+        journal_digest: Digest::of(b"synthetic reserved journal"),
+        reservation_remaining_ms: 10000,
+    };
+    let nonce = Uuid::new_v4();
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/accept")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("aq-delivery-nonce", nonce.to_string())
+                .body(axum::body::Body::from(serde_json::to_vec(&accept).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let ControlReply::Preparation(preparation) = decode_reply(&bytes).unwrap() else {
+        panic!()
+    };
+    preparation.validate_for(&accept, nonce).unwrap();
+    assert_eq!(preparation.original.materials.len(), 1);
+    let hot: Value = sqlx::query_scalar("SELECT state FROM profiled_authority_hot")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(hot["status"], "preparing");
+    assert!(hot["grant"].is_null());
+}
+#[tokio::test]
+async fn task_cas_and_same_cas_content_mismatch_never_publish_an_offer() {
+    let c = setup().await;
+    for mode in [1, 2] {
+        c.mode.store(mode, Ordering::SeqCst);
+        let (status, _) = poll(&c).await;
+        assert_eq!(status, 409);
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_attempts")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+#[tokio::test]
+async fn missing_qualified_capacity_never_invents_zero_or_exports_source() {
+    let mut c = setup().await;
+    let mut config = (*c.env.env.state.config).clone();
+    let mut native = (*config.profiled_execution.as_ref().unwrap().as_ref()).clone();
+    native.revision += 1;
+    native.context_qualifications.clear();
+    config.profiled_execution = Some(std::sync::Arc::new(native));
+    c.env.env.state.config = std::sync::Arc::new(config);
+    aq_server::profiled_execution::policies::install(&c.env.env.state)
+        .await
+        .unwrap();
+    let (status, _) = poll(&c).await;
+    assert_eq!(status, 409);
+    for table in [
+        "execution_attempts",
+        "profiled_source_exports",
+        "admission_material_leases",
+    ] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{table}");
+    }
+}
+#[tokio::test]
+async fn poll_rejects_chosen_scope_duplicate_fields_and_oversized_body_before_admission() {
+    let c = setup().await;
+    let original = serde_json::to_value(&c.request).unwrap();
+    let mut unknown = original.clone();
+    unknown["selected_task_id"] = serde_json::json!(Uuid::new_v4());
+    let text = original.to_string();
+    let duplicate = text.replacen(
+        "\"operation_id\":",
+        &format!("\"operation_id\":\"{}\",\"operation_id\":", Uuid::new_v4()),
+        1,
+    );
+    for (bytes, status) in [
+        (serde_json::to_vec(&unknown).unwrap(), 400),
+        (duplicate.into_bytes(), 400),
+        (vec![b' '; 16385], 413),
+    ] {
+        let response = common::native_offer::post(
+            &c.env.env.state,
+            &c.env.env.credential,
+            "/v1/worker/profiled/poll",
+            bytes,
+        )
+        .await;
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_attempts")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let admin = aq_server::build_admin_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/poll")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin.status(), 404);
+}

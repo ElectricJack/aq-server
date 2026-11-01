@@ -38,6 +38,16 @@ pub async fn load_original_offer_locked(
     // erase a receipt and cannot be mistaken for fresh delivery permission.
     let published = native.offered.clock.server_time_ms;
     stored.read_provenance.validate_at(published)?;
+    if native.offered.clock.expires_at_ms
+        > stored
+            .read_provenance
+            .ready_expires_at_ms
+            .min(stored.read_provenance.context_expires_at_ms)
+            .min(spec.source.expires_at_ms)
+    {
+        return Err(refused());
+    }
+
     if stored.read_provenance.task != spec.task
         || stored.read_provenance.authorized_context_digest != spec.task_context.digest
     {
@@ -45,7 +55,7 @@ pub async fn load_original_offer_locked(
     }
     spec.validate_retained(offer, &native.offered.artifacts, published)
         .map_err(|_| refused())?;
-    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id").bind(attempt).fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
+    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127").bind(attempt).fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
     if ids.len() != native.offered.artifacts.len() || ids.len() > 126 {
         return Err(refused());
     }
@@ -79,6 +89,12 @@ pub async fn load_original_offer_locked(
             .descriptor
             .verify(&retained.bytes, published)
             .map_err(|_| refused())?;
+        if retained.descriptor.artifact == native.startup.payload {
+            native
+                .startup
+                .verify_payload(&retained.bytes)
+                .map_err(|_| refused())?;
+        }
         remaining.remove(index);
     }
     if !remaining.is_empty() {
