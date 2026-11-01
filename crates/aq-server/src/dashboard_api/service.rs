@@ -1,3 +1,5 @@
+#[path = "lifecycle.rs"]
+mod lifecycle;
 use super::{
     runtime::{self, Resource, Snapshot},
     *,
@@ -399,12 +401,13 @@ async fn session(
     };
     let mut revisions = vec![];
     let mut task_revision = None;
+    let mut lifecycle = None;
     if view.kind == Kind::ProfiledV1 {
-        let raw: Value =
-            sqlx::query_scalar("SELECT state->'offer' FROM execution_attempts WHERE attempt_id=$1")
-                .bind(attempt)
-                .fetch_one(&mut *tx)
-                .await?;
+        // Reuse the existing authorized per-session offer read: receipt PK joins
+        // add bounded columns, never another per-row query or an event scan.
+        let row=sqlx::query("SELECT e.state->'offer' AS offer,s.request_bytes AS started_request,s.request_digest AS started_digest,s.receipt_bytes AS started_receipt,z.request_bytes AS stopped_request,z.request_digest AS stopped_digest,z.receipt_bytes AS stopped_receipt FROM execution_attempts e LEFT JOIN profiled_started_receipts s USING(attempt_id) LEFT JOIN profiled_stopped_receipts z USING(attempt_id) WHERE e.attempt_id=$1")
+            .bind(attempt).fetch_one(&mut *tx).await?;
+        let raw: Value = row.get("offer");
         {
             let offer: ProfiledOffer =
                 serde_json::from_value(raw).map_err(|_| Error::Unavailable)?;
@@ -416,6 +419,7 @@ async fn session(
                     == view.launch_manifest_digest.as_ref()
                 && offer.binding.execution_spec_digest.as_str() == view.execution_spec_digest
             {
+                lifecycle = Some(lifecycle::from_row(&row, &offer.binding)?);
                 profile = Profile {
                     provider: Some(offer.manifest.model.provider.as_str().into()),
                     model: Some(offer.manifest.model.model.as_str().into()),
@@ -505,6 +509,7 @@ async fn session(
         },
         terminal,
         session_identity,
+        lifecycle,
         record_revision: if view.record_revision > 0 {
             Some(Revision(view.record_revision.to_string()))
         } else {
