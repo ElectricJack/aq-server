@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "status": "pure_reducer_only_independent_source_accepted_and_tests_passed",
+  "source_commit": "10dcfbdfc8cc1c75ad65aebd124aba181fb7544f",
+  "base_commit": "33dcc41",
+  "proposal_commit": "234f946",
+  "source_chain": [
+    "37c1bf2",
+    "a8af0f0",
+    "ac542a9",
+    "449ef91",
+    "10dcfbd"
+  ],
+  "independent_review": {
+    "accepted_source": "10dcfbd",
+    "reviewer_builds": false,
+    "closed_findings": [
+      "Separate owner snapshot identity/hash from internal AQ MemberOutcome projection digest",
+      "Restore WorkKind must match phase and completed installation; no skipped unconditional reobserve",
+      "Terminal outcome members match retained current facts",
+      "Only reducer-supported kinds; fixed deadline and cancelled-resume constraints",
+      "Corruption regressions isolate each semantic invariant after rehashing wire-valid data"
+    ]
+  },
+  "component": {
+    "name": "aq-wait-engine",
+    "publish": false,
+    "new_external_versions": 0,
+    "uses_frozen_CON03_types": true,
+    "normal_dependency_exclusions": [
+      "aq-server",
+      "sqlx",
+      "reqwest",
+      "tokio",
+      "aq-worker",
+      "aq-admission",
+      "aq-playbooks"
+    ]
+  },
+  "checks": {
+    "pure_tests": 17,
+    "test_seconds": 0.06,
+    "warm_rebuild_seconds": 1.09,
+    "strict_all_targets_seconds": 0.61,
+    "offline_jobs2_debug0_incremental0": true,
+    "affected_fmt_and_diff_clean": true
+  },
+  "coverage": [
+    "Committed prefix versus held earlier allocation/later commit and rollback gap",
+    "Before/during-install resolution with unconditional reobserve; lost reply/restart/stable subscription IDs",
+    "One-TX complete/reopen is not committed terminal; two committed transactions retain historical evidence",
+    "Replay retention gap cannot turn a current-only state into success",
+    "Any/All ordinal selection, unavailable pending/backoff and bounded retry hold",
+    "Dirty hints during held IO remain scheduled; bounded work prevents duplicate drive",
+    "Exact source scope/binding/principal/incarnation/condition/subscription/owner snapshot/projection pins",
+    "Cancellation/deadline/late reply, original creation age, logical clock rollback and immutable outcome",
+    "Bounded complete-known cycle proof, opposing edges and incomplete/deep/oversized proof refusal",
+    "Bounded snapshot restore, malformed/forged phase and wire-valid inconsistent outcome refusal"
+  ],
+  "limitations": [
+    "No SQL storage, durable transaction, source IO, runtime/public capability or enforced scheduling hold",
+    "No real Graph/mailbox/timer adapter qualification",
+    "No source authentication inferred from a digest or fake owner",
+    "No physical stop, retained checkpoint, grant, hibernation or wake scheduling",
+    "No standalone published package claim; workspace-only",
+    "AQ25 remains partial; migration38 unallocated"
+  ],
+  "provider_calls": 0,
+  "database_or_live_fixture_operations": 0,
+  "canonical_operations": 0,
+  "source_sha256": {
+    "Cargo.toml": "6f48e5ce6fa54c58ee16ae2a43ef3e8ce1bf1b19763377bafe1a31d5f238584c",
+    "Cargo.lock": "47006a565d254d8f23ff978ae59aebd17075170908ccc09d8cabe93b7f82b389",
+    "crates/aq-wait-engine/Cargo.toml": "c7f15638a7dee435fa5cb1ab6fc84ed99b2c0120a95142e2d6e5584a63eefe52",
+    "crates/aq-wait-engine/src/cycle.rs": "e83878af1000293a7d40ec649d1bf43d676ef6eaf6c0bb76cbf878e7b05dc700",
+    "crates/aq-wait-engine/src/lib.rs": "43440c1214724b924b9779a78a385f96b391ce314bf4636bed32cda591e51709",
+    "crates/aq-wait-engine/src/model.rs": "df223002259ee126566e0aec73d50c5c8389ecfefa518198395bf113ca145a9d",
+    "crates/aq-wait-engine/src/reduce.rs": "163e08e6dc853da0203f653711abfebc46dde377543d6f370c73ffbead380586",
+    "crates/aq-wait-engine/src/tests.rs": "616f209fb331f870685744c7beb6a85b3aa02910efea06251763940233635dd6"
+  }
+}

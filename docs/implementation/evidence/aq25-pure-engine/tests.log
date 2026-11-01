@@ -1,0 +1,25 @@
+   Compiling aq-wait-engine v0.1.0 (/tmp/aq-verified-waits-v2/crates/aq-wait-engine)
+    Finished `test` profile [unoptimized] target(s) in 1.09s
+     Running unittests src/lib.rs (/tmp/aq-native-union-target/debug/deps/aq_wait_engine-bb41e189d2d18f87)
+
+running 17 tests
+test tests::bounded_known_cycles_and_serialized_opposing_registration_refuse_without_global_claim ... ok
+test tests::owner_snapshot_and_aq_projection_digests_are_independent_verified_links ... ok
+test tests::lost_install_reply_restart_reclaim_and_exact_request_replay_preserve_stable_identity_age ... ok
+test tests::rollback_gap_is_settled_but_an_unqualified_max_allocated_claim_is_refused ... ok
+test tests::early_resolution_never_skips_unconditional_reobserve_and_result_is_immutable ... ok
+test tests::restored_unsupported_terminal_kinds_early_deadline_and_cancelled_resume_are_refused ... ok
+test tests::bounded_restore_and_backpressure_refuse_malformed_or_duplicate_work ... ok
+test tests::resolution_during_install_and_with_no_hint_is_found_after_restart ... ok
+test tests::internal_atomic_complete_reopen_is_not_success_but_two_commits_have_historical_evidence ... ok
+test tests::allocated_later_commit_does_not_advance_safe_watermark_past_held_early_mutation ... ok
+test tests::restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_member_history ... ok
+test tests::retention_gap_cannot_use_current_only_success_and_retryable_outage_keeps_last_freshness ... ok
+test tests::rollback_time_and_retry_exhaustion_never_reset_age_or_create_hot_polling ... ok
+test tests::source_scope_principal_incarnation_and_snapshot_proof_are_mandatory ... ok
+test tests::cancellation_deadline_and_late_reply_races_preserve_one_immutable_outcome ... ok
+test tests::any_all_use_declared_order_and_unavailable_is_never_evidenced_failure ... ok
+test tests::dirty_hint_during_held_round_is_not_lost_and_does_not_commit_stale_success ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

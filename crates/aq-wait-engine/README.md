@@ -20,6 +20,11 @@ cannot satisfy a wait. Source events only coalesce dirty work; installation must
 be followed by unconditional reobservation. Gaps/unavailable coverage stay pending
 with backoff; they never become current-only success or source failure.
 
+The frozen SourceBoundary snapshot digest continues to identify the OWNER
+snapshot. Internal proofs carry a separate owner snapshot reference and AQ
+projection digest; the adapter validates actual snapshot decode/evidence linkage.
+Canonical MemberOutcome bytes are not relabelled as the source snapshot.
+
 Use `Snapshot::decode` for bounded restart data. Snapshot validation checks shape,
 identity/digest linkage and reducer invariants; the outside storage owner still
 authenticates retained bytes and current authority. No snapshot is itself a grant,
