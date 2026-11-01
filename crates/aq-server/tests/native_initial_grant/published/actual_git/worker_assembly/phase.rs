@@ -144,8 +144,8 @@ pub(super) async fn verify(
     assert_eq!(result["first_history"], result["history"]);
     let snapshot: Value =
         serde_json::from_slice(&std::fs::read(root.join("journal/journal.json")).unwrap()).unwrap();
-    assert_eq!(snapshot["state"]["format"], 9);
-    assert_eq!(result["journal_format"], 9);
+    assert_eq!(snapshot["state"]["format"], 10);
+    assert_eq!(result["journal_format"], 10);
     let attempt =
         &snapshot["state"]["attempts"][q.original.acceptance.binding.attempt_id.to_string()];
     assert_eq!(attempt["phase_acceptance"]["request"], result["request"]);

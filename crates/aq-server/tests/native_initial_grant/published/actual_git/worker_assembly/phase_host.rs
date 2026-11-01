@@ -53,6 +53,68 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         history["stopped"]["recorded_revision"].as_u64().unwrap()
             > history["running"]["recorded_revision"].as_u64().unwrap()
     );
+    // Format10 pairs the actual physical facts with fsynced phase envelopes.
+    // This host-only probe sends neither envelope and claims no remote ACK.
+    let terminal = &history["terminal"];
+    let phase_started = &terminal["started"]["request"];
+    let phase_stopped = &terminal["stopped"]["request"];
+    assert_eq!(phase_started["schema_version"], 1);
+    assert_eq!(phase_stopped["schema_version"], 1);
+    assert_eq!(phase_started["original"], result["host_started"]);
+    let stopped: aq_admission::stopped::Request =
+        serde_json::from_value(phase_stopped["original"].clone()).unwrap();
+    stopped.validate_after(&started).unwrap();
+    assert_eq!(
+        serde_json::to_value(&stopped.proof.observation).unwrap(),
+        history["stopped"]["observation"]
+    );
+    assert_eq!(phase_started["origin"], phase_stopped["origin"]);
+    assert_eq!(phase_started["origin"]["kind"], "phase_execution_v2");
+    assert_eq!(
+        phase_started["origin"]["execution_receipt_digest"],
+        json!(delivery.receipt.digest().unwrap())
+    );
+    let attempt = &snapshot["state"]["attempts"][started.binding.attempt_id.to_string()];
+    let accepted: aq_admission::preparation_v2::AcceptedReceipt =
+        serde_json::from_value(attempt["phase_preparation"]["delivery"]["receipt"].clone())
+            .unwrap();
+    assert_eq!(
+        phase_started["origin"]["accepted_receipt_digest"],
+        json!(accepted.digest().unwrap())
+    );
+    assert_eq!(phase_started["negotiation"], phase_stopped["negotiation"]);
+    assert_eq!(
+        phase_started["negotiation"]["protocol"],
+        "aq.phase-terminal.v1"
+    );
+    assert_eq!(
+        phase_started["negotiation"]["features"],
+        json!(["started_stopped_closure_v1", "original_lease_no_renewal_v1"])
+    );
+    let contract: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../aq-phase-terminal-protocol/artifacts/artifact.json"
+    )))
+    .unwrap();
+    assert_eq!(phase_started["negotiation"]["contract"], contract);
+    assert_eq!(
+        terminal["started"]["recorded_revision"],
+        history["running"]["recorded_revision"]
+    );
+    assert_eq!(
+        terminal["stopped"]["recorded_revision"],
+        history["stopped"]["recorded_revision"]
+    );
+    assert_eq!(
+        phase_started["original"]["operation_id"],
+        history["intent"]["started_operation_id"]
+    );
+    assert_eq!(
+        phase_stopped["original"]["evidence"]["stop_operation_id"],
+        history["intent"]["stopped_operation_id"]
+    );
+    assert!(terminal["started"]["receipt"].is_null());
+    assert!(terminal["stopped"]["receipt"].is_null());
     let directory = root.join("host").join(started.launch_id.to_string());
     assert_eq!(
         std::fs::read(directory.join("fixture-marker")).unwrap(),

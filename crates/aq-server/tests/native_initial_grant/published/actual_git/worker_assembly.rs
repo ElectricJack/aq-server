@@ -253,7 +253,7 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: 
             &std::fs::read(worker_root.join("journal/journal.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(snapshot["state"]["format"], 9);
+        assert_eq!(snapshot["state"]["format"], 10);
         let attempt = &snapshot["state"]["attempts"][prepare.binding.attempt_id.to_string()];
         let record = &attempt["initial_grant"];
         assert_eq!(record["delivery"], result["grant"]);
