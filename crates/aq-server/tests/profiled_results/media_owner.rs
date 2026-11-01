@@ -920,3 +920,178 @@ async fn media_actual_expired_pending_cleanup_releases_report_slots_preserving_t
     let (reserved,retained,history):(i64,i64,i64)=sqlx::query_as("SELECT reserved_bytes,retained_bytes,historical_intents FROM result_media_budgets WHERE scope_key='installation'").fetch_one(&pool).await.unwrap();
     assert_eq!((reserved, retained, history), (10_485_760, 0, 10));
 }
+async fn wait_for_node_waiters(pool: &sqlx::PgPool, minimum: i64) {
+    tokio::time::timeout(std::time::Duration::from_millis(700),async{
+        loop{
+            let count:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT revoked_at IS NOT NULL FROM nodes%FOR UPDATE'")
+                .fetch_one(pool).await.unwrap();
+            if count>=minimum{return;}
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }).await.expect("actual owner must reach the held node lock before timeout");
+}
+#[tokio::test]
+async fn media_actual_status_node_before_intent_order_allows_concurrent_listing() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let id = retained(&owner, &actor, report.report_id, &revision).await;
+    let pool = f.db.pool().await;
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(f.node.node_id)
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
+    let status = {
+        let owner = owner.clone();
+        let actor = actor.clone();
+        tokio::spawn(async move { owner.status(&actor, id).await })
+    };
+    wait_for_node_waiters(&pool, 1).await;
+    sqlx::query(
+        "SELECT operation_id FROM result_media_intents WHERE operation_id=$1 FOR UPDATE NOWAIT",
+    )
+    .bind(id)
+    .fetch_one(&mut *held)
+    .await
+    .expect("status waiting for Node must not already hold Intent");
+    let listing = {
+        let owner = owner.clone();
+        let actor = actor.clone();
+        let revision = revision.clone();
+        tokio::spawn(async move { owner.list(&actor, report.report_id, &revision).await })
+    };
+    wait_for_node_waiters(&pool, 2).await;
+    held.commit().await.unwrap();
+    let status = status.await.unwrap().unwrap();
+    let page = listing.await.unwrap().unwrap();
+    assert_eq!(status.state, media::UploadState::Retained);
+    assert_eq!(page.items[0].receipt, status.artifact.unwrap().receipt);
+}
+#[tokio::test]
+async fn media_actual_writer_post_io_node_before_intent_and_fresh_deadline_fences() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let pool = f.db.pool().await;
+    for phase in ["put", "finalize", "late_finalize"] {
+        let id = Uuid::new_v4();
+        owner
+            .reserve(&actor, report.report_id, &revision, &request(id))
+            .await
+            .unwrap();
+        if phase != "put" {
+            owner.put(&actor, id, png()).await.unwrap();
+        }
+        let gate = Gate::new();
+        owner
+            .set_test_hook(Some(gate.hook(if phase == "put" {
+                "received_before_commit"
+            } else {
+                "before_receipt_commit"
+            })))
+            .unwrap();
+        let write = {
+            let owner = owner.clone();
+            let actor = actor.clone();
+            tokio::spawn(async move {
+                if phase == "put" {
+                    owner.put(&actor, id, png()).await
+                } else {
+                    owner.finalize(&actor, id).await
+                }
+            })
+        };
+        gate.entered.notified().await;
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+            .bind(f.node.node_id)
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+        gate.release();
+        wait_for_node_waiters(&pool, 1).await;
+        sqlx::query(
+            "SELECT operation_id FROM result_media_intents WHERE operation_id=$1 FOR UPDATE NOWAIT",
+        )
+        .bind(id)
+        .fetch_one(&mut *held)
+        .await
+        .expect("post-IO writer waiting for Node must not already hold Intent");
+        let listing = {
+            let owner = owner.clone();
+            let actor = actor.clone();
+            let revision = revision.clone();
+            tokio::spawn(async move { owner.list(&actor, report.report_id, &revision).await })
+        };
+        wait_for_node_waiters(&pool, 2).await;
+        if phase == "late_finalize" {
+            f.time.store(
+                (NOW + media::MAX_UPLOAD_TTL_MS + 1) as i64,
+                Ordering::SeqCst,
+            );
+        }
+        held.commit().await.unwrap();
+        let result = write.await.unwrap();
+        let page = listing.await.unwrap().unwrap();
+        assert_eq!(page.binding.report_id.as_uuid(), report.report_id);
+        owner.set_test_hook(None).unwrap();
+        if phase == "late_finalize" {
+            assert!(
+                matches!(result, Err(Error::Expired)),
+                "post-wait clock/deadline must be fresh"
+            );
+            let (state,charged,receipt):(String,i64,bool)=sqlx::query_as("SELECT state,reserved_bytes,receipt_bytes IS NOT NULL FROM result_media_intents WHERE operation_id=$1").bind(id).fetch_one(&pool).await.unwrap();
+            assert_eq!(
+                (state.as_str(), charged, receipt),
+                ("finalizing", 10_485_760, false)
+            );
+        } else {
+            assert_eq!(
+                result.unwrap().state,
+                if phase == "put" {
+                    media::UploadState::Received
+                } else {
+                    media::UploadState::Retained
+                }
+            );
+            if phase == "put" {
+                owner.finalize(&actor, id).await.unwrap();
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn media_actual_status_uses_fresh_locked_flags_after_immutable_peek() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let id = retained(&owner, &actor, report.report_id, &revision).await;
+    let pool = f.db.pool().await;
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(f.node.node_id)
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
+    let status = {
+        let owner = owner.clone();
+        let actor = actor.clone();
+        tokio::spawn(async move { owner.status(&actor, id).await })
+    };
+    wait_for_node_waiters(&pool, 1).await;
+    sqlx::query(
+        "SELECT operation_id FROM result_media_intents WHERE operation_id=$1 FOR UPDATE NOWAIT",
+    )
+    .bind(id)
+    .fetch_one(&mut *held)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE result_media_intents SET withheld_at_ms=$2 WHERE operation_id=$1")
+        .bind(id)
+        .bind(NOW as i64)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    held.commit().await.unwrap();
+    let status = status.await.unwrap().unwrap();
+    assert_eq!(
+        status.artifact.unwrap().availability.state,
+        media::AvailabilityState::Withheld
+    );
+}

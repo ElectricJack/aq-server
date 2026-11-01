@@ -115,6 +115,47 @@ pub(super) struct Intent {
     pub cleanup: String,
     pub withheld: bool,
 }
+/// Scope discovery only: no mutable flags, deadlines, state or leases can be
+/// borrowed from an unlocked observation. The fresh locked Intent is required
+/// after the actual result/node owner has been locked.
+pub(super) struct IntentPeek {
+    id: Uuid,
+    actor: Uuid,
+    identity: Value,
+    pub binding: media::ReportBinding,
+    storage: Uuid,
+}
+impl IntentPeek {
+    pub fn original(&self, user: &User) -> Result<()> {
+        if self.actor != user.id || self.identity != key(user)? {
+            return Err(Error::NotFound);
+        }
+        Ok(())
+    }
+    pub fn matches(&self, row: &Intent) -> bool {
+        self.id == row.id
+            && self.actor == row.actor
+            && self.identity == row.identity
+            && self.binding == row.binding
+            && self.storage == row.storage
+    }
+}
+pub(super) async fn peek(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<IntentPeek> {
+    // PK plus frozen JSON byte bounds limit this to one bounded immutable
+    // scope record. In particular, do not add FOR SHARE/UPDATE here.
+    let row=sqlx::query("SELECT operation_id,actor_id,actor_identity,report_binding,storage_id FROM result_media_intents WHERE operation_id=$1")
+        .bind(id).fetch_optional(&mut **tx).await.map_err(sql)?.ok_or(Error::NotFound)?;
+    let binding: media::ReportBinding =
+        serde_json::from_value(row.get("report_binding")).map_err(|_| Error::Owner)?;
+    binding.validate().map_err(|_| Error::Owner)?;
+    Ok(IntentPeek {
+        id: row.get("operation_id"),
+        actor: row.get("actor_id"),
+        identity: row.get("actor_identity"),
+        binding,
+        storage: row.get("storage_id"),
+    })
+}
 impl Intent {
     pub fn original(&self, user: &User) -> Result<()> {
         if self.actor != user.id || self.identity != key(user)? {

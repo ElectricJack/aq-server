@@ -11,11 +11,7 @@ impl Owner {
     ) -> Result<(db::Intent, Uuid, files::ActivityGuard)> {
         let guard = self.root.active(id, true)?;
         let mut tx = db::transaction(&self.state).await?;
-        db::budgets(&mut tx, None).await?;
-        db::principal(&mut tx, actor).await?;
-        let row = db::load(&mut tx, id).await?;
-        db::budgets(&mut tx, Some(row.binding.project_id.as_uuid())).await?;
-        self.fence(&mut tx, actor, &row).await?;
+        let row = self.lock_operation(&mut tx, actor, id, true).await?;
         let at = now(&self.state)?;
         row.live(at)?;
         use media::UploadState as S;
@@ -82,11 +78,7 @@ impl Owner {
         .map_err(|_| Error::Storage)?;
         result?;
         let mut tx = db::transaction(&self.state).await?;
-        db::budgets(&mut tx, None).await?;
-        db::principal(&mut tx, actor).await?;
-        let current = db::load(&mut tx, id).await?;
-        db::budgets(&mut tx, Some(current.binding.project_id.as_uuid())).await?;
-        self.fence(&mut tx, actor, &current).await?;
+        let current = self.lock_operation(&mut tx, actor, id, true).await?;
         let at = now(&self.state)?;
         current.live(at)?;
         if current.lease != Some(lease) || current.lease_expires.is_none_or(|v| at >= v) {
@@ -154,11 +146,7 @@ impl Owner {
         .await
         .map_err(|_| Error::Storage)?;
         let mut tx = db::transaction(&self.state).await?;
-        db::budgets(&mut tx, None).await?;
-        db::principal(&mut tx, actor).await?;
-        let current = db::load(&mut tx, id).await?;
-        db::budgets(&mut tx, Some(current.binding.project_id.as_uuid())).await?;
-        self.fence(&mut tx, actor, &current).await?;
+        let current = self.lock_operation(&mut tx, actor, id, true).await?;
         let at = now(&self.state)?;
         current.live(at)?;
         if current.lease != Some(lease) || current.lease_expires.is_none_or(|v| at >= v) {

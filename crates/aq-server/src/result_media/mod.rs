@@ -163,9 +163,7 @@ impl Owner {
     }
     pub async fn status(&self, actor: &User, id: Uuid) -> Result<media::UploadStatus> {
         let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        let row = db::load(&mut tx, id).await?;
-        self.fence(&mut tx, actor, &row).await?;
+        let row = self.lock_operation(&mut tx, actor, id, false).await?;
         let mut status = row.status(now(&self.state)?)?;
         let withheld = row.withheld;
         tx.commit().await.map_err(sql)?;
@@ -178,9 +176,7 @@ impl Owner {
                     .map_err(|_| Error::Storage)?;
         }
         let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        let current = db::load(&mut tx, id).await?;
-        self.fence(&mut tx, actor, &current).await?;
+        let current = self.lock_operation(&mut tx, actor, id, false).await?;
         if current.receipt != row.receipt
             || current.state != row.state
             || current.withheld != withheld
@@ -192,29 +188,41 @@ impl Owner {
         self.root.check()?;
         Ok(status)
     }
-    async fn fence(
+    async fn lock_operation(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         actor: &User,
-        row: &db::Intent,
-    ) -> Result<()> {
+        id: Uuid,
+        write_budget: bool,
+    ) -> Result<db::Intent> {
+        if write_budget {
+            db::budgets(tx, None).await?;
+        }
+        db::principal(tx, actor).await?;
+        let peek = db::peek(tx, id).await?;
+        peek.original(actor)?;
+        if write_budget {
+            db::budgets(tx, Some(peek.binding.project_id.as_uuid())).await?;
+        }
+        // All human paths take the actual result/node authority before an
+        // intent lock. The peek supplies only an immutable lookup key.
+        let proof = db::binding(
+            &self.state,
+            tx,
+            peek.binding.report_id.as_uuid(),
+            &peek.binding.report_revision,
+        )
+        .await?;
+        let row = db::load(tx, id).await?;
+        if !peek.matches(&row) || proof != row.binding {
+            return Err(Error::Owner);
+        }
         db::principal(tx, actor).await?;
         row.original(actor)?;
         if row.storage != self.root.id {
             return Err(Error::Storage);
         }
-        if db::binding(
-            &self.state,
-            tx,
-            row.binding.report_id.as_uuid(),
-            &row.binding.report_revision,
-        )
-        .await?
-            != row.binding
-        {
-            return Err(Error::Owner);
-        }
-        Ok(())
+        Ok(row)
     }
     fn observation(&self, receipt: &media::Receipt, withheld: bool) -> media::Availability {
         if withheld {
