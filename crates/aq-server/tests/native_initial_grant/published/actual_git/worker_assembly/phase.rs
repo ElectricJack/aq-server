@@ -133,7 +133,8 @@ pub(super) async fn verify(
         serde_json::to_value(&replay.receipt).unwrap()
     );
     let executed = result["phase"] == "granted_phase_execution";
-    if !executed {
+    let history_only = result["phase"] == "phase_history_only";
+    if !executed && !history_only {
         assert!(replay.delivery.clock.server_time_ms >= p.original.offered.clock.expires_at_ms);
         assert!(
             result["checked_at_ns"].as_u64().unwrap()
@@ -161,7 +162,7 @@ pub(super) async fn verify(
     );
     if matches!(
         result["phase"].as_str(),
-        Some("prepared_phase_inputs" | "granted_phase_execution")
+        Some("prepared_phase_inputs" | "granted_phase_execution" | "phase_history_only")
     ) {
         verify_inputs(root, result, attempt, &q, &p, &initial, &snapshot);
     } else {
@@ -203,6 +204,8 @@ pub(super) async fn verify(
             .unwrap();
     if executed {
         verify_execution(case, result, &q, &p, &initial, &snapshot, &hot).await;
+    } else if history_only {
+        super::phase_history::verify(case, result, &q, &p, &initial, &snapshot, &hot).await;
     } else {
         assert_eq!(hot["status"], "preparing");
         assert!(hot["grant"].is_null());
@@ -222,7 +225,7 @@ pub(super) async fn verify(
             .fetch_one(&case.env.env.pool)
             .await
             .unwrap(),
-        if executed { 1 } else { 0 }
+        if executed || history_only { 1 } else { 0 }
     );
     eprintln!(
         "bounded phase clocks: {}",
@@ -264,7 +267,7 @@ fn verify_inputs(
         result["prepared_revision"].as_u64().unwrap()
             > result["journal_revision"].as_u64().unwrap()
     );
-    if result["phase"] != "granted_phase_execution" {
+    if result["phase"] == "prepared_phase_inputs" {
         assert!(
             result["prepared_at_ns"].as_u64().unwrap()
                 > result["original_deadline_ns"].as_u64().unwrap()

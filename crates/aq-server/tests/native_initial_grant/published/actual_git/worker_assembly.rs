@@ -5,6 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use tokio::io::AsyncReadExt;
 #[path = "worker_assembly/phase.rs"]
 mod phase;
+#[path = "worker_assembly/phase_history.rs"]
+mod phase_history;
 #[path = "worker_assembly/phase_host.rs"]
 mod phase_host;
 async fn read_frame(reader: &mut BufReader<tokio::process::ChildStdout>) -> Value {
@@ -25,29 +27,54 @@ async fn read_frame(reader: &mut BufReader<tokio::process::ChildStdout>) -> Valu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned native worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_downloads_installs_hydrates_and_prepares_against_real_daemon() {
-    run_worker(false, false, false, false).await;
+    run_worker(Mode::Legacy).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned phase-capable worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_durably_accepts_new_phase_and_replays_after_proposal_expiry() {
-    run_worker(true, false, false, false).await;
+    run_worker(Mode::Accepted).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned phase-input worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_prepares_phase_inputs_after_proposal_expiry() {
-    run_worker(true, true, false, false).await;
+    run_worker(Mode::Inputs).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned phase execution worker and actual aq-git/Git"]
 async fn actual_worker_receives_durable_phase_execution_from_actual_issuer() {
-    run_worker(true, true, true, false).await;
+    run_worker(Mode::Execution).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires pinned worker, aq-git/Git, host helper, synthetic ELF and actual tmux"]
 async fn actual_worker_phase_execution_launches_and_stops_actual_tmux_host() {
-    run_worker(true, true, true, true).await;
+    run_worker(Mode::Host).await;
 }
-async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: bool, host: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires pinned history-capable worker and actual aq-git/Git"]
+async fn actual_worker_reads_history_after_withheld_first_execution_reply() {
+    run_worker(Mode::LostExecutionReply).await;
+}
+#[derive(Clone, Copy)]
+enum Mode {
+    Legacy,
+    Accepted,
+    Inputs,
+    Execution,
+    Host,
+    LostExecutionReply,
+}
+async fn run_worker(mode: Mode) {
+    let use_phase = !matches!(mode, Mode::Legacy);
+    let prepare_phase_inputs = matches!(
+        mode,
+        Mode::Inputs | Mode::Execution | Mode::Host | Mode::LostExecutionReply
+    );
+    let execute_phase = matches!(
+        mode,
+        Mode::Execution | Mode::Host | Mode::LostExecutionReply
+    );
+    let host = matches!(mode, Mode::Host);
+    let history_loss = matches!(mode, Mode::LostExecutionReply);
     let mut a = setup_actual_unpublished().await;
     let case = &mut a.case;
     let (phase_config, inventory_qualification) = if use_phase {
@@ -55,6 +82,9 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: 
         config["prepare_inputs"] = json!(prepare_phase_inputs);
         if execute_phase {
             config["prepare_execution"] = json!(true);
+            if history_loss {
+                config["history_after_lost_execution"] = json!(true);
+            }
             if host {
                 config["synthetic_host"] = phase_host::configuration();
             }
@@ -106,7 +136,15 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: 
     let observed = http_statuses.clone();
     let mut app = aq_server::build_worker_router(case.env.env.state.clone());
     if execute_phase {
-        app = app.merge(phase::execution_routes(case.env.env.state.clone()));
+        let routes = phase::execution_routes(case.env.env.state.clone());
+        app = app.merge(if history_loss {
+            phase_history::withhold_first_success(routes)
+        } else {
+            routes
+        });
+        if history_loss {
+            app = app.merge(phase_history::routes(case.env.env.state.clone()));
+        }
     }
     let app = app.layer(axum::middleware::from_fn(
         move |request: axum::extract::Request, next: axum::middleware::Next| {
@@ -189,7 +227,9 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: 
     }
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
     let result = read_frame(&mut output).await;
-    let expected_phase = if execute_phase {
+    let expected_phase = if history_loss {
+        "phase_history_only"
+    } else if execute_phase {
         "granted_phase_execution"
     } else if prepare_phase_inputs {
         "prepared_phase_inputs"
@@ -234,6 +274,20 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: 
         "{result}; HTTP statuses: {:?}",
         http_statuses.lock().unwrap()
     );
+    if history_loss {
+        let statuses = http_statuses.lock().unwrap();
+        for (path, expected) in [
+            ("/v1/worker/profiled-v2/prepare", 503),
+            ("/v1/worker/profiled-v2/history", 200),
+        ] {
+            let seen: Vec<_> = statuses
+                .iter()
+                .filter(|(p, _, _)| p == path)
+                .map(|(_, status, _)| *status)
+                .collect();
+            assert_eq!(seen, vec![expected], "exactly one request to {path}");
+        }
+    }
     if use_phase {
         phase::verify(case, &worker_root, &identity, &result).await;
         if host {
