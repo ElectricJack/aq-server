@@ -151,3 +151,30 @@ The resulting test artifact is
 This compile evidence does not identify the earlier HTTP409 cause and does not
 establish accepted output. A separately authorized diagnostic process attempt
 would be needed to obtain the fixed refusal category and original clocks.
+
+## Fifth attempt: successful acceptance, historical-store execution guard
+
+The single authorized classified diagnostic reused the pinned `4fc2360` artifact
+above and all unchanged worker/source/host pins. Available disk was22,717,546,496B.
+The case ran11.53s. First acceptance200/225ms and its replay200/106ms had no
+conflict class. First acceptance completed950ms before the original budget/offer
+expiry, while the real source observation retained its separate30s bound. The
+earlier409 was not reproduced and remains unexplained.
+
+All artifact/material/source reads succeeded, including local hydration. The
+worker then refused at `phase_execution_http`, with Prepare503/4ms. Journal
+revision26 had no issued execution grant, execution deadline, baseline, Running,
+Stopped, ECHILD or either ACK. No terminal/Watch/pull/upload/tail step was reached.
+The [bounded log](classified-prepare-negative.log) and
+[structured pins/clocks/history](classified-prepare-negative.json) preserve this
+distinct outcome. No matching pinned child process remained in the post-case
+process observation; this is not a substitute for subtree ECHILD proof.
+
+Read-only source inspection identified a concrete fixture assembly bug: the real
+Prepare transport requires meta version equal to its compiled
+`STATE_FORMAT_VERSION` as well as the actual migration33 terminal table/trigger.
+This frozen binary expects35; the historical fixture genuinely reaches33, so the
+readiness condition is false before the issuer. A separate ordinary current-store
+entrypoint must use actual Store startup and already-applied migrations. The
+runtime guard, historical32→33 helper behavior, default timers and Git profile
+remain unchanged. This failure supplies no accepted-output or production proof.

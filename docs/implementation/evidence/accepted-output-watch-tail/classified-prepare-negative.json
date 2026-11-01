@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "authority": "historical33 static diagnostic; no execution or accepted output proof",
+  "worker_source": "04b8f13",
+  "server_source": "4fc2360",
+  "documentation_source": "009b924",
+  "worker_sha256": "adbf3230fc6c9d19de9c29a744e8f8ee0eccaa5aa6bacbcadb50c512c3638b20",
+  "server_test_sha256": "d0d871db9cebe7e9e2127a5a0dc9f8efccb644c967b07d5b22e40225cfefdbbc",
+  "owners_sha256": {
+    "periodic_elf": "fdbfbdc8e8a906019303aeec2a386b43d3f5862404f3448623f653585500f912",
+    "aq_git": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "git": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+    "host": "96aaafcc295b45e95accf67d06f9a90d5a1caf9dad09ebdd09034f7cf8ad9044",
+    "tmux": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd"
+  },
+  "disk_available_before_case_bytes": 22717546496,
+  "default_git_import_minimum_available_bytes": 11005853696,
+  "default_git_profile_changed": false,
+  "timeouts_changed": false,
+  "rebuild_performed": false,
+  "case_seconds": 11.53,
+  "accept_responses": [
+    {
+      "conflict_class": null,
+      "request_started_at_ms": 1793572945233,
+      "response_completed_at_ms": 1793572945459,
+      "status": 200
+    },
+    {
+      "conflict_class": null,
+      "request_started_at_ms": 1793572945632,
+      "response_completed_at_ms": 1793572945739,
+      "status": 200
+    }
+  ],
+  "original_clocks": [
+    {
+      "budget_expires_at_ms": 1793572946409,
+      "budget_observed_at_ms": 1793572944409,
+      "context_expires_at_ms": 1793572974379,
+      "context_received_at_ms": 1793572944380,
+      "context_requested_at_ms": 1793572944379,
+      "maximum_observation_ms": 2000,
+      "node_expires_at_ms": 1793572974009,
+      "node_observed_at_ms": 1793572944009,
+      "offer_expires_at_ms": 1793572946409,
+      "offer_server_time_ms": 1793572944604,
+      "project_expires_at_ms": 1793572974387,
+      "proposal_published_at_ms": 1793572945087,
+      "ready_expires_at_ms": 1793572974378,
+      "ready_received_at_ms": 1793572944379,
+      "ready_requested_at_ms": 1793572944378,
+      "selection_expires_at_ms": 1793572946409,
+      "selection_now_ms": 1793572944409,
+      "source_expires_at_ms": 1793572974427,
+      "source_observed_at_ms": 1793572944427
+    }
+  ],
+  "worker_diagnostic": {
+    "baseline": false,
+    "execution_deadline_ns": null,
+    "http_statuses": [
+      [
+        "/v1/worker/profiled/register",
+        200,
+        75
+      ],
+      [
+        "/v1/worker/profiled/poll",
+        200,
+        745
+      ],
+      [
+        "/v1/worker/profiled-v2/proposal",
+        200,
+        214
+      ],
+      [
+        "/v1/worker/profiled-v2/accept",
+        200,
+        225
+      ],
+      [
+        "/v1/worker/profiled-v2/accept",
+        200,
+        106
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        113
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        169
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        94
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        92
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        98
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        99
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        95
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        46
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        93
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        117
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        129
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        211
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        68
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        120
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        62
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        115
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        64
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        133
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        68
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        127
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        53
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        101
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        98
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        95
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        93
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        95
+      ],
+      [
+        "/v1/worker/profiled/material",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        62
+      ],
+      [
+        "/v1/worker/profiled/source/06a90d59-20bc-50e2-9c30-51a81c04ad6b",
+        200,
+        112
+      ],
+      [
+        "/v1/worker/profiled/source/06a90d59-20bc-50e2-9c30-51a81c04ad6b/manifest",
+        200,
+        103
+      ],
+      [
+        "/v1/worker/profiled/source/06a90d59-20bc-50e2-9c30-51a81c04ad6b/bundle",
+        200,
+        98
+      ],
+      [
+        "/v1/worker/profiled-v2/prepare",
+        503,
+        4
+      ]
+    ],
+    "journal_revision": 26,
+    "kernel_wait_echild": null,
+    "phase": "refused",
+    "phase_accept_created_ns": 228067285006150,
+    "phase_accept_original_deadline_ns": 228068057779136,
+    "phase_accept_reservation_remaining_ms": 772,
+    "reservation_deadline_ns": 228068057779136,
+    "reserved_at_ns": 228067011450714,
+    "running": false,
+    "stage": "phase_execution_http",
+    "started_ack": false,
+    "stopped": false,
+    "stopped_ack": false
+  },
+  "server_diagnostic": {
+    "availability": [
+      {
+        "expires_at_ms": 1793572974078,
+        "received_at_ms": 1793572944078,
+        "sequence": 2,
+        "state": "available"
+      }
+    ],
+    "issued": [],
+    "server_now_ms": 1793572951631
+  },
+  "post_case_process_observation": "no matching pinned worker, git, host, synthetic harness or test process remained in ps; no subtree stop proof inferred",
+  "limits_of_inference": [
+    "prior409 not reproduced or explained",
+    "both acceptance requests200; no conflict classification present",
+    "source hydration completed; current format guard refuses historical33 before issuer",
+    "no terminal registration/Watch/pull/upload/tail or ACKs",
+    "no Codex/provider/newDDL/timeout or TTL change",
+    "no retry after this result"
+  ]
+}
