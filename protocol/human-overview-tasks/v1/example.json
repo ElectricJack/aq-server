@@ -1,0 +1,41 @@
+{
+  "contract": "human-overview-tasks-1",
+  "observed_at": "2026-11-01T00:00:00Z",
+  "scope": {
+    "project_id": null
+  },
+  "projects": [
+    {
+      "project": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "name": "Contract fixture",
+        "revision": "1",
+        "workspace_id": "00000000-0000-0000-0000-000000000002"
+      },
+      "observed_at": "2026-11-01T00:00:00Z",
+      "source_status": "available",
+      "coverage": "partial",
+      "count_accuracy": "lower_bound",
+      "task_counts": {
+        "draft": 0,
+        "active": 1,
+        "completed": 0,
+        "canceled": 0
+      },
+      "tasks": [
+        {
+          "id": "00000000-0000-0000-0000-000000000003",
+          "title": "Contract fixture: observed task",
+          "version": "1",
+          "content_revision": "1",
+          "task_state": "active",
+          "updated_at": "2026-11-01T00:00:00Z"
+        }
+      ],
+      "more_tasks": true,
+      "reason": null
+    }
+  ],
+  "next_after": null,
+  "coverage": "partial"
+}

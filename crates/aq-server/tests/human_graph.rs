@@ -47,10 +47,22 @@ async fn absent_graph_and_viewer_scope_do_not_fabricate_empty_success() {
         read(&app, &path, "owner@localhost").await.0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+    assert_eq!(
+        read(&app, "/api/human/overview/tasks", "owner@localhost")
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     let viewer = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'viewer@localhost','viewer','dev','viewer@localhost',now())").bind(viewer).execute(&f.db.pool().await).await.unwrap();
     assert_eq!(
         read(&app, &path, "viewer@localhost").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        read(&app, "/api/human/overview/tasks", "viewer@localhost")
+            .await
+            .0,
         StatusCode::FORBIDDEN
     );
     assert_eq!(
@@ -199,6 +211,92 @@ async fn actual_graph_tasks_dependencies_knowledge_revisions_and_cursor_scope() 
     .await;
     assert_eq!(status, StatusCode::OK, "{search}");
     assert_eq!(search["data"]["items"].as_array().unwrap().len(), 1);
+    let overview_path = format!("/api/human/overview/tasks?project_id={project}");
+    let (status, summary) = read(&app, &overview_path, "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["contract"], "human-overview-tasks-1");
+    let overview_schema: Value = serde_json::from_str(include_str!(
+        "../../../protocol/human-overview-tasks/v1/schema.json"
+    ))
+    .unwrap();
+    assert!(
+        aq_agent_api::check(&overview_schema, &overview_schema, &summary),
+        "overview schema: {summary}"
+    );
+
+    assert_eq!(summary["coverage"], "complete");
+    assert_eq!(
+        summary["projects"][0]["count_accuracy"],
+        "complete_observation"
+    );
+    assert_eq!(summary["projects"][0]["task_counts"]["active"], 2);
+    assert_eq!(summary["projects"][0]["task_counts"]["draft"], 0);
+    assert_eq!(summary["projects"][0]["tasks"].as_array().unwrap().len(), 2);
+    assert!(!summary.to_string().contains("must-not-escape"));
+    assert!(summary["projects"][0]["tasks"][0].get("body").is_none());
+    let (status, lower) = read(
+        &app,
+        &format!("{overview_path}&task_limit=1"),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{lower}");
+    assert_eq!(lower["coverage"], "partial");
+    assert_eq!(lower["projects"][0]["count_accuracy"], "lower_bound");
+    assert_eq!(lower["projects"][0]["task_counts"]["active"], 1);
+    assert_eq!(lower["projects"][0]["more_tasks"], true);
+    assert_eq!(
+        read(
+            &app,
+            "/api/human/overview/tasks?project_limit=9",
+            "owner@localhost"
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let other_project = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) SELECT $2,1,binding || jsonb_build_object('project_id',$2::text,'name','Unavailable fixture project','graph_adapter_reference','other.graph.adapter'),validated_at_ms,binding_observation FROM project_execution_bindings WHERE project_id=$1").bind(project).bind(other_project).execute(&f.db.pool().await).await.unwrap();
+    let (status, mixed) = read(&app, "/api/human/overview/tasks", "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{mixed}");
+    assert_eq!(mixed["coverage"], "partial");
+    assert!(
+        aq_agent_api::check(&overview_schema, &overview_schema, &mixed),
+        "partial overview schema: {mixed}"
+    );
+    let views = mixed["projects"].as_array().unwrap();
+    assert_eq!(views.len(), 2);
+    let good = views
+        .iter()
+        .find(|v| v["project"]["id"] == json!(project))
+        .unwrap();
+    assert_eq!(good["task_counts"]["active"], 2);
+    let missing = views
+        .iter()
+        .find(|v| v["project"]["id"] == json!(other_project))
+        .unwrap();
+    assert_eq!(missing["count_accuracy"], "unknown");
+    assert!(missing["task_counts"]["active"].is_null());
+    assert_eq!(missing["reason"], "unsupported_adapter");
+    let (status, bounded) = read(
+        &app,
+        "/api/human/overview/tasks?project_limit=1",
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bounded}");
+    assert_eq!(bounded["coverage"], "partial");
+    assert_eq!(bounded["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(bounded["next_after"], json!(project));
+    let (status, next) = read(
+        &app,
+        &format!("/api/human/overview/tasks?project_limit=1&after={project}"),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["projects"][0]["project"]["id"], json!(other_project));
+    assert!(next["next_after"].is_null());
     // Current binding changes invalidate old cursors, rather than silently changing workspaces.
     sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
         .bind(project)
@@ -264,6 +362,23 @@ async fn actual_graph_tasks_dependencies_knowledge_revisions_and_cursor_scope() 
     let race_app = human::routes(&f.state).with_state(f.state.clone());
     let path = format!("{base}/tasks/{root}");
     let pending = tokio::spawn(async move { read(&race_app, &path, "owner@localhost").await });
+    arrived.notified().await;
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(f.actor)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    release.notify_one();
+    let (status, body) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    sqlx::query("UPDATE users SET role='owner' WHERE id=$1")
+        .bind(f.actor)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    let overview_app = human::routes(&f.state).with_state(f.state.clone());
+    let pending =
+        tokio::spawn(async move { read(&overview_app, &overview_path, "owner@localhost").await });
     arrived.notified().await;
     sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
         .bind(f.actor)
