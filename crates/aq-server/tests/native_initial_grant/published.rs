@@ -649,3 +649,57 @@ async fn actual_initial_grant_reconciliation_returns_history_without_live_clock_
     let after:Value=sqlx::query_scalar("SELECT jsonb_build_object('hot',to_jsonb(h),'journal',to_jsonb(j),'receipts',(SELECT count(*) FROM profiled_execution_receipts)) FROM profiled_authority_hot h JOIN profiled_owner_journals j USING(attempt_id) WHERE attempt_id=$1").bind(c.request.binding.attempt_id).fetch_one(&c.case.env.env.pool).await.unwrap();
     assert_eq!(before, after);
 }
+
+#[tokio::test]
+async fn initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time() {
+    let mut case = native_offer::setup().await;
+    let original: Vec<u8> =
+        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
+            .bind(case.env.env.body["catalog_digest"].as_str().unwrap())
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
+    let mut artifact = catalog.artifact().clone();
+    for profile in &mut artifact.catalog.intelligence {
+        if let Some(policy) = profile.selection_policy.as_mut() {
+            policy.max_lineage_elapsed_ms = 5000;
+            profile.version = 3;
+        }
+    }
+    for profile in &mut artifact.catalog.agents {
+        profile.version = 3;
+        profile.intelligence = "engineering@3".into();
+    }
+    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
+    let app = aq_server::build_admin_router(case.env.env.state.clone());
+    let (status,body)=super::common::selection::call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
+    assert_eq!(status, 200, "{body}");
+    case.env.env.body["catalog_digest"] = json!(updated.digest());
+    case.env.env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
+    case.env.env.body["allowed_intelligence_profiles"] = json!(["engineering@3"]);
+    let (status,body)=super::common::selection::call(&app,&super::common::selection::path(),Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":case.env.env.body})),"owner@localhost").await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = native_offer::poll(&case).await;
+    assert_eq!(status, 200, "{body}");
+    let aq_admission::control::ControlReply::Poll(mut page) =
+        aq_admission::control::decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(page.offers.len(), 1);
+    let c = setup_from(case, page.offers.remove(0)).await;
+    assert!(c.offer.offered.offer.manifest.resources.wall_time_ms > 5000);
+    let first = grant(&c).await.unwrap();
+    assert_eq!(
+        first.execution_deadline_ms - first.original.clock.server_time_ms,
+        5000
+    );
+    assert!(first.original.grant.expires_at_ms <= first.execution_deadline_ms);
+    let replay = grant(&c).await.unwrap();
+    assert_eq!(first.execution_deadline_ms, replay.execution_deadline_ms);
+    assert_eq!(first.versions, replay.versions);
+}
+
+#[path = "published/material_receipts.rs"]
+mod material_receipts;

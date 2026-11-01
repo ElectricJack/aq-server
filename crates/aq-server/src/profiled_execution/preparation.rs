@@ -400,7 +400,7 @@ async fn admit(
     if lease_bytes > 8192 || response_bytes > 16384 {
         return Err(refused());
     }
-    let quota:(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0) FROM admission_material_leases").bind(auth.id()).fetch_one(&mut **tx).await.map_err(db)?;
+    let quota = retained_quota_locked(tx, auth.id()).await?;
     let incoming = lease_bytes
         .checked_add(response_bytes)
         .ok_or_else(refused)?;
@@ -448,4 +448,14 @@ async fn admit(
     .await?;
     sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'accept',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(aq_selection::digest(request).map_err(|_|AppError::Internal)?.as_str()).bind(serde_json::to_value(response).map_err(|_|AppError::Internal)?).execute(&mut **tx).await.map_err(db)?;
     Ok(plan)
+}
+
+/// Shared actual retained JSONB text budget for Accept and initial Grant.
+/// Caller holds the global native preparation quota advisory lock.
+pub(super) async fn retained_quota_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+) -> Result<(i64, i64, i64, i64), AppError> {
+    let quota: (i64,i64,i64,i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m ON m.lease_id=r.lease_id WHERE m.node_id=$1),0) FROM admission_material_leases").bind(node).fetch_one(&mut **tx).await.map_err(db)?;
+    Ok(quota)
 }

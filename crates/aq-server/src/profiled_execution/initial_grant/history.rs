@@ -33,6 +33,9 @@ pub(crate) async fn load_original_grant_locked(
     if original.body.grant.binding != *binding || original.body.grant.grant_id != grant_id {
         return Err(refused());
     }
+    for lease in &original.body.materials {
+        super::load_installed_receipt_locked(tx, lease, original.body.clock.server_time_ms).await?;
+    }
     let request_digest: Digest =
         serde_json::from_value(serde_json::Value::String(row.get("request_digest")))
             .map_err(|_| refused())?;

@@ -2,6 +2,7 @@
 //! from its digest. Git/private-file observations run between fenced SQL phases.
 mod graph;
 mod history;
+mod material_receipts;
 use super::{artifacts, journal, material, registration, source_exports};
 use crate::{
     AppState,
@@ -23,6 +24,7 @@ use aq_admission::{
     },
 };
 pub(crate) use history::{OriginalGrant, load_original_grant_locked};
+pub(crate) use material_receipts::load_installed_receipt_locked;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
@@ -105,6 +107,7 @@ struct Locked {
     decision: Decision,
     material: MaterialLease,
     ceiling: u64,
+    remaining_lineage_ms: u64,
 }
 async fn original(
     tx: &mut Transaction<'_, Postgres>,
@@ -315,6 +318,13 @@ async fn locked(
         return Err(refused());
     }
     let receipt = &request.materials[0];
+    if let Some(grant) = &old {
+        let retained =
+            load_installed_receipt_locked(tx, lease, grant.body.clock.server_time_ms).await?;
+        if !same(&retained, receipt)? {
+            return Err(refused());
+        }
+    }
     receipt
         .validate_against(lease, now(state)?)
         .map_err(|_| refused())?;
@@ -416,6 +426,8 @@ async fn locked(
         return Err(refused());
     }
     crate::intelligence::fence_current_registry(state, tx).await?;
+    let (_, remaining_lineage_ms) =
+        super::continuation_policy::load_locked(tx, &request.binding).await?;
     Ok(Locked {
         material: lease.clone(),
         offer,
@@ -426,6 +438,7 @@ async fn locked(
         original: old,
         decision,
         ceiling,
+        remaining_lineage_ms,
     })
 }
 /// Current authenticated runtime claims installed bytes; the daemon verifies
@@ -509,7 +522,16 @@ pub async fn prepare(
         let issued = now(state)?;
         graph.validate_for(&after.graph, issued)?;
         let deadline = issued
-            .checked_add(after.offer.offered.offer.manifest.resources.wall_time_ms)
+            .checked_add(
+                after
+                    .offer
+                    .offered
+                    .offer
+                    .manifest
+                    .resources
+                    .wall_time_ms
+                    .min(after.remaining_lineage_ms),
+            )
             .filter(|v| *v <= i64::MAX as u64)
             .ok_or_else(refused)?;
         let expiry = after.ceiling.min(deadline);
@@ -563,7 +585,11 @@ pub async fn prepare(
             .await
             .map_err(db)?;
         let incoming = u64::try_from(incoming).map_err(|_| refused())?;
-        let quota:(i64,i64)=sqlx::query_as("SELECT COALESCE(sum(octet_length(lease::text)),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts),0),COALESCE(sum(octet_length(lease::text)) FILTER(WHERE node_id=$1),0)+COALESCE((SELECT sum(octet_length(response::text)) FROM profiled_execution_receipts WHERE node_id=$1),0) FROM admission_material_leases").bind(auth.id()).fetch_one(&mut *tx).await.map_err(db)?;
+        // Insert/check under the same transaction before summing actual rows:
+        // a new installation is charged once, and exact existing rows once.
+        material_receipts::retain(&mut tx, &after.material, &request.materials[0], issued).await?;
+        let retained = super::preparation::retained_quota_locked(&mut tx, auth.id()).await?;
+        let quota = (retained.2, retained.3);
         if incoming > 16384
             || u64::try_from(quota.0)
                 .ok()
