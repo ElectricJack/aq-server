@@ -182,6 +182,16 @@ pub fn build_admin_router_with_dashboard(
 ) -> Router {
     build_admin_router_with_optional_dashboard(state, None, None, Some(dashboard))
 }
+/// Explicit embedding of configured policy owners and a verified static bundle.
+/// Uses the same human authorization, capability, CSRF and maintenance layers.
+pub fn build_admin_router_with_dashboard_and_policy_owners(
+    state: AppState,
+    playbooks: Option<Arc<playbooks::driver::Driver>>,
+    reviews: Option<Arc<reviews::Service>>,
+    dashboard: Arc<dashboard_assets::DashboardAssets>,
+) -> Router {
+    build_admin_router_with_optional_dashboard(state, playbooks, reviews, Some(dashboard))
+}
 fn build_admin_router_with_optional_dashboard(
     state: AppState,
     playbooks: Option<Arc<playbooks::driver::Driver>>,
