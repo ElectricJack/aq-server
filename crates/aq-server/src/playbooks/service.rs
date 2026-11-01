@@ -1471,3 +1471,6 @@ impl Service {
         Ok(rows.len())
     }
 }
+
+#[path = "inspection/admissions.rs"]
+mod inspection_admissions;
