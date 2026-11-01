@@ -60,7 +60,14 @@ struct Actual {
     seed: std::path::PathBuf,
     base: String,
 }
-async fn setup_actual() -> Actual {
+struct Unpublished {
+    case: Case,
+    process: tokio::process::Child,
+    socket: std::path::PathBuf,
+    seed: std::path::PathBuf,
+    base: String,
+}
+async fn setup_actual_unpublished() -> Unpublished {
     let mut case = native_offer::setup().await;
     let dir = case.env.env._dir.path();
     let seed = dir.join("actual-seed");
@@ -132,6 +139,22 @@ async fn setup_actual() -> Actual {
     aq_server::profiled_execution::policies::install(&case.env.env.state)
         .await
         .unwrap();
+    Unpublished {
+        case,
+        process,
+        socket,
+        seed,
+        base,
+    }
+}
+async fn setup_actual() -> Actual {
+    let Unpublished {
+        case,
+        process,
+        socket,
+        seed,
+        base,
+    } = setup_actual_unpublished().await;
     let (status, body) = native_offer::poll(&case).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
@@ -259,3 +282,6 @@ async fn actual_released_export_refuses_grant_without_erasing_preparation() {
     actual.process.kill().await.unwrap();
     actual.process.wait().await.unwrap();
 }
+
+#[path = "actual_git/worker_assembly.rs"]
+mod worker_assembly;
