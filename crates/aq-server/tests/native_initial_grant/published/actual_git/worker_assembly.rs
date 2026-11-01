@@ -23,27 +23,35 @@ async fn read_frame(reader: &mut BufReader<tokio::process::ChildStdout>) -> Valu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned native worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_downloads_installs_hydrates_and_prepares_against_real_daemon() {
-    run_worker(false, false).await;
+    run_worker(false, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned phase-capable worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_durably_accepts_new_phase_and_replays_after_proposal_expiry() {
-    run_worker(true, false).await;
+    run_worker(true, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned phase-input worker smoke binary and actual aq-git/Git"]
 async fn actual_worker_prepares_phase_inputs_after_proposal_expiry() {
-    run_worker(true, true).await;
+    run_worker(true, true, false).await;
 }
-async fn run_worker(use_phase: bool, prepare_phase_inputs: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires explicit pinned phase execution worker and actual aq-git/Git"]
+async fn actual_worker_receives_durable_phase_execution_from_actual_issuer() {
+    run_worker(true, true, true).await;
+}
+async fn run_worker(use_phase: bool, prepare_phase_inputs: bool, execute_phase: bool) {
     let mut a = setup_actual_unpublished().await;
     let case = &mut a.case;
-    let phase_config = if use_phase {
-        let mut config = phase::configure(case).await;
+    let (phase_config, inventory_qualification) = if use_phase {
+        let (mut config, inventory_qualification) = phase::configure(case, execute_phase).await;
         config["prepare_inputs"] = json!(prepare_phase_inputs);
-        Some(config)
+        if execute_phase {
+            config["prepare_execution"] = json!(true);
+        }
+        (Some(config), inventory_qualification)
     } else {
-        None
+        (None, None)
     };
     let dir = case.env.env._dir.path();
     let worker_root = dir.join("assembly-worker");
@@ -86,27 +94,29 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool) {
     let address = listener.local_addr().unwrap();
     let http_statuses = Arc::new(std::sync::Mutex::new(Vec::<(String, u16, u128)>::new()));
     let observed = http_statuses.clone();
-    let app = aq_server::build_worker_router(case.env.env.state.clone()).layer(
-        axum::middleware::from_fn(
-            move |request: axum::extract::Request, next: axum::middleware::Next| {
-                let observed = observed.clone();
-                async move {
-                    let path = request.uri().path().to_owned();
-                    let started = std::time::Instant::now();
-                    let response = next.run(request).await;
-                    let mut values = observed.lock().unwrap();
-                    if values.len() < 160 {
-                        values.push((
-                            path,
-                            response.status().as_u16(),
-                            started.elapsed().as_millis(),
-                        ));
-                    }
-                    response
+    let mut app = aq_server::build_worker_router(case.env.env.state.clone());
+    if execute_phase {
+        app = app.merge(phase::execution_routes(case.env.env.state.clone()));
+    }
+    let app = app.layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let observed = observed.clone();
+            async move {
+                let path = request.uri().path().to_owned();
+                let started = std::time::Instant::now();
+                let response = next.run(request).await;
+                let mut values = observed.lock().unwrap();
+                if values.len() < 160 {
+                    values.push((
+                        path,
+                        response.status().as_u16(),
+                        started.elapsed().as_millis(),
+                    ));
                 }
-            },
-        ),
-    );
+                response
+            }
+        },
+    ));
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -144,26 +154,34 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool) {
     let identity: aq_admission::transport::WorkerIdentity =
         serde_json::from_value(ready["identity"].clone()).unwrap();
     assert_eq!(identity.node_id, case.env.env.node);
-    // A new fixture observation for the real process's newly created boot.
-    // No offer/selection exists yet and no sealed observation is retimed.
-    let mut snapshot = case.env.input.node.clone();
-    snapshot.target = aq_selection::ExecutionTarget::Worker {
-        node_id: identity.node_id,
-        boot_id: identity.boot_id,
-    };
-    let now = chrono::Utc::now().timestamp_millis() as u64;
-    snapshot.revision += 1;
-    snapshot.observed_at_ms = now;
-    snapshot.expires_at_ms = now + 30000;
-    for c in &mut snapshot.credential_bindings {
-        c.observed_at_ms = now;
-        c.expires_at_ms = now + 30000;
+    if execute_phase {
+        phase::record_current_inventory(case, &identity, inventory_qualification.as_ref().unwrap())
+            .await;
+        phase::record_operator_availability(case).await;
+    } else {
+        // A new fixture observation for the real process's newly created boot.
+        // No offer/selection exists yet and no sealed observation is retimed.
+        let mut snapshot = case.env.input.node.clone();
+        snapshot.target = aq_selection::ExecutionTarget::Worker {
+            node_id: identity.node_id,
+            boot_id: identity.boot_id,
+        };
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        snapshot.revision += 1;
+        snapshot.observed_at_ms = now;
+        snapshot.expires_at_ms = now + 30000;
+        for c in &mut snapshot.credential_bindings {
+            c.observed_at_ms = now;
+            c.expires_at_ms = now + 30000;
+        }
+        sqlx::query("UPDATE intelligence_node_snapshots SET boot_id=$2,sequence=1,revision=revision+1,snapshot=$3 WHERE node_id=$1")
+            .bind(identity.node_id).bind(identity.boot_id).bind(json!(snapshot)).execute(&case.env.env.pool).await.unwrap();
     }
-    sqlx::query("UPDATE intelligence_node_snapshots SET boot_id=$2,sequence=1,revision=revision+1,snapshot=$3 WHERE node_id=$1")
-        .bind(identity.node_id).bind(identity.boot_id).bind(json!(snapshot)).execute(&case.env.env.pool).await.unwrap();
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
     let result = read_frame(&mut output).await;
-    let expected_phase = if prepare_phase_inputs {
+    let expected_phase = if execute_phase {
+        "granted_phase_execution"
+    } else if prepare_phase_inputs {
         "prepared_phase_inputs"
     } else if use_phase {
         "accepted_preparation"
@@ -171,6 +189,9 @@ async fn run_worker(use_phase: bool, prepare_phase_inputs: bool) {
         "granted"
     };
     if result["phase"] != expected_phase {
+        if execute_phase {
+            phase::diagnostics(case).await;
+        }
         // A rejected delivery does not imply that the server issued no grant.
         // Retain only bounded historical metadata, never material or credentials.
         let issued: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('operation_id',r.operation_id,'request_digest',r.request_digest,'grant_id',r.response#>'{body,grant,grant_id}','binding',r.response#>'{body,grant,binding}','versions',r.response->'versions','original_clock',r.response#>'{body,clock}','grant_expiry',r.response#>'{body,grant,expires_at_ms}','execution_deadline_ms',r.response->'execution_deadline_ms','holds_task',a.holds_task,'hot_status',h.state->'status') FROM profiled_execution_receipts r JOIN execution_attempts a ON a.attempt_id::text=r.response#>>'{body,grant,binding,attempt_id}' JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id WHERE r.node_id=$1 AND r.kind='prepare' AND r.response->>'kind'='grant' ORDER BY r.operation_id LIMIT 2")
