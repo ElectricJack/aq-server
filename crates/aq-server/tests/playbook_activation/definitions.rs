@@ -4,6 +4,9 @@ use axum::{Router, body::Body, http::Request};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+#[path = "../../examples/support/development_definition.rs"]
+mod development_definition;
+
 async fn read(app: &Router, email: &str, query: &str) -> (u16, Value) {
     let response = app
         .clone()
@@ -275,4 +278,130 @@ async fn optional_browser(s: &Setup, runtime: &aq_server::playbooks::runtime::Ru
             .unwrap()
             .success()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inert_development_startup_and_quanta_create_no_work_or_delivery() {
+    let mut s = setup().await;
+    let artifact = development_definition::artifact();
+    assert!(artifact.content.registry.commands.is_empty());
+    assert!(artifact.content.playbook.required_capabilities.is_empty());
+    assert!(artifact.content.playbook.triggers.is_empty());
+    private(&s.artifact_path, serde_json::to_vec(&artifact).unwrap());
+    // The finite grant schema requires one capability and recipient; this
+    // read-only capability is unused by the command-free Return definition.
+    s.text = s
+        .text
+        .replace(
+            "capabilities=[\"message.send\"]",
+            "capabilities=[\"operation.get\"]",
+        )
+        .replace("drive_interval_ms=250", "drive_interval_ms=60000");
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let pool = s.f.db.pool().await;
+    let tables = [
+        "execution_attempts",
+        "mailbox_messages",
+        "mailbox_operations",
+        "notification_messages",
+        "notification_deliveries",
+        "human_decision_requests",
+        "agent_graph_operations",
+    ];
+    let mut before = Vec::new();
+    for table in tables {
+        before.push(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+        );
+    }
+    let runtime = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match runtime.driver.quantum().await {
+                    Err(Error::Overloaded) => tokio::task::yield_now().await,
+                    result => break result,
+                }
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["admissions_checked"], 0);
+        assert_eq!(result["events_checked"], 0);
+        assert_eq!(result["tick"]["transitions"], 0);
+    }
+    let runs = runtime
+        .driver
+        .inspect_runs(s.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert!(runs.items.is_empty());
+    assert!(
+        runtime
+            .driver
+            .service
+            .inspect_admissions(s.f.actor, None, 25)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    for table in ["playbook_admissions", "playbook_effects", "playbook_outbox"] {
+        let count: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} WHERE namespace_id=$1"
+        ))
+        .bind(s.namespace)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0, "unexpected work in {table}");
+    }
+    for (table, expected) in tables.into_iter().zip(before) {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            expected,
+            "unexpected change to {table}"
+        );
+    }
+    let binding = runtime.driver.inspect_binding("mail".into()).await.unwrap();
+    assert_eq!(binding["artifact"], artifact.digest);
+    assert_eq!(binding["revision"], 1);
+    let page = runtime
+        .driver
+        .inspect_loaded_definitions(s.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].name, "development-inspection-only");
+    let app = aq_server::build_admin_router_with_policy_owners(
+        s.f.state.clone(),
+        Some(runtime.driver.clone()),
+        Some(runtime.reviews.clone()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/api/reviews/decisions")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let inbox: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(inbox["items"], json!([]));
+    runtime.shutdown().await.unwrap();
 }
