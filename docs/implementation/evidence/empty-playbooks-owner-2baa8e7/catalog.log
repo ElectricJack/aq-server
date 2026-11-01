@@ -9,4 +9,3 @@ test catalog::actual_explicit_empty_owner_has_current_catalog_without_grants_or_
 test catalog::held_catalog_read_pins_original_owner_binding_and_authorization_version ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 1.89s
-

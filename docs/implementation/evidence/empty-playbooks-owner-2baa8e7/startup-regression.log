@@ -7,4 +7,3 @@ test definitions::loaded_definitions_refuse_foreign_scope_roles_unknown_query_an
 test definitions::actual_startup_definitions_are_redacted_historical_and_do_not_read_engine_snapshot ... ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.19s
-
