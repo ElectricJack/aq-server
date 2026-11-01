@@ -119,6 +119,7 @@ async fn authorized_review_inbox_pages_actual_owner_records_and_binds_cursors() 
     let response: aq_server::reviews::InboxPage = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(response.api_version, "review-inbox-1");
     assert_eq!(response.items.len(), 2);
+    optional_browser(&env, first.items[0].decision_id).await;
     sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
         .bind(f.actor)
         .execute(&f.db.pool().await)
@@ -126,4 +127,46 @@ async fn authorized_review_inbox_pages_actual_owner_records_and_binds_cursors() 
         .unwrap();
     assert!(env.service.inbox(f.actor, &query()).await.is_err());
     env.peer.abort();
+}
+
+/// Explicit local-development qualification only. Uses the persisted fixture's
+/// actual protected owner and the supplied verified production bundle. No mock
+/// interception, fabricated browser responses or browser decision mutation.
+async fn optional_browser(env: &ReviewEnv, decision: Uuid) {
+    let Some(script) = std::env::var_os("AQ_TEST_REVIEW_BROWSER_SCRIPT") else {
+        assert!(std::env::var_os("AQ_TEST_REVIEW_DASHBOARD_DIR").is_none());
+        return;
+    };
+    let bundle = std::env::var_os("AQ_TEST_REVIEW_DASHBOARD_DIR")
+        .expect("explicit browser probe requires production dashboard bundle");
+    let assets =
+        aq_server::dashboard_assets::DashboardAssets::load(std::path::Path::new(&bundle)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mut state = env.f.state.clone();
+    let mut config = (*state.config).clone();
+    config.server.public_origin = origin.clone();
+    state.config = Arc::new(config);
+    let router = aq_server::build_admin_router_with_dashboard_and_policy_owners(
+        state,
+        None,
+        Some(Arc::new(env.service.clone())),
+        Arc::new(assets),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut probe = tokio::process::Command::new("node")
+        .arg(script)
+        .env("AQ_LIVE_URL", origin)
+        .env("AQ_LIVE_DECISION_ID", decision.to_string())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(25), probe.wait()).await;
+    server.abort();
+    assert!(
+        result
+            .expect("bounded actual review browser probe")
+            .unwrap()
+            .success()
+    );
 }

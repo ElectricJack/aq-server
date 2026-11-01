@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "origin": "http://127.0.0.1:37155/",
+  "decision_id": "691235d0-f206-4ca8-9114-844fc25820c6",
+  "actual_inbox_items": 3,
+  "exact_criterion": true,
+  "source_object": true,
+  "desktop_and_mobile": true,
+  "mutations": 0,
+  "screenshots": "/tmp/aq-decisions-browser-evidence"
+}
