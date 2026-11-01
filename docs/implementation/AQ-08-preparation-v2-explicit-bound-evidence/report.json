@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "source_revision": "3cf5fa2dddda1987d35aa103b3e67a1d8fdcf33c",
+  "base_revision": "b97498c",
+  "passed": 74,
+  "phase_passed": 16,
+  "ignored": 0,
+  "source_files": [
+    {
+      "path": "crates/aq-admission/PREPARATION_V2.md",
+      "bytes": 3073,
+      "sha256": "5da9e9fe35efeefc34d1286a55cdb0dfbeb59f4c78184f4392505b05417def38"
+    },
+    {
+      "path": "crates/aq-admission/artifacts/preparation-v2.contract.json",
+      "bytes": 498,
+      "sha256": "5daa8b4fa8e3df3918857e52c77769f74b03e4ce8c4371ff1cc2a5a8c9dbcda2"
+    },
+    {
+      "path": "crates/aq-admission/artifacts/preparation-v2.fixture.json",
+      "bytes": 218119,
+      "sha256": "62ea2abb887a0368993a9c062399616e06cf4c9ed15fe4a3aad2f3204aedcb7f"
+    },
+    {
+      "path": "crates/aq-admission/artifacts/preparation-v2.python-vectors.json",
+      "bytes": 1410,
+      "sha256": "1e222a8d6e83e33effb792ab0d20c5c4a933a7302bdae9fb5a62aab6b140630b"
+    },
+    {
+      "path": "crates/aq-admission/artifacts/preparation-v2.schema.json",
+      "bytes": 67369,
+      "sha256": "727d9eed109f649dedf77f99f4fd1e5961062002c75df0e99677f041b45f83bc"
+    },
+    {
+      "path": "crates/aq-admission/src/preparation_v2.rs",
+      "bytes": 34505,
+      "sha256": "de9c38d309e38fe74e301072da04924fb8a1ab0f0396d88d4900224fce75a508"
+    },
+    {
+      "path": "crates/aq-admission/tests/preparation_v2.rs",
+      "bytes": 13889,
+      "sha256": "784da396a71e6e8fbfa9ebf3fab1250920a526e657cb3f23ee77a5336eaea045"
+    },
+    {
+      "path": "crates/aq-admission/tests/preparation_v2_common.rs",
+      "bytes": 14812,
+      "sha256": "2ce1dfce55f04bf4f21de90177ed813bf3a61bdaec66abb64eeed2270851b80d"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/AQ-08-preparation-v2-explicit-bound-evidence/aq-preparation-v2-explicit-phase-tests.log",
+      "bytes": 10705,
+      "sha256": "ac4f07fe11bd63953e96a773f08fed781bf14333138713005d4bd636dbc4f58f"
+    },
+    {
+      "path": "docs/implementation/AQ-08-preparation-v2-explicit-bound-evidence/aq-preparation-v2-explicit-phase-focused.log",
+      "bytes": 1552,
+      "sha256": "b30aa6568970539540ba84a6ccc34336bb11e83e9cfd600fec9f25b5b18c2c52"
+    },
+    {
+      "path": "docs/implementation/AQ-08-preparation-v2-explicit-bound-evidence/aq-preparation-v2-explicit-phase-clippy.log",
+      "bytes": 159,
+      "sha256": "c9b3b63d2c8b9a84404083393dfbbe5aaff76ea40b41fa21e7c610d4c0c701bf"
+    }
+  ],
+  "boundary": "Pure contract only; joint archive and actual owners remain pending. Explicit new phase bound is independent of original proposal remaining time. Wrong preliminary2b766bb is not an adopted/publication candidate. Full tests ran before final focused test-only refinement; focused16 tests reran against final source. Strict lint/Python vectors passed; final joint clean qualification remains required.",
+  "commands": [
+    "CARGO_TARGET_DIR=/tmp/aq-preparation-v2-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p aq-admission --locked --offline",
+    "same environment cargo test -p aq-admission --test preparation_v2 --locked --offline",
+    "same environment cargo clippy -p aq-admission --all-targets --locked --offline -- -D warnings",
+    "python3 crates/aq-admission/tools/preparation_v2_vectors.py --check"
+  ]
+}

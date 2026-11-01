@@ -1,0 +1,24 @@
+   Compiling aq-admission v0.1.9 (/tmp/aq-accepted-preparation-v2/crates/aq-admission)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+     Running tests/preparation_v2.rs (/tmp/aq-preparation-v2-target/debug/deps/preparation_v2-7c1559b3bbf62b15)
+
+running 16 tests
+test exact_qualified_018_source_and_artifacts_are_preserved ... ok
+test exact_contract_and_complete_unique_features_are_mandatory ... ok
+test v2_decoder_never_falls_back_to_legacy_or_different_schema ... ok
+test original_artifact_retention_caps_accepted_preparation ... ok
+test structural_claims_are_not_authenticated_owner_truth ... ok
+test serialization_and_decode_are_bounded_and_unknown_fields_refuse ... ok
+test exact_unique_artifacts_and_linked_transfer_roles_refuse_substitution ... ok
+test mandatory_owner_fact_set_hash_and_lifetime_are_bounded ... ok
+test grant_issuance_must_be_inside_phase_and_current_budget ... ok
+test cold_preparation_and_execution_are_distinct_immutable_phases ... ok
+test historical_receipt_does_not_become_live_from_expired_delivery ... ok
+test accepted_phase_requires_explicit_new_worker_duration_bound ... ok
+test acceptance_cannot_change_hold_request_or_retime_expired_proposal ... ok
+test independent_execution_replay_never_extends_or_revives_old_sample ... ok
+test generated_artifacts_and_independent_canonical_vectors_match ... ok
+test changed_current_choice_context_source_and_unknown_facts_deny_initial_confirmation ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
