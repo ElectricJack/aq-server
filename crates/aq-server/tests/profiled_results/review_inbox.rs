@@ -31,6 +31,21 @@ async fn authorized_review_inbox_pages_actual_owner_records_and_binds_cursors() 
     }
     let first = env.service.inbox(f.actor, &query()).await.unwrap();
     assert_eq!(first.items.len(), 1);
+    let detail = env
+        .service
+        .inspect(f.actor, first.items[0].decision_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        detail["recorded_result"]["report_id"],
+        json!(env.report.report_id)
+    );
+    assert!(
+        !detail["acceptance_criteria"][0]["text"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
     let token = first.next_cursor.clone().unwrap();
     assert!(!token.contains(&first.items[0].decision_id.to_string()));
     f.time.store((NOW + 30000) as i64, Ordering::SeqCst);

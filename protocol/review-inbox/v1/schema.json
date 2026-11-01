@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "InboxItem": {
+      "additionalProperties": false,
+      "properties": {
+        "current_report_head": {
+          "type": "boolean"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "decision_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eligible_owner": {
+          "type": "boolean"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "project_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "report_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "state": {
+          "pattern": "^(pending|answered|expired|cancelled)$",
+          "type": "string"
+        },
+        "task_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "decision_revision",
+        "state",
+        "expires_at_ms",
+        "project_id",
+        "task_id",
+        "report_id",
+        "current_report_head",
+        "eligible_owner"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "pattern": "^review-inbox-1$",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/InboxItem"
+      },
+      "maxItems": 50,
+      "type": "array"
+    },
+    "next_cursor": {
+      "maxLength": 4096,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sampled": {
+      "description": "Pages sample current authorized rows; they are not a transactional snapshot.",
+      "type": "boolean"
+    },
+    "server_time_ms": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "api_version",
+    "server_time_ms",
+    "items",
+    "sampled"
+  ],
+  "title": "InboxPage",
+  "type": "object"
+}
