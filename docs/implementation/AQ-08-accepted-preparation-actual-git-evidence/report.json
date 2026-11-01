@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "source_revision": "0c74bf48473dd5efc06f740fe7fe31b81480b967",
+  "production_owner_revision": "9121809",
+  "phase_test_revision": "940b061",
+  "state_format_version": 28,
+  "migration_030": "unregistered candidate manually applied; ordered029->030 not qualified",
+  "scope": "Actual external aq-git and Git with actual server source owners and HTTP router; synthetic Graph, runtime/resource journal and installation claims, no worker harness or execution Grant",
+  "passed": 1,
+  "other_ignored_cases_not_run": 3,
+  "trace": {
+    "accepted_expires_at_ms": 1793501953173,
+    "accepted_issued_at_ms": 1793501923302,
+    "bundle_digest": "01a8316b3b8643290efa81c701017dca209dcdf094d773fdf7107cabcfedac67",
+    "export_retirement_refused_reads": true,
+    "grant": null,
+    "historical_source_expires_at_ms": 1793501952814,
+    "historical_source_observed_at_ms": 1793501922814,
+    "holds_task": true,
+    "installed_receipts": 0,
+    "manifest_digest": "1692a3a4655b2f359a84be04fa0fbed1d514dd8f70a5f0f5943c8c53ab8e0399",
+    "original_base": "c8ed8ebeba9f490c588612ed041f30b2e261ba17",
+    "proposal_clock": {
+      "expires_at_ms": 1793501924796,
+      "server_time_ms": 1793501922961,
+      "valid_for_ms": 1835
+    },
+    "read_started_at_ms": 1793501926030,
+    "source_profile": {
+      "digest": "e03a140297fd263be0e524f7ade813ddc819a0f14ba0b56449d4b6c071cd3ca5",
+      "id": "synthetic-retained-reader-profile-no-hydration",
+      "version": "1"
+    },
+    "transfer_id": "3eceb182-2e0c-5eed-91fd-c65e23dc5bcb"
+  },
+  "clock": "Actual chrono Utc now throughout; original proposal/source clocks not changed; real wait past proposal expiry. Original source eligibility history had not expired during source reads, and no new eligibility receipt was fabricated.",
+  "git": {
+    "executable": "/tmp/aq-wrk08-git-pin/aq-git",
+    "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "producer_revision": "2035654eeda57ded8880ea3f518ff0b4d324fa49",
+    "git": "/usr/bin/git",
+    "git_version": "2.43.0",
+    "limits": "unchanged actual Git builtin defaults; existing server fixture explicitly bounds source staging/bundle; source profile is synthetic reader-only, not worker hydration qualification"
+  },
+  "commands": [
+    "AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git DATABASE_URL=<scripts/test-db disposableURL> CARGO_TARGET_DIR=/tmp/aq-phase-owner-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p aq-server --test native_initial_grant published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease --locked --offline -- --exact --ignored --test-threads=2 --nocapture",
+    "CARGO_TARGET_DIR=/tmp/aq-phase-owner-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --test native_initial_grant --all-features --locked --offline -- -D warnings",
+    "cargo fmt --package aq-server --check",
+    "git diff --check"
+  ],
+  "assertions": [
+    "Timely original proposal admission; independent accepted no-launch lease",
+    "Same immutable transfer manifest before and after proposal expiry",
+    "Actual retained manifest and bundle ranges match exact transfer digests/base; real Git bundle verify",
+    "Original SourceAdmission/manifest/resource source profile unchanged; exact accepted replay",
+    "Complete phase Prepare still refused by legacy execution issuer; no install receipt or Grant",
+    "Actual export retirement refuses subsequent reads while accepted lease still live; task remains held"
+  ],
+  "limitations": [
+    "No ordered030 schema, production runtime qualification or activation",
+    "No fresh v2 execution confirmation/Grant, worker phase journal/input adoption, renewal/closure or provider/host call",
+    "Does not qualify source retrieval after the historical SourceAdmission expiry; specifically qualifies original proposal expiry",
+    "No latency/cold-workload/PB04 closure"
+  ],
+  "source_files": [
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git.rs",
+      "bytes": 10966,
+      "sha256": "d5bb783af350c0412db023d4fb188ed668bce693036027c84d3736a6b6fc5216"
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs",
+      "bytes": 13284,
+      "sha256": "263f1be03809c356075daa26bfb6270bd495d8425fd1da62a0320cec314d9f84"
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-git1.log",
+      "bytes": 3128,
+      "sha256": "878ea5e219d4a4935ae67b736766b32139fbb2a15e92fbd8e6a6939cf1160883",
+      "result": "superseded compile failure: include path and missing sqlx Row trait"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-git2.log",
+      "bytes": 514,
+      "sha256": "78ff12a23ac3d68c190248f99e81829dcadb137585cb41515253288c51c0d87b",
+      "result": "first actual-clock pinned Git pass; before trace-only instrumentation"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-git3.log",
+      "bytes": 1384,
+      "sha256": "d52b136d8e3c39c13f331047c0670bec4840854e650ea2cef31a00d76e37bd75",
+      "result": "final actual-clock pinned Git pass4.80s with sanitized trace"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-clippy.log",
+      "bytes": 156,
+      "sha256": "35735c64fc96f7e5c16a3049f90c0df0cf4c59eb14f649fe0986c2059605bcae",
+      "result": "focused all-feature strict lint passed1.51s"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "package format passed"
+    },
+    {
+      "path": "docs/implementation/AQ-08-accepted-preparation-actual-git-evidence/aq-phase-owner-actual-v2-diff.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "diff whitespace passed"
+    }
+  ]
+}

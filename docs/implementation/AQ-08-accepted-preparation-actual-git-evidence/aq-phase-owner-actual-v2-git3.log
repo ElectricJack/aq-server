@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/native_initial_grant.rs (/tmp/aq-phase-owner-target/debug/deps/native_initial_grant-1904c9301f88acce)
+
+running 1 test
+accepted_v2_actual_git {"accepted_expires_at_ms":1793501953173,"accepted_issued_at_ms":1793501923302,"bundle_digest":"01a8316b3b8643290efa81c701017dca209dcdf094d773fdf7107cabcfedac67","export_retirement_refused_reads":true,"grant":null,"historical_source_expires_at_ms":1793501952814,"historical_source_observed_at_ms":1793501922814,"holds_task":true,"installed_receipts":0,"manifest_digest":"1692a3a4655b2f359a84be04fa0fbed1d514dd8f70a5f0f5943c8c53ab8e0399","original_base":"c8ed8ebeba9f490c588612ed041f30b2e261ba17","proposal_clock":{"expires_at_ms":1793501924796,"server_time_ms":1793501922961,"valid_for_ms":1835},"read_started_at_ms":1793501926030,"source_profile":{"digest":"e03a140297fd263be0e524f7ade813ddc819a0f14ba0b56449d4b6c071cd3ca5","id":"synthetic-retained-reader-profile-no-hydration","version":"1"},"transfer_id":"3eceb182-2e0c-5eed-91fd-c65e23dc5bcb"}
+test published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 4.80s
+

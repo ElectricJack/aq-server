@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.55s
+     Running tests/native_initial_grant.rs (/tmp/aq-phase-owner-target/debug/deps/native_initial_grant-1904c9301f88acce)
+
+running 1 test
+test published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 4.84s
+

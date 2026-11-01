@@ -1,0 +1,69 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-accepted-preparation-owner/crates/aq-server)
+error: couldn't read `crates/aq-server/tests/native_initial_grant/published/actual_git/../../../../../migrations/0030_accepted_preparation_v2.sql`: No such file or directory (os error 2)
+  --> crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs:61:19
+   |
+61 |       sqlx::raw_sql(include_str!(
+   |  ___________________^
+62 | |         "../../../../../migrations/0030_accepted_preparation_v2.sql"
+63 | |     ))
+   | |_____^
+   |
+help: there is a file with the same name in a different directory
+   |
+62 -         "../../../../../migrations/0030_accepted_preparation_v2.sql"
+62 +         "../../../../migrations/0030_accepted_preparation_v2.sql"
+   |
+
+error[E0599]: no method named `get` found for struct `PgRow` in the current scope
+   --> crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs:319:17
+    |
+319 |     assert!(row.get::<bool, _>("holds_task"));
+    |                 ^^^ method not found in `PgRow`
+    |
+   ::: /home/jkern/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.6/src/row.rs:68:8
+    |
+ 68 |     fn get<'r, T, I>(&'r self, index: I) -> T
+    |        --- the method is available for `PgRow` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Row` which provides `get` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use sqlx::Row;
+    |
+
+error[E0599]: no method named `get` found for struct `PgRow` in the current scope
+   --> crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs:320:17
+    |
+320 |     assert!(row.get::<Value, _>("grant").is_null());
+    |                 ^^^ method not found in `PgRow`
+    |
+   ::: /home/jkern/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.6/src/row.rs:68:8
+    |
+ 68 |     fn get<'r, T, I>(&'r self, index: I) -> T
+    |        --- the method is available for `PgRow` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Row` which provides `get` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use sqlx::Row;
+    |
+
+error[E0599]: no method named `get` found for struct `PgRow` in the current scope
+   --> crates/aq-server/tests/native_initial_grant/published/actual_git/accepted_v2.rs:321:20
+    |
+321 |     assert_eq!(row.get::<i64, _>("installations"), 0);
+    |                    ^^^ method not found in `PgRow`
+    |
+   ::: /home/jkern/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.6/src/row.rs:68:8
+    |
+ 68 |     fn get<'r, T, I>(&'r self, index: I) -> T
+    |        --- the method is available for `PgRow` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Row` which provides `get` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use sqlx::Row;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aq-server` (test "native_initial_grant") due to 4 previous errors
