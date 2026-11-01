@@ -182,6 +182,11 @@ pub(super) async fn bootstrap(
             "Human Graph inspection requires an owner account and configured Graph runtime",
         ),
         capability(
+            "human.overview.tasks.read",
+            graph,
+            "Recorded task summaries require an owner account and configured Graph runtime",
+        ),
+        capability(
             "tasks.read",
             graph,
             "Task inspection requires an owner account and configured Graph runtime",

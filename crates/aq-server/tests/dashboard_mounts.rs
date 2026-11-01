@@ -52,6 +52,7 @@ async fn mounted_routes_and_absent_owners_have_granular_truthful_capabilities() 
     assert_eq!(status, StatusCode::OK, "{b}");
     for name in [
         "human.graph.read",
+        "human.overview.tasks.read",
         "tasks.read",
         "knowledge.read",
         "search.read",
@@ -115,6 +116,7 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
     let (_, standalone_bootstrap) = read(&standalone, "/api/v1/bootstrap", "owner@localhost").await;
     for name in [
         "human.graph.read",
+        "human.overview.tasks.read",
         "tasks.read",
         "knowledge.read",
         "search.read",
@@ -145,6 +147,7 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
     assert_eq!(status, StatusCode::OK, "{b}");
     for name in [
         "human.graph.read",
+        "human.overview.tasks.read",
         "tasks.read",
         "knowledge.read",
         "search.read",
@@ -166,6 +169,7 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
     let (_, b) = read(&app, "/api/v1/bootstrap", "viewer@localhost").await;
     for name in [
         "human.graph.read",
+        "human.overview.tasks.read",
         "tasks.read",
         "knowledge.read",
         "search.read",
