@@ -84,7 +84,14 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Json<Docume
             "phase terminal storage is not ready".into(),
         ));
     }
-    Ok(Json(Document::ExecutionDelivery(Box::new(
-        super::prepare(state, &auth, &q, nonce).await?,
-    ))))
+    let document =
+        Document::ExecutionDelivery(Box::new(super::prepare(state, &auth, &q, nonce).await?));
+    // The issuer has committed; a response-envelope failure is ambiguous to the
+    // caller and must preserve its operation identity for history/retry.
+    document.validate_shape().map_err(|_| {
+        AppError::IdentityUnavailable(
+            "phase Prepare outcome unknown: response envelope unavailable".into(),
+        )
+    })?;
+    Ok(Json(document))
 }
