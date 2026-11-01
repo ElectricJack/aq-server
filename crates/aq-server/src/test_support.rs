@@ -12,8 +12,12 @@ tokio::task_local! { static STATE32_STORE: (); }
 /// Scope a fixture to a real frozen32 migration prefix. It does not relabel a
 /// database and does not alter normal Store startup or inherited spawned tasks.
 #[cfg(feature = "test-support")]
-pub async fn with_state32_store<F: std::future::Future>(future: F) -> F::Output {
-    STATE32_STORE.scope((), future).await
+pub fn with_state32_store<F: std::future::Future>(
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    // Keep large async fixture state on the heap rather than embedding another
+    // complete copy in this wrapper's async state machine.
+    STATE32_STORE.scope((), Box::pin(future))
 }
 /// Expected actual fixture format; ordinary fixtures always use current Store.
 pub fn fixture_store_state_version() -> u32 {

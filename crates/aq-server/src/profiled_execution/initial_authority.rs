@@ -5,7 +5,8 @@
 //! initial execution receipt, even if a hot row happens to contain a Grant.
 use super::{accepted_preparation, initial_grant};
 use crate::error::AppError;
-use aq_admission::LaunchBinding;
+use aq_admission::{Digest, LaunchBinding};
+use aq_session_protocol::ProfiledGrant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -13,6 +14,55 @@ pub(crate) enum InitialAuthorityHistory {
     Legacy(Box<initial_grant::OriginalGrant>),
     AcceptedNoLaunch(Box<accepted_preparation::AcceptedHistory>),
     PhaseExecution(Box<super::phase_execution::history::PhaseExecutionHistory>),
+}
+/// Receipt kinds are not interchangeable digest namespaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReceiptKind {
+    LegacyPrepareV1,
+    PhaseExecutionV2,
+}
+pub(crate) struct ReceiptIdentity<'a> {
+    pub kind: ReceiptKind,
+    pub digest: &'a Digest,
+}
+/// A borrowed immutable owner record, never a decoded wire authorization.
+/// Only the SQL-loaded history constructs this view. It has no Serde impl.
+pub(crate) struct InitialAuthorityView<'a> {
+    original: &'a InitialAuthorityHistory,
+}
+impl InitialAuthorityHistory {
+    pub(crate) fn view(&self) -> Result<InitialAuthorityView<'_>, AppError> {
+        if matches!(self, Self::AcceptedNoLaunch(_)) {
+            return Err(unsupported());
+        }
+        Ok(InitialAuthorityView { original: self })
+    }
+}
+impl InitialAuthorityView<'_> {
+    pub(crate) fn grant(&self) -> &ProfiledGrant {
+        match self.original {
+            InitialAuthorityHistory::Legacy(h) => &h.body.grant,
+            InitialAuthorityHistory::PhaseExecution(h) => &h.receipt.grant,
+            InitialAuthorityHistory::AcceptedNoLaunch(_) => {
+                unreachable!("no-launch view cannot be constructed")
+            }
+        }
+    }
+    pub(crate) fn identity(&self) -> ReceiptIdentity<'_> {
+        match self.original {
+            InitialAuthorityHistory::Legacy(h) => ReceiptIdentity {
+                kind: ReceiptKind::LegacyPrepareV1,
+                digest: &h.receipt_digest,
+            },
+            InitialAuthorityHistory::PhaseExecution(h) => ReceiptIdentity {
+                kind: ReceiptKind::PhaseExecutionV2,
+                digest: &h.receipt_digest,
+            },
+            InitialAuthorityHistory::AcceptedNoLaunch(_) => {
+                unreachable!("no-launch view cannot be constructed")
+            }
+        }
+    }
 }
 fn unsupported() -> AppError {
     AppError::Conflict("execution protocol origin is not supported by this owner".into())
@@ -69,7 +119,16 @@ pub(crate) async fn load_legacy_initial_grant_locked(
     binding: &LaunchBinding,
     grant_id: Uuid,
 ) -> Result<initial_grant::OriginalGrant, AppError> {
-    match load_locked(tx, node, binding, grant_id).await? {
+    let history = load_locked(tx, node, binding, grant_id).await?;
+    let view = history.view()?;
+    if view.grant().binding != *binding || view.grant().grant_id != grant_id {
+        return Err(unsupported());
+    }
+    let identity = view.identity();
+    if identity.kind != ReceiptKind::LegacyPrepareV1 || identity.digest.as_str().len() != 64 {
+        return Err(unsupported());
+    }
+    match history {
         InitialAuthorityHistory::Legacy(grant) => Ok(*grant),
         InitialAuthorityHistory::PhaseExecution(history) => {
             let _original_receipt = history.receipt;

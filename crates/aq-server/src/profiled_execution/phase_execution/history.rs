@@ -35,6 +35,7 @@ pub(crate) struct PhaseExecutionHistory {
     pub accepted: AcceptedHistory,
     pub request: PrepareRequest,
     pub receipt: ExecutionReceipt,
+    pub receipt_digest: Digest,
     pub provenance: Provenance,
     pub installation: MaterialReceipt,
 }
@@ -92,6 +93,7 @@ pub(crate) async fn load_optional_locked(
         &row.get::<Vec<u8>, _>("provenance_bytes"),
         &row.get::<String, _>("provenance_digest"),
     )?;
+    let receipt_digest = receipt.digest().map_err(|_| refused())?;
     let accepted = accepted_preparation::load_accepted_history_locked(tx, binding).await?;
     receipt
         .validate_for(
@@ -110,8 +112,7 @@ pub(crate) async fn load_optional_locked(
         || row.get::<Uuid, _>("operation_id") != request.original.operation_id
         || row.get::<String, _>("request_digest")
             != request.digest().map_err(|_| refused())?.as_str()
-        || row.get::<String, _>("receipt_digest")
-            != receipt.digest().map_err(|_| refused())?.as_str()
+        || row.get::<String, _>("receipt_digest") != receipt_digest.as_str()
         || row.get::<String, _>("accepted_receipt_digest")
             != accepted.receipt.digest().map_err(|_| refused())?.as_str()
         || row.get::<i64, _>("issued_at_ms") as u64 != receipt.issued_at_ms
@@ -149,6 +150,7 @@ pub(crate) async fn load_optional_locked(
         accepted,
         request,
         receipt,
+        receipt_digest,
         provenance,
         installation,
     }))

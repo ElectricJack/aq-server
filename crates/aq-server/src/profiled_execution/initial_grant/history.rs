@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub(crate) struct OriginalGrant {
     pub operation_id: Uuid,
     pub request_digest: Digest,
+    /// Canonical identity of the actual retained legacy SQL response.
+    pub receipt_digest: Digest,
     pub body: GrantedLaunch,
     pub versions: Versions,
     pub execution_deadline_ms: u64,
@@ -29,7 +31,9 @@ pub(crate) async fn load_original_grant_locked(
         return Err(refused());
     }
     let row = &rows[0];
-    let original = StoredInitialGrant::decode(row.get("response"))?;
+    let response: serde_json::Value = row.get("response");
+    let receipt_digest = aq_selection::digest(&response).map_err(|_| refused())?;
+    let original = StoredInitialGrant::decode(response)?;
     if original.body.grant.binding != *binding || original.body.grant.grant_id != grant_id {
         return Err(refused());
     }
@@ -42,6 +46,7 @@ pub(crate) async fn load_original_grant_locked(
     Ok(OriginalGrant {
         operation_id: row.get("operation_id"),
         request_digest,
+        receipt_digest,
         body: original.body,
         versions: original.versions,
         execution_deadline_ms: original.execution_deadline_ms,
