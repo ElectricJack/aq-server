@@ -9,3 +9,5 @@ pub mod service;
 pub mod api;
 
 pub mod peer;
+
+pub mod tail;

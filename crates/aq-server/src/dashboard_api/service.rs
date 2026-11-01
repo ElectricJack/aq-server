@@ -191,8 +191,8 @@ pub(super) async fn bootstrap(
         ),
         capability(
             "terminal.watch",
-            false,
-            "Terminal viewing is not connected to this dashboard yet",
+            state.config.terminals.is_some() && a.visibility_complete,
+            "Terminal relay or session inspection is unavailable",
         ),
         capability(
             "terminal.control",
