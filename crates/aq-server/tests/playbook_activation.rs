@@ -624,3 +624,172 @@ async fn lost_engine_connection_does_not_fabricate_shutdown_release_ack() {
     .unwrap();
     assert!(incarnation.is_none());
 }
+
+#[tokio::test]
+async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let (base, stop, task) = launch(s.f.state.clone()).await;
+    ready(&base, &task).await;
+    let first = get(&base, "/api/playbooks/inspection/runs?limit=1").await;
+    assert_eq!(first["api_version"], "playbooks-inspection-1");
+    assert_eq!(first["namespace"]["id"], json!(s.namespace));
+    assert_eq!(first["items"], json!([]));
+    let binding = get(&base, "/api/playbooks/bindings/mail").await;
+    let mut requests = vec![];
+    for _ in 0..2 {
+        let request = PrepareRequest {
+            request_id: Uuid::new_v4(),
+            grant_id: s.grant,
+            grant_revision: 1,
+            binding: "mail".into(),
+            expected_activation_revision: binding["revision"].as_u64().unwrap(),
+            entry: "main".into(),
+            input: Value::Null,
+        };
+        let response = client()
+            .post(format!("{base}/api/playbooks/admissions"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .header("x-aq-request", "1")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 202);
+        requests.push(request.request_id);
+    }
+    let admission = get(&base, "/api/playbooks/inspection/admissions?limit=1").await;
+    assert_eq!(admission["items"].as_array().unwrap().len(), 1);
+    assert!(
+        admission["revision"].is_null(),
+        "AQ admissions have no engine snapshot revision"
+    );
+    let cursor = admission["next_cursor"].as_str().unwrap();
+    let next = get(
+        &base,
+        &format!("/api/playbooks/inspection/admissions?limit=1&after={cursor}"),
+    )
+    .await;
+    assert_eq!(next["items"].as_array().unwrap().len(), 1);
+    assert!(next["next_cursor"].is_null());
+    assert_ne!(
+        admission["items"][0]["request_id"],
+        next["items"][0]["request_id"]
+    );
+    let mut page = Value::Null;
+    for _ in 0..100 {
+        page = get(&base, "/api/playbooks/inspection/runs?limit=1").await;
+        if page["items"].as_array().unwrap().len() == 1 && page["next_cursor"].is_string() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let run = page["items"][0]["id"]
+        .as_str()
+        .expect("actual admitted run");
+    let detail = get(
+        &base,
+        &format!("/api/playbooks/inspection/runs/{run}?limit=1"),
+    )
+    .await;
+    assert_eq!(detail["run"]["id"], run);
+    assert_eq!(detail["run"]["artifact"], binding["artifact"]);
+    assert_eq!(detail["observation_is_atomic"], false);
+    let parallel_detail_path = format!("/api/playbooks/inspection/runs/{run}?limit=1");
+    let (parallel_list, parallel_detail) = tokio::join!(
+        get(&base, "/api/playbooks/inspection/runs?limit=1"),
+        get(&base, &parallel_detail_path)
+    );
+    assert_eq!(parallel_list["api_version"], "playbooks-inspection-1");
+    assert_eq!(parallel_detail["run"]["id"], run);
+    assert!(detail["receipts"]["revision"].is_string());
+    assert!(detail["receipts"]["items"].as_array().unwrap().len() <= 1);
+    let text = serde_json::to_string(&detail).unwrap();
+    assert!(!text.contains("synthetic optional-owner mailbox delivery"));
+    assert!(!text.contains("password=test"));
+    assert!(!text.contains("\"variables\"") && !text.contains("\"input\""));
+    let after = page["next_cursor"].as_str().unwrap();
+    let second = get(
+        &base,
+        &format!("/api/playbooks/inspection/runs?limit=1&after={after}"),
+    )
+    .await;
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_ne!(second["items"][0]["id"], json!(run));
+    for path in [
+        "/api/playbooks/inspection/runs?limit=26".to_string(),
+        format!(
+            "/api/playbooks/inspection/runs?project_id={}",
+            Uuid::new_v4()
+        ),
+    ] {
+        let response = client()
+            .get(format!("{base}{path}"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+            .unwrap();
+        assert!(matches!(response.status().as_u16(), 400 | 404));
+    }
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn inspection_refuses_other_owner_viewer_and_absent_runtime() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let (base, stop, task) = launch(s.f.state.clone()).await;
+    ready(&base, &task).await;
+    let pool = s.f.db.pool().await;
+    for (email, role, expected) in [
+        ("inspection-viewer@localhost", "viewer", 403),
+        ("inspection-other-owner@localhost", "owner", 404),
+    ] {
+        sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,$2,$3,'dev',$2,now())").bind(Uuid::new_v4()).bind(email).bind(role).execute(&pool).await.unwrap();
+        let response = client()
+            .get(format!("{base}/api/playbooks/inspection/runs"))
+            .header("x-aq-dev-email", email)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), expected);
+    }
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(s.f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = client()
+        .get(format!("{base}/api/playbooks/inspection/admissions"))
+        .header("x-aq-dev-email", "owner@localhost")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    // Restore only the fixture user so the actual configured runtime can drain.
+    sqlx::query("UPDATE users SET role='owner' WHERE id=$1")
+        .bind(s.f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+    let app = aq_server::build_admin_router(s.f.state.clone());
+    use tower::ServiceExt;
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/api/playbooks/inspection/runs")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        404,
+        "absent Driver is not an empty run list"
+    );
+}

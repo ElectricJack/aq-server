@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Contract",
+  "type": "object",
+  "properties": {
+    "admissions": {
+      "$ref": "#/$defs/Page4"
+    },
+    "detail": {
+      "$ref": "#/$defs/RunDetail"
+    },
+    "query": {
+      "$ref": "#/$defs/PageQuery"
+    },
+    "runs": {
+      "$ref": "#/$defs/Page"
+    }
+  },
+  "required": [
+    "query",
+    "runs",
+    "detail",
+    "admissions"
+  ],
+  "$defs": {
+    "AdmissionView": {
+      "type": "object",
+      "properties": {
+        "activation_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "catalog_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "status",
+        "created_at_ms"
+      ]
+    },
+    "EffectView": {
+      "type": "object",
+      "properties": {
+        "cancel_requested": {
+          "type": "boolean"
+        },
+        "command": {
+          "type": "string"
+        },
+        "deadline_at_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "step",
+        "command",
+        "status",
+        "cancel_requested"
+      ]
+    },
+    "NamespaceView": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id",
+        "generation",
+        "name",
+        "project_id"
+      ]
+    },
+    "Page": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunView"
+          }
+        },
+        "namespace": {
+          "$ref": "#/$defs/NamespaceView"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "Each page is a fresh bounded observation; not a cross-owner snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "api_version",
+        "namespace",
+        "server_time_ms",
+        "items"
+      ]
+    },
+    "Page2": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EffectView"
+          }
+        },
+        "namespace": {
+          "$ref": "#/$defs/NamespaceView"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "Each page is a fresh bounded observation; not a cross-owner snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "api_version",
+        "namespace",
+        "server_time_ms",
+        "items"
+      ]
+    },
+    "Page3": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptView"
+          }
+        },
+        "namespace": {
+          "$ref": "#/$defs/NamespaceView"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "Each page is a fresh bounded observation; not a cross-owner snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "api_version",
+        "namespace",
+        "server_time_ms",
+        "items"
+      ]
+    },
+    "Page4": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdmissionView"
+          }
+        },
+        "namespace": {
+          "$ref": "#/$defs/NamespaceView"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "Each page is a fresh bounded observation; not a cross-owner snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "api_version",
+        "namespace",
+        "server_time_ms",
+        "items"
+      ]
+    },
+    "PageQuery": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "maximum": 25,
+          "minimum": 1
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReceiptView": {
+      "type": "object",
+      "properties": {
+        "at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "child": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequence": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "step",
+        "at_ms",
+        "kind"
+      ]
+    },
+    "RunDetail": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "effects": {
+          "$ref": "#/$defs/Page2"
+        },
+        "namespace": {
+          "$ref": "#/$defs/NamespaceView"
+        },
+        "observation_is_atomic": {
+          "type": "boolean"
+        },
+        "receipts": {
+          "$ref": "#/$defs/Page3"
+        },
+        "run": {
+          "$ref": "#/$defs/RunView"
+        },
+        "server_time_ms": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "api_version",
+        "namespace",
+        "server_time_ms",
+        "run",
+        "effects",
+        "receipts",
+        "observation_is_atomic"
+      ]
+    },
+    "RunView": {
+      "type": "object",
+      "properties": {
+        "admitted_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "entry": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pending_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "artifact",
+        "entry",
+        "step",
+        "status",
+        "root",
+        "children",
+        "dependencies",
+        "admitted_at_ms"
+      ]
+    }
+  }
+}

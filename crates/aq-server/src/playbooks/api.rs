@@ -35,6 +35,7 @@ async fn gate(State(budget): State<Arc<Budget>>, request: Request, next: Next) -
 }
 pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
     Router::new()
+        .merge(super::inspection::routes(driver.clone()))
         .route("/api/playbooks/status", get(status))
         .route("/api/playbooks/bindings/{id}", get(binding))
         .route("/api/playbooks/grants", post(grant))

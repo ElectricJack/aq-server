@@ -9,3 +9,5 @@ pub mod review_domain;
 
 pub mod config;
 pub mod runtime;
+
+pub mod inspection;
