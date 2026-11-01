@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "qualified_source_actual_router_pending_paired_browser",
+  "status": "qualified_optional_png_actual_stage",
   "source_commit": "55b1dc67ea93aa098377150923dcf1473cd5942f",
   "base_commit": "01e09b6",
   "root_wiring_commit": "b070223",
@@ -73,7 +73,7 @@
   },
   "scope_limits": [
     "No canonical configuration/migration or production deployment enablement",
-    "Paired actual dashboard/browser qualification remains separate",
+    "Actual paired acceptance uses only a disposable fixture; parent owns canonical promotion",
     "Existing recorded_legacy_native_only results only; no worker upload grant",
     "No uploader UI, arbitrary external URL, original-input download, comments, video or report mutation",
     "Available listing is descriptor-presence observation; actual content verifies length and SHA"
@@ -94,5 +94,50 @@
     "crates/aq-server/src/result_media/processing.rs": "428a9f04eac4eeef80bfc531a48be183cb9078bd3791e48bd375c3dcdefcd2d4",
     "crates/aq-server/src/result_media/runtime.rs": "610878fc4f6b1438ef9c1f7a61e6440fd9789cf07db5a32960f1a536f41d4b39",
     "crates/aq-server/tests/profiled_results/media_http.rs": "acd439344500c187c3de87112708a241031af8fc2c282c8ecf523715d21c3b68"
+  },
+  "paired_browser": {
+    "status": "passed",
+    "stage": "isolated loopback4206",
+    "seconds": 3.809,
+    "dashboard_evidence_commit": "337d207",
+    "dashboard_probe_preflight_commit": "ea96ee7",
+    "artifact_id": "18db7bb4-c508-4fb4-b192-c7492c031620",
+    "input": {
+      "bytes": 83919,
+      "width": 960,
+      "height": 600,
+      "provenance": "Actual labelled AQ fixture screenshot; manual human-supplemental upload"
+    },
+    "preview": {
+      "bytes": 37957,
+      "width": 384,
+      "height": 240
+    },
+    "render": {
+      "bytes": 195989,
+      "width": 960,
+      "height": 600
+    },
+    "node_api_mutations": {
+      "admission_post": 1,
+      "content_put": 1,
+      "finalize_post": 1
+    },
+    "browser_mutations_after_upload": 0,
+    "external_requests": 0,
+    "browser_errors": 0,
+    "retries": 0,
+    "reviewed_viewports": [
+      1440,
+      390,
+      320
+    ],
+    "verified": [
+      "exact API06/report/source binding",
+      "immutable receipt SHA and variant headers",
+      "actual response bytes and compiled Blob SHA",
+      "preview/expand/close/refresh/reload without another upload"
+    ],
+    "result_source": "UI owner actual probe and visual review, durable evidence in dashboard337d207"
   }
 }

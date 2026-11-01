@@ -7,8 +7,12 @@ units in 14.25 seconds, and the earlier nineteen-case HTTP/owner backstop in
 binary is stamped with the full feature revision; its SHA and all captured
 outputs are retained in the
 [qualification record](evidence/api11-media-http/qualification.json).
-Independent source review accepted this boundary. Paired dashboard/browser
-acceptance remains a separate gate.
+Independent source review accepted this boundary. The paired actual 4206 browser
+probe passed in 3.809 seconds, with desktop/390/320 visual review. Dashboard
+evidence `337d207` and probe preflight `ea96ee7` record one real labelled AQ PNG
+upload, exact receipt/header/Blob SHA checks, preview/expand/close/refresh/reload,
+and no repeated upload, external requests or browser errors. The fixture retains
+one artifact; canonical promotion remains the parent integration lane's decision.
 
 This increment connects the qualified internal media owner to the actual human
 router. It adds no worker upload grant, provider call, uploader UI, external
