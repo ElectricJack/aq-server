@@ -1,0 +1,6 @@
+2026-11-01T22:52:27.627023Z  INFO aq_server: connecting to database host="localhost" database="aq_uds_931c7bf13f424d5bb101490f2991bd2f"
+2026-11-01T22:52:27.633346Z  INFO sqlx::postgres::notice: relation "schema_migrations" already exists, skipping
+2026-11-01T22:52:27.704287Z  INFO aq_server: listening admin=127.0.0.1:4294 worker=127.0.0.1:4295
+2026-11-01T22:52:27.748857Z  INFO postgres::config: NOTICE: schema "aq_playbooks" already exists, skipping
+2026-11-01T22:52:27.748911Z  INFO postgres::config: NOTICE: relation "schema_migrations" already exists, skipping
+2026-11-01T22:52:39.432125Z  INFO aq_server: shutdown signal received

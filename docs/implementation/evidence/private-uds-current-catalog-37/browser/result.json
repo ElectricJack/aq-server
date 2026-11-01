@@ -1,0 +1,181 @@
+{
+  "passed": true,
+  "elapsed_ms": 3503,
+  "origin": "http://127.0.0.1:4294",
+  "bundle_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "definitions": 1,
+  "activations": 1,
+  "artifact": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+  "binding_revision": "1",
+  "incarnation": "4",
+  "metadata_revision": "6",
+  "retained_expired_grant_execution_validity_claimed": false,
+  "browser_catalog_reads": 14,
+  "catalog_view_unrelated_engine_reads": 0,
+  "mutations": [],
+  "foreign": [],
+  "errors": [],
+  "responses": [
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/runs",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/reviews/decisions",
+      "status": 200
+    }
+  ],
+  "viewports": [
+    1440,
+    390,
+    320
+  ],
+  "browser_interception": false,
+  "real_unix_socket_owner": true,
+  "synthetic_forwarding": false,
+  "scope": "Read-only current metadata; structural unavailable project fixture; no eligibility, readiness or execution claim"
+}

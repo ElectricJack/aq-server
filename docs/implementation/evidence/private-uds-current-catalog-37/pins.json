@@ -1,0 +1,39 @@
+{
+  "source_revision": "5d445a50644b32d5318f974b9c41e4700769fc17",
+  "source_tree": "d28ba3f6c0e0f3a91baae5edf29172cb7f5a21fc",
+  "state_format": 37,
+  "default_features": true,
+  "command": [
+    "cargo",
+    "build",
+    "-p",
+    "aq-server",
+    "--bin",
+    "aq-server",
+    "--locked",
+    "--offline"
+  ],
+  "build_seconds": 45.66,
+  "binary": "/tmp/aq-composed-backend-5d445a5/aq-server",
+  "sha256": "56221fc3081666f302eccf779ddd102df0fd728111645246b46e79d967f626d0",
+  "bytes": 115844952,
+  "permissions": "0500",
+  "no_service_started": true,
+  "component_source_archive_sha256": "6f8c373abacc9360c7be9618bdef3d608ac2f12d605738e711466a22fe6a1b4a",
+  "component_packages": {
+    "runner": "0.1.3",
+    "postgres": "0.1.3",
+    "cli": "0.1.3",
+    "model": "0.1.0",
+    "compiler": "0.1.0"
+  },
+  "dashboard_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "browser_probe_sha256": "d8b8dae9955c08fc9d1a568aed2868a2150973977dcee2ebeec087e294a2c76f",
+  "private_preupgrade_backup": {
+    "private_path": "/tmp/aq-current-uds-proof/pre-upgrade-private.pg_dump",
+    "sha256": "ebf71d223207e35791ac3b7afae01f87c6f0789e41ce3e7fc6cd84aa571b1764",
+    "bytes": 477873,
+    "not_for_git": true,
+    "contents_committed": false
+  }
+}

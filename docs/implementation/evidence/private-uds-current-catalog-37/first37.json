@@ -1,0 +1,531 @@
+{
+  "ready": {
+    "version": "0.1.0",
+    "source_revision": "5d445a50644b32d5318f974b9c41e4700769fc17",
+    "state_format": 37,
+    "protocol_min": 1,
+    "protocol_max": 1,
+    "database": "ok",
+    "auth_mode": "dev"
+  },
+  "bootstrap": {
+    "api_version": "dashboard-read-1",
+    "request_id": "5a56bbfe-f29a-4542-b74b-ed5aeb394d4e",
+    "server_time": "2026-11-01T22:52:27.833Z",
+    "scope": {
+      "kind": "all_authorized"
+    },
+    "data": {
+      "principal": {
+        "id": "97ecbd79-e439-4b3a-a1b3-4337a166253f",
+        "display_name": "private-uds-inert-owner@localhost",
+        "authorization_revision": "244462392360417037589355699460490823256"
+      },
+      "product": {
+        "version": "0.1.0",
+        "dashboard_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663"
+      },
+      "contracts": [
+        {
+          "name": "dashboard-read",
+          "version": "dashboard-read-1",
+          "digest": "sha256:a02ddfafafa5c492ae962f3132bdd0dd463978101628e93cf12ff2ef1cd612f8"
+        }
+      ],
+      "capabilities": [
+        {
+          "name": "dashboard.overview",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "sessions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.usage.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.events.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "projects.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "status.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "workers.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "notifications.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "human.graph.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Human Graph inspection requires an owner account and configured Graph runtime"
+        },
+        {
+          "name": "human.overview.tasks.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Recorded task summaries require an owner account and configured Graph runtime"
+        },
+        {
+          "name": "tasks.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Task inspection requires an owner account and configured Graph runtime"
+        },
+        {
+          "name": "tasks.create",
+          "version": "1",
+          "enabled": false,
+          "reason": "Task creation requires an owner account and configured Graph mutation identity"
+        },
+        {
+          "name": "knowledge.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Knowledge inspection requires an owner account and configured Graph runtime"
+        },
+        {
+          "name": "search.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Search requires an owner account and configured Graph runtime"
+        },
+        {
+          "name": "decisions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "decisions.resolve",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "provider.quota",
+          "version": "1",
+          "enabled": false,
+          "reason": "Provider account usage is unavailable"
+        },
+        {
+          "name": "supervisor.history.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.message.enqueue",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.conversation",
+          "version": "1",
+          "enabled": false,
+          "reason": "The global supervisor is not connected yet"
+        },
+        {
+          "name": "terminal.watch",
+          "version": "1",
+          "enabled": false,
+          "reason": "Terminal relay or session inspection is unavailable"
+        },
+        {
+          "name": "terminal.control",
+          "version": "1",
+          "enabled": false,
+          "reason": "Terminal control is not connected to this dashboard yet"
+        },
+        {
+          "name": "dashboard.actions",
+          "version": "1",
+          "enabled": false,
+          "reason": "Dashboard actions are not connected yet"
+        },
+        {
+          "name": "results.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "results.media.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental images require an owner account and mounted media storage"
+        },
+        {
+          "name": "results.media.upload",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental image uploads require an owner account and enabled uploads"
+        },
+        {
+          "name": "playbooks.inspect",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "playbooks.loaded-definitions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "playbooks.catalog.read",
+          "version": "1",
+          "enabled": true
+        }
+      ],
+      "limits": {
+        "page_size": 25,
+        "max_page_size": 100,
+        "snapshot_members": 256,
+        "snapshot_ttl_ms": 30000
+      },
+      "default_scope": {
+        "kind": "all_authorized"
+      },
+      "global_supervisor": {
+        "status": "unconfigured",
+        "conversation_id": null,
+        "reason": "The global supervisor is not connected yet"
+      }
+    },
+    "observation": {
+      "observed_at": "2026-11-01T22:52:27.833Z",
+      "fresh_until": "2026-11-01T22:52:32.833Z",
+      "source": "aq_dashboard_read",
+      "quality": "reported",
+      "coverage": "complete"
+    },
+    "pending_operations": [],
+    "coverage": {
+      "state": "complete"
+    }
+  },
+  "metadata": {
+    "aq_state": "37",
+    "component_schema": 4,
+    "engine": {
+      "namespace": "aq/41c70feb-6234-4dc3-beac-c590b60088f8/1",
+      "revision": 9,
+      "owned": true,
+      "incarnation": 4,
+      "owner_backend_pid": 1603
+    },
+    "grants": [
+      {
+        "grant_id": "cff04b76-1100-4378-8ab6-42c12e237cbf",
+        "revision": 1,
+        "expires_at_ms": 1793568185308,
+        "revoked_at_ms": null,
+        "payload_digest": "sha256:306376883fb394f9698c6cef174d65e020fae2d37b86e2e766f97c29faee0ba6"
+      }
+    ],
+    "clients": [
+      {
+        "application_name": "aq-dashboard-read",
+        "datname": "aq_uds_931c7bf13f424d5bb101490f2991bd2f",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-bridge",
+        "datname": "aq_uds_931c7bf13f424d5bb101490f2991bd2f",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-owner",
+        "datname": "aq_uds_931c7bf13f424d5bb101490f2991bd2f",
+        "unix_connection": true,
+        "connections": 1
+      },
+      {
+        "application_name": "aq-private-uds-proof",
+        "datname": "aq_uds_931c7bf13f424d5bb101490f2991bd2f",
+        "unix_connection": true,
+        "connections": 4
+      }
+    ]
+  },
+  "api_reads": {
+    "definitions": {
+      "api_version": "playbooks-current-catalog-1",
+      "component_api_version": "playbooks-catalog-1",
+      "source": "current_namespace_state",
+      "current_catalog": true,
+      "namespace": {
+        "id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "generation": "1",
+        "name": "Private UDS inert startup only",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+      },
+      "server_time_ms": 1793573547848,
+      "kind": "definitions",
+      "state_revision": "9",
+      "incarnation": "4",
+      "metadata_revision": "6",
+      "items": [
+        {
+          "key": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+          "record": {
+            "kind": "definition",
+            "metadata": {
+              "artifact": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+              "executable_fingerprint": "sha256:53087ab226ebed27a593f391bda87c85d228a5a7da8858d7dd2ce20ac9d69fe0",
+              "source_digest": "sha256:8d7ed20d32c269c4ac3d4b977d6e10ef0b45dae5b21d4c0957eb6e02bfc5559e",
+              "name": "development-inspection-only",
+              "scope": "project",
+              "compiler": "agent-q labelled development inert example",
+              "purpose": "Development inspection-only definition. No triggers or commands. If explicitly admitted, main returns ok with null output. Startup must not admit it.",
+              "purpose_truncated": false,
+              "entries": [
+                "main"
+              ],
+              "dependencies": {}
+            }
+          }
+        }
+      ],
+      "next_cursor": null
+    },
+    "activations": {
+      "api_version": "playbooks-current-catalog-1",
+      "component_api_version": "playbooks-catalog-1",
+      "source": "current_namespace_state",
+      "current_catalog": true,
+      "namespace": {
+        "id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "generation": "1",
+        "name": "Private UDS inert startup only",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+      },
+      "server_time_ms": 1793573547861,
+      "kind": "activations",
+      "state_revision": "9",
+      "incarnation": "4",
+      "metadata_revision": "6",
+      "items": [
+        {
+          "key": "sha256:ccbcff2c8fd12e8d8cd91b9b44af1b7e60447c16c738ca85f7ed64471af4cecf",
+          "record": {
+            "kind": "activation",
+            "metadata": {
+              "binding": "development-inspection-only",
+              "artifact": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+              "revision": "1",
+              "controls": {
+                "calls_enabled": true,
+                "event_starts_enabled": true,
+                "execution_enabled": true
+              },
+              "artifact_execution_denied": false
+            }
+          }
+        }
+      ],
+      "next_cursor": null
+    },
+    "loaded_definitions": {
+      "api_version": "playbooks-loaded-definitions-1",
+      "namespace": {
+        "id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "generation": "1",
+        "name": "Private UDS inert startup only",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+      },
+      "server_time_ms": 1793573547867,
+      "captured_at_ms": 1793573547799,
+      "source": "runtime_startup_configuration",
+      "current_catalog": false,
+      "items": [
+        {
+          "artifact": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+          "executable_fingerprint": "sha256:53087ab226ebed27a593f391bda87c85d228a5a7da8858d7dd2ce20ac9d69fe0",
+          "name": "development-inspection-only",
+          "purpose": "Development inspection-only definition. No triggers or commands. If explicitly admitted, main returns ok with null output. Startup must not admit it.",
+          "purpose_truncated": false,
+          "compiler": "agent-q labelled development inert example",
+          "source_digest": "sha256:8d7ed20d32c269c4ac3d4b977d6e10ef0b45dae5b21d4c0957eb6e02bfc5559e",
+          "entries": [
+            "main"
+          ],
+          "dependency_pins": {}
+        }
+      ]
+    },
+    "runs": {
+      "api_version": "playbooks-inspection-1",
+      "namespace": {
+        "id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "generation": "1",
+        "name": "Private UDS inert startup only",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+      },
+      "server_time_ms": 1793573547881,
+      "revision": "9",
+      "items": [],
+      "next_cursor": null
+    },
+    "admissions": {
+      "api_version": "playbooks-inspection-1",
+      "namespace": {
+        "id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "generation": "1",
+        "name": "Private UDS inert startup only",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+      },
+      "server_time_ms": 1793573547887,
+      "revision": null,
+      "items": [],
+      "next_cursor": null
+    },
+    "decisions": {
+      "api_version": "review-inbox-1",
+      "server_time_ms": 1793573547894,
+      "items": [],
+      "next_cursor": null,
+      "sampled": true
+    },
+    "status": {
+      "automatic_driver": true,
+      "automatic_driver_state": "active",
+      "catalog_digest": "sha256:470b770745a16411d28f67cc0de84781d326b0d507ce58972efc29c13beb80f7",
+      "namespace": {
+        "generation": 1,
+        "name": "Private UDS inert startup only",
+        "namespace_id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+        "owner_user_id": "97ecbd79-e439-4b3a-a1b3-4337a166253f",
+        "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784",
+        "workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4"
+      },
+      "registered_commands": [
+        "decision.request",
+        "message.send",
+        "operation.get"
+      ],
+      "synchronous_calls_interruptible": false
+    },
+    "projects": {
+      "items": [
+        {
+          "binding": {
+            "allowed_agent_profiles": [
+              "unavailable-fixture@1"
+            ],
+            "allowed_environments": [
+              "unavailable-fixture"
+            ],
+            "allowed_execution_profiles": [
+              "unavailable-fixture@1"
+            ],
+            "allowed_intelligence_profiles": [
+              "unavailable-fixture@1"
+            ],
+            "allowed_node_ids": [
+              "1442f67f-ac80-486a-a9b0-f263e28e20a9"
+            ],
+            "allowed_worker_groups": [],
+            "catalog_digest": "e78d54929f7880bf25755744eb4ea4c59f04539c445f44af2648afb5573220ec",
+            "ceilings": {
+              "context_bytes": 1024,
+              "cost_limit_microunits": null,
+              "cpu_millis": 1000,
+              "currency": null,
+              "memory_bytes": 1048576,
+              "permissions": [],
+              "process_limit": 1,
+              "require_hard_cost_enforcement": false,
+              "wall_time_ms": 1000
+            },
+            "context": [],
+            "enabled": true,
+            "graph_adapter_reference": "aq.graph.configured",
+            "graph_workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4",
+            "name": "Private UDS inert startup fixture - external status unavailable",
+            "policy": {
+              "digest": "be90b02b221a4cf084931255c6108d581560d7a696f72caece452b91f2cbe2d1",
+              "identity": "private-uds-inert-fixture",
+              "revision": "1"
+            },
+            "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784",
+            "repository_adapter_reference": "aq.git.configured",
+            "repository_binding_generation": 1,
+            "repository_id": "b20c8f39-b66b-4258-9d71-9058f529e4c0",
+            "schema_version": 1
+          },
+          "revision": 1,
+          "validated_at_ms": 1,
+          "validation": {
+            "expires_at_ms": 2,
+            "graph": "unavailable",
+            "graph_adapter_reference": "aq.graph.configured",
+            "graph_workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4",
+            "observed_at_ms": 1,
+            "repository": "unavailable",
+            "repository_adapter_reference": "aq.git.configured",
+            "repository_generation": null,
+            "repository_id": "b20c8f39-b66b-4258-9d71-9058f529e4c0"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "idle_samples": [
+    {
+      "pid": 1603,
+      "query_start": "2026-11-01T22:52:27.876991+00:00",
+      "application_name": "aq-playbook-owner",
+      "unix_connection": true
+    },
+    {
+      "pid": 1603,
+      "query_start": "2026-11-01T22:52:28.828197+00:00",
+      "application_name": "aq-playbook-owner",
+      "unix_connection": true
+    },
+    {
+      "pid": 1603,
+      "query_start": "2026-11-01T22:52:29.827223+00:00",
+      "application_name": "aq-playbook-owner",
+      "unix_connection": true
+    }
+  ],
+  "work_counts": {
+    "execution_attempts": 0,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  }
+}

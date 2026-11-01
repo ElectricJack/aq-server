@@ -99,3 +99,16 @@ Strict DTO/schema generation and frontend tests precede a root-built bundle and
 independent actual desktop/390/320px browser review. Until those gates pass, this
 is a source contract increment, not a canonical preview or full Playbooks design
 acceptance. Editing, source compilation and mutation actions remain deferred.
+
+### Actual default37 owner over real Unix PostgreSQL
+
+The [retained real-UDS composition proof](evidence/private-uds-current-catalog-37/README.md)
+passed with composed source5d445a5/default features and immutable dashboard624707…e663.
+The same isolated physical cluster/database advanced AQ35→37 and component3→4,
+served one unchanged inert current definition/activation, and released ownership
+across graceful stop/restart. The retained expired grant was neither replaced nor
+extended; current metadata and stored controls do not claim execution authority.
+Actual desktop/390/320 catalog/navigation/empty-work browser checks passed3503ms
+with zero browser mutations or foreign requests. All17 work/effect counts remained
+zero. This is separate from the earlier synthetic-forwarding protected HTTP
+fixture, and does not enable or qualify a canonical optional owner.

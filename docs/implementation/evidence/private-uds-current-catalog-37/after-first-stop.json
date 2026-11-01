@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "aq_state": "37",
+    "component_schema": 4,
+    "engine": {
+      "namespace": "aq/41c70feb-6234-4dc3-beac-c590b60088f8/1",
+      "revision": 9,
+      "owned": false,
+      "incarnation": 4,
+      "owner_backend_pid": null
+    },
+    "grants": [
+      {
+        "grant_id": "cff04b76-1100-4378-8ab6-42c12e237cbf",
+        "revision": 1,
+        "expires_at_ms": 1793568185308,
+        "revoked_at_ms": null,
+        "payload_digest": "sha256:306376883fb394f9698c6cef174d65e020fae2d37b86e2e766f97c29faee0ba6"
+      }
+    ],
+    "clients": []
+  },
+  "work_counts": {
+    "execution_attempts": 0,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  }
+}
