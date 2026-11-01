@@ -158,3 +158,28 @@ history and all other unchanged source tables logically identical.
 
 A final quiesce/fresh backup/NEW restore and explicit canonical promotion decision
 remain separate. No claim here says canonical optional owners are enabled.
+
+## Later composed central-admission union, same stage and assets
+
+Root's next qualified default37 binary, source
+`511ee995ac55dd6345590732705b5a3bfde5130d` (runtime stamp511ee99), SHA256
+`17698c625675b7a994b0a56bbd37737becbf039380093ae9dd32fe1bdcd27b25`,
+now supersedes6f07 for this stage. It includes the qualified central-admission
+0.1.4 source union. No central host or profile is started by this check.
+
+The exact owned stage process was gracefully stopped, releasing owner4 and all
+its clients/listeners. The new binary started with unchanged config, environment,
+private keys, physical UDS DB and624 assets and acquired owner5. Protected current
+catalog/capability/Overview/Supervisor/Graph GET checks passed. The same-DB bootstrap
+principal object is unchanged for this swap; the earlier restore's expected MVCC
+revision change remains distinct. All17 work counts and the unresolved held claim
+remain unchanged; a repeat109-table fingerprint check still finds exactly the same
+five expected metadata/runtime tables differing from the original source snapshot.
+All critical node/attempt/hot-authority/material/phase/receipt/closure/release tables
+remain identical to that original snapshot. No authority is repaired or reissued.
+
+The unchanged frontend's full13.740s visual suite was not repeated for a backend-only
+swap. The later bounded actual API/owner proof is under `union511ee99/`. The stage
+is left running on4218/4219, now PID898833 at this checkpoint, for root review.
+Canonical4188 still uses its original backend/database. The final cutover proposal
+uses this later qualified binary and requires a fresh quiesced source snapshot.

@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "original_tables": 109,
+  "unchanged_original_tables": 104,
+  "known_changed_metadata_tables": [
+    "public.meta",
+    "public.notification_budget",
+    "public.playbook_namespaces",
+    "public.schema_migrations",
+    "public.terminal_sessions"
+  ],
+  "critical_held_authority_and_receipt_tables_unchanged": [
+    "public.nodes",
+    "public.execution_attempts",
+    "public.profiled_authority_hot",
+    "public.admission_material_leases",
+    "public.profiled_phase_execution_grants",
+    "public.profiled_started_receipts",
+    "public.profiled_launch_closures",
+    "public.profiled_verified_releases"
+  ],
+  "source_baseline_preserved_after_latest_union": true
+}

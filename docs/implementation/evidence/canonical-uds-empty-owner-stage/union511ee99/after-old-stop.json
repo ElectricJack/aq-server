@@ -1,0 +1,25 @@
+{
+  "state": "37",
+  "engine": {
+    "namespace": "aq/2ae9605f-5277-4c58-aad8-61ad8121fcac/1",
+    "incarnation": 4,
+    "revision": 4,
+    "owned": false,
+    "owner_backend_pid": null
+  },
+  "claims": [
+    {
+      "kind": "profiled_v1",
+      "status": "offered",
+      "holds_task": true,
+      "count": 1
+    }
+  ],
+  "authority": [
+    {
+      "status": "finished",
+      "count": 1
+    }
+  ],
+  "clients": []
+}

@@ -1,0 +1,286 @@
+{
+  "ready": {
+    "version": "0.1.0",
+    "source_revision": "2baa8e7",
+    "state_format": 37,
+    "protocol_min": 1,
+    "protocol_max": 1,
+    "database": "ok",
+    "auth_mode": "dev"
+  },
+  "counts": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "facts": {
+    "state": "37",
+    "engine": {
+      "namespace": "aq/2ae9605f-5277-4c58-aad8-61ad8121fcac/1",
+      "incarnation": 4,
+      "revision": 4,
+      "owned": true,
+      "owner_backend_pid": 2155
+    },
+    "claims": [
+      {
+        "kind": "profiled_v1",
+        "status": "offered",
+        "holds_task": true,
+        "count": 1
+      }
+    ],
+    "authority": [
+      {
+        "status": "finished",
+        "count": 1
+      }
+    ],
+    "clients": [
+      {
+        "application_name": "aq-canonical-stage-core",
+        "unix_connection": true,
+        "count": 5
+      },
+      {
+        "application_name": "aq-dashboard-read",
+        "unix_connection": true,
+        "count": 2
+      },
+      {
+        "application_name": "aq-playbook-bridge",
+        "unix_connection": true,
+        "count": 2
+      },
+      {
+        "application_name": "aq-playbook-owner",
+        "unix_connection": true,
+        "count": 1
+      },
+      {
+        "application_name": "aq-terminal",
+        "unix_connection": true,
+        "count": 2
+      }
+    ]
+  },
+  "bootstrap": {
+    "api_version": "dashboard-read-1",
+    "request_id": "0877ee40-cc4f-4941-9b45-02b141f1ef5b",
+    "server_time": "2026-11-01T23:09:37.680Z",
+    "scope": {
+      "kind": "all_authorized"
+    },
+    "data": {
+      "principal": {
+        "id": "f4c33664-c524-4395-815f-5af6109a418b",
+        "display_name": "owner@localhost",
+        "authorization_revision": "266683367553016329454686406843694971669"
+      },
+      "product": {
+        "version": "0.1.0",
+        "dashboard_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663"
+      },
+      "contracts": [
+        {
+          "name": "dashboard-read",
+          "version": "dashboard-read-1",
+          "digest": "sha256:a02ddfafafa5c492ae962f3132bdd0dd463978101628e93cf12ff2ef1cd612f8"
+        }
+      ],
+      "capabilities": [
+        {
+          "name": "dashboard.overview",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "sessions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.usage.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "session.events.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "projects.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "status.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "workers.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "notifications.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "human.graph.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "human.overview.tasks.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "tasks.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "tasks.create",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "knowledge.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "search.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "decisions.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "decisions.resolve",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "provider.quota",
+          "version": "1",
+          "enabled": false,
+          "reason": "Provider account usage is unavailable"
+        },
+        {
+          "name": "supervisor.history.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.message.enqueue",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "supervisor.conversation",
+          "version": "1",
+          "enabled": false,
+          "reason": "The global supervisor is not connected yet"
+        },
+        {
+          "name": "terminal.watch",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "terminal.control",
+          "version": "1",
+          "enabled": false,
+          "reason": "Terminal control is not connected to this dashboard yet"
+        },
+        {
+          "name": "dashboard.actions",
+          "version": "1",
+          "enabled": false,
+          "reason": "Dashboard actions are not connected yet"
+        },
+        {
+          "name": "results.read",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "results.media.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental images require an owner account and mounted media storage"
+        },
+        {
+          "name": "results.media.upload",
+          "version": "1",
+          "enabled": false,
+          "reason": "Supplemental image uploads require an owner account and enabled uploads"
+        },
+        {
+          "name": "playbooks.inspect",
+          "version": "1",
+          "enabled": true
+        },
+        {
+          "name": "playbooks.loaded-definitions.read",
+          "version": "1",
+          "enabled": false,
+          "reason": "Loaded definitions require the configured runtime namespace owner"
+        },
+        {
+          "name": "playbooks.catalog.read",
+          "version": "1",
+          "enabled": true
+        }
+      ],
+      "limits": {
+        "page_size": 25,
+        "max_page_size": 100,
+        "snapshot_members": 256,
+        "snapshot_ttl_ms": 30000
+      },
+      "default_scope": {
+        "kind": "all_authorized"
+      },
+      "global_supervisor": {
+        "status": "unconfigured",
+        "conversation_id": null,
+        "reason": "The global supervisor is not connected yet"
+      }
+    },
+    "observation": {
+      "observed_at": "2026-11-01T23:09:37.680Z",
+      "fresh_until": "2026-11-01T23:09:42.680Z",
+      "source": "aq_dashboard_read",
+      "quality": "reported",
+      "coverage": "complete"
+    },
+    "pending_operations": [],
+    "coverage": {
+      "state": "complete"
+    }
+  }
+}
