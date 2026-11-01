@@ -164,6 +164,7 @@ impl Owner {
         }
         status.validate().map_err(|_| Error::Owner)?;
         tx.commit().await.map_err(sql)?;
+        self.root.check()?;
         Ok(status)
     }
     async fn fence(

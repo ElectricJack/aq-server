@@ -353,9 +353,24 @@ impl Root {
         )
         .map_err(|_| Error::Storage)?;
         self.point("renamed")?;
+        self.confirm_published(id)?;
+        self.point("published")?;
+        self.check()
+    }
+    /// Recovered visibility is not durability. Every retention attempt repeats
+    /// all publication directory fsyncs before its immutable receipt commit.
+    pub fn confirm_published(&self, id: Uuid) -> Result<()> {
+        let generation = self.generation(id, true)?;
+        io(generation.sync_all())?;
         io(self.objects.sync_all())?;
         io(self.staging.sync_all())?;
-        self.point("published")?;
+        if !identity(
+            &private(&generation, true)?,
+            &private(&self.generation(id, true)?, true)?,
+        ) {
+            return Err(Error::Storage);
+        }
+        self.point("publication_durable")?;
         self.check()
     }
     pub fn variant(
@@ -411,7 +426,13 @@ impl Root {
                     name.as_str(),
                     nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
                 ) {
-                    Err(Errno::ENOENT) => Ok(()),
+                    Err(Errno::ENOENT) => {
+                        // A prior interrupted unlink may be visible but not
+                        // durable. Confirm the parent before releasing charge.
+                        io(parent.sync_all())?;
+                        self.point("absence_durable")?;
+                        self.check()
+                    }
                     _ => Err(Error::Storage),
                 };
             }

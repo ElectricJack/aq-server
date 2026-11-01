@@ -534,13 +534,32 @@ async fn media_actual_fsync_rename_precommit_interruptions_recover_exact_one_gen
             ));
         }
         assert!(fired.load(Ordering::SeqCst));
-        owner.set_test_hook(None).unwrap();
+        let crossed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = crossed.clone();
+        owner
+            .set_test_hook(Some(Arc::new(move |name| {
+                recorded.lock().unwrap().push(name.to_owned());
+                Ok(())
+            })))
+            .unwrap();
         at += 30_001;
         f.time.store(at as i64, Ordering::SeqCst);
         if point == "input.png" {
             owner.put(&actor, id, png()).await.unwrap();
         }
         let retained = owner.finalize(&actor, id).await.unwrap();
+        let phases = crossed.lock().unwrap();
+        let durable = phases
+            .iter()
+            .position(|p| p == "publication_durable")
+            .expect("recovery must repeat fsync durability fence");
+        let commit = phases
+            .iter()
+            .position(|p| p == "before_receipt_commit")
+            .unwrap();
+        assert!(durable < commit);
+        drop(phases);
+        owner.set_test_hook(None).unwrap();
         assert_eq!(retained.artifact.unwrap().receipt.artifact_id.as_uuid(), id);
         assert_eq!(
             std::fs::read_dir(root.path().join("objects"))
@@ -633,4 +652,177 @@ async fn media_actual_replaced_lock_inode_cannot_start_second_owner() {
     ));
     std::fs::remove_file(marker).unwrap();
     std::fs::rename(old, root.path().join("owner.lock")).unwrap();
+}
+#[tokio::test]
+async fn media_actual_exact_put_replay_never_writes_or_renews_original_intent() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let id = Uuid::new_v4();
+    owner
+        .reserve(&actor, report.report_id, &revision, &request(id))
+        .await
+        .unwrap();
+    let pool = f.db.pool().await;
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(matches!(
+        owner.put(&actor, id, vec![1, 2, 3]).await,
+        Err(Error::Conflict)
+    ));
+    let unchanged: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, unchanged);
+    owner.put(&actor, id, png()).await.unwrap();
+    owner
+        .set_test_hook(Some(Arc::new(|name| {
+            if matches!(
+                name,
+                "input.png" | "render.png" | "preview.png" | "renamed" | "received_before_commit"
+            ) {
+                panic!("replayed PUT performed physical write")
+            } else {
+                Ok(())
+            }
+        })))
+        .unwrap();
+    let received_before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        owner.put(&actor, id, png()).await.unwrap().state,
+        media::UploadState::Received
+    );
+    let received_after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(received_before, received_after);
+    owner.set_test_hook(None).unwrap();
+    owner.finalize(&actor, id).await.unwrap();
+    let retained_before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    owner
+        .set_test_hook(Some(Arc::new(|name| {
+            if matches!(
+                name,
+                "input.png" | "render.png" | "preview.png" | "renamed" | "received_before_commit"
+            ) {
+                panic!("retained replay performed physical write")
+            } else {
+                Ok(())
+            }
+        })))
+        .unwrap();
+    assert_eq!(
+        owner.put(&actor, id, png()).await.unwrap().state,
+        media::UploadState::Retained
+    );
+    let retained_after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(i) FROM result_media_intents i WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retained_before, retained_after);
+}
+#[tokio::test]
+async fn media_actual_root_swap_after_receive_before_sql_commit_is_refused() {
+    let (f, report, revision, owner, root, actor) = setup().await;
+    let id = Uuid::new_v4();
+    owner
+        .reserve(&actor, report.report_id, &revision, &request(id))
+        .await
+        .unwrap();
+    let gate = Gate::new();
+    owner
+        .set_test_hook(Some(gate.hook("received_before_commit")))
+        .unwrap();
+    let task = {
+        let owner = owner.clone();
+        let actor = actor.clone();
+        tokio::spawn(async move { owner.put(&actor, id, png()).await })
+    };
+    gate.entered.notified().await;
+    let moved = root.path().with_extension("moved-after-receive");
+    std::fs::rename(root.path(), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, root.path()).unwrap();
+    gate.release();
+    assert!(matches!(task.await.unwrap(), Err(Error::Storage)));
+    assert!(matches!(
+        owner.status(&actor, id).await,
+        Err(Error::Storage)
+    ));
+    let pool = f.db.pool().await;
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM result_media_intents WHERE operation_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "reserved");
+    std::fs::remove_file(root.path()).unwrap();
+    std::fs::rename(moved, root.path()).unwrap();
+    owner.set_test_hook(None).unwrap();
+    f.time.store((NOW + 30_001) as i64, Ordering::SeqCst);
+    assert_eq!(
+        owner.put(&actor, id, png()).await.unwrap().state,
+        media::UploadState::Received
+    );
+}
+#[tokio::test]
+async fn media_actual_cleanup_absence_durability_failure_keeps_charge_and_retries() {
+    let (f, report, revision, owner, _root, actor) = setup().await;
+    let id = Uuid::new_v4();
+    owner
+        .reserve(&actor, report.report_id, &revision, &request(id))
+        .await
+        .unwrap();
+    f.time.store(
+        (NOW + media::MAX_UPLOAD_TTL_MS + 1) as i64,
+        Ordering::SeqCst,
+    );
+    owner
+        .set_test_hook(Some(Arc::new(|name| {
+            if name == "absence_durable" {
+                Err(Error::Storage)
+            } else {
+                Ok(())
+            }
+        })))
+        .unwrap();
+    assert_eq!(owner.cleanup(1).await.unwrap(), 0);
+    let pool = f.db.pool().await;
+    let (state, charge): (String, i64) = sqlx::query_as(
+        "SELECT cleanup_state,reserved_bytes FROM result_media_intents WHERE operation_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), charge), ("blocked", 10_485_760));
+    owner.set_test_hook(None).unwrap();
+    assert_eq!(owner.cleanup(1).await.unwrap(), 1);
+    let charge: i64 = sqlx::query_scalar(
+        "SELECT reserved_bytes FROM result_media_budgets WHERE scope_key='installation'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(charge, 0);
 }

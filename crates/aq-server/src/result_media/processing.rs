@@ -42,6 +42,25 @@ impl Owner {
         if bytes.len() > media::MAX_INPUT_BYTES {
             return Err(Error::Invalid);
         }
+        let status = self.status(actor, id).await?;
+        if bytes.len() != status.input.bytes as usize
+            || media::Digest::of(&bytes) != status.input.digest
+        {
+            return Err(Error::Conflict);
+        }
+        if matches!(
+            status.state,
+            media::UploadState::Received | media::UploadState::Retained
+        ) {
+            // Exact lost-response replay is a read. Never renew a lease or
+            // rewrite even an expired/cleaned retained generation.
+            if status.state == media::UploadState::Received
+                && now(&self.state)? >= status.upload_expires_at_ms
+            {
+                return Err(Error::Expired);
+            }
+            return Ok(status);
+        }
         let (row, lease, guard) = self.job(actor, id, false).await?;
         if bytes.len() != row.request.input_bytes as usize
             || media::Digest::of(&bytes) != row.request.input_digest
@@ -55,7 +74,8 @@ impl Owner {
             // of the same uncommitted generation under its physical guard.
             let result = root
                 .remove(id, false)
-                .and_then(|()| root.receive(id, &bytes, &digest));
+                .and_then(|()| root.receive(id, &bytes, &digest))
+                .and_then(|()| root.point("received_before_commit"));
             (result, guard)
         })
         .await
@@ -74,6 +94,7 @@ impl Owner {
         }
         sqlx::query("UPDATE result_media_intents SET state='received',received_at_ms=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$2 WHERE operation_id=$1 AND lease_id=$3")
             .bind(id).bind(at as i64).bind(lease).execute(&mut *tx).await.map_err(sql)?;
+        self.root.check()?;
         tx.commit().await.map_err(sql)?;
         drop(guard);
         self.status(actor, id).await
@@ -115,6 +136,7 @@ impl Owner {
                 if published {
                     root.variant(id, "render.png", r)?;
                     root.variant(id, "preview.png", p)?;
+                    root.confirm_published(id)?;
                 } else {
                     root.remove_variants(id)?;
                     root.variants(id, &image)?;

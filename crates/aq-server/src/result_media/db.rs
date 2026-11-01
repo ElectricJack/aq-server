@@ -148,7 +148,7 @@ impl Intent {
         } else if self.attempts >= 8 {
             Some(R::RetryBudgetExhausted)
         } else {
-            recovery.put_allowed = self.state == S::Reserved;
+            recovery.put_allowed = matches!(self.state, S::Reserved | S::Received);
             recovery.finalize_allowed = matches!(self.state, S::Received | S::Finalizing);
             None
         };
