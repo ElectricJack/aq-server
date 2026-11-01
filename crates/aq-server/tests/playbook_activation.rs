@@ -825,3 +825,6 @@ async fn inspection_refuses_other_owner_viewer_and_absent_runtime() {
         "absent Driver is not an empty run list"
     );
 }
+
+#[path = "playbook_activation/browser.rs"]
+mod browser;
