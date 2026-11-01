@@ -149,108 +149,14 @@ pub(crate) fn validate(
     bounds(&input.observations, 128)?;
     bounds(&input.estimates, 128)?;
     bounds(&input.compositions, 16)?;
-    let mut credentials = BTreeSet::new();
-    for credential in &input.credentials {
-        text(&credential.provider)?;
-        text(&credential.account_reference)?;
-        text(&credential.endpoint_reference)?;
-        if let Some(owner) = &credential.material_owner {
-            text(owner.id.as_str())?;
-            text(owner.version.as_str())?;
-        }
-        ensure(
-            credential.revision > 0
-                && credentials.insert(format!(
-                    "{}@{}",
-                    credential.profile.id.as_str(),
-                    credential.profile.version.as_str()
-                )),
-            "credential revision/identity conflict",
-        )?;
-    }
-    if let Some(delivery) = &input.node.material_delivery {
-        text(delivery.adapter.id.as_str())?;
-        text(delivery.adapter.version.as_str())?;
-        ensure(delivery.version > 0, "delivery protocol version")?;
-    }
-    let mut installed_credentials = BTreeSet::new();
-    for binding in &input.node.credential_bindings {
-        if let Some(preparation) = &binding.preparation {
-            for reference in [
-                &preparation.owner,
-                &preparation.credential_profile,
-                &preparation.delivery.adapter,
-            ] {
-                text(reference.id.as_str())?;
-                text(reference.version.as_str())?;
-            }
-            target(&preparation.target)?;
-            ensure(
-                preparation.credential_revision > 0
-                    && preparation.delivery.version > 0
-                    && preparation.observed_at_ms > 0
-                    && preparation.expires_at_ms > preparation.observed_at_ms
-                    && preparation.expires_at_ms - preparation.observed_at_ms <= 120_000,
-                "preparation evidence bounds",
-            )?;
-        }
-        ensure(
-            binding.credential_revision > 0
-                && installed_credentials.insert((
-                    binding.credential_profile.digest.clone(),
-                    binding.credential_revision,
-                )),
-            "credential evidence revision/duplicate",
-        )?;
-    }
-    let mut harnesses = BTreeSet::new();
-    for harness in &input.node.harnesses {
-        text(&harness.harness)?;
-        text(&harness.cli_version)?;
-        bounds(&harness.models, 64)?;
-        bounds(&harness.capabilities, 64)?;
-        ensure(
-            harnesses.insert((
-                harness.harness.clone(),
-                harness.adapter.clone().digest,
-                harness.environment.clone().digest,
-            )),
-            "duplicate harness identity",
-        )?;
-        let mut models = BTreeSet::new();
-        for model in &harness.models {
-            for value in [
-                &model.provider,
-                &model.model,
-                &model.reasoning_configuration_reference,
-                &model.native_reasoning,
-            ] {
-                text(value)?;
-            }
-            ensure(
-                models.insert((
-                    &model.provider,
-                    &model.model,
-                    &model.reasoning_configuration_reference,
-                )),
-                "conflicting model mapping",
-            )?;
-        }
-        for capability in &harness.capabilities {
-            capability
-                .validate()
-                .map_err(|e| SelectionError::Invalid(e.to_string()))?;
-        }
-    }
-    let mut observations = BTreeSet::new();
-    for observation in &input.observations {
-        observation.validate()?;
-        ensure(
-            observation.received_at_ms <= input.now_ms
-                && observations.insert(observation.observation_id),
-            "future or duplicate observation",
-        )?;
-    }
+    validate_installation(
+        &input.credentials,
+        &input.node.credential_bindings,
+        input.node.material_delivery.as_ref(),
+        &input.node.harnesses,
+        &input.observations,
+        input.now_ms,
+    )?;
     let mut total = 0usize;
     let mut compositions = BTreeSet::new();
     for prepared in &input.compositions {
@@ -366,4 +272,117 @@ pub(crate) fn validate(
             <= 8_388_608,
         "snapshot byte bound",
     )
+}
+
+/// Structural checks shared by subject adapters; these never authenticate facts.
+pub(crate) fn validate_installation(
+    credential_rows: &[AuthorizedCredential],
+    bindings: &[CredentialBinding],
+    delivery: Option<&DeliveryCapability>,
+    harness_rows: &[InstalledHarness],
+    observation_rows: &[AvailabilityObservation],
+    now_ms: u64,
+) -> Result<()> {
+    let mut credentials = BTreeSet::new();
+    for credential in credential_rows {
+        text(&credential.provider)?;
+        text(&credential.account_reference)?;
+        text(&credential.endpoint_reference)?;
+        if let Some(owner) = &credential.material_owner {
+            text(owner.id.as_str())?;
+            text(owner.version.as_str())?;
+        }
+        ensure(
+            credential.revision > 0
+                && credentials.insert(format!(
+                    "{}@{}",
+                    credential.profile.id.as_str(),
+                    credential.profile.version.as_str()
+                )),
+            "credential revision/identity conflict",
+        )?;
+    }
+    if let Some(delivery) = delivery {
+        text(delivery.adapter.id.as_str())?;
+        text(delivery.adapter.version.as_str())?;
+        ensure(delivery.version > 0, "delivery protocol version")?;
+    }
+    let mut installed_credentials = BTreeSet::new();
+    for binding in bindings {
+        if let Some(preparation) = &binding.preparation {
+            for reference in [
+                &preparation.owner,
+                &preparation.credential_profile,
+                &preparation.delivery.adapter,
+            ] {
+                text(reference.id.as_str())?;
+                text(reference.version.as_str())?;
+            }
+            target(&preparation.target)?;
+            ensure(
+                preparation.credential_revision > 0
+                    && preparation.delivery.version > 0
+                    && preparation.observed_at_ms > 0
+                    && preparation.expires_at_ms > preparation.observed_at_ms
+                    && preparation.expires_at_ms - preparation.observed_at_ms <= 120_000,
+                "preparation evidence bounds",
+            )?;
+        }
+        ensure(
+            binding.credential_revision > 0
+                && installed_credentials.insert((
+                    binding.credential_profile.digest.clone(),
+                    binding.credential_revision,
+                )),
+            "credential evidence revision/duplicate",
+        )?;
+    }
+    let mut harnesses = BTreeSet::new();
+    for harness in harness_rows {
+        text(&harness.harness)?;
+        text(&harness.cli_version)?;
+        bounds(&harness.models, 64)?;
+        bounds(&harness.capabilities, 64)?;
+        ensure(
+            harnesses.insert((
+                harness.harness.clone(),
+                harness.adapter.clone().digest,
+                harness.environment.clone().digest,
+            )),
+            "duplicate harness identity",
+        )?;
+        let mut models = BTreeSet::new();
+        for model in &harness.models {
+            for value in [
+                &model.provider,
+                &model.model,
+                &model.reasoning_configuration_reference,
+                &model.native_reasoning,
+            ] {
+                text(value)?;
+            }
+            ensure(
+                models.insert((
+                    &model.provider,
+                    &model.model,
+                    &model.reasoning_configuration_reference,
+                )),
+                "conflicting model mapping",
+            )?;
+        }
+        for capability in &harness.capabilities {
+            capability
+                .validate()
+                .map_err(|e| SelectionError::Invalid(e.to_string()))?;
+        }
+    }
+    let mut observations = BTreeSet::new();
+    for observation in observation_rows {
+        observation.validate()?;
+        ensure(
+            observation.received_at_ms <= now_ms && observations.insert(observation.observation_id),
+            "future or duplicate observation",
+        )?;
+    }
+    Ok(())
 }

@@ -377,11 +377,12 @@ dependencies = [
 
 [[package]]
 name = "aq-selection"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "aq-profiles",
  "aq-session-api",
  "aq-session-protocol",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",

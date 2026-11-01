@@ -1,0 +1,1783 @@
+{
+  "$defs": {
+    "AccountingState": {
+      "enum": [
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "request",
+        "policy",
+        "compatibility",
+        "compiler",
+        "renderer",
+        "composition",
+        "mail_frame",
+        "startup"
+      ],
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "AuthorityState": {
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
+    "AuthorityState2": {
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
+    "AuthorizedCredential": {
+      "additionalProperties": false,
+      "description": "Operator authority to provision a specific profile/account/endpoint. Presence\nis separate from the node's installed binding and provider availability.",
+      "properties": {
+        "account_reference": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpoint_reference": {
+          "type": "string"
+        },
+        "material_owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "provisionable": {
+          "type": "boolean"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile",
+        "provider",
+        "account_reference",
+        "endpoint_reference",
+        "revision",
+        "enabled",
+        "provisionable"
+      ],
+      "type": "object"
+    },
+    "Availability": {
+      "enum": [
+        "available",
+        "quota_unavailable",
+        "temporary_unavailable",
+        "authentication_failed",
+        "model_unsupported"
+      ],
+      "type": "string"
+    },
+    "AvailabilityObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "cooldown_until_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "received_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ObservationScope"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/ObservationSource"
+        },
+        "state": {
+          "$ref": "#/$defs/Availability"
+        }
+      },
+      "required": [
+        "observation_id",
+        "scope",
+        "source",
+        "sequence",
+        "revision",
+        "state",
+        "received_at_ms",
+        "expires_at_ms",
+        "cooldown_until_ms"
+      ],
+      "type": "object"
+    },
+    "BudgetBasis": {
+      "enum": [
+        "task_cumulative_estimated_cost",
+        "task_cumulative_enforced_cost"
+      ],
+      "type": "string"
+    },
+    "CandidateState": {
+      "enum": [
+        "eligible",
+        "missing_credentials",
+        "unavailable",
+        "unsupported",
+        "stale_unknown",
+        "policy_denied"
+      ],
+      "type": "string"
+    },
+    "CandidateTrace": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "credential_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environment": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "observation_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "profile_candidate_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/CandidateState"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "profile_candidate_id",
+        "provider",
+        "model",
+        "harness",
+        "environment",
+        "state",
+        "reason_codes",
+        "observation_ids"
+      ],
+      "type": "object"
+    },
+    "Capability": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "CentralAttemptPolicy": {
+      "enum": [
+        "initial_selection_only"
+      ],
+      "type": "string"
+    },
+    "CentralBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "compiler": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "composition": {
+          "$ref": "#/$defs/CentralComposition"
+        },
+        "mail_frame": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "policy": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "renderer": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "request": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        },
+        "startup": {
+          "$ref": "#/$defs/GeneratedArtifact"
+        }
+      },
+      "required": [
+        "composition",
+        "request",
+        "policy",
+        "compatibility",
+        "compiler",
+        "renderer",
+        "mail_frame",
+        "startup",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "CentralChoice": {
+      "additionalProperties": false,
+      "properties": {
+        "account_reference": {
+          "type": "string"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "composition": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "credential_profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "credential_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint_reference": {
+          "type": "string"
+        },
+        "harness_settings": {
+          "$ref": "#/$defs/HarnessSettings"
+        },
+        "model_settings": {
+          "$ref": "#/$defs/ModelSettings"
+        },
+        "profile_candidate_id": {
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reasoning_configuration_reference": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceCeilings"
+        },
+        "startup": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "profile_candidate_id",
+        "model_settings",
+        "reasoning_configuration_reference",
+        "harness_settings",
+        "qualification",
+        "credential_profile",
+        "credential_revision",
+        "account_reference",
+        "endpoint_reference",
+        "composition",
+        "startup",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "CentralComposition": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "authority": {
+          "$ref": "#/$defs/AuthorityState"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "compiler": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "context_limit_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "type": "null"
+        },
+        "denied_requirements": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "effective_permissions": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "execution_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "instruction_order": {
+          "items": {
+            "$ref": "#/$defs/Instruction"
+          },
+          "type": "array"
+        },
+        "intelligence_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "mail_frame": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "modules": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "omissions": {
+          "items": {
+            "$ref": "#/$defs/Omission"
+          },
+          "type": "array"
+        },
+        "optional_startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "overrides": {
+          "items": {
+            "$ref": "#/$defs/OverrideExplanation"
+          },
+          "type": "array"
+        },
+        "reference_material": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "type": "array"
+        },
+        "renderer": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "request": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "requested_permissions": {
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "type": "array"
+        },
+        "required_startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "selected_model": {
+          "type": "null"
+        },
+        "selection": {
+          "$ref": "#/$defs/SelectionState"
+        },
+        "startup": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "startup_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralProfileSubject"
+        },
+        "token_count": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema_version",
+        "subject",
+        "request",
+        "catalog",
+        "compiler",
+        "compatibility",
+        "renderer",
+        "mail_frame",
+        "agent_profile",
+        "intelligence_profile",
+        "execution_profile",
+        "modules",
+        "harness",
+        "environment",
+        "instruction_order",
+        "requested_permissions",
+        "effective_permissions",
+        "denied_requirements",
+        "context_limit_bytes",
+        "required_startup_bytes",
+        "optional_startup_bytes",
+        "omissions",
+        "overrides",
+        "reference_material",
+        "startup",
+        "startup_bytes",
+        "selection",
+        "selected_model",
+        "token_count",
+        "cost",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "CentralCredentialBinding": {
+      "additionalProperties": false,
+      "description": "Installed local presence data only; no worker delivery/preparation target.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "credential_profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "credential_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "credential_revision",
+        "credential_profile",
+        "available",
+        "observed_at_ms",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "CentralPolicyKind": {
+      "enum": [
+        "central_turn_selection"
+      ],
+      "type": "string"
+    },
+    "CentralProfileSubject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "conversation_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central_conversation",
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "actor_id",
+            "conversation_id",
+            "conversation_revision",
+            "policy"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CentralSelectionArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "selection": {
+          "$ref": "#/$defs/ResolvedCentralSelection"
+        },
+        "utf8": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "utf8",
+        "selection"
+      ],
+      "type": "object"
+    },
+    "CentralSelectionInputs": {
+      "additionalProperties": false,
+      "properties": {
+        "compositions": {
+          "items": {
+            "$ref": "#/$defs/CentralBundle"
+          },
+          "type": "array"
+        },
+        "installation": {
+          "$ref": "#/$defs/Pinned5"
+        },
+        "now_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "original_expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pinned3"
+        },
+        "registry": {
+          "$ref": "#/$defs/Pinned4"
+        },
+        "reservation": {
+          "$ref": "#/$defs/Pinned"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "reservation",
+        "policy",
+        "registry",
+        "installation",
+        "compositions",
+        "now_ms",
+        "original_expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "CentralSelectionOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "accounting": {
+          "$ref": "#/$defs/AccountingState"
+        },
+        "authority": {
+          "$ref": "#/$defs/AuthorityState2"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resolved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CentralSelectionArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spent_microunits": {
+          "type": "null"
+        },
+        "token_count": {
+          "type": "null"
+        },
+        "traces": {
+          "items": {
+            "$ref": "#/$defs/CandidateTrace"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "traces",
+        "reason_codes",
+        "accounting",
+        "token_count",
+        "spent_microunits",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "CentralTurnPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "allow_unknown_cost": {
+          "type": "boolean"
+        },
+        "allowed_environments": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "type": "array"
+        },
+        "attempts": {
+          "$ref": "#/$defs/CentralAttemptPolicy"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "ceilings": {
+          "$ref": "#/$defs/ResourceCeilings"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "composition_policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "execution_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "intelligence_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "kind": {
+          "$ref": "#/$defs/CentralPolicyKind"
+        },
+        "max_output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reservation": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralProfileSubject"
+        }
+      },
+      "required": [
+        "schema_version",
+        "revision",
+        "kind",
+        "subject",
+        "reservation",
+        "reservation_policy",
+        "composition_policy",
+        "compatibility",
+        "catalog",
+        "agent_profile",
+        "intelligence_profile",
+        "execution_profile",
+        "enabled",
+        "attempts",
+        "allow_unknown_cost",
+        "ceilings",
+        "max_output_tokens",
+        "allowed_environments"
+      ],
+      "type": "object"
+    },
+    "Delivery": {
+      "enum": [
+        "startup",
+        "on_demand"
+      ],
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "GeneratedArtifact": {
+      "additionalProperties": false,
+      "description": "Actual generated UTF-8 data, never retained storage or authenticated authority.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "utf8": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reference",
+        "utf8"
+      ],
+      "type": "object"
+    },
+    "HarnessSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "cli_version": {
+          "$ref": "#/$defs/Text"
+        },
+        "environment": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "harness": {
+          "$ref": "#/$defs/Text"
+        },
+        "required_capabilities": {
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "harness",
+        "cli_version",
+        "adapter",
+        "environment",
+        "required_capabilities"
+      ],
+      "type": "object"
+    },
+    "InstallationSnapshot": {
+      "additionalProperties": false,
+      "description": "Local installation incarnation, deliberately not a Run generation or worker.",
+      "properties": {
+        "credential_bindings": {
+          "items": {
+            "$ref": "#/$defs/CentralCredentialBinding"
+          },
+          "type": "array"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "harnesses": {
+          "items": {
+            "$ref": "#/$defs/InstalledHarness"
+          },
+          "type": "array"
+        },
+        "incarnation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "installation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "observed_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "installation_id",
+        "incarnation_id",
+        "revision",
+        "observed_at_ms",
+        "expires_at_ms",
+        "harnesses",
+        "credential_bindings"
+      ],
+      "type": "object"
+    },
+    "InstalledHarness": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        },
+        "cli_version": {
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "failure_classifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness": {
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/NativeLimits"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/NativeModelSupport"
+          },
+          "type": "array"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "harness",
+        "cli_version",
+        "adapter",
+        "environment",
+        "qualification",
+        "models",
+        "capabilities",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "Instruction": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "delivery",
+        "required",
+        "text"
+      ],
+      "type": "object"
+    },
+    "ModelSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "max_output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "$ref": "#/$defs/Text"
+        },
+        "provider": {
+          "$ref": "#/$defs/Text"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/Text"
+        },
+        "spending_budget": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "reasoning",
+        "max_output_tokens"
+      ],
+      "type": "object"
+    },
+    "NativeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "context_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cpu_millis": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hard_cost_enforcer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process_limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context_bytes",
+        "max_output_tokens",
+        "wall_time_ms",
+        "memory_bytes",
+        "cpu_millis",
+        "process_limit"
+      ],
+      "type": "object"
+    },
+    "NativeModelSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "native_reasoning": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning_configuration_reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "reasoning_configuration_reference",
+        "native_reasoning"
+      ],
+      "type": "object"
+    },
+    "ObservationScope": {
+      "additionalProperties": false,
+      "properties": {
+        "account_reference": {
+          "type": "string"
+        },
+        "credential_profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "credential_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint_reference": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node_id": {
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_revision",
+        "provider",
+        "credential_profile",
+        "account_reference",
+        "endpoint_reference"
+      ],
+      "type": "object"
+    },
+    "ObservationSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "operator",
+              "type": "string"
+            },
+            "principal_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "principal_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "worker",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "selection_digest": {
+              "$ref": "#/$defs/Digest"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "selection_digest"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Omission": {
+      "additionalProperties": false,
+      "properties": {
+        "reason_code": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "source",
+        "reason_code",
+        "required"
+      ],
+      "type": "object"
+    },
+    "OverrideExplanation": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "reason_code": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "field",
+        "source",
+        "reason_code"
+      ],
+      "type": "object"
+    },
+    "Permission": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "scope_reference": {
+          "description": "Logical scope reference, never a physical credential or secret value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "scope_reference"
+      ],
+      "type": "object"
+    },
+    "Pinned": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "value": {
+          "$ref": "#/$defs/ReservationSnapshot"
+        }
+      },
+      "required": [
+        "reference",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Pinned2": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "value": {
+          "$ref": "#/$defs/ReservationPolicy"
+        }
+      },
+      "required": [
+        "reference",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Pinned3": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "value": {
+          "$ref": "#/$defs/CentralTurnPolicy"
+        }
+      },
+      "required": [
+        "reference",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Pinned4": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "value": {
+          "$ref": "#/$defs/RegistrySnapshot"
+        }
+      },
+      "required": [
+        "reference",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Pinned5": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "value": {
+          "$ref": "#/$defs/InstallationSnapshot"
+        }
+      },
+      "required": [
+        "reference",
+        "value"
+      ],
+      "type": "object"
+    },
+    "RegistrySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "credentials": {
+          "items": {
+            "$ref": "#/$defs/AuthorizedCredential"
+          },
+          "type": "array"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/AvailabilityObservation"
+          },
+          "type": "array"
+        },
+        "observed_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "observed_at_ms",
+        "expires_at_ms",
+        "credentials",
+        "observations"
+      ],
+      "type": "object"
+    },
+    "ReservationPolicy": {
+      "additionalProperties": false,
+      "description": "Exact schema37 LocalPolicy data shape, not an executable policy adapter.",
+      "properties": {
+        "actor_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReservationPolicyKind"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "actor_id",
+        "conversation_id",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "ReservationPolicyKind": {
+      "enum": [
+        "global_supervisor_reservation"
+      ],
+      "type": "string"
+    },
+    "ReservationSnapshot": {
+      "additionalProperties": false,
+      "description": "Actual bounded source projection. Pure validity does not authenticate a hold.",
+      "properties": {
+        "actor_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "actor_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "conversation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "conversation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/ReservedMail"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/Pinned2"
+        },
+        "policy_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reservation_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "through_cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "actor_id",
+        "conversation_id",
+        "conversation_revision",
+        "actor_revision",
+        "reservation_revision",
+        "policy_revision",
+        "policy",
+        "through_cursor",
+        "messages"
+      ],
+      "type": "object"
+    },
+    "ReservedMail": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "message_id",
+        "cursor",
+        "payload_digest"
+      ],
+      "type": "object"
+    },
+    "ResolvedCentralSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "accounting": {
+          "$ref": "#/$defs/AccountingState"
+        },
+        "agent_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "authority": {
+          "$ref": "#/$defs/AuthorityState2"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "choice": {
+          "$ref": "#/$defs/CentralChoice"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "composition_policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "execution_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "installation": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "intelligence_profile": {
+          "$ref": "#/$defs/Source"
+        },
+        "policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "registry": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "selected_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "spent_microunits": {
+          "type": "null"
+        },
+        "subject": {
+          "$ref": "#/$defs/CentralProfileSubject"
+        },
+        "token_count": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema_version",
+        "subject",
+        "reservation",
+        "policy",
+        "reservation_policy",
+        "composition_policy",
+        "compatibility",
+        "catalog",
+        "agent_profile",
+        "intelligence_profile",
+        "execution_profile",
+        "registry",
+        "installation",
+        "snapshot_digest",
+        "choice",
+        "selected_at_ms",
+        "expires_at_ms",
+        "accounting",
+        "token_count",
+        "spent_microunits",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "ResourceCeilings": {
+      "additionalProperties": false,
+      "properties": {
+        "context_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost_limit_microunits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cpu_millis": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "currency": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process_limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_hard_cost_enforcement": {
+          "type": "boolean"
+        },
+        "wall_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context_bytes",
+        "wall_time_ms",
+        "memory_bytes",
+        "cpu_millis",
+        "process_limit",
+        "require_hard_cost_enforcement"
+      ],
+      "type": "object"
+    },
+    "SelectionState": {
+      "enum": [
+        "unresolved"
+      ],
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "digest",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "SpendingBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/BudgetBasis"
+        },
+        "currency": {
+          "$ref": "#/$defs/Text"
+        },
+        "limit_microunits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "currency",
+        "basis",
+        "limit_microunits"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "urn:agent-q:central-selection:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralSelectionInputs"
+        },
+        "document": {
+          "const": "inputs",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CentralSelectionOutcome"
+        },
+        "document": {
+          "const": "outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "data"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Document",
+  "x-execution-authority": false,
+  "x-input-maxBytes": 33554432,
+  "x-output-maxBytes": 262144,
+  "x-required-validation": "select_central / verify_central_selection plus independent current owner authentication"
+}

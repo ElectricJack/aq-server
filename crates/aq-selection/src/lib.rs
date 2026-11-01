@@ -1,5 +1,7 @@
 //! Pure deterministic selection over bounded snapshots. No inputs confer authority.
 //! Server-owned adapters authenticate facts and recheck them at actual admission.
+mod candidate_core;
+pub mod central;
 mod domain;
 mod explanation;
 pub use explanation::human_selection;
