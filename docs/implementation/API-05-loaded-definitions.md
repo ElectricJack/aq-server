@@ -63,6 +63,16 @@ were zero. The complete UI `tsc -b` check also passes after two test-only typing
 fixes. Canonical runtime activation/promotion remains a separate operator gate;
 the current TCP-only PostgreSQL deployment is not a valid Unix owner transport.
 
+The [inert development startup recipe](development-playbooks-startup-recipe.md)
+is separately qualified against combined schema35 source `8b42b08`. The two
+loaded-definition cases and fresh inert startup case passed together in 3.30s.
+Startup and two real idle quanta created no workflow admissions/effects/outbox,
+and left execution, Graph-operation, mail, notification and review counts
+unchanged. The actual Runs and Decisions owners returned empty fixture lists.
+This supplies a truthful dormant definition for a future correctly deployed
+optional runtime; it does not supply or weaken the currently absent trusted
+Unix socket transport, and no canonical configuration was applied.
+
 ## Follow-up for the current installed catalog
 
 The frozen runner inspector exposes only Runs, Effects and Receipts. Its
