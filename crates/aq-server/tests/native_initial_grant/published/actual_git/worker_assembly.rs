@@ -197,13 +197,21 @@ async fn run_worker(mode: Mode) {
                 let request_started_ms = (admission_clock)().timestamp_millis();
                 let (request, output_upload) = phase_output::capture_upload_request(request).await;
                 let response = next.run(request).await;
-                if path == "/v1/worker/profiled-v2/accept" {
+                if matches!(
+                    path.as_str(),
+                    "/v1/worker/profiled-v2/accept" | "/v1/worker/profiled-v2/prepare"
+                ) {
                     let classification =
                         response
                             .extensions()
                             .get::<aq_server::test_support::control_diagnostics::ConflictClass>();
                     eprintln!(
-                        "bounded accept response: {}",
+                        "bounded {} response: {}",
+                        if path == "/v1/worker/profiled-v2/accept" {
+                            "accept"
+                        } else {
+                            "prepare"
+                        },
                         json!({
                             "request_started_at_ms":request_started_ms,
                             "response_completed_at_ms":(admission_clock)().timestamp_millis(),

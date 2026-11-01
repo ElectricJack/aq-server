@@ -7,6 +7,8 @@ pub enum ConflictClass {
     SelectionExpired,
     NativePreparationUnavailable,
     PhasePreparationUnavailable,
+    PhaseExecutionAuthorityUnavailable,
+    PhaseExecutionInputsChanged,
     OriginalOfferUnavailable,
     SourceObservationUnavailable,
     CapabilitySnapshotChanged,
@@ -29,6 +31,10 @@ pub(crate) fn classify(error: &AppError) -> Option<ConflictClass> {
         "accepted preparation v2 is not currently available" => {
             ConflictClass::PhasePreparationUnavailable
         }
+        "phase execution authority is not currently available" => {
+            ConflictClass::PhaseExecutionAuthorityUnavailable
+        }
+        "pinned phase execution inputs changed" => ConflictClass::PhaseExecutionInputsChanged,
         "original native offer unavailable or inconsistent" => {
             ConflictClass::OriginalOfferUnavailable
         }
@@ -67,5 +73,11 @@ mod tests {
             Some(ConflictClass::SelectionExpired)
         );
         assert!(classify(&AppError::Internal).is_none());
+        assert_eq!(
+            classify(&AppError::Conflict(
+                "pinned phase execution inputs changed".into()
+            )),
+            Some(ConflictClass::PhaseExecutionInputsChanged)
+        );
     }
 }
