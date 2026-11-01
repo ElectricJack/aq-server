@@ -433,3 +433,6 @@ async fn normalized_binding_removal_then_restore_requires_new_scoped_read() {
     let (status, reply) = renew(&f.c, &f.initial).await;
     assert_eq!(status, StatusCode::OK, "{reply:?}");
 }
+
+#[path = "presence/isolation.rs"]
+mod isolation;

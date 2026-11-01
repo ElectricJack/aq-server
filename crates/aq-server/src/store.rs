@@ -332,6 +332,15 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
             ));
         }
     }
+    if supported >= 31 {
+        let complete: bool = sqlx::query_scalar("SELECT to_regprocedure('profiled_provisionable_binding_set(jsonb)') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='profiled_inventory_semantic_heads' AND column_name='provisionable_binding_set' AND data_type='jsonb')")
+            .fetch_one(&mut *tx).await?;
+        if !complete {
+            return Err(StoreError::Corrupt(
+                "scoped presence binding barrier missing from current schema".into(),
+            ));
+        }
+    }
     tx.commit().await?;
     Ok(())
 }

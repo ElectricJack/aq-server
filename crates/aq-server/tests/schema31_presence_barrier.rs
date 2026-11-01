@@ -63,3 +63,41 @@ async fn semantic_projection_ignores_order_and_observation_clocks_but_not_bindin
     .unwrap();
     assert!(removed);
 }
+
+#[tokio::test]
+async fn current31_missing_binding_column_or_function_refuses_reopen_without_repair() {
+    for missing in ["column", "function"] {
+        let db = TestDb::create().await;
+        let store = db.store().await;
+        let pool = db.pool().await;
+        store.close().await;
+        let ddl = if missing == "column" {
+            "ALTER TABLE profiled_inventory_semantic_heads DROP COLUMN provisionable_binding_set"
+        } else {
+            "DROP FUNCTION profiled_provisionable_binding_set(JSONB)"
+        };
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+        assert!(matches!(
+            Store::connect_with(db.options()).await,
+            Err(aq_server::store::StoreError::Corrupt(_))
+        ));
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(version, aq_server::STATE_FORMAT_VERSION.to_string());
+        let restored: bool = if missing == "column" {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='profiled_inventory_semantic_heads' AND column_name='provisionable_binding_set')")
+                .fetch_one(&pool).await.unwrap()
+        } else {
+            sqlx::query_scalar(
+                "SELECT to_regprocedure('profiled_provisionable_binding_set(jsonb)') IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        assert!(!restored);
+    }
+}

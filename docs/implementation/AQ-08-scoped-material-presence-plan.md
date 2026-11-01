@@ -170,7 +170,7 @@ refreshes and per-attempt reports remain independent. No new public wire version
 or schema is introduced.
 
 The current qualification exercises one actual public placement slot. Independent
-same-node simultaneous-attempt storage/owner fixtures and sustained control-lane
-load remain followup qualification; separate heads and pools alone are not
+same-node storage-head and controlled admission/PG saturation fixtures are covered
+by the isolation followup; sustained control-lane load remains followup qualification; separate heads and pools alone are not
 capacity evidence. Existing renewal regressions retain current task/source,
 principal, registry and private-byte fences. No provider calls are made.
