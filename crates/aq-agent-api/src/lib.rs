@@ -141,6 +141,12 @@ pub fn check(root: &Value, s: &Value, v: &Value) -> bool {
                             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 }
                 "\\S" => t.chars().any(|c| !c.is_whitespace()),
+                "^sha256:[0-9a-f]{64}$" => t.strip_prefix("sha256:").is_some_and(|hex| {
+                    hex.len() == 64
+                        && hex
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                }),
                 "^[0-9a-f]{64}$" => {
                     t.len() == 64
                         && t.bytes()
@@ -344,5 +350,40 @@ impl Context {
     }
     pub fn value(&self) -> &Value {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod human_digest_pattern_tests {
+    #[test]
+    fn prefixed_sha256_pattern_is_exact_and_existing_hex_remains_exact() {
+        let prefixed = serde_json::json!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$"});
+        let hex = "a1".repeat(32);
+        assert!(super::check(
+            &prefixed,
+            &prefixed,
+            &serde_json::json!(format!("sha256:{hex}"))
+        ));
+        for value in [
+            hex.clone(),
+            format!("SHA256:{hex}"),
+            format!("sha256:{}", hex.to_uppercase()),
+            format!("sha256:{}", "g".repeat(64)),
+            format!("sha256:{}", "a".repeat(63)),
+            format!("sha256:{}", "a".repeat(65)),
+        ] {
+            assert!(!super::check(
+                &prefixed,
+                &prefixed,
+                &serde_json::json!(value)
+            ));
+        }
+        let original = serde_json::json!({"type":"string","pattern":"^[0-9a-f]{64}$"});
+        assert!(super::check(&original, &original, &serde_json::json!(hex)));
+        assert!(!super::check(
+            &original,
+            &original,
+            &serde_json::json!(format!("sha256:{hex}"))
+        ));
     }
 }
