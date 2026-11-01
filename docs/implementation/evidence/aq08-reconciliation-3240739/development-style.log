@@ -1,0 +1,52 @@
+    Checking aq-session-protocol v0.1.0 (/tmp/aq-native-reconcile/vendor/aq-session-protocol-0.1.0)
+    Checking aq-playbooks-model v0.1.0 (/tmp/aq-native-reconcile/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+    Checking aq-lifecycle-protocol v0.1.0 (/tmp/aq-native-reconcile/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking aq-session-api v0.1.0 (/tmp/aq-native-reconcile/crates/aq-session-api)
+    Checking aq-playbooks-runner v0.1.2 (/tmp/aq-native-reconcile/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+    Checking aq-lifecycle-api v0.1.0 (/tmp/aq-native-reconcile/crates/aq-lifecycle-api)
+    Checking aq-agent-api v0.1.0 (/tmp/aq-native-reconcile/crates/aq-agent-api)
+    Checking aq-profiles v0.1.1 (/tmp/aq-native-reconcile/crates/aq-profiles)
+    Checking aq-playbooks-postgres v0.1.2 (/tmp/aq-native-reconcile/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+    Checking aq-terminal-relay-protocol v0.1.0 (/tmp/aq-native-reconcile/crates/aq-terminal-relay-protocol)
+    Checking aq-release v0.1.0 (/tmp/aq-native-reconcile/crates/aq-release)
+    Checking aq-terminal-relay v0.1.0 (/tmp/aq-native-reconcile/crates/aq-terminal-relay)
+    Checking aq-selection v0.1.2 (/tmp/aq-native-reconcile/crates/aq-selection)
+    Checking aq-playbook-host v0.1.2 (/tmp/aq-native-reconcile/crates/aq-playbook-host)
+    Checking aq-notifications v0.1.0 (/tmp/aq-native-reconcile/crates/aq-notifications)
+    Checking aq-observation-api v0.1.0 (/tmp/aq-native-reconcile/crates/aq-observation-api)
+    Checking aq-observation-admission v0.1.0 (/tmp/aq-native-reconcile/crates/aq-observation-admission)
+    Checking aq-accounting v0.1.0 (/tmp/aq-native-reconcile/crates/aq-accounting)
+    Checking aq-admission v0.1.7 (/tmp/aq-native-reconcile/crates/aq-admission)
+    Checking aq-review-protocol v0.1.0 (/tmp/aq-native-reconcile/crates/aq-review-protocol)
+    Checking aq-protocol v0.1.0 (/tmp/aq-native-reconcile/vendor/aq-protocol-0.1.0)
+    Checking aq-worker-protocol v0.2.0 (/tmp/aq-native-reconcile/vendor/aq-worker-protocol-0.2.0)
+    Checking aq-playbooks-compiler v0.1.0 (/tmp/aq-native-reconcile/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+    Checking aq-server v0.1.0 (/tmp/aq-native-reconcile/crates/aq-server)
+error: this `if` statement can be collapsed
+   --> crates/aq-server/src/profiled_execution/reconciliation/mod.rs:163:5
+    |
+163 | /     if let Some(expected) = expected {
+164 | |         if expected.binding != binding
+165 | |             || hot.owner.as_ref().is_some_and(|o| {
+166 | |                 o.guardian_id != expected.guardian_id || o.launch_id != expected.launch_id
+...   |
+174 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+163 ~     if let Some(expected) = expected
+164 ~         && (expected.binding != binding
+165 |             || hot.owner.as_ref().is_some_and(|o| {
+...
+169 |                 .last_grant_id
+170 ~                 .is_some_and(|id| hot.grant.as_ref().is_none_or(|g| g.grant_id != id)))
+171 |         {
+172 |             return Err(invalid());
+173 ~         }
+    |
+
+error: could not compile `aq-server` (lib) due to 1 previous error

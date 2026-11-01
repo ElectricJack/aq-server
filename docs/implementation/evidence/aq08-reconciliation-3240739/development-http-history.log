@@ -1,0 +1,58 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-native-reconcile/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.12s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/agent-q/target/debug/deps/native_initial_grant-769fb35b95da6ed9)
+
+running 16 tests
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... ok
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+
+test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 22.75s
+
+     Running tests/native_reconciliation.rs (/home/jkern/dev/agent-q/target/debug/deps/native_reconciliation-3b89a3aad585339c)
+
+running 7 tests
+test actual_started_and_stopped_receipts_remain_readable_after_launch_configuration_retires ... ok
+test actual_publication_and_preparation_are_read_without_adopting_input_journal ... ok
+test credential_rotation_during_observed_node_lock_wait_refuses_old_authentication ... ok
+test expired_snapshot_does_not_close_and_actual_never_granted_receipt_is_required ... ok
+test explicit_scope_owner_refusals_and_cursor_progress_do_not_leak_other_bindings ... ok
+test mounted_contract_requires_current_auth_exact_nonce_and_bounded_strict_body ... FAILED
+test unsupported_history_advances_cursor_and_current_boot_loss_does_not_restore_authority ... FAILED
+
+failures:
+
+---- mounted_contract_requires_current_auth_exact_nonce_and_bounded_strict_body stdout ----
+
+thread 'mounted_contract_requires_current_auth_exact_nonce_and_bounded_strict_body' (158289) panicked at crates/aq-server/tests/native_reconciliation.rs:262:5:
+assertion `left == right` failed
+  left: 403
+ right: 404
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- unsupported_history_advances_cursor_and_current_boot_loss_does_not_restore_authority stdout ----
+
+thread 'unsupported_history_advances_cursor_and_current_boot_loss_does_not_restore_authority' (158292) panicked at crates/aq-server/tests/native_reconciliation.rs:304:10:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "P0001", message: "native incarnation cannot become a fixture registration", detail: None, hint: None, position: None, where: Some("PL/pgSQL function native_incarnation_guard() line 5 at RAISE"), schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("pl_exec.c"), line: Some(3897), routine: Some("exec_stmt_raise") })
+
+
+failures:
+    mounted_contract_requires_current_auth_exact_nonce_and_bounded_strict_body
+    unsupported_history_advances_cursor_and_current_boot_loss_does_not_restore_authority
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.93s
+
+error: test failed, to rerun pass `-p aq-server --test native_reconciliation`

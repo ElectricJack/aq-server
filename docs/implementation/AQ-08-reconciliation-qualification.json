@@ -1,0 +1,1225 @@
+{
+  "schema_version": 1,
+  "source_revision": "32407399251b57132397f27bf8b6b5444c66d798",
+  "reconciliation_source": "1bf6a5b",
+  "style_fix": "dd1fbd8",
+  "closure_contract": "f5f61b3",
+  "passed": 51,
+  "failed": 0,
+  "ignored": 0,
+  "strict_affected_all_feature_clippy": true,
+  "format": true,
+  "source_inventory": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "19456997cb1f8959a6d14d6393320a3b33d880a5f562cbdd71e1415bc4b1acfe",
+      "bytes": 88659
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "42bcbada166090885b1fd7c5da190aa8022bcedf1770885b6f0c111e1f1ef6cc",
+      "bytes": 2574
+    },
+    {
+      "path": "crates/aq-admission/Cargo.toml",
+      "sha256": "4435f3270c72cbb2e6d1ab78dd16bbba223f4580be1c77d7a85aa0dabfe18fea",
+      "bytes": 522
+    },
+    {
+      "path": "crates/aq-admission/README.md",
+      "sha256": "ae71d67964881a993d3a2f04277bc193e58e4ad9422c9d752ddcc41c0f352f95",
+      "bytes": 14321
+    },
+    {
+      "path": "crates/aq-admission/artifacts/contract.schema.json",
+      "sha256": "1a5637238c16ec1345f40232a732ae391143d518a320f6823da94241c9c6f988",
+      "bytes": 22967
+    },
+    {
+      "path": "crates/aq-admission/artifacts/control.compatibility-sha256.json",
+      "sha256": "23d083519430c8e4156f73b0b7c41723fd43abe2ddf2a91bbc0ad5db3507304d",
+      "bytes": 6252
+    },
+    {
+      "path": "crates/aq-admission/artifacts/control.fixture.json",
+      "sha256": "da31ccc3e14c3ea0c5fbc535ddb487d1adab60ecf20387cd8680d567db57cbbe",
+      "bytes": 56964
+    },
+    {
+      "path": "crates/aq-admission/artifacts/control.python-vectors.json",
+      "sha256": "a90fcb7068623031691bea00a8d58ac9e113dcb2a5a5594ff753488ab6500176",
+      "bytes": 748
+    },
+    {
+      "path": "crates/aq-admission/artifacts/control.schema.json",
+      "sha256": "929d5c4873ebf8f56556088971d3ed60d66753d04041baac367849cbb3a2afec",
+      "bytes": 49523
+    },
+    {
+      "path": "crates/aq-admission/artifacts/execution-spec.fixture.json",
+      "sha256": "3f5509eec96f33ca0023016f3c633a2d340f245c8454a0c0f4d9e88295bbfc8d",
+      "bytes": 8556
+    },
+    {
+      "path": "crates/aq-admission/artifacts/execution-spec.schema.json",
+      "sha256": "865634d68302bb70c024152c1db47b34563216feb7645e579d4ed76dd1383f47",
+      "bytes": 9818
+    },
+    {
+      "path": "crates/aq-admission/artifacts/fixtures.json",
+      "sha256": "53217ced2c2d36e8f03542298212275327b3741eabe848a8fec236464a857a24",
+      "bytes": 9984
+    },
+    {
+      "path": "crates/aq-admission/artifacts/granted-closure.compatibility-sha256.json",
+      "sha256": "fef5a0589c60c0d7156c25e2481190ffaf9c832c0415d76f3630c2e257ef61d4",
+      "bytes": 12171
+    },
+    {
+      "path": "crates/aq-admission/artifacts/granted-closure.fixture.json",
+      "sha256": "fe2865f73c6c70b98f54b51669464f767d7835739df28266c299f5b8498978d7",
+      "bytes": 87402
+    },
+    {
+      "path": "crates/aq-admission/artifacts/granted-closure.python-vectors.json",
+      "sha256": "d964631a9e5bb13b174d6044c84dcce18c0c3229f6d3bde6e4a68f989e8d9fbd",
+      "bytes": 724
+    },
+    {
+      "path": "crates/aq-admission/artifacts/granted-closure.schema.json",
+      "sha256": "cca6c8f8570e45e048e14dd26df6ff9ad98ab676eaea0c6dd7ff72284ded4d14",
+      "bytes": 19505
+    },
+    {
+      "path": "crates/aq-admission/artifacts/outcome.fixture.json",
+      "sha256": "6db72d816b024813d139feffda00978648430916cd24939824c08783e7f2b0f1",
+      "bytes": 1774
+    },
+    {
+      "path": "crates/aq-admission/artifacts/outcome.python-vectors.json",
+      "sha256": "a1640bbbc5b47981a07f119a46b2f00e26387212d826b767dfc24fde67c9734a",
+      "bytes": 189
+    },
+    {
+      "path": "crates/aq-admission/artifacts/outcome.schema.json",
+      "sha256": "f363167669672a3c7aa051bd748d9938d18285cb3b8b6a12744747c675d75b7c",
+      "bytes": 5146
+    },
+    {
+      "path": "crates/aq-admission/artifacts/result-record.fixture.json",
+      "sha256": "4179990a70b643f901ddf93f452e24b2e17b8a1f6bae69a31e791ac99c675596",
+      "bytes": 4429
+    },
+    {
+      "path": "crates/aq-admission/artifacts/result-record.python-vectors.json",
+      "sha256": "9cf494d10cf050b30d4dac8c41e66e8d3a5a98a58d8c086abc889fe0b2930a4e",
+      "bytes": 246
+    },
+    {
+      "path": "crates/aq-admission/artifacts/result-record.schema.json",
+      "sha256": "aca6c88e67c5cd2e9ca6948780094a34ec3a62837790b719101ed3c79911a0c0",
+      "bytes": 4903
+    },
+    {
+      "path": "crates/aq-admission/artifacts/shared-launch.json",
+      "sha256": "34b28ba102cbec61985249edecee228cafdebc76896d2e0625b8b518e612517d",
+      "bytes": 5664
+    },
+    {
+      "path": "crates/aq-admission/artifacts/started.fixture.json",
+      "sha256": "7bb69786ea9b76225ae3c69ee2ab654114860d00918b01ffea13a5726843cdae",
+      "bytes": 2994
+    },
+    {
+      "path": "crates/aq-admission/artifacts/started.python-vectors.json",
+      "sha256": "cf692dc3f705be8164c09ff4e25dac74ce9701f7cc60301485d43d30ff31d781",
+      "bytes": 361
+    },
+    {
+      "path": "crates/aq-admission/artifacts/started.schema.json",
+      "sha256": "6d168444ede7a3a6066eed98a0d07d82c667d1340fbadcc7af4f38be4023e7ce",
+      "bytes": 9284
+    },
+    {
+      "path": "crates/aq-admission/artifacts/startup.fixture.json",
+      "sha256": "3c6b6c77c2e2b7ff6028f00e35d8612feb38773ec16ade3fa8ff27f0e5614a0c",
+      "bytes": 14648
+    },
+    {
+      "path": "crates/aq-admission/artifacts/startup.python-vectors.json",
+      "sha256": "71da1c67d3e1846d47b3a28c4e00ec26d3ebdf4b8ddb290846e0c40ddd4cb4f4",
+      "bytes": 463
+    },
+    {
+      "path": "crates/aq-admission/artifacts/startup.schema.json",
+      "sha256": "061b93d84c72c3621a8560821c468e20438d835f62a69ada257c408839646329",
+      "bytes": 23518
+    },
+    {
+      "path": "crates/aq-admission/artifacts/stopped.fixture.json",
+      "sha256": "ae036e04c59704e83bc2455fc6b5e96a176d3c5d994041495ce0b46d60c62965",
+      "bytes": 3344
+    },
+    {
+      "path": "crates/aq-admission/artifacts/stopped.python-vectors.json",
+      "sha256": "31414785697582d2905047546d58ee5ffd95ab4300be2df8fc266ea3cb6065ea",
+      "bytes": 252
+    },
+    {
+      "path": "crates/aq-admission/artifacts/stopped.schema.json",
+      "sha256": "d69c6f9c6fc9ca77bf7161da21d4611e13ff3520328055e1462fc4d0d092117a",
+      "bytes": 13429
+    },
+    {
+      "path": "crates/aq-admission/artifacts/task-lineage-v1.json",
+      "sha256": "2ecd6d94254fd73b39156a437beaffe37627a7799087833d8481836fe1f983c0",
+      "bytes": 1349
+    },
+    {
+      "path": "crates/aq-admission/artifacts/transport.fixtures.json",
+      "sha256": "6d59a63df2b21ee5e836d65e91f009de92cf0fab20aeaa3e433e2a1e6ab297a3",
+      "bytes": 3855
+    },
+    {
+      "path": "crates/aq-admission/artifacts/transport.schema.json",
+      "sha256": "3c160f996a27b2f7ebc21f8015122c932e301bed37377b119392f34195a70d83",
+      "bytes": 56219
+    },
+    {
+      "path": "crates/aq-admission/examples/export.rs",
+      "sha256": "b0b07b7c2ee381bb47b55ddc3ded00218b075aad343b83115cc7f79880ad72de",
+      "bytes": 329
+    },
+    {
+      "path": "crates/aq-admission/examples/export_control.rs",
+      "sha256": "9971c44b669ec03c973c64d628978985e47e2477b7e411956d2d2735a2a9b475",
+      "bytes": 304
+    },
+    {
+      "path": "crates/aq-admission/examples/export_granted_closure.rs",
+      "sha256": "92a2aacdd58899e49168756b55702956a82e4ed4ebc6be603133dc525ba244af",
+      "bytes": 500
+    },
+    {
+      "path": "crates/aq-admission/examples/export_outcome.rs",
+      "sha256": "bd71ebe65ea08bd86220a04cde001b58cfdcc7b043504ee0f1dd47b868a3f596",
+      "bytes": 129
+    },
+    {
+      "path": "crates/aq-admission/examples/export_result_record.rs",
+      "sha256": "56bf47df53270895a171cb6f34bd09ad500905a3b29f6c89027731e399797070",
+      "bytes": 143
+    },
+    {
+      "path": "crates/aq-admission/examples/export_spec.rs",
+      "sha256": "1a35ec214038c7b4f0f293dd42f631ca14a6e7eafd5a8abd58519e3c3033f88d",
+      "bytes": 389
+    },
+    {
+      "path": "crates/aq-admission/examples/export_started.rs",
+      "sha256": "fdab70372d0f13576fadda43fc0ac2914b952c85d2f929a7df567a1bae82486f",
+      "bytes": 347
+    },
+    {
+      "path": "crates/aq-admission/examples/export_startup.rs",
+      "sha256": "f043c22d4e6f0151e397bf9cca193b64ad2e60454b3f575eb1f9bb259d40fff8",
+      "bytes": 428
+    },
+    {
+      "path": "crates/aq-admission/examples/export_stopped.rs",
+      "sha256": "d0ddec89f054c91e2a0c035473e7878e95ce43cb7353c6f5fbf153aca81b2c68",
+      "bytes": 137
+    },
+    {
+      "path": "crates/aq-admission/examples/export_transport.rs",
+      "sha256": "28cb7f24c915c3c9fc4a26b4109a6b6cd5bb7a603c9f7893915cc617b8f75d9e",
+      "bytes": 1779
+    },
+    {
+      "path": "crates/aq-admission/src/control.rs",
+      "sha256": "8ce64ef118493a343310932342046e55ee9565372d3955b997ab40c96934e966",
+      "bytes": 34554
+    },
+    {
+      "path": "crates/aq-admission/src/execution_spec.rs",
+      "sha256": "b99b12222e4cf6becf3aa914b4295485fec588a504c6f529977cd3c3a4c10c89",
+      "bytes": 6905
+    },
+    {
+      "path": "crates/aq-admission/src/granted_closure.rs",
+      "sha256": "d9e97ca91cbcb1b25ba4697b3277ad3de17364461b2203d3c8a098c33da491dd",
+      "bytes": 17730
+    },
+    {
+      "path": "crates/aq-admission/src/lib.rs",
+      "sha256": "53b9246f421e467e644cb585ed6742478f73ef9b07e1b70cd738cbacff315e46",
+      "bytes": 18840
+    },
+    {
+      "path": "crates/aq-admission/src/outcome.rs",
+      "sha256": "3ef2b3ecae7ba552cda91cc5604b04a49844fc1aa1f0111228f564d9ccde8fee",
+      "bytes": 6357
+    },
+    {
+      "path": "crates/aq-admission/src/placement.rs",
+      "sha256": "97031dd2400be6404490db678988c6d106bebd4fbaecd2773d9358226886dd13",
+      "bytes": 10150
+    },
+    {
+      "path": "crates/aq-admission/src/result_record.rs",
+      "sha256": "0901be32558ecb0cfc0aa6fecffa0a62502b96513cca33f14a95fcda394601d5",
+      "bytes": 4181
+    },
+    {
+      "path": "crates/aq-admission/src/started.rs",
+      "sha256": "a6eaf294088314db3b01432b470755a0f33dbf166edfa268b578e2ad1137e8b5",
+      "bytes": 8331
+    },
+    {
+      "path": "crates/aq-admission/src/startup.rs",
+      "sha256": "590d7c86ecc92a4d049c37fbba7818d01766b736eb51d58cf3a22d07182f8ba9",
+      "bytes": 12182
+    },
+    {
+      "path": "crates/aq-admission/src/stopped.rs",
+      "sha256": "df1b771e981632f475a4d0dfd85db1dad0d9c974cc42d4f41906ad26d0a07395",
+      "bytes": 8803
+    },
+    {
+      "path": "crates/aq-admission/src/transport.rs",
+      "sha256": "4f19c6c0bb728e781fb6349c4a994e28c31b0ff665fe11628c70169df9ceea50",
+      "bytes": 35252
+    },
+    {
+      "path": "crates/aq-admission/tests/common.rs",
+      "sha256": "0e8ca341f86e73bdc63d7144eae7e5c381349e25b95fb56444391de989692b07",
+      "bytes": 4615
+    },
+    {
+      "path": "crates/aq-admission/tests/contracts.rs",
+      "sha256": "a14980e77071ee2ca183eb61453f2ced66e1ed24282424f0bfe7c07f9b7300b5",
+      "bytes": 7817
+    },
+    {
+      "path": "crates/aq-admission/tests/control.rs",
+      "sha256": "92bc15ab7543dca7bdcbbe1bc3bbf20a754c8ea8b528d4cf04cd161bd3d6083a",
+      "bytes": 13882
+    },
+    {
+      "path": "crates/aq-admission/tests/control_common.rs",
+      "sha256": "ce2cd0409eabf732def0563ac2a3270bde459a23b745c5a8691866d50db55e49",
+      "bytes": 8457
+    },
+    {
+      "path": "crates/aq-admission/tests/execution_spec.rs",
+      "sha256": "bd76d2a2836cb6834f87577bde444f6a9e6f15d3944d4acac8371e1928bc00ea",
+      "bytes": 4401
+    },
+    {
+      "path": "crates/aq-admission/tests/granted_closure.rs",
+      "sha256": "300227cb36253ccd2d442e4f7cf2c103e304387804c2f0f73ac031b5243d4dd8",
+      "bytes": 6351
+    },
+    {
+      "path": "crates/aq-admission/tests/granted_closure_common.rs",
+      "sha256": "8c4d2729e530bbd9429e29f8af24f5f2d2d259acbac7cf386e5d7aca8b7ecfd2",
+      "bytes": 7188
+    },
+    {
+      "path": "crates/aq-admission/tests/outcome.rs",
+      "sha256": "476f6d8d33c881759948079c83fff4b71a6a45d3d2553be9c04e502a5d332107",
+      "bytes": 5542
+    },
+    {
+      "path": "crates/aq-admission/tests/placement.rs",
+      "sha256": "63754549e9d2b140ceac40e736c70db60d69c07f1c10bb806f25c89952a4ba30",
+      "bytes": 3348
+    },
+    {
+      "path": "crates/aq-admission/tests/result_record.rs",
+      "sha256": "02f2cd7045e6fb98a3949356b5bd825073beac5600f83c1a1d0a44ef2ed91c16",
+      "bytes": 3557
+    },
+    {
+      "path": "crates/aq-admission/tests/spec_common.rs",
+      "sha256": "22d13218d21c465609972e6c8badab388555f5a7665b8ea73153d4a71f91bb13",
+      "bytes": 1975
+    },
+    {
+      "path": "crates/aq-admission/tests/started.rs",
+      "sha256": "0a391a7e69c1a1d3be11470b0e2739f300eb9aa5e4f5a0e2a42d4185983ef6c4",
+      "bytes": 3737
+    },
+    {
+      "path": "crates/aq-admission/tests/started_common.rs",
+      "sha256": "bfe971db2dc4d8fd373eb6a90787fdda1be2e8fe1c787f95d459f5e4728fa524",
+      "bytes": 1892
+    },
+    {
+      "path": "crates/aq-admission/tests/startup.rs",
+      "sha256": "c5b5e7f1f98caaa3cb26e27f4e34662bac22f65642b493aeec93ff2210bd26b5",
+      "bytes": 6396
+    },
+    {
+      "path": "crates/aq-admission/tests/startup_common.rs",
+      "sha256": "d1149a9cdadbbec384aa43b727e568c8114091476c20442764d0f3ad1deea849",
+      "bytes": 4435
+    },
+    {
+      "path": "crates/aq-admission/tests/stopped.rs",
+      "sha256": "c569ab2497ada3ad2eb0ee9b334ccf61bd95dadbd491fdcb2f9b56dab4f39081",
+      "bytes": 4984
+    },
+    {
+      "path": "crates/aq-admission/tests/task_lineage.rs",
+      "sha256": "11d64917ee5721094b04c68932a716e4e78ddbdbe1ec49fbcd80c1dd2bbda986",
+      "bytes": 1230
+    },
+    {
+      "path": "crates/aq-admission/tests/transport.rs",
+      "sha256": "db24d558462763267f1da6dca5d6ba28995d8fe0305cdd2959d911bac23e155c",
+      "bytes": 4264
+    },
+    {
+      "path": "crates/aq-admission/tools/granted_closure_vectors.py",
+      "sha256": "0602501eaa36675c57593cd648dc27c2bdc6f18317300bf1e470ab61edccd355",
+      "bytes": 1032
+    },
+    {
+      "path": "crates/aq-server/migrations/0001_foundation.sql",
+      "sha256": "2ac1359cde1cebfbe9b94de1dc91c67d7277f04e723081ae0f98b69d93be3715",
+      "bytes": 1014
+    },
+    {
+      "path": "crates/aq-server/migrations/0002_execution.sql",
+      "sha256": "e52191473cf6eca5b5b8e81662873f25dc9eb80967e11d5a8d7b390c583e34ed",
+      "bytes": 1773
+    },
+    {
+      "path": "crates/aq-server/migrations/0003_agent_access.sql",
+      "sha256": "863cfa9e1bf91d863452a9f473c26612e2d4e9d71cfcc42a4727682b6bde77d3",
+      "bytes": 959
+    },
+    {
+      "path": "crates/aq-server/migrations/0004_source_retention.sql",
+      "sha256": "54a00da384fa810f01060cd04bf0b3cb9b30c52a32d4fc370e7697ef30d77606",
+      "bytes": 1565
+    },
+    {
+      "path": "crates/aq-server/migrations/0005_messaging.sql",
+      "sha256": "07fa84e6557172caf38aaeba6b4a631ca9fdfc15e1e133781ff07b96b6938716",
+      "bytes": 1750
+    },
+    {
+      "path": "crates/aq-server/migrations/0006_profile_catalog.sql",
+      "sha256": "69873c07fd6f0436cf1b9fc6c66fc62b75c94c8ee79133169eee889e2e3b84c6",
+      "bytes": 1116
+    },
+    {
+      "path": "crates/aq-server/migrations/0007_graph_mutations.sql",
+      "sha256": "0ec5317b0e54466b5a88aef05fc951827a7b4e156ecdfca6e60d1a5dd75faa64",
+      "bytes": 1917
+    },
+    {
+      "path": "crates/aq-server/migrations/0008_project_bindings.sql",
+      "sha256": "dab779e5f1bd7d88694695981691753d91b4a3ce600f6feb31c29c3ef0c96043",
+      "bytes": 957
+    },
+    {
+      "path": "crates/aq-server/migrations/0009_intelligence_selection.sql",
+      "sha256": "4817b6191e6c9f5ece5c2e103747f7775a6f30fe066784d30e9035f295e61b86",
+      "bytes": 1824
+    },
+    {
+      "path": "crates/aq-server/migrations/0010_profiled_authority.sql",
+      "sha256": "5c8abce1c3b06db1b90afe728247341442723ef113e6527e1cd0266893326909",
+      "bytes": 9204
+    },
+    {
+      "path": "crates/aq-server/migrations/0011_notifications.sql",
+      "sha256": "5f197bdaaf429c35f0f29f09509ef8a30b579b597030ceed48495b77708eeb0b",
+      "bytes": 4311
+    },
+    {
+      "path": "crates/aq-server/migrations/0012_terminal_relay.sql",
+      "sha256": "848ffaba3034e30cc2d9f6716150f4b079d341b39f028411ced986b8c1249dc7",
+      "bytes": 7780
+    },
+    {
+      "path": "crates/aq-server/migrations/0013_profiled_hot_authority.sql",
+      "sha256": "2de40704ae7de694c0f29ea7606b48f0cd97bb44fd40bad4a199f99d47be9c0c",
+      "bytes": 12157
+    },
+    {
+      "path": "crates/aq-server/migrations/0014_observation_ledger.sql",
+      "sha256": "d8c16d8c5b0bfdab2b6f53a57ed54b472a67549b0ecf9dc1fe1cff02dd6cbd29",
+      "bytes": 4437
+    },
+    {
+      "path": "crates/aq-server/migrations/0015_never_granted_closure.sql",
+      "sha256": "6dbfeee6391ba650b6f2486d8ee507a32ebbc08a352c4701468255b62e0c853c",
+      "bytes": 21879
+    },
+    {
+      "path": "crates/aq-server/migrations/0016_observation_transport.sql",
+      "sha256": "1a1daad1da217aeb0f6edf82e7403d9bd819800d9e83fb47caf63fe2c1380fa4",
+      "bytes": 4512
+    },
+    {
+      "path": "crates/aq-server/migrations/0017_policy_decision_principals.sql",
+      "sha256": "9f7ad26f2645b10dbea6bbc52bf71a26233a962961b773d8e590d2d09d538c3e",
+      "bytes": 1763
+    },
+    {
+      "path": "crates/aq-server/migrations/0018_profiled_started.sql",
+      "sha256": "ce64fe4cf491382975090575516c07db4299d09aad18adf49e68e7fdf354ff11",
+      "bytes": 8132
+    },
+    {
+      "path": "crates/aq-server/migrations/0019_native_registration.sql",
+      "sha256": "92844d5c11b576122bef43fb462658587c6e1302024a4904a3383ee8dc619409",
+      "bytes": 2057
+    },
+    {
+      "path": "crates/aq-server/migrations/0020_inline_artifact_owner.sql",
+      "sha256": "c746e191fe65ab731a0527491b2d5175f5849c86e47380e7ad127444178eddd5",
+      "bytes": 5870
+    },
+    {
+      "path": "crates/aq-server/migrations/0021_profiled_stopped.sql",
+      "sha256": "05b3692151d1750cc9d032b3de8103d717df2e7db396ff23c0b1351ce16ad20d",
+      "bytes": 10384
+    },
+    {
+      "path": "crates/aq-server/migrations/0022_profiled_source_exports.sql",
+      "sha256": "8656485f0e9f45bb37da4ee3139c8582125c5cb112fe73390da4d3428fdb9475",
+      "bytes": 9841
+    },
+    {
+      "path": "crates/aq-server/migrations/0023_playbook_bridge.sql",
+      "sha256": "071882c333e404026b4a23e42727143e5dfc88b9990633594786547e0026cfbc",
+      "bytes": 6037
+    },
+    {
+      "path": "crates/aq-server/migrations/0024_profiled_results.sql",
+      "sha256": "b5de98d626581c83b93cc6ad9646fff1f74cf278bcd8bbd2ee94f116ae5238c7",
+      "bytes": 5911
+    },
+    {
+      "path": "crates/aq-server/migrations/0025_native_source_observations.sql",
+      "sha256": "6fbb1ee724ddb9253aeb779e84f0a6953a41a9c1f23d4c2550defbd54dacc5c6",
+      "bytes": 2697
+    },
+    {
+      "path": "crates/aq-server/migrations/0026_review_owners.sql",
+      "sha256": "1f2999baeca7caf48e23a08cb74e1970ea2c1725d15d6a88c6258b32e4ae392e",
+      "bytes": 5779
+    },
+    {
+      "path": "crates/aq-server/migrations/0027_native_definition_identities.sql",
+      "sha256": "ee1622b0d1470286cad47963b2eee971b859861b304452b8d5bed365a07113f7",
+      "bytes": 1690
+    },
+    {
+      "path": "crates/aq-server/src/admin_api.rs",
+      "sha256": "bb7081f926c331574c96d2c4ead201843e06068772ff401b010fc6c4c418ddde",
+      "bytes": 7370
+    },
+    {
+      "path": "crates/aq-server/src/admission.rs",
+      "sha256": "415ee13f2a5680db9e0c93484ec26b03d23657818223424efbe4c120375ad4e1",
+      "bytes": 7475
+    },
+    {
+      "path": "crates/aq-server/src/agent_access.rs",
+      "sha256": "2b899bab1671b91555675b2d1e5cec6d41ee17c1a160caf437e02097980e895d",
+      "bytes": 28469
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/contract.rs",
+      "sha256": "70876c1350f7567449ac96adee332796d67521815ba2c09cea9594ca8d2fb75c",
+      "bytes": 602
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/graph.rs",
+      "sha256": "b69c5c098a076a75dd94cd139ee5a34d36e0bbf58239abfac1c092ab1e8e3f3a",
+      "bytes": 24493
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/messaging.rs",
+      "sha256": "bb584adf5749625fd143f8edd53a311510ab62944704805fb70055b8a4660765",
+      "bytes": 27260
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/mutations.rs",
+      "sha256": "0e89cb6d57cfefa775ad4136c6929e38e860271eaca5b76c7fb3815356654bbb",
+      "bytes": 19770
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/mutations/authorize.rs",
+      "sha256": "4e3ef10dfaab7d3bb0f491530f05146593c16286c031878e7668fafbd5411d3a",
+      "bytes": 14673
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/mutations/dispatch.rs",
+      "sha256": "35f9720cab5dc16055cf63ea48658f4c095cf041ef6c466f324edc389e14af9b",
+      "bytes": 17087
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/native_binding.rs",
+      "sha256": "8a1df89c4789b332bea3e3ff8f3680f20c311e3e97a05f8ccfa9ab6e639feebe",
+      "bytes": 3625
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/scheduling.rs",
+      "sha256": "986518fed44cea1510a03d00525a77cd8864b4a428db5e06e036755eccd24c30",
+      "bytes": 13028
+    },
+    {
+      "path": "crates/aq-server/src/agent_access/scheduling/parse.rs",
+      "sha256": "5c9428ccc3f0da9fb4e1c09a436e8525fd2196f55adb867cc75f0e5649fcb5a0",
+      "bytes": 3235
+    },
+    {
+      "path": "crates/aq-server/src/authz.rs",
+      "sha256": "4a51f29ab06b64b4b5c5739e86966cd9dcdbddbd9256e2b8ddc1b71d9dcb2a57",
+      "bytes": 4091
+    },
+    {
+      "path": "crates/aq-server/src/config.rs",
+      "sha256": "e335a89435bff2d1ced7df9d584b862e5e98d58b677b62d73ec329e630b273a3",
+      "bytes": 11457
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api.rs",
+      "sha256": "64d8b07fbd887eeee8b3164a4b24f766df1ec643b79a1149d9e2c4ae8c8c8d97",
+      "bytes": 8575
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/contract.rs",
+      "sha256": "41ad5dc2ed517f00b967d6ebb630c2e3787e62bc1bc418b54be23a575addd4e0",
+      "bytes": 9423
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/runtime.rs",
+      "sha256": "423ecd3fc3d4aa8990a70ab1c5c8adaa6381df2c199625e486b2bf10be42a15c",
+      "bytes": 10043
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_api/service.rs",
+      "sha256": "1b3efea5357b788c127ad09eb5e5eeb0b7ed438aa60589f09aa2fb044646d7cd",
+      "bytes": 23986
+    },
+    {
+      "path": "crates/aq-server/src/dashboard_assets.rs",
+      "sha256": "7d79dc560130cec199ade17a054d984430758182fdca244906e6fcd8de922e37",
+      "bytes": 18930
+    },
+    {
+      "path": "crates/aq-server/src/error.rs",
+      "sha256": "630e3f85d70ad68aed679d3e2356dc0827f4dbd6202a1ba5f48b452b1f895e1a",
+      "bytes": 5338
+    },
+    {
+      "path": "crates/aq-server/src/execution.rs",
+      "sha256": "c1db7bc750fea61313b0b043b3d432871bd2a3964972868d1812555f8d6721d2",
+      "bytes": 50712
+    },
+    {
+      "path": "crates/aq-server/src/execution/api.rs",
+      "sha256": "7d7f2d24893402c771113f9775f7f5c0be7d7d94d68928fa7f70d1524e471fcc",
+      "bytes": 9604
+    },
+    {
+      "path": "crates/aq-server/src/execution/authority.rs",
+      "sha256": "16623c20a7b1ee847f6e015d1217411f402acbdf37c0126336be1ed048cc573c",
+      "bytes": 18175
+    },
+    {
+      "path": "crates/aq-server/src/execution/authority/cache.rs",
+      "sha256": "8ba9f659aa53ad5ae3b2b8682852ba2b039fa03e37ee66c94a81dafacd607901",
+      "bytes": 3943
+    },
+    {
+      "path": "crates/aq-server/src/execution/authority/hot.rs",
+      "sha256": "75858960e3a93251bbbc9e2da11a425b6d72d3e8804122cf42a1e281e0db64ad",
+      "bytes": 15859
+    },
+    {
+      "path": "crates/aq-server/src/execution/profiled.rs",
+      "sha256": "c1308c8a406260dd531b5ffe10b20cc71853361a776d8d97cf67182c243be7e1",
+      "bytes": 5656
+    },
+    {
+      "path": "crates/aq-server/src/execution/testing.rs",
+      "sha256": "0f9044c5f4cdf6add95c93df519369caf5f4ab9acc60eb4fd1a3f5ea08585f65",
+      "bytes": 4999
+    },
+    {
+      "path": "crates/aq-server/src/identity/cloudflare.rs",
+      "sha256": "c58339fcdd9157624060fe2eb311fa2f3c9bd0f011baf36808359cddf09aeb43",
+      "bytes": 6461
+    },
+    {
+      "path": "crates/aq-server/src/identity/dev.rs",
+      "sha256": "c80ef43905057a914ff67769585412366e8c78a655d03c432d059d38cce79053",
+      "bytes": 1183
+    },
+    {
+      "path": "crates/aq-server/src/identity/mod.rs",
+      "sha256": "562e0867e0e3cacc6d7fb67d190d5d1cb156d5d80bfda4bbe0b65126aff1eebe",
+      "bytes": 1471
+    },
+    {
+      "path": "crates/aq-server/src/intelligence.rs",
+      "sha256": "ecff45f6ace4b4d17c7ae6d30cf1cc6969ed94d8c8d3776696b88708edf36f50",
+      "bytes": 9050
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/config.rs",
+      "sha256": "164179a1af4a3830bba855e2ca350dd04da6314939a54efe5afcd2798319c9c7",
+      "bytes": 8243
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/feedback.rs",
+      "sha256": "46a4ad64853c5cf40ca30b0d25622f030962729cdac24dd9a5eab5e503671f24",
+      "bytes": 6316
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/inventory.rs",
+      "sha256": "b337d6b304df8a9d959bd3cfd80e99519cd441399ef5672380a2331e8f9feb2c",
+      "bytes": 10411
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/principal.rs",
+      "sha256": "300d7365f76190789a83a74c68aac31ec9a2ed7c64b9ab867541aab21e2f2cc1",
+      "bytes": 8161
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/registry.rs",
+      "sha256": "dcebf7db00dbec0944eb5979c58d283a9cc4e63e2b433601b4445e55e9465c39",
+      "bytes": 8961
+    },
+    {
+      "path": "crates/aq-server/src/intelligence/resolver.rs",
+      "sha256": "facf014d6bbd5add5ccb00c8e24bf852ea754f2d0f19c9cc9538098cceb8ad22",
+      "bytes": 21271
+    },
+    {
+      "path": "crates/aq-server/src/lib.rs",
+      "sha256": "d6bcc46904e649563d9c2d9f3b240aacfa1d8f85bc3ee3cbd863c82715426ff1",
+      "bytes": 14437
+    },
+    {
+      "path": "crates/aq-server/src/main.rs",
+      "sha256": "6429139099c2b19ef0218c9c83aef03a896f49db8a868e3dd4f4712b9c5d8c38",
+      "bytes": 5404
+    },
+    {
+      "path": "crates/aq-server/src/notifications/api.rs",
+      "sha256": "c42f440dc65b8d0069c2d18a7d352a3a4431e63dded517dadb9b6d98bc269202",
+      "bytes": 2629
+    },
+    {
+      "path": "crates/aq-server/src/notifications/config.rs",
+      "sha256": "38c131d7d034fd1e57d454e21577d06c87c2f43c38398a71140a3f5d8817ace0",
+      "bytes": 7137
+    },
+    {
+      "path": "crates/aq-server/src/notifications/dispatch.rs",
+      "sha256": "ed1e32485c90e0e8763d856574b5644e2f128413b17c6a2478ee765a38d3c25d",
+      "bytes": 11869
+    },
+    {
+      "path": "crates/aq-server/src/notifications/mod.rs",
+      "sha256": "f9cc2a5688d962ed7379171c1edec1cd0f32214f29e3a96d7c3c7e4338548d5d",
+      "bytes": 2072
+    },
+    {
+      "path": "crates/aq-server/src/notifications/persistence.rs",
+      "sha256": "7ca90f9cde586aa1a197b61659ad9e1bc4949539633e31896d9da9a5a6f5f511",
+      "bytes": 22728
+    },
+    {
+      "path": "crates/aq-server/src/notifications/runtime.rs",
+      "sha256": "106abb76be120e072c25d35312ace5ff924725988f50d8e2e6abadf6765dadad",
+      "bytes": 2481
+    },
+    {
+      "path": "crates/aq-server/src/observations.rs",
+      "sha256": "efbb5d381515ca53f1121182eb0dc6c37d75a4ea417b3fa4d0c124dd911f69df",
+      "bytes": 23141
+    },
+    {
+      "path": "crates/aq-server/src/observations/api.rs",
+      "sha256": "4ed312e3b0d7615ce6dd7850b096221c2f22575095163b27e6f11f4ba6000033",
+      "bytes": 4682
+    },
+    {
+      "path": "crates/aq-server/src/observations/inspection.rs",
+      "sha256": "2d31a0992a9299cb97292a7a1c2619217662fb9b1130c27a97b84b319e7da03e",
+      "bytes": 9819
+    },
+    {
+      "path": "crates/aq-server/src/observations/transport.rs",
+      "sha256": "281f7ec9733e01cbecbe01aa11b72362b878b3f1bf7034199dc19adf9b7b2e87",
+      "bytes": 8019
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/api.rs",
+      "sha256": "e4c0f61d9742b2c1676a788baf52ecd863df88eb6f4d7a5506ad1f2989a915cd",
+      "bytes": 8085
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/config.rs",
+      "sha256": "8797cac26484defa7732588299f2b552545ad1f97985ae1d02c194f12cdc5d4d",
+      "bytes": 10795
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/domain.rs",
+      "sha256": "6e19a8ecf659f9ed4b38454aa486cd5b9ad8133c1347ab983663f3f408cb4c4f",
+      "bytes": 10478
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/driver.rs",
+      "sha256": "ed10ecfa661dc81672e80828c87424abccafa707bf91bcabdc09da1439141ab0",
+      "bytes": 23560
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/mod.rs",
+      "sha256": "ee8f056dfdec51162ca04a98c43a9dd551d82a90dc204fd34905d8e4f2882623",
+      "bytes": 282
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/review_domain.rs",
+      "sha256": "12cc8c4d1c04b2dc0dbcbcc8e82c559bf71f5aa28193bec3f2a16a958afa61d0",
+      "bytes": 8382
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/runtime.rs",
+      "sha256": "2dcbf43646b16332568376ed2b67d08d0bdf5e348ca485f61fd60674d98f38e3",
+      "bytes": 9834
+    },
+    {
+      "path": "crates/aq-server/src/playbooks/service.rs",
+      "sha256": "2a04777302faf7cac8c76e1fceb11715403d020b0b782fee9e2abe7e2bc44603",
+      "bytes": 68009
+    },
+    {
+      "path": "crates/aq-server/src/profile_catalog.rs",
+      "sha256": "e79b9bb32c0d06effa763eae560d47a8641c59a6b45b18f9049ef0ae035cf086",
+      "bytes": 8488
+    },
+    {
+      "path": "crates/aq-server/src/profile_catalog/inspection.rs",
+      "sha256": "1685f65e8adb75e838d74bd2242640b9540e09a7a1593387c69911da8e238b85",
+      "bytes": 3380
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution.rs",
+      "sha256": "00fe541f813a5856cad65ff3abb011615b2d78d762a5afccacef2cb1df220606",
+      "bytes": 761
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/api.rs",
+      "sha256": "20b735eca953fa9b0427d8bc7e618433b075810058595f2956d7bdabbd8f1bab",
+      "bytes": 1180
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/artifact_api.rs",
+      "sha256": "c1037d4ee28e231b2d75f98e27fcb8f22b49f6b817e7980113c06312818ea6ae",
+      "bytes": 8040
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/artifacts.rs",
+      "sha256": "ec9622404134217b4f7ae53e5530d80e846ed052f03efc13a93a19ce4df1f6a6",
+      "bytes": 11582
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/config.rs",
+      "sha256": "a5d34fa599940f4257b51dcf07b392eb84589c3d5b81d9a0538fe6556d28408f",
+      "bytes": 9017
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/context_budget.rs",
+      "sha256": "a0c2cd26a912f6e3aed6b180d0d75b2a2ccfc3628dbf34722f92d74fa976e78d",
+      "bytes": 23672
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/context_projection.rs",
+      "sha256": "cb563f3b838dc5e7f242812db3ac9bbc9960d8393ea52e1278dc8c4bcb475793",
+      "bytes": 15718
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/control_api.rs",
+      "sha256": "a43933087b6188fdabf123934c3d33b11ba93735710b4755611c5eba1126a8c5",
+      "bytes": 4114
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/definitions.rs",
+      "sha256": "02c6e1fbcf708f9fac8ed45fdc798bb7ae8625661d58b30635abf2545371da24",
+      "bytes": 6667
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/expiry.rs",
+      "sha256": "6ce8aff07fdad3b1c9e13e0eeedffcdfc68a436004ac16f0ededde62e5183853",
+      "bytes": 3950
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant.rs",
+      "sha256": "d935ee97798ce993e7d54f319a54b107fc72a201d5ba8824faa71253658d26b8",
+      "bytes": 25411
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant/graph.rs",
+      "sha256": "4fe4e76b8850ff44e4d1300100860a79ef4d0433cafb40c279c74ba69b7dddb4",
+      "bytes": 4978
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/initial_grant/history.rs",
+      "sha256": "a46edb8d3712f1c234386669e565e72e6e68c6f510d644e801895595f7d20821",
+      "bytes": 2029
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/journal.rs",
+      "sha256": "1865ab282063d85ccaf2fccecd2a90f47c9cf13fcc6c90f190240b586f9b6ce6",
+      "bytes": 5018
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/material.rs",
+      "sha256": "97453ff8a06edfc45d2f06a02acd82251095d1c1b7535ebce351e8ad68f206e7",
+      "bytes": 10415
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/material/issuance.rs",
+      "sha256": "1fbb7e82711870e2b81c189fc5c7a119d35ef134ab1a98cd65ddd05cd0ab6762",
+      "bytes": 2790
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/material_api.rs",
+      "sha256": "bf316ef1470bf185e78814f0cf50fdb1bc064801c1f700c294677e4c6e2695ea",
+      "bytes": 12578
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/native_offer/mod.rs",
+      "sha256": "b43971ab44f2c8276d96641ab8e66de00741278f176feaf4cd58e9ad45a9072d",
+      "bytes": 4930
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/native_offer/observation.rs",
+      "sha256": "e1174e4dd74bec9b816b00c428f79e435157de190d9ae164d6b6b12758732e4b",
+      "bytes": 8146
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/no_grant.rs",
+      "sha256": "4438f3ce25f7013e1f6435d18497cedf37506d649e688828bc05aff49b841531",
+      "bytes": 9226
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/policies.rs",
+      "sha256": "dbacc73aaa325fc86bd4c58f89b348aaab0e2a8d717299607f29e9a2d4f0b143",
+      "bytes": 9653
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/preparation.rs",
+      "sha256": "2312dce7451843b93682b03cc6f3fd0a8a2a0c915509566a3d135c992856a7ad",
+      "bytes": 18398
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/api.rs",
+      "sha256": "b4329ee32ccabba900dd63c01a7dc9fb60ce58295feec09d65f3f85c3a577bba",
+      "bytes": 1561
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/artifacts.rs",
+      "sha256": "7d1867f6c340f9d18d769fa3127dd9fcec659029e13272baf076848591987ed5",
+      "bytes": 3060
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/build.rs",
+      "sha256": "f8e11ecffc7f37693d6a33fadc68241c0788bf95d455cc2d26f7757430bfe066",
+      "bytes": 23947
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/compose.rs",
+      "sha256": "dfe6722b35bcb59a81e0cf82ea1f53986d89d5da4cd929fa2577807d633f6d27",
+      "bytes": 10012
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/mod.rs",
+      "sha256": "6aedaa46a70defd2b1ecad2ba90d1df69813bb2fe4259ac2b0ce78fa4167c101",
+      "bytes": 716
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/publication.rs",
+      "sha256": "69f2bf0d37d13889e0c83088986db421f742142a84ae6c7d3036ebf5b7c42989",
+      "bytes": 8559
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/redelivery.rs",
+      "sha256": "170944a73acbf5d5e49da68e9cb0a44749729c6b6ca83cf90d0aa9557d33aba8",
+      "bytes": 2612
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/startup.rs",
+      "sha256": "0c017c6ae2a88b8318210a0c15d5c7fa2040d14212063866fedc514dd7e9ceef",
+      "bytes": 5544
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/producer/workflow.rs",
+      "sha256": "dcb722ce8a454956867ea74222ef33dde9dedd88047b914d0d8feae15111c8ad",
+      "bytes": 14058
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/reconciliation/api.rs",
+      "sha256": "ceffd12c235506e798b84e969db692a5f425864ec39ba05cb80fa78382a70b5a",
+      "bytes": 1419
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/reconciliation/mod.rs",
+      "sha256": "3998603c3995b441c2f7e7a511f30ce9560780d72a694f93f513bb15dd5c00ff",
+      "bytes": 13987
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/reconciliation/receipts.rs",
+      "sha256": "c42ee48fd196df1935a31929d3d0cc1f7f836f1bd3f047df6877fa418d347ca7",
+      "bytes": 5841
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/registration.rs",
+      "sha256": "cfbdef37eefc46ab1dae923161604abb5f3462aa512173d3c5692785ff0ea60a",
+      "bytes": 9404
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/results.rs",
+      "sha256": "ac756c1c04cb9da959fb2c1a904ddfd9b3320a96cbf7bd87351a82b5c6366f5d",
+      "bytes": 19657
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source.rs",
+      "sha256": "44e00129150417e8752fc94d222798c6243e6386117c73b885a8bf4c57c66418",
+      "bytes": 13600
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source/ownership.rs",
+      "sha256": "0dd01b973ec9dddf30c308992ef162fc6a893cae5f16b5ece01e74854109917d",
+      "bytes": 4814
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source_api.rs",
+      "sha256": "62d526eedc1d1fdb983b734e8553ad59fd8a33d7a7a5656175fcbfbcefd7e3a5",
+      "bytes": 14495
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source_exports.rs",
+      "sha256": "017fe64e35770285a5456612a02979e2ce30cf0cda9445596d4503e379f3cf51",
+      "bytes": 17097
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/source_exports/completion.rs",
+      "sha256": "0da04d4e4b5ab2c81a91e837fc30b6a24a6a5aaa0cacfa3d2ea80c25567dbc4f",
+      "bytes": 11605
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/started.rs",
+      "sha256": "87aa5dd627fc887717b561b096d223b97c6a989954ddb186b8b5aa5bed47de42",
+      "bytes": 7682
+    },
+    {
+      "path": "crates/aq-server/src/profiled_execution/stopped.rs",
+      "sha256": "e7a208e4b2cfddf313cc87acc01ff632e2c9bf8c6fa38e319375ea32ff4cdb81",
+      "bytes": 9220
+    },
+    {
+      "path": "crates/aq-server/src/project_bindings.rs",
+      "sha256": "95ac209713f883103f715be964335b05252657f83783f8fb0f627f233493d1d2",
+      "bytes": 23757
+    },
+    {
+      "path": "crates/aq-server/src/project_bindings/domain.rs",
+      "sha256": "42a020c7fe122e65658a1332041781d73eca5d795da85e82fc6d11b826c72d61",
+      "bytes": 22420
+    },
+    {
+      "path": "crates/aq-server/src/project_bindings/external.rs",
+      "sha256": "46202e9b51c267f2e5ba6baa54e6867d1358c17b3617a1c4c3ef84a501a75a02",
+      "bytes": 8162
+    },
+    {
+      "path": "crates/aq-server/src/protected_storage.rs",
+      "sha256": "46ef4ae71351dee84c87748babb1c4befe7e71ba4a517b998b26ca5132535c8b",
+      "bytes": 7905
+    },
+    {
+      "path": "crates/aq-server/src/readiness.rs",
+      "sha256": "b9aba4d36137fcbff140303f4cbeda71b8dea5f6e581ab961b03402c5b0437c1",
+      "bytes": 1913
+    },
+    {
+      "path": "crates/aq-server/src/reviews.rs",
+      "sha256": "adea5390b0d1ce99158542094b688680264f9c8a019b3a69f5e17d31fc44a769",
+      "bytes": 39301
+    },
+    {
+      "path": "crates/aq-server/src/session_access.rs",
+      "sha256": "abe964b2bae572b8894c1dc6f4b2bf812b7c4fa12cafe39ed974dca943ee448a",
+      "bytes": 2907
+    },
+    {
+      "path": "crates/aq-server/src/source_retention.rs",
+      "sha256": "260b665d82fc78154f314690fbf808e8ccd2ce4b8bf24ee8456a006aa55fd220",
+      "bytes": 47554
+    },
+    {
+      "path": "crates/aq-server/src/source_retention/profiled_base.rs",
+      "sha256": "0be095d16c28aa839262811d55451af5470e391260ed79f6b2c37d1878aa72f4",
+      "bytes": 42911
+    },
+    {
+      "path": "crates/aq-server/src/source_retention/result_retention.rs",
+      "sha256": "0326006ba25bab2ea469de38e171eb87ec343e581200a2edcf104b162a3cbda8",
+      "bytes": 8670
+    },
+    {
+      "path": "crates/aq-server/src/store.rs",
+      "sha256": "7bbd20e9e2fabf376492bf7cbd2a28910bb276051e41f19ec23e36c3d6c2f3c9",
+      "bytes": 25077
+    },
+    {
+      "path": "crates/aq-server/src/terminal/api.rs",
+      "sha256": "766b4c641f61ce26c38e0dec9dc94ec42e48070c30f795579d37010f2dcad8cf",
+      "bytes": 5978
+    },
+    {
+      "path": "crates/aq-server/src/terminal/config.rs",
+      "sha256": "797f8534706784d4c5607d607517d83d7ac3d2e0019fb3bb85d8d13fe5ac3627",
+      "bytes": 1161
+    },
+    {
+      "path": "crates/aq-server/src/terminal/mod.rs",
+      "sha256": "c935344d118071f0883803487062d2578d96d0621e7013232650a8771b9b236d",
+      "bytes": 274
+    },
+    {
+      "path": "crates/aq-server/src/terminal/peer.rs",
+      "sha256": "15fc44433c9ac4c66542597f29f5b475dfec87c7cbf879345fabef11ca48e83d",
+      "bytes": 25553
+    },
+    {
+      "path": "crates/aq-server/src/terminal/persistence.rs",
+      "sha256": "50d0f188844873b53591929e7c6e1329eb8fd2a9b47bf4214743bf004ec1115d",
+      "bytes": 24605
+    },
+    {
+      "path": "crates/aq-server/src/terminal/protection.rs",
+      "sha256": "63f7acac9f8227056a45c235a9392adc1da9656f43ecf4a4d2916e013c8afd3c",
+      "bytes": 6680
+    },
+    {
+      "path": "crates/aq-server/src/terminal/runtime.rs",
+      "sha256": "432740db16969d2e3ac35b5348d55b4e00687a8c51d9859f9b87c1589cd6724f",
+      "bytes": 13544
+    },
+    {
+      "path": "crates/aq-server/src/terminal/service.rs",
+      "sha256": "e1e5d30e005c6aaded826ddfd6038235cfa0e040498e9d34ce5b53976896e4b5",
+      "bytes": 32935
+    },
+    {
+      "path": "crates/aq-server/src/test_support.rs",
+      "sha256": "d52250a71e55baf876d9895d641febaaaf1b2c22319515512c3b136669042272",
+      "bytes": 2881
+    },
+    {
+      "path": "crates/aq-server/src/tokens.rs",
+      "sha256": "725491872bd17ecf587fb49ddfdf8d9dc28b34df9f2e28b49676a301176c4c41",
+      "bytes": 808
+    },
+    {
+      "path": "crates/aq-server/src/updates.rs",
+      "sha256": "ec68ce0b0eb1cd0d4ca32d450ea4abf56fb24bfecf27d3b3a659c5a4fd29b142",
+      "bytes": 13053
+    },
+    {
+      "path": "crates/aq-server/src/worker_api.rs",
+      "sha256": "e8cddd119d4ef2192a7d359eaf168112aa155143c1388edc54929f42b5756603",
+      "bytes": 6998
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant.rs",
+      "sha256": "c4877420ea07e623accc272c4091afebc78254f1c6ffc6bfe5c530580f576e29",
+      "bytes": 5887
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published.rs",
+      "sha256": "8a4e3a9e257fc9c55b12cf423964bac08984509fe606f957e7aff5d002b1d167",
+      "bytes": 24671
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git.rs",
+      "sha256": "ecd392e9cb2fbb6e92128777932ee452180db9eebc339a2b35029efbd3303767",
+      "bytes": 10398
+    },
+    {
+      "path": "crates/aq-server/tests/native_reconciliation.rs",
+      "sha256": "7c471120f7121d5abe12abdac8ddbd82bf713ec4e19d7ddfab1b68d1ba1169f2",
+      "bytes": 16303
+    }
+  ],
+  "logs": [
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/tests.log",
+      "sha256": "7f047a23510c01947ec957906ccf9472a8b74558a53b8bde78c44dbfae668e0c",
+      "bytes": 6159,
+      "role": "qualification"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/clippy.log",
+      "sha256": "f859b026a6385f12cddd1651f2285640572271ff7b74b3cb6eb4aecfc9dc1ecf",
+      "bytes": 227,
+      "role": "qualification"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "role": "qualification"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/development-compile.log",
+      "sha256": "9f9967c076094aaf945832c56ba6e10581dd051025e70c5cd5bd951398cd2930",
+      "bytes": 2854,
+      "role": "development failure"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/development-http-history.log",
+      "sha256": "c143586159fbe6107e1f37937e6a442bb7126f3b32c954e65b6655962cd670fb",
+      "bytes": 4353,
+      "role": "development failure"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/preflight.log",
+      "sha256": "ad212501cf3c9520c3fdd91ff4dba6613d0a9c8e65212dc16697b07d4ff0a1a0",
+      "bytes": 2951,
+      "role": "preflight"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/before-contract-tests.log",
+      "sha256": "6cad3a767fdc932a922dd280925a1f53e6d64b1f2a815aec13ba4332c807e9cc",
+      "bytes": 6079,
+      "role": "earlier source"
+    },
+    {
+      "path": "docs/implementation/evidence/aq08-reconciliation-3240739/development-style.log",
+      "sha256": "fd1167174639277e6b7466b08040f2a90653940f9d387a3bfaf183c41a812319",
+      "bytes": 3412,
+      "role": "development failure"
+    }
+  ],
+  "scope": "Read-only native Reconcile and initial grant/offers/expiry/preparation/NeverGranted regression; actual Git initial grant cases enabled. Graph/runtime/material installation fixtures remain synthetic.",
+  "limits": [
+    "No authority delivery, mutation, new journal adoption or physical process proof.",
+    "No worker driver or end-to-end model/provider qualification.",
+    "Cursor is finite ordered pagination, not a cross-request snapshot."
+  ]
+}
