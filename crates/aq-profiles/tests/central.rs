@@ -397,3 +397,18 @@ fn generated_schema_stays_frozen() {
     }
     assert_eq!(generated["x-execution-authority"], false);
 }
+
+#[test]
+fn narrowing_override_cannot_forge_a_catalog_or_unprovided_source() {
+    let (c, mut r) = fixture();
+    r.overrides.push(Override {
+        field: "context_limit_bytes".into(),
+        value: 50000,
+        source: c.source("module", "engineering@1").unwrap(),
+        reason_code: "claimed_module_override".into(),
+    });
+    let error = compile_central(&c, &r).unwrap_err().to_string();
+    assert!(error.contains("central override provenance"));
+    r.overrides[0].source = r.platform.source.clone();
+    assert!(compile_central(&c, &r).unwrap().composition_valid);
+}

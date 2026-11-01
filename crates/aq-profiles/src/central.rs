@@ -161,6 +161,8 @@ fn external(context: &ContextInput) -> Result<()> {
         "execution:",
         "catalog:",
         "central.",
+        "aq.central-profile.",
+        "aq.profiles.catalog/",
     ] {
         ensure(
             !context.source.identity.starts_with(prefix),
@@ -319,6 +321,28 @@ pub fn compile_central(
     )?;
     let mail_frame = GeneratedArtifact::new(ArtifactKind::MailFrame, mail_context.text.clone())?;
     let subject_contexts = [policy_context, conversation_context, mail_context];
+    let artifact_source = |a: &GeneratedArtifact| Source {
+        identity: a.reference.id.as_str().into(),
+        revision: a.reference.version.as_str().into(),
+        digest: a.reference.digest.as_str().into(),
+    };
+    let policy_source = artifact_source(&policy);
+    let compatibility_source = artifact_source(&compatibility);
+    for override_input in &r.overrides {
+        let source = &override_input.source;
+        let known = std::iter::once(&r.platform.source)
+            .chain(r.context.iter().map(|c| &c.source))
+            .chain(subject_contexts.iter().map(|c| &c.source))
+            .chain([&policy_source, &compatibility_source]);
+        ensure(
+            known.into_iter().any(|candidate| {
+                candidate.identity == source.identity
+                    && candidate.revision == source.revision
+                    && candidate.digest == source.digest
+            }),
+            "central override provenance must bind actual supplied input bytes",
+        )?;
+    }
     let mut result = compile_core(
         catalog,
         &CoreRequest {
