@@ -1,0 +1,1716 @@
+{
+  "cases": {
+    "base": {
+      "input_digest": "abc4eabbcf8125104f39f8f00c6440bafb356d05da06ebdce6272a34e5382f1a",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-a",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-a",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-a",
+              "native_reasoning": "high",
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-a@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "69464561fe074dcf2f8ef5577c5b7e65cb39b87475ab748a381de6491245583e",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000a"
+                ],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000a"
+              ],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_00": {
+      "input_digest": "fd7013dcb9e985de850216940190fd222c0e8a41c61c9047ee541b4647a0655e",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-a",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-a",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-a",
+              "native_reasoning": "high",
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-a@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "913101c5f0e63d6ebd663e1443e9650d69e9a96f904036eb7fd282d14fd5a4b9",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000a"
+                ],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000a"
+              ],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_01": {
+      "input_digest": "661da338606a310614fb74acef16a97f8827bbfd41e9b7236a0a829b1bb3538b",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-a",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-a",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-a",
+              "native_reasoning": "high",
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-a@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "6f07d693fd3d10efaccc685998745318d75300cd332863d1de3b343bb3105987",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000a"
+                ],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000a"
+              ],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_02": {
+      "input_digest": "fecb27f873aaef1be904aed549a4de937e16cba1fa920bd9ea90f9f85d58e2a9",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-b",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-b",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-b",
+              "native_reasoning": "deliberate",
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-b@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "f60b9c11ea000354d0111cdc0ae4fffad69bdc825e2a7b53beb751c50d7d6a39",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000a"
+                ],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "provider_cooldown_or_unavailable"
+                ],
+                "state": "unavailable"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000a"
+              ],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "provider_cooldown_or_unavailable"
+              ],
+              "state": "unavailable"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_03": {
+      "input_digest": "99a57e03e72567f9317eab16d21fee9f2d3462465c0f7dbff23e446e0d145579",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-b",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-b",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-b",
+              "native_reasoning": "deliberate",
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-b@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "513bc3a25995751e12d373381bc1343c459f6b9f253391ce094238184ebfb1ad",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "credential_profile_disabled"
+                ],
+                "state": "policy_denied"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "credential_profile_disabled"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_04": {
+      "input_digest": "b131d994c1eb96b416722f3be2edba17e0d53433ddd7214120e50a154a1f36b7",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "44ba8b1bf494c6d36ffbe4addb69da6348a570d00ff2e3f438c8741443404c62",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-b",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "cli_version": "fixture-1",
+              "composition_digest": "c108741876ccc82fa12b2491673854106ccf873188487b5ded4fe01b0075da05",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-b",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-b",
+              "native_reasoning": "deliberate",
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-b@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "c57406496b731ab6ef6392c3f650b75d0485a486f2ad3e54f019fd0450a8c79a",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "credential_not_provisionable"
+                ],
+                "state": "missing_credentials"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [
+                  "00000000-0000-0000-0000-00000000000b"
+                ],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "availability_observed"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "credential_not_provisionable"
+              ],
+              "state": "missing_credentials"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_05": {
+      "input_digest": "09a64a6fe3b6591f940f8bf55fa8e04f0f05768be75571a0a1fe552e6cf4c8e4",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "installed_credential_missing_or_stale"
+              ],
+              "state": "missing_credentials"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "installed_credential_missing_or_stale"
+              ],
+              "state": "missing_credentials"
+            }
+          ]
+        }
+      }
+    },
+    "vector_06": {
+      "input_digest": "2a879cbe99b403007c425fce7c4607efd443d416ff5f41a4b6ae3e841b0bf4f3",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "node_capability_snapshot_stale"
+              ],
+              "state": "stale_unknown"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "node_capability_snapshot_stale"
+              ],
+              "state": "stale_unknown"
+            }
+          ]
+        }
+      }
+    },
+    "vector_07": {
+      "input_digest": "c9ec916e4d0ca69063d04034a8241549ab9f7ee4b12fb9a0ed5d5b4adc900c40",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "model_or_reasoning_unsupported"
+              ],
+              "state": "unsupported"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "model_or_reasoning_unsupported"
+              ],
+              "state": "unsupported"
+            }
+          ]
+        }
+      }
+    },
+    "vector_08": {
+      "input_digest": "2796a51c760fa10085296c93d0064d980561444810040215bf9920d53f4c2b7a",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "required_native_limit_unsupported"
+              ],
+              "state": "unsupported"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "required_native_limit_unsupported"
+              ],
+              "state": "unsupported"
+            }
+          ]
+        }
+      }
+    },
+    "vector_09": {
+      "input_digest": "da87d671d7b9eeaf810f90235f9c4652e65cb59630a58d4bf70105dbd96bc95d",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "project_environment_denied"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "project_environment_denied"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_10": {
+      "input_digest": "d8fce4058185c74626fc4bae5e2b6cb588a3ae48134fd5a295929efa43dd3bc3",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "lineage_retry_budget_exhausted"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "lineage_retry_budget_exhausted"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_11": {
+      "input_digest": "b924e8fe8bd0181853c6bb9d00edc1858660455dfdcf456e99a35dab1aa5b0da",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "replacement_stop_retention_reconciliation_required"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "replacement_stop_retention_reconciliation_required"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_12": {
+      "input_digest": "4be8c12129637a49717786ade6a82324e6d6bdbfa0c2ad4522f10e159042e46b",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "lineage_time_budget_exhausted_or_unknown"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "lineage_time_budget_exhausted_or_unknown"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_13": {
+      "input_digest": "9a624754857db0b780c48d08d1c7b8f031f4d88f35f89a7b6e760014d17bf787",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "cost_unknown"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "cost_unknown"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_14": {
+      "input_digest": "9efd9b045dd2da5599c6d028f8cf05b09904758e4ea706f6fffa73af7a9aa00a",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_eligible_candidate"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "availability_stale_or_unknown"
+              ],
+              "state": "stale_unknown"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_stale_or_unknown"
+              ],
+              "state": "stale_unknown"
+            }
+          ]
+        }
+      }
+    },
+    "vector_15": {
+      "input_digest": "eb106f9e8bf6a4a206f3070667d0bc51a924de333eb43434b4b36180362dd6c4",
+      "outcome": {
+        "ok": {
+          "reason_codes": [],
+          "resolved": {
+            "budget_revision": 1,
+            "catalog_digest": "d28df595f93d7c3292fb1e739f5ca285d3b0dc19b6f35d15224681e634ac9cee",
+            "catalog_revision": 1,
+            "choice": {
+              "account_reference": "billing-a",
+              "adapter": {
+                "digest": "1a25a2efa6908d721d67f9afc496c132f2afcb98bca93b53b844d81eca09bf41",
+                "id": "codex-adapter",
+                "version": "1"
+              },
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "cli_version": "fixture-1",
+              "composition_digest": "320862b8068b1fdc6fcf7fa74a616c239cce31fb00e0978549991c9c749814af",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "endpoint_reference": "endpoint-a",
+              "environment": {
+                "digest": "1074e7eb4e1e3e8687c066ea4f04f8334687ba29a8a6e594f5926693b281f3e9",
+                "id": "confined-worktree",
+                "version": "1"
+              },
+              "estimate": null,
+              "failure_classifier": {
+                "digest": "d9395ac0e08bd5869be2dc41f41b948fd7a65ed83582ad6b2599397271b479a8",
+                "id": "synthetic-error-classifier",
+                "version": "1"
+              },
+              "harness": "codex",
+              "max_output_tokens": 128,
+              "model": "model-a",
+              "native_reasoning": "high",
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "qualification": {
+                "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
+                "id": "synthetic-qualification",
+                "version": "1"
+              },
+              "reasoning_configuration_reference": "reasoning-a@1",
+              "resources": {
+                "context_bytes": 8192,
+                "cost_limit_microunits": null,
+                "cpu_millis": 60000,
+                "currency": null,
+                "memory_bytes": 268435456,
+                "process_limit": 8,
+                "require_hard_cost_enforcement": false,
+                "wall_time_ms": 60000
+              }
+            },
+            "credential_revision": 1,
+            "expires_at_ms": 4000,
+            "lineage": {
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "task_id": "00000000-0000-0000-0000-000000000003",
+              "workspace_id": "00000000-0000-0000-0000-000000000002"
+            },
+            "node_revision": 1,
+            "project_revision": 1,
+            "registry_revision": 1,
+            "schema_version": 1,
+            "selected_at_ms": 2000,
+            "snapshot_digest": "79c2f06d0bd1bb96136df2030e92d10b3cf7e33ba3c8897f351177730d4f1247",
+            "target": {
+              "boot_id": "00000000-0000-0000-0000-000000000005",
+              "kind": "worker",
+              "node_id": "00000000-0000-0000-0000-000000000004"
+            },
+            "traces": [
+              {
+                "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+                "credential_profile": {
+                  "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                  "id": "account-a",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-a",
+                "observation_ids": [],
+                "profile_candidate_id": "primary",
+                "provider": "fixture-a",
+                "reason_codes": [
+                  "unknown_availability_bounded_attempt"
+                ],
+                "state": "eligible"
+              },
+              {
+                "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+                "credential_profile": {
+                  "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                  "id": "account-b",
+                  "version": "1"
+                },
+                "environment": "confined-worktree@1",
+                "harness": "codex",
+                "model": "model-b",
+                "observation_ids": [],
+                "profile_candidate_id": "fallback",
+                "provider": "fixture-b",
+                "reason_codes": [
+                  "unknown_availability_bounded_attempt"
+                ],
+                "state": "eligible"
+              }
+            ]
+          },
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "unknown_availability_bounded_attempt"
+              ],
+              "state": "eligible"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "unknown_availability_bounded_attempt"
+              ],
+              "state": "eligible"
+            }
+          ]
+        }
+      }
+    },
+    "vector_16": {
+      "input_digest": "c8ecf64fb120bb6de673b84f09a0925624e08979bf8536ee2ab106ee093802b9",
+      "outcome": {
+        "ok": {
+          "reason_codes": [
+            "no_permitted_fallback"
+          ],
+          "resolved": null,
+          "traces": [
+            {
+              "candidate_id": "choice:e1c06c327f26ef21fd833ea52472d97a59d2befab010988443fd3de071dd544d",
+              "credential_profile": {
+                "digest": "fc164f8250803ea8d41834f1de85821035d27d3747e83610789e0f8e5313b9c3",
+                "id": "account-a",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-a",
+              "observation_ids": [],
+              "profile_candidate_id": "primary",
+              "provider": "fixture-a",
+              "reason_codes": [
+                "credential_profile_disabled"
+              ],
+              "state": "policy_denied"
+            },
+            {
+              "candidate_id": "choice:c08df6ff608052435e881cafdc42452fe92d461e40c3b1e53c4260c49b7db041",
+              "credential_profile": {
+                "digest": "21c2f07264873c61880586ab9ba7227b10e8451d7b028ce0e09402f2e79101ca",
+                "id": "account-b",
+                "version": "1"
+              },
+              "environment": "confined-worktree@1",
+              "harness": "codex",
+              "model": "model-b",
+              "observation_ids": [
+                "00000000-0000-0000-0000-00000000000b"
+              ],
+              "profile_candidate_id": "fallback",
+              "provider": "fixture-b",
+              "reason_codes": [
+                "availability_observed",
+                "fallback_not_permitted"
+              ],
+              "state": "policy_denied"
+            }
+          ]
+        }
+      }
+    },
+    "vector_17": {
+      "input_digest": "46c71911529d164b3867a91ff24982c89fa8edd114f26563f53c7476ad2b0616",
+      "outcome": {
+        "error": "invalid selection snapshot: composition binding mismatch"
+      }
+    },
+    "vector_18": {
+      "input_digest": "1b566347abc51cd8efd54061c37492eea9fd08eb14bd64bd4154847542fec9f5",
+      "outcome": {
+        "error": "invalid selection snapshot: lineage identity"
+      }
+    },
+    "vector_19": {
+      "input_digest": "09b425aedbddfb678bdb6729609950362dae0dc310525324d29569db825e8aea",
+      "outcome": {
+        "error": "invalid selection snapshot: native selection requires schema2 composition"
+      }
+    },
+    "vector_20": {
+      "input_digest": "956bf81c3884bc67c7bcdc181ff4d8166f7f3a40a78aececfe1c16aa7132bdf5",
+      "outcome": {
+        "error": "invalid selection snapshot: snapshot subject mismatch"
+      }
+    },
+    "vector_21": {
+      "input_digest": "f2fa135352bf712ca253a5c6f694eee7b9e486d2e488119949a9f769add46307",
+      "outcome": {
+        "error": "invalid selection snapshot: future or duplicate observation"
+      }
+    }
+  },
+  "source": "untouched aq-selection0.1.3"
+}
