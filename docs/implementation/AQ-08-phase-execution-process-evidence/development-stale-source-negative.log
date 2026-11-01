@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/native_initial_grant.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_initial_grant-d7a833cd4412f572)
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... bounded phase failure clocks (historical, no execution permission): {"availability":[{"expires_at_ms":1793508281559,"received_at_ms":1793508251559,"sequence":2,"state":"available"}],"issued":[],"server_now_ms":1793508257742}
+bounded central issued-grant history (not live worker permission): []
+bounded original decision clocks: [{"budget_expiry":1793508253753,"now":1793508251753,"selection_expiry":1793508253753},{"budget_expiry":1793508253607,"now":1793508251607,"selection_expiry":1793508253607}]
+bounded worker timing: {"completed_count":36,"deadline_ns":null,"download_count":36,"last_completion_ns":165100101522085,"preparation_clock":null,"received_ns":null,"sent_ns":null,"server_now_ms":1793508257757}
+
+thread 'published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer' (417276) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly.rs:221:5:
+assertion `left == right` failed: {"phase":"refused","stage":"phase_execution_http"}; HTTP statuses: [("/v1/worker/profiled/register", 200, 42), ("/v1/worker/profiled/poll", 200, 460), ("/v1/worker/profiled-v2/proposal", 200, 84), ("/v1/worker/profiled-v2/accept", 200, 185), ("/v1/worker/profiled-v2/accept", 200, 84), ("/v1/worker/profiled/artifact", 200, 112), ("/v1/worker/profiled/artifact", 200, 172), ("/v1/worker/profiled/artifact", 200, 52), ("/v1/worker/profiled/artifact", 200, 103), ("/v1/worker/profiled/artifact", 200, 53), ("/v1/worker/profiled/artifact", 200, 103), ("/v1/worker/profiled/artifact", 200, 52), ("/v1/worker/profiled/artifact", 200, 100), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 99), ("/v1/worker/profiled/artifact", 200, 50), ("/v1/worker/profiled/artifact", 200, 103), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 100), ("/v1/worker/profiled/artifact", 200, 50), ("/v1/worker/profiled/artifact", 200, 96), ("/v1/worker/profiled/artifact", 200, 50), ("/v1/worker/profiled/artifact", 200, 98), ("/v1/worker/profiled/artifact", 200, 52), ("/v1/worker/profiled/artifact", 200, 99), ("/v1/worker/profiled/artifact", 200, 50), ("/v1/worker/profiled/artifact", 200, 97), ("/v1/worker/profiled/artifact", 200, 49), ("/v1/worker/profiled/artifact", 200, 97), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 100), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 100), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 100), ("/v1/worker/profiled/artifact", 200, 53), ("/v1/worker/profiled/artifact", 200, 102), ("/v1/worker/profiled/artifact", 200, 51), ("/v1/worker/profiled/artifact", 200, 99), ("/v1/worker/profiled/artifact", 200, 52), ("/v1/worker/profiled/artifact", 200, 102), ("/v1/worker/profiled/material", 200, 54), ("/v1/worker/profiled/artifact", 200, 62), ("/v1/worker/profiled/source/99a5dbc9-855f-5115-9a8e-940b4ebbcd04", 200, 106), ("/v1/worker/profiled/source/99a5dbc9-855f-5115-9a8e-940b4ebbcd04/manifest", 200, 111), ("/v1/worker/profiled/source/99a5dbc9-855f-5115-9a8e-940b4ebbcd04/bundle", 200, 112), ("/v1/worker/profiled-v2/prepare", 409, 412)]
+  left: String("refused")
+ right: "granted_phase_execution"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 47 filtered out; finished in 7.92s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

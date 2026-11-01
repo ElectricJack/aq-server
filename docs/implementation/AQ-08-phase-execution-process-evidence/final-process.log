@@ -1,0 +1,12 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.26s
+     Running tests/native_initial_grant.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_initial_grant-d7a833cd4412f572)
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... bounded phase inputs: {"artifacts":38,"deadline_ns":165957071911773,"materials":1,"original_deadline_ns":165928498765232,"prepared_at_ns":165930535749441,"prepared_revision":26}
+bounded phase execution: {"checked_at_ns":165931122834374,"execution_deadline_ns":165940445486504,"execution_revision":27,"grant_expires_at_ms":1793509142208,"hard_deadline_ms":1793509192208,"hard_deadline_ns":165990445486504,"issued_at_ms":1793509132208}
+bounded phase clocks: {"accepted_expiry_ms":1793509158517,"accepted_issued_ms":1793509128653,"journal_format":8,"journal_revision":27,"proposal_expiry_ms":1793509130129,"replay_server_ms":1793509128799}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 6.23s
+

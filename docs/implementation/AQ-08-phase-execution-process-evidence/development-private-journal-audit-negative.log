@@ -1,0 +1,21 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.16s
+     Running tests/native_initial_grant.rs (/tmp/aq-phase30-qualification-target/debug/deps/native_initial_grant-d7a833cd4412f572)
+
+running 1 test
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... 
+thread 'published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer' (422924) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs:251:5:
+assertion `left == right` failed
+  left: Null
+ right: Number(26)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 47 filtered out; finished in 6.07s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

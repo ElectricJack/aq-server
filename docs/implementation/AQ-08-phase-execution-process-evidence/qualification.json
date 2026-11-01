@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "source_commit": "013ffe881b73c7d2d8f2bf25444040355a59ca2c",
+  "base_commit": "ea1ca6e23d79ae931ec1d9a40ab2e752cb0b23d6",
+  "issuer_commit": "3af7741c3a9c7b3e006718dad7980f3904605119",
+  "issuer_tracked_production_paths_equal_to_base": [
+    "crates/aq-server/src",
+    "crates/aq-server/migrations",
+    "crates/aq-server/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/aq-admission"
+  ],
+  "worker_source_commit": "376c2b3af1345bf5717ab7212bbf23382548c105",
+  "command": "CARGO_TARGET_DIR=/tmp/aq-phase30-qualification-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=1 AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git AQ_TEST_NATIVE_WORKER=/tmp/aq-native-prepare-smoke-artifact/phase8-execution-prompt-release/native-prepare-smoke AQ_TEST_NATIVE_WORKER_SHA256=077e21136716a6826bb7df89cc8e8fb11d7cd9b3bb8e891c49626dcaddac6d79 cargo test -p aq-server --test native_initial_grant --all-features --locked --offline published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer -- --exact --ignored --test-threads=1 --nocapture",
+  "passed": 1,
+  "failed": 0,
+  "ignored": 0,
+  "test_seconds": 6.23,
+  "source_files": [
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly.rs",
+      "sha256": "b1d2874bcae86a6c35c5d963bcbf8061e3d7254b243ba3623c3ac8fe858e7305",
+      "bytes": 15462
+    },
+    {
+      "path": "crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs",
+      "sha256": "e88ff3e9fd679ff08949d693288af9a5004415d7265384384a94b0eb6f03ce81",
+      "bytes": 23586
+    }
+  ],
+  "external_artifacts": [
+    {
+      "kind": "worker",
+      "path": "/tmp/aq-native-prepare-smoke-artifact/phase8-execution-prompt-release/native-prepare-smoke",
+      "sha256": "077e21136716a6826bb7df89cc8e8fb11d7cd9b3bb8e891c49626dcaddac6d79",
+      "bytes": 9052040
+    },
+    {
+      "kind": "aq-git",
+      "path": "/tmp/aq-wrk08-git-pin/aq-git",
+      "sha256": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+      "bytes": 45338176
+    },
+    {
+      "kind": "git",
+      "path": "/usr/bin/git",
+      "sha256": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+      "bytes": 4066232
+    }
+  ],
+  "logs": [
+    {
+      "path": "final-process.log",
+      "sha256": "bbb9766fd90ea0ce0a1d33f84ad3800273f04bb68f6d67ccdb730eb655965b7a",
+      "bytes": 1151
+    },
+    {
+      "path": "final-alltargets-clippy.log",
+      "sha256": "508deda933889b47f1180766e84feb97f96939f176dcc8c25dd9e87a1ffcf605",
+      "bytes": 151
+    },
+    {
+      "path": "final-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "native-aggregate-negative.log",
+      "sha256": "de04f5921ebd41b780f5511d86212ecd8db9841ef2217ee14a91f70d7cf3094d",
+      "bytes": 7182
+    },
+    {
+      "path": "quota-individual.log",
+      "sha256": "5da3e2c289bf9ecd69585667ad5378218a8a66398dbcaead3cd5744cd176fb88",
+      "bytes": 405
+    },
+    {
+      "path": "presence-individual.log",
+      "sha256": "d275365b5e23d43df75c410a9ba8459a014059d5c4765d3427c5070a6f99fcf3",
+      "bytes": 422
+    },
+    {
+      "path": "development-module-path-negative.log",
+      "sha256": "d8dc623761a9e15441c1c01717725141592c188b9bdb1a383daed5c29109e0b9",
+      "bytes": 3296
+    },
+    {
+      "path": "development-registration-negative.log",
+      "sha256": "259770916cfca4ae26846af1336dbe626ad8796acf4f78ccf961462036f72003",
+      "bytes": 1057
+    },
+    {
+      "path": "development-stale-source-negative.log",
+      "sha256": "377f80d423859375706854daff1219ce1f6bdf02d6f30eb5ec412c1ce64b7ac7",
+      "bytes": 3995
+    },
+    {
+      "path": "development-private-journal-audit-negative.log",
+      "sha256": "668226306f6fb82572b484f9b290228d356f3c5491dd0aa7ebefd3b332ad6445",
+      "bytes": 1109
+    }
+  ],
+  "measured": {
+    "inputs": {
+      "artifacts": 38,
+      "deadline_ns": 165957071911773,
+      "materials": 1,
+      "original_deadline_ns": 165928498765232,
+      "prepared_at_ns": 165930535749441,
+      "prepared_revision": 26
+    },
+    "execution": {
+      "checked_at_ns": 165931122834374,
+      "execution_deadline_ns": 165940445486504,
+      "execution_revision": 27,
+      "grant_expires_at_ms": 1793509142208,
+      "hard_deadline_ms": 1793509192208,
+      "hard_deadline_ns": 165990445486504,
+      "issued_at_ms": 1793509132208
+    },
+    "clocks": {
+      "accepted_expiry_ms": 1793509158517,
+      "accepted_issued_ms": 1793509128653,
+      "journal_format": 8,
+      "journal_revision": 27,
+      "proposal_expiry_ms": 1793509130129,
+      "replay_server_ms": 1793509128799
+    }
+  },
+  "grant_issued_after_original_proposal_expiry_ms": 2079,
+  "strict_all_target_all_feature_server_clippy": {
+    "status": "passed",
+    "seconds": 2.36,
+    "owner": "v1_evidence",
+    "exact_probe_file_hashes_independently_matched": true
+  },
+  "explicit_rustfmt_check": "passed",
+  "policies_unchanged": {
+    "phase_maximum_observation_ms": 2000,
+    "selection_observation_max_age_ms": 5000
+  },
+  "native_aggregate": {
+    "passed": 39,
+    "failed": 2,
+    "ignored": 7,
+    "qualification": "NOT a broad green run; failures retained"
+  },
+  "unchanged_individual_reruns": [
+    {
+      "case": "observed quota lock arrival/expiry",
+      "passed": 1,
+      "seconds": 1.32
+    },
+    {
+      "case": "presence then private/revocation denial",
+      "passed": 1,
+      "seconds": 1.61
+    }
+  ],
+  "development_negatives": [
+    "test-only module import typo corrected",
+    "ready previously preceded actual native registration; execution-only worker handshake fixed, no daemon guard relaxation",
+    "source age6183ms exceeded unchanged5s policy with artificial pause; execution-only probe omits that artificial pause",
+    "actual grant reached but test audited nonexistent phase_prepared.record_revision; corrected to actual request journal revision+1"
+  ],
+  "limits": [
+    "Actual worker process, daemon HTTP/SQL and aq-git/Git; Graph/provider/model/runtime qualifications remain explicitly synthetic",
+    "No host or paid provider launch, Started event or task settlement",
+    "Test-only execution route; no production route mount",
+    "No sustained-load/fleet or full-suite pass claim",
+    "Original three probe modes retained; their artificial expiry assertions remain active"
+  ]
+}

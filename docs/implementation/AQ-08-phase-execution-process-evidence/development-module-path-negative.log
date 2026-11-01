@@ -1,0 +1,44 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-phase-execution-owner/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq-phase-execution-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-phase-execution-owner/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-session-api)
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-lifecycle-api)
+   Compiling aq-playbooks-runner v0.1.2 (/tmp/aq-phase-execution-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-runner)
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.1 (/tmp/aq-phase-execution-owner/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.2 (/tmp/aq-phase-execution-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-postgres)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.2 (/tmp/aq-phase-execution-owner/crates/aq-playbook-host)
+   Compiling aq-notifications v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-notifications)
+   Compiling aq-selection v0.1.2 (/tmp/aq-phase-execution-owner/crates/aq-selection)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-observation-api)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-observation-admission)
+   Compiling aq-admission v0.1.9 (/tmp/aq-phase-execution-owner/crates/aq-admission)
+   Compiling aq-accounting v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-accounting)
+   Compiling aq-review-protocol v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-phase-execution-owner/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-phase-execution-owner/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-playbooks-compiler v0.1.0 (/tmp/aq-phase-execution-owner/vendor/aq-playbooks-d3bd349/crates/aq-playbooks-compiler)
+   Compiling aq-server v0.1.0 (/tmp/aq-phase-execution-owner/crates/aq-server)
+error[E0433]: cannot find module or crate `common` in this scope
+   --> crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase.rs:392:26
+    |
+392 |     let (status, body) = common::selection::call(
+    |                          ^^^^^^ use of unresolved module or unlinked crate `common`
+    |
+    = help: if you wanted to use a crate named `common`, use `cargo add common` to add it to your `Cargo.toml`
+help: consider importing this module
+    |
+  2 + use crate::common::selection;
+    |
+help: if you import `selection`, refer to it directly
+    |
+392 -     let (status, body) = common::selection::call(
+392 +     let (status, body) = selection::call(
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `aq-server` (test "native_initial_grant") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
