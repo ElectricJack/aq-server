@@ -285,3 +285,6 @@ async fn actual_released_export_refuses_grant_without_erasing_preparation() {
 
 #[path = "actual_git/worker_assembly.rs"]
 mod worker_assembly;
+
+#[path = "actual_git/accepted_v2.rs"]
+mod accepted_v2;
