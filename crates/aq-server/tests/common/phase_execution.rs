@@ -88,7 +88,10 @@ pub async fn configure(
             .fetch_one(&c.env.env.pool)
             .await
             .unwrap();
-    assert_eq!(format, aq_server::STATE_FORMAT_VERSION.to_string());
+    assert_eq!(
+        format,
+        aq_server::test_support::fixture_store_state_version().to_string()
+    );
     let present:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&c.env.env.pool).await.unwrap();
     assert!(
         present,

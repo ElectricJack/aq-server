@@ -37,7 +37,7 @@ async fn history(pool: &sqlx::PgPool) -> Vec<u8> {
 }
 #[tokio::test]
 async fn actual32_history_survives33_and_reserves_cleanup_without_terminal_effects() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     issue(&f).await;
     let pool = &f.c.env.env.pool;
     let before = history(pool).await;
@@ -68,9 +68,9 @@ async fn actual32_history_survives33_and_reserves_cleanup_without_terminal_effec
         extra, expected_extra,
         "include both generated raw digest columns"
     );
-    let started = 16384_i64 + 16384 + extra;
-    let stopped = 16384_i64 + 16384 + 16384 + extra;
-    let closure = 32768_i64 + 65536 + 16384 + 8192 + 4096 + extra;
+    let started = 16384_i64 + 16384 + 64 + extra;
+    let stopped = 16384_i64 + 16384 + 16384 + 128 + extra;
+    let closure = 32768_i64 + 65536 + 16384 + 8192 + 4096 + 256 + extra;
     assert!(
         started + stopped + closure < 1048576,
         "all declared variable byte maxima must fit each reservation"
@@ -78,7 +78,7 @@ async fn actual32_history_survives33_and_reserves_cleanup_without_terminal_effec
 }
 #[tokio::test]
 async fn collision_rolls_back33_without_changing_actual32_history() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     issue(&f).await;
     let pool = &f.c.env.env.pool;
     let before = history(pool).await;
@@ -102,19 +102,33 @@ async fn collision_rolls_back33_without_changing_actual32_history() {
 }
 #[tokio::test]
 async fn already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     issue(&f).await;
     let pool = &f.c.env.env.pool;
     let mut old = pool.acquire().await.unwrap();
     migrate(pool).await.unwrap();
     let attempt = f.prepared.original.binding.attempt_id;
     let node = f.prepared.original.identity.node_id;
-    let error=sqlx::query("INSERT INTO profiled_started_receipts(attempt_id,node_id,operation_id,request_bytes,request_digest,receipt_bytes,before_record_revision) VALUES($1,$2,$3,'{}',encode(sha256('{}'::bytea),'hex'),'{}',1)").bind(attempt).bind(node).bind(Uuid::new_v4()).execute(&mut *old).await.unwrap_err();
+    let before:Vec<u8>=sqlx::query_scalar("SELECT convert_to(jsonb_build_object('hot',to_jsonb(h),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j WHERE j.attempt_id=h.attempt_id))::text,'UTF8') FROM profiled_authority_hot h WHERE attempt_id=$1").bind(attempt).fetch_one(pool).await.unwrap();
+    let mut old_tx = old.begin().await.unwrap();
+    sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{effects}','{\"kind\":\"pending\",\"count\":1}'::jsonb) WHERE attempt_id=$1").bind(attempt).execute(&mut *old_tx).await.unwrap();
+    let changed:Vec<u8>=sqlx::query_scalar("SELECT convert_to(jsonb_build_object('hot',to_jsonb(h),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j WHERE j.attempt_id=h.attempt_id))::text,'UTF8') FROM profiled_authority_hot h WHERE attempt_id=$1").bind(attempt).fetch_one(&mut *old_tx).await.unwrap();
+    assert_ne!(
+        before, changed,
+        "the old transaction must actually mutate hot state before its insert is fenced"
+    );
+    let error=sqlx::query("INSERT INTO profiled_started_receipts(attempt_id,node_id,operation_id,request_bytes,request_digest,receipt_bytes,before_record_revision) VALUES($1,$2,$3,'{}',encode(sha256('{}'::bytea),'hex'),'{}',1)").bind(attempt).bind(node).bind(Uuid::new_v4()).execute(&mut *old_tx).await.unwrap_err();
     assert!(
         error
             .to_string()
             .contains("qualified transaction-local phase terminal writer required"),
         "{error:?}"
+    );
+    old_tx.rollback().await.unwrap();
+    let after:Vec<u8>=sqlx::query_scalar("SELECT convert_to(jsonb_build_object('hot',to_jsonb(h),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j WHERE j.attempt_id=h.attempt_id))::text,'UTF8') FROM profiled_authority_hot h WHERE attempt_id=$1").bind(attempt).fetch_one(pool).await.unwrap();
+    assert_eq!(
+        before, after,
+        "origin refusal rolls back the old writer's prior hot update and derived revisions, preserving its actual journal"
     );
     let stopped = sqlx::query("INSERT INTO profiled_stopped_receipts(attempt_id,node_id,operation_id,request_bytes,request_digest,proof_bytes,proof_digest,receipt_bytes,before_record_revision,before_grant_revision) VALUES($1,$2,$3,'{}',encode(sha256('{}'::bytea),'hex'),'{}',encode(sha256('{}'::bytea),'hex'),'{}',1,1)").bind(attempt).bind(node).bind(Uuid::new_v4()).execute(&mut *old).await.unwrap_err();
     assert!(
@@ -131,7 +145,7 @@ async fn already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant
 }
 #[tokio::test]
 async fn old_snapshot_classifies_actual030_origin_even_without_visible032_grant() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     let pool = &f.c.env.env.pool;
     let mut old = pool.acquire().await.unwrap();
     let mut snapshot = old.begin().await.unwrap();
@@ -162,7 +176,7 @@ async fn old_snapshot_classifies_actual030_origin_even_without_visible032_grant(
 
 #[tokio::test]
 async fn relational_only_over_budget_backfill_rolls_back_entire_migration() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     issue(&f).await;
     let pool = &f.c.env.env.pool;
     // Capacity boundary only: these additional rows deliberately are NOT runnable
@@ -191,7 +205,7 @@ async fn relational_only_over_budget_backfill_rolls_back_entire_migration() {
 
 #[tokio::test]
 async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
-    let f = prepared(true).await;
+    let f = aq_server::test_support::with_state32_store(Box::pin(prepared(true))).await;
     let pool = &f.c.env.env.pool;
     migrate(pool).await.unwrap();
     // Relational-only occupied capacity, not executable grants or scheduler slots.
