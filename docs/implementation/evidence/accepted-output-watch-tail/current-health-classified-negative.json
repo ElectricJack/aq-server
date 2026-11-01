@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "authority": "genuine current Store classified static diagnostic; no execution or accepted output proof",
+  "worker_source": "04b8f13",
+  "server_source": "2c03b79",
+  "documentation_source": "563c549",
+  "worker_sha256": "adbf3230fc6c9d19de9c29a744e8f8ee0eccaa5aa6bacbcadb50c512c3638b20",
+  "server_test_sha256": "0b8899846d046d4e7cc937821462109cbb9a80767974325d11371fd6b1542efc",
+  "owners_sha256": {
+    "periodic_elf": "fdbfbdc8e8a906019303aeec2a386b43d3f5862404f3448623f653585500f912",
+    "aq_git": "c2ff26f5e63008aec0fbd4082a547e87825e651d4aba0744c4b9fdf752d58c39",
+    "git": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+    "host": "96aaafcc295b45e95accf67d06f9a90d5a1caf9dad09ebdd09034f7cf8ad9044",
+    "tmux": "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd"
+  },
+  "disk_available_before_case_bytes": 21368180736,
+  "default_git_import_minimum_available_bytes": 11005853696,
+  "default_git_profile_changed": false,
+  "timeouts_changed": false,
+  "rebuild_performed": true,
+  "case_seconds": 10.49,
+  "accept_responses": [
+    {
+      "conflict_class": null,
+      "request_started_at_ms": 1793573343056,
+      "response_completed_at_ms": 1793573343228,
+      "status": 200
+    },
+    {
+      "conflict_class": null,
+      "request_started_at_ms": 1793573343359,
+      "response_completed_at_ms": 1793573343434,
+      "status": 200
+    }
+  ],
+  "original_clocks": [
+    {
+      "budget_expires_at_ms": 1793573344540,
+      "budget_observed_at_ms": 1793573342540,
+      "context_expires_at_ms": 1793573372517,
+      "context_received_at_ms": 1793573342517,
+      "context_requested_at_ms": 1793573342517,
+      "maximum_observation_ms": 2000,
+      "node_expires_at_ms": 1793573372297,
+      "node_observed_at_ms": 1793573342297,
+      "offer_expires_at_ms": 1793573344540,
+      "offer_server_time_ms": 1793573342710,
+      "project_expires_at_ms": 1793573372522,
+      "proposal_published_at_ms": 1793573342936,
+      "ready_expires_at_ms": 1793573372516,
+      "ready_received_at_ms": 1793573342517,
+      "ready_requested_at_ms": 1793573342516,
+      "selection_expires_at_ms": 1793573344540,
+      "selection_now_ms": 1793573342540,
+      "source_expires_at_ms": 1793573372559,
+      "source_observed_at_ms": 1793573342559
+    }
+  ],
+  "worker_diagnostic": {
+    "baseline": false,
+    "execution_deadline_ns": null,
+    "http_statuses": [
+      [
+        "/v1/worker/profiled/register",
+        200,
+        44
+      ],
+      [
+        "/v1/worker/profiled/poll",
+        200,
+        491
+      ],
+      [
+        "/v1/worker/profiled-v2/proposal",
+        200,
+        86
+      ],
+      [
+        "/v1/worker/profiled-v2/accept",
+        200,
+        172
+      ],
+      [
+        "/v1/worker/profiled-v2/accept",
+        200,
+        75
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        108
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        164
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        51
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        96
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        90
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        96
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        96
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        95
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        94
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        93
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        57
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        115
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        48
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        93
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        91
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        95
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        49
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        93
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        97
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        50
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        97
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        91
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        91
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        47
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        92
+      ],
+      [
+        "/v1/worker/profiled/material",
+        200,
+        51
+      ],
+      [
+        "/v1/worker/profiled/artifact",
+        200,
+        61
+      ],
+      [
+        "/v1/worker/profiled/source/1e3bf612-ea47-5e2e-b16f-6f6b65a35285",
+        200,
+        103
+      ],
+      [
+        "/v1/worker/profiled/source/1e3bf612-ea47-5e2e-b16f-6f6b65a35285/manifest",
+        200,
+        106
+      ],
+      [
+        "/v1/worker/profiled/source/1e3bf612-ea47-5e2e-b16f-6f6b65a35285/bundle",
+        200,
+        99
+      ],
+      [
+        "/v1/worker/profiled-v2/prepare",
+        409,
+        388
+      ]
+    ],
+    "journal_revision": 26,
+    "kernel_wait_echild": null,
+    "phase": "refused",
+    "phase_accept_created_ns": 228445494454866,
+    "phase_accept_original_deadline_ns": 228446696686627,
+    "phase_accept_reservation_remaining_ms": 1202,
+    "reservation_deadline_ns": 228446696686627,
+    "reserved_at_ns": 228445367502894,
+    "running": false,
+    "stage": "phase_execution_http",
+    "started_ack": false,
+    "stopped": false,
+    "stopped_ack": false
+  },
+  "server_diagnostic": {
+    "availability": [
+      {
+        "expires_at_ms": 1793573372327,
+        "received_at_ms": 1793573342327,
+        "sequence": 2,
+        "state": "available"
+      }
+    ],
+    "issued": [],
+    "server_now_ms": 1793573349415
+  },
+  "post_case_process_observation": "no matching pinned worker, git, host, synthetic harness or test process remained in ps; no subtree stop proof inferred",
+  "limits_of_inference": [
+    "actual phase current health refusal branch observed; synthetic operator assessment was stale",
+    "prior firstaccept409 remains unresolved",
+    "no executiongrant/host/terminal/Watch/pull/upload/tail/ACK",
+    "no provider/model/newDDL/TTL or timeout change",
+    "no unchanged retry"
+  ],
+  "focused_no_run_build_seconds": 4.72,
+  "prepare_responses": [
+    {
+      "conflict_class": "phase_execution_health_unavailable",
+      "request_started_at_ms": 1793573349018,
+      "response_completed_at_ms": 1793573349406,
+      "status": 409
+    }
+  ],
+  "pinned_health_policy_maximum_age_ms": 5000,
+  "availability_age_at_prepare_request_ms": 6691,
+  "source_checks": {
+    "redacted_wire_test_passed": true,
+    "unknown_message_fallback_test_passed": true,
+    "library_build_seconds": 75.0
+  }
+}

@@ -205,3 +205,30 @@ expired admission budget without observing the actual branch. The next bounded
 instrumentation observes the existing fixed extension for Prepare as well and
 classifies its two exact static conflict literals. No unchanged retry, source
 restamp, TTL extension, guard weakening or provider call follows from this run.
+
+## Seventh attempt: exact stale synthetic-health refusal
+
+Source `3fe4fd5` observes the fixed Prepare extension, and `2c03b79` identifies
+the actual current-health refusal branch only in test-support builds. The public
+wire remains identical, verified for both selection expiry and health refusal;
+the unknown-message fallback also passed. The library rebuild took1m15s and the
+fixture no-run build4.72s. Test binary SHA256 was
+`0b8899846d046d4e7cc937821462109cbb9a80767974325d11371fd6b1542efc`.
+
+The single newly instrumented case ran10.49s with21,368,180,736B available.
+Prepare409/388ms carried exact class `phase_execution_health_unavailable`.
+The existing synthetic operator assessment sequence2 was6,691ms old when Prepare
+arrived, beyond the unchanged pinned5,000ms maximum age despite its30s TTL.
+The actual health owner correctly refused. Both accepts and hydration reads
+succeeded; journal26 still had no execution grant, host, terminal or ACK.
+The [bounded log](current-health-classified-negative.log) and
+[structured evidence](current-health-classified-negative.json) retain this proof.
+No matching pinned child process remained in the post-case process observation.
+
+This identifies a fixture observation boundary, not a stale original selection
+or a reason to increase the health bound. A corrected static fixture must obtain
+a new explicit synthetic operator assessment after genuinely revalidating its
+stated deterministic-peer/material/harness/node/journal facts at PreparedInputs.
+It must retain sequence2 and the unchanged policy, and make no claim about actual
+model/provider availability. No unchanged retry or automatic runtime refresh is
+authorized by this evidence.
