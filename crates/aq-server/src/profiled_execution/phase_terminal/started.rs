@@ -130,6 +130,10 @@ async fn record_inner(
     }
     common::require_start_open_locked(state, &mut tx, &loaded).await?;
     loaded.set_writer_marker(&mut tx).await?;
+    let recorded_at_ms = common::now(state)?;
+    if recorded_at_ms < loaded.history.receipt.issued_at_ms {
+        return Err(common::conflict());
+    }
     let receipt = wire::StartedReceipt {
         schema_version: 1,
         negotiation: request.negotiation.clone(),
@@ -141,7 +145,7 @@ async fn record_inner(
             binding: q.binding.clone(),
             grant_id: q.grant_id,
             request_digest: q.digest().map_err(|_| common::conflict())?,
-            recorded_at_ms: common::now(state)?,
+            recorded_at_ms,
             authority_revision_at_record: loaded
                 .versions
                 .authority_revision
@@ -171,7 +175,11 @@ async fn record_inner(
     }
     // Every mutable eligibility row remains locked. The final awaited writes
     // may consume the remaining lease; never acknowledge a newly expired start.
-    loaded.view.active_at(common::now(state)?)?;
+    let final_now = common::now(state)?;
+    if final_now < recorded_at_ms {
+        return Err(common::conflict());
+    }
+    loaded.view.active_at(final_now)?;
     tx.commit().await.map_err(common::database)?;
     Ok(receipt)
 }
