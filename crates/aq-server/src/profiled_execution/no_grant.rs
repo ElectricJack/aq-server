@@ -56,6 +56,18 @@ pub async fn close_expired(
         .begin()
         .await
         .map_err(|_| AppError::Internal)?;
+    // Bound contention for housekeeping as well as direct internal callers.
+    // Expiry is sampled only after node ownership below; a lock wait cannot
+    // manufacture an earlier proof or authorize a grant.
+    for sql in [
+        "SET LOCAL lock_timeout='250ms'",
+        "SET LOCAL statement_timeout='2s'",
+    ] {
+        sqlx::query(sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| AppError::Internal)?;
+    }
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
         .bind(node)
         .fetch_optional(&mut *tx)
