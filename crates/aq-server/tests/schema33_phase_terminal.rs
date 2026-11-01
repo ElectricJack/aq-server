@@ -232,3 +232,6 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_phase_terminal_capacity),(SELECT count(*) FROM profiled_owner_journals WHERE phase<>'reserved')").fetch_one(pool).await.unwrap();
     assert_eq!(counts, (16, 0));
 }
+
+#[path = "schema33_phase_terminal/legacy_parent.rs"]
+mod legacy_parent;
