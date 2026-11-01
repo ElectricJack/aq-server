@@ -148,7 +148,7 @@ async fn run_worker(mode: Mode) {
     let http_statuses = Arc::new(std::sync::Mutex::new(Vec::<(String, u16, u128)>::new()));
     let observed = http_statuses.clone();
     let mut app = aq_server::build_worker_router(case.env.env.state.clone());
-    if execute_phase {
+    if execute_phase && !terminal {
         let routes = phase::execution_routes(case.env.env.state.clone());
         app = app.merge(if history_loss {
             phase_history::withhold_first_success(routes)

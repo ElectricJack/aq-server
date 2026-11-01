@@ -261,6 +261,9 @@ fn build_worker_router_inner(
         .merge(profiled_execution::accepted_preparation::routes(
             state.clone(),
         ))
+        .merge(profiled_execution::phase_execution::transport::routes(
+            state.clone(),
+        ))
         .merge(profiled_execution::reconciliation::routes(state.clone()))
         .merge(profiled_execution::renewal::routes(state.clone()))
         .merge(profiled_execution::presence::routes(state.clone()))
