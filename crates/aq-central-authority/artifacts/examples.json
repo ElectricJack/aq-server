@@ -1,0 +1,133 @@
+{
+  "plan": {
+    "document": "plan",
+    "data": {
+      "schema_version": 1,
+      "subject": {
+        "kind": "central_conversation",
+        "actor_id": "00000000-0000-0000-0000-000000000001",
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "conversation_revision": 1,
+        "policy": {
+          "id": "central-supervisor-policy",
+          "version": "1",
+          "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261"
+        }
+      },
+      "session": {
+        "kind": "central",
+        "authority_id": "00000000-0000-0000-0000-000000000003",
+        "session_id": "00000000-0000-0000-0000-000000000004",
+        "generation": 1
+      },
+      "generation": 1,
+      "profiles": {
+        "catalog": {
+          "id": "catalog",
+          "version": "1",
+          "digest": "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57"
+        },
+        "agent": {
+          "id": "agent",
+          "version": "1",
+          "digest": "d4f0bc5a29de06b510f9aa428f1eedba926012b591fef7a518e776a7c9bd1824"
+        },
+        "intelligence": {
+          "id": "intelligence",
+          "version": "1",
+          "digest": "9f80a5e14017ccc05ab0c904c792915a8e134a97ebc2f5a3c7bc9f7b0f215509"
+        },
+        "execution": {
+          "id": "execution",
+          "version": "1",
+          "digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e"
+        },
+        "composition": {
+          "id": "composition",
+          "version": "1",
+          "digest": "730d725c8a59d3a7303def2bed041a577edb4255aabd4889ce12918311d952f0"
+        },
+        "selection": {
+          "id": "selection",
+          "version": "1",
+          "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886"
+        },
+        "host_plan": {
+          "id": "host_plan",
+          "version": "1",
+          "digest": "205f1091d904dc467d9560fc95b5aebdc52d6771df0dcd7ecc02223f254b9969"
+        },
+        "adapter": {
+          "id": "adapter",
+          "version": "1",
+          "digest": "ae1eae1d76e5b7c865c4122ce366a08025842566d2d96c75cc13e6353a73db0d"
+        },
+        "environment": {
+          "id": "environment",
+          "version": "1",
+          "digest": "ba5285161ba6eed0085fb13784ce5c92f70ebc268b94fd66aa1d68a32884204d"
+        },
+        "renderer": {
+          "id": "renderer",
+          "version": "1",
+          "digest": "6bd52b204f5b4cffb267597f37d0fa62bae229341394dfec0e5d42439d8b722c"
+        },
+        "startup": {
+          "id": "startup",
+          "version": "1",
+          "digest": "8e7e3ff9c84fb08d79d6544ae6803a0a68df5677ca4ea055db6d4f8cca09c768"
+        }
+      },
+      "batch": {
+        "conversation_id": "00000000-0000-0000-0000-000000000002",
+        "through_cursor": 2,
+        "messages": [
+          {
+            "message_id": "00000000-0000-0000-0000-000000000005",
+            "cursor": 1,
+            "payload_digest": "46313c32691b3bc4baf07c6836e3c0f82c824d55259ff4bc0fd40fca1e65ec41"
+          },
+          {
+            "message_id": "00000000-0000-0000-0000-000000000006",
+            "cursor": 2,
+            "payload_digest": "601b16d08ecfc4b8685dfeed59a6ec9e63a35dd6405427f0c00cd9a8abe8e23e"
+          }
+        ]
+      },
+      "dispatch_id": "00000000-0000-0000-0000-000000000007",
+      "host_operation_id": "00000000-0000-0000-0000-000000000008",
+      "wall_time_ms": 300000,
+      "max_permit_ms": 120000
+    }
+  },
+  "permit": {
+    "document": "permit",
+    "data": {
+      "binding": {
+        "subject": {
+          "kind": "central_conversation",
+          "actor_id": "00000000-0000-0000-0000-000000000001",
+          "conversation_id": "00000000-0000-0000-0000-000000000002",
+          "conversation_revision": 1,
+          "policy": {
+            "id": "central-supervisor-policy",
+            "version": "1",
+            "digest": "fadbab776ab20518ff5d7cec010af3bd03ca3c6fd02cda245583689b72d1d261"
+          }
+        },
+        "session": {
+          "kind": "central",
+          "authority_id": "00000000-0000-0000-0000-000000000003",
+          "session_id": "00000000-0000-0000-0000-000000000004",
+          "generation": 1
+        },
+        "generation": 1,
+        "plan_digest": "0e0d50b342739be75abb6a44264d27fabf89065bc2b013ff04b2daa49a633809"
+      },
+      "machine_boot_id": "00000000-0000-0000-0000-000000000009",
+      "sequence": 1,
+      "issued_boot_ms": 1000,
+      "expires_boot_ms": 121000
+    }
+  }
+}
