@@ -183,3 +183,11 @@ swap. The later bounded actual API/owner proof is under `union511ee99/`. The sta
 is left running on4218/4219, now PID898833 at this checkpoint, for root review.
 Canonical4188 still uses its original backend/database. The final cutover proposal
 uses this later qualified binary and requires a fresh quiesced source snapshot.
+
+## Subsequent canonical cutover
+
+This stage is now gracefully retired with data/evidence preserved. The separate
+[final fresh-snapshot canonical acceptance](../canonical-uds-empty-owner-live/README.md)
+records actual4188 promotion. Its namespace and backup are distinct; the earlier
+stage snapshot was not promoted as current. The shared PostgreSQL instance is now
+a protected canonical dependency and must never be stopped through proof cleanup.

@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "pid": 898833,
+  "listeners_closed": [
+    4218,
+    4219
+  ],
+  "engine": {
+    "owned": false,
+    "owner_backend_pid": null,
+    "clients": 0
+  },
+  "data_or_authority_deleted": false,
+  "canonical_lifecycle_changed": false
+}

@@ -1,0 +1,153 @@
+{
+  "passed": true,
+  "ready": {
+    "version": "0.1.0",
+    "source_revision": "511ee99",
+    "state_format": 37,
+    "protocol_min": 1,
+    "protocol_max": 1,
+    "database": "ok",
+    "auth_mode": "dev"
+  },
+  "old_source": {
+    "database": "aq_test_d2942959309042a3ad3e087dec11e03e",
+    "system_identifier": "7702509189573074990",
+    "aq_state": "35",
+    "component_schema": null,
+    "clients": [],
+    "held_claims": 1,
+    "offered_held_claims": 1,
+    "hot_finished": 1,
+    "phase_grants": 1,
+    "started_receipts": 1,
+    "material_leases": 1,
+    "unexpired_material_leases": 0
+  },
+  "current": {
+    "database": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+    "system_identifier": "7703296609124593685",
+    "aq_state": "37",
+    "component_schema": 4,
+    "clients": [
+      {
+        "application_name": "aq-canonical-core",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 7
+      },
+      {
+        "application_name": "aq-dashboard-read",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-human-graph-read",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-bridge",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 2
+      },
+      {
+        "application_name": "aq-playbook-owner",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 1
+      },
+      {
+        "application_name": "aq-supervisor-conversation",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 1
+      },
+      {
+        "application_name": "aq-terminal",
+        "datname": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+        "unix_connection": true,
+        "connections": 2
+      }
+    ],
+    "held_claims": 1,
+    "offered_held_claims": 1,
+    "hot_finished": 1,
+    "phase_grants": 1,
+    "started_receipts": 1,
+    "material_leases": 1,
+    "unexpired_material_leases": 0
+  },
+  "all_source_domain_tables_still_equal_frozen_snapshot": true,
+  "original_table_count": 109,
+  "unchanged_original_target_tables": 104,
+  "expected_changed_metadata_tables": [
+    "public.meta",
+    "public.notification_budget",
+    "public.playbook_namespaces",
+    "public.schema_migrations",
+    "public.terminal_sessions"
+  ],
+  "critical_domain_bags_identical": [
+    "public.nodes",
+    "public.execution_attempts",
+    "public.profiled_authority_hot",
+    "public.admission_material_leases",
+    "public.profiled_phase_execution_grants",
+    "public.profiled_started_receipts",
+    "public.profiled_launch_closures",
+    "public.profiled_verified_releases"
+  ],
+  "held_claim_disposition": "RETAIN_UNRESOLVED_UNCHANGED",
+  "work_counts": {
+    "execution_attempts": 1,
+    "playbook_admissions": 0,
+    "playbook_effects": 0,
+    "playbook_cancellations": 0,
+    "playbook_outbox": 0,
+    "human_graph_operations": 0,
+    "agent_graph_operations": 0,
+    "agent_graph_outbox": 0,
+    "mailbox_messages": 0,
+    "mailbox_deliveries": 0,
+    "notification_messages": 0,
+    "notification_deliveries": 0,
+    "review_subjects": 0,
+    "human_decision_requests": 0,
+    "human_decision_finality": 0,
+    "review_owner_outbox": 0,
+    "observation_events": 0
+  },
+  "old_source_pointer_processes": [],
+  "target_user_domain_writes_observed": false,
+  "automatic_rollback_after_target_user_writes": false,
+  "canonical_authority": {
+    "authoritative_database": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+    "system_identifier": "7703296609124593685",
+    "canonical_pid": 902127,
+    "start_ticks": "22993206",
+    "argv": [
+      "/tmp/aq-composed-central-empty-511ee99/aq-server",
+      "serve",
+      "--vault",
+      "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/vault"
+    ],
+    "binary_sha256": "17698c625675b7a994b0a56bbd37737becbf039380093ae9dd32fe1bdcd27b25",
+    "source_commit": "511ee995ac55dd6345590732705b5a3bfde5130d",
+    "bundle": "/tmp/aq-dashboard-actions-promotion/dist-composed-f2dbe5e",
+    "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+    "vault": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/vault",
+    "config_sha256": "8e816e5d3e83c3995218cd877df8537d2a589552fba41e251fc9839e87ed572b",
+    "private_core_pointer": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/core-database-url",
+    "protected_env_matches_preserved_source": true,
+    "namespace_id": "3daf3183-40d2-4858-95de-a3557dce72b6",
+    "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+    "old_database_preserved": "aq_test_d2942959309042a3ad3e087dec11e03e",
+    "old_database_read_only_operator_freeze": true,
+    "rollback_automatic_after_target_user_writes": false,
+    "proof_pg_instance_is_now_canonical_dependency": true,
+    "cleanup_prohibited": true
+  }
+}

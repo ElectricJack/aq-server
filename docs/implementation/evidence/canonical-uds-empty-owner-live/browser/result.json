@@ -1,0 +1,489 @@
+{
+  "passed": true,
+  "elapsed_ms": 13664,
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "namespace_id": "3daf3183-40d2-4858-95de-a3557dce72b6",
+  "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "definitions": 0,
+  "activations": 0,
+  "loaded_definitions_capability": false,
+  "real_udsocket": true,
+  "synthetic_forwarding": false,
+  "browser_interception": false,
+  "viewports": [
+    1440,
+    390,
+    320
+  ],
+  "pages": [
+    "/overview",
+    "/work",
+    "/knowledge",
+    "/agents",
+    "/supervisor",
+    "/results",
+    "/settings"
+  ],
+  "catalog_view_unrelated_engine_reads": 0,
+  "mutations": [],
+  "foreign": [],
+  "errors": [],
+  "responses": [
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/definitions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/playbooks/inspection/catalog/activations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/overview",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/human/overview/tasks",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/global",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/9da826a0-89d9-45e1-ae28-a26e0460dd04/messages",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/human/results",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/notifications",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/overview",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/human/overview/tasks",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/global",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/9da826a0-89d9-45e1-ae28-a26e0460dd04/messages",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/human/results",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/notifications",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/overview",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/human/overview/tasks",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/sessions",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/global",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/human/conversations/9da826a0-89d9-45e1-ae28-a26e0460dd04/messages",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/human/results",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/bootstrap",
+      "status": 200
+    },
+    {
+      "path": "/api/status",
+      "status": 200
+    },
+    {
+      "path": "/api/workers",
+      "status": 200
+    },
+    {
+      "path": "/api/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/notifications",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 200
+    }
+  ]
+}

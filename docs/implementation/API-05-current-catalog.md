@@ -112,3 +112,15 @@ Actual desktop/390/320 catalog/navigation/empty-work browser checks passed3503ms
 with zero browser mutations or foreign requests. All17 work/effect counts remained
 zero. This is separate from the earlier synthetic-forwarding protected HTTP
 fixture, and does not enable or qualify a canonical optional owner.
+
+### Canonical local preview accepted
+
+The [actual final cutover and read-only acceptance](evidence/canonical-uds-empty-owner-live/README.md)
+now qualifies the real protected owner on canonical4188: AQ37/default source511ee99
+with the unchanged624 dashboard, actual same-physical-DB UDS clients and genuinely
+empty current Definitions/Activations. No dummy policy or workflow activity was
+seeded. Historical loaded definitions remain unavailable for explicit deployments=[].
+Desktop/390/320 empty-catalog and all-page reads passed13.664s, plus bounded actual
+Graph/Work/Knowledge, Overview and Supervisor regressions. Original data and the
+unresolved held claim were preserved; the original35 database remains retained,
+and rollback after target user writes requires reviewed reconciliation.

@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "visual_measurements": {
+    "desktop_graph_width": 725.328125,
+    "desktop_inspector_width": 426.65625,
+    "desktop_graph_fits": true,
+    "phone_graph_node_top": 603.59375,
+    "phone_graph_node_bottom": 675.59375,
+    "phone_navigation_top": 787,
+    "phone_document_paragraph_top": 514.796875,
+    "phone_document_paragraph_bottom": 567.578125
+  },
+  "references": [
+    "02-work-explorer-v3.png",
+    "07-knowledge-v2.png"
+  ],
+  "visual_subset": "task workspace with readable dependency graph and contextual inspector; document library with first-viewport phone reading",
+  "origin": "http://127.0.0.1:4188",
+  "served_bundle_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "api_product_bundle_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "task_id": "cedfdada-042c-5f56-a9c0-7fa68e98081d",
+  "task_revision": "2",
+  "knowledge_id": "dee01ab9-1345-5944-87d2-98441d7941b4",
+  "knowledge_revision": "1",
+  "task_rows": 3,
+  "knowledge_rows": 2,
+  "graph_nodes": 2,
+  "graph_edges": 1,
+  "human_reads": 16,
+  "mutations": 0,
+  "page_errors": 0,
+  "elapsed_ms": 3247,
+  "output": "/tmp/aq-empty-owner-qualified-2baa8e7/canonical-graph",
+  "note": "Actual AQ human API and actual configured Graph; labelled local fixture, no interception or domain mutations. Current and exact pinned revision inspected; no older-history claim."
+}

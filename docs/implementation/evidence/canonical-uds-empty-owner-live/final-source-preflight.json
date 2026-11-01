@@ -1,0 +1,28 @@
+{
+  "database": "aq_test_d2942959309042a3ad3e087dec11e03e",
+  "system_identifier": "7702509189573074990",
+  "state": "35",
+  "other_clients": 0,
+  "database_bytes": 14612147,
+  "dbmeta": {
+    "owner": "postgres",
+    "datcollate": "en_US.utf8",
+    "datctype": "en_US.utf8",
+    "datlocprovider": "c",
+    "datcollversion": "2.36",
+    "datacl": null
+  },
+  "dbrole_settings": 0,
+  "owner_exists": 1,
+  "project_exact": 1,
+  "namespaces": 0,
+  "held_task_claims": 1,
+  "offered_claims": 1,
+  "hot_finished": 1,
+  "roles": [
+    "postgres"
+  ],
+  "extensions": [
+    "plpgsql"
+  ]
+}

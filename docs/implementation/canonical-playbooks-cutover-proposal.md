@@ -1,8 +1,10 @@
 # Proposed canonical empty-Playbooks cutover after actual UDS staging
 
-Status: ready for root lifecycle review; **not executed**. The successful
+Status: **executed and accepted** for the local canonical preview; see the
+[actual final cutover record](evidence/canonical-uds-empty-owner-live/README.md).
+The remaining text preserves the reviewed proposal before execution. The successful
 [actual canonical-data clone stage](evidence/canonical-uds-empty-owner-stage/README.md)
-remains available on4218/4219. Canonical4188/4189 is still its original state35
+was available on4218/4219 and is now retired. Before execution, canonical4188/4189 used its original state35
 backend/database/config. No final snapshot, target creation, canonical config
 change, stop or promotion is implied by this proposal.
 

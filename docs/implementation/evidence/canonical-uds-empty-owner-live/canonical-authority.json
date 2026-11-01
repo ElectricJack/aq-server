@@ -1,0 +1,27 @@
+{
+  "authoritative_database": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+  "system_identifier": "7703296609124593685",
+  "canonical_pid": 902127,
+  "start_ticks": "22993206",
+  "argv": [
+    "/tmp/aq-composed-central-empty-511ee99/aq-server",
+    "serve",
+    "--vault",
+    "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/vault"
+  ],
+  "binary_sha256": "17698c625675b7a994b0a56bbd37737becbf039380093ae9dd32fe1bdcd27b25",
+  "source_commit": "511ee995ac55dd6345590732705b5a3bfde5130d",
+  "bundle": "/tmp/aq-dashboard-actions-promotion/dist-composed-f2dbe5e",
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "vault": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/vault",
+  "config_sha256": "8e816e5d3e83c3995218cd877df8537d2a589552fba41e251fc9839e87ed572b",
+  "private_core_pointer": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/core-database-url",
+  "protected_env_matches_preserved_source": true,
+  "namespace_id": "3daf3183-40d2-4858-95de-a3557dce72b6",
+  "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "old_database_preserved": "aq_test_d2942959309042a3ad3e087dec11e03e",
+  "old_database_read_only_operator_freeze": true,
+  "rollback_automatic_after_target_user_writes": false,
+  "proof_pg_instance_is_now_canonical_dependency": true,
+  "cleanup_prohibited": true
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "usage": "canonical_agent_q_database",
+  "protected_from_proof_cleanup": true,
+  "prohibited_operations": [
+    "stop",
+    "delete",
+    "proof_cleanup"
+  ],
+  "container_id": "aaca77f508c794f0e078f5d5062e8b27903378cf71357125c34dff977f018819",
+  "authoritative_database": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+  "canonical_authority_record": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f/canonical-authority.json",
+  "canonical_pid": 902127,
+  "source_commit": "511ee995ac55dd6345590732705b5a3bfde5130d",
+  "binary_sha256": "17698c625675b7a994b0a56bbd37737becbf039380093ae9dd32fe1bdcd27b25",
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "marked_at": "2026-11-01T23:16:12.439507+00:00"
+}

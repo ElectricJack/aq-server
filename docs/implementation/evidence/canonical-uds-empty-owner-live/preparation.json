@@ -1,0 +1,27 @@
+{
+  "root": "/tmp/aq-private-uds-n8vgb39f/canonical-final-6e5d546cd36d48db8b6aba8ceb987d4f",
+  "database": "aq_canonical_final_71832758a2954c228c016b645c92c7d0",
+  "namespace_id": "3daf3183-40d2-4858-95de-a3557dce72b6",
+  "owner_id": "f4c33664-c524-4395-815f-5af6109a418b",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "workspace_id": "00000000-0000-0000-0000-000000000003",
+  "generation": 1,
+  "configured_deployments": 0,
+  "binary": "/tmp/aq-composed-central-empty-511ee99/aq-server",
+  "binary_sha256": "17698c625675b7a994b0a56bbd37737becbf039380093ae9dd32fe1bdcd27b25",
+  "source_commit": "511ee995ac55dd6345590732705b5a3bfde5130d",
+  "bundle": "/tmp/aq-dashboard-actions-promotion/dist-composed-f2dbe5e",
+  "bundle_manifest_sha256": "624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663",
+  "final_config_sha256": "8e816e5d3e83c3995218cd877df8537d2a589552fba41e251fc9839e87ed572b",
+  "original_non_playbooks_config_including_server_exact": true,
+  "protected_runtime_key_names": [
+    "AQ_PRIVATE_VALUE_KEY_K1"
+  ],
+  "protected_runtime_key_matches_live_source": true,
+  "source_process": 874715,
+  "stage_retirement_pending": true,
+  "backup_started": false,
+  "target_database_created": false,
+  "final_service_started": false,
+  "held_claim_disposition": "RETAIN_UNRESOLVED_UNCHANGED"
+}

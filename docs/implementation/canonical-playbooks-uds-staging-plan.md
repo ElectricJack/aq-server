@@ -1,6 +1,10 @@
 # Proposed canonical Playbooks owner through a private UDS clone
 
-Status: proposal after the successful actual private-UDS AQ37/component0.1.3
+Current status: the [actual final local cutover](evidence/canonical-uds-empty-owner-live/README.md)
+now runs canonical AQ37 with the real empty owner over UDS. Original AQ35 data
+remains retained. The following is the historical preparation proposal.
+
+Original draft status: proposal after the successful actual private-UDS AQ37/component0.1.3
 proof. No canonical database reads, writes, configuration changes, clone, or
 service lifecycle operation were performed to write this plan. Canonical still
 uses its existing core database; optional Playbooks remain unavailable there.

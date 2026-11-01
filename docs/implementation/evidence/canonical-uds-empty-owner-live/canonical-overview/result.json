@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "origin": "http://127.0.0.1:4188",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "task_id": "563c8853-4311-54f5-bab4-505c5b18a2b2",
+  "contract": "human-overview-tasks-1",
+  "coverage": "complete",
+  "count_accuracy": "complete_observation",
+  "task_counts": {
+    "draft": 1,
+    "active": 2,
+    "completed": 0,
+    "canceled": 0
+  },
+  "served_product": {
+    "version": "0.1.0",
+    "dashboard_digest": "sha256:624707540cc6566158c3721e4733f69934c8a1670c4ffb972afb7d469fb8e663"
+  },
+  "elapsed_ms": 497,
+  "note": "Actual bounded recorded-task contribution and core layout; no running/readiness/capacity/quota inference."
+}
