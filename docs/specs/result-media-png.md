@@ -72,8 +72,9 @@ chunks. The strict subset is declared as a limit, not general PNG compatibility.
 
 Fully decode under the PNG decoder's resource limits and separately bounded
 caller-owned buffers; IHDR/signature checks alone cannot finalize an image.
-Allocate at most 8,000,000 RGBA bytes, configure a16MiB decoder scratch budget, and bounded
-encoding output. Only two processing jobs may be active; acquire the permit
+The full-raster RGBA buffer is at most 8,000,000 bytes; preview RGBA is at most
+589,824 bytes. Configure a 16 MiB decoder scratch budget and bound encoding
+output separately. Only two processing jobs may be active; acquire the permit
 before reading a request body and hold it until all work finishes, even if an
 HTTP client disconnects. No detached timed-out decoder is counted as completed.
 Catch decoder panics at the job boundary and retain a typed rejection, not a
@@ -84,8 +85,13 @@ buffers and malformed/compressed-bomb cases before enabling upload capability.
 alpha to RGB, and preserves RGBA samples; it performs no ICC color conversion.
 Write a fresh static RGBA8 PNG with sRGB marking and no copied metadata. Retain
 the input privately for digest/provenance, but expose only canonical variants.
-Use pinned encoder settings and exact dependency bytes, with golden vectors;
-changing those settings requires a new rendering-policy identity. The render
+Encoder final settings are RGBA8, noninterlaced, perceptual sRGB marking,
+`Compression::Fast` followed by `Filter::NoFilter`, and no optional metadata.
+Pin exact dependency bytes and golden vectors; changing those settings requires
+a new rendering-policy identity. These are supported by the upstream
+[encoder](https://docs.rs/png/0.18.1/png/struct.Encoder.html),
+[compression](https://docs.rs/png/latest/png/enum.Compression.html) and
+[filter](https://docs.rs/png/latest/png/enum.Filter.html) APIs. The render
 variant keeps dimensions and has an 8 MiB encoded bound. A deterministic
 nearest-sample preview has a maximum 384px long edge, preserves aspect ratio,
 and has a 768KiB bound. Decode/encode overflow rejects rather than truncates.
@@ -189,6 +195,11 @@ Use image/png, no-store/private, nosniff, a restrictive content security policy
 and inline disposition. Original input bytes have no public content route.
 Range and conditional-cache requests are outside the first slice; reject them
 after authorization. No permanent signed URL or unauthenticated static serving.
+Media uses its own bounded request class, separate from renewal/cancellation:
+two physical processing jobs, four content reads, and no unbounded wait queue.
+Content response permits remain associated with bounded body delivery/drop;
+returning from a handler does not release a budget while private bytes remain
+queued indefinitely for a slow client.
 
 Availability is a current observation: available means the owned variant files
 are present at expected lengths under a valid retained receipt; content retrieval

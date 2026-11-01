@@ -80,6 +80,10 @@ an arbitrary response URL. HTTP routes and headers are mediated by AQ.
   most 2,000,000. Preview uses floor(width×scale), floor(height×scale), minimum 1,
   scale=min(1,384/max(width,height)), with deterministic nearest samples. No
   upscale, implicit crop, EXIF/color profile, second frame or source replacement.
+  Final encoder settings are perceptual sRGB, Compression::Fast then
+  Filter::NoFilter, pinned dependency bytes, and no copied metadata. Source sample
+  selection for preview pixel(x,y) is floor(x×source_width/preview_width),
+  floor(y×source_height/preview_height), with checked integer arithmetic.
 - All item bindings equal MediaPage.binding, artifact IDs are unique and sorted
   by stable UUID. This is an attachment list, not chronological result Latest.
 - Availability reason is null only for available. Other states have their
