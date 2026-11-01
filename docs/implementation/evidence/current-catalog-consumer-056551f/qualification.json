@@ -1,0 +1,132 @@
+{
+  "profile": "isolated current catalog consumer source qualification; not canonical promotion",
+  "backend_commits": [
+    "6129bed",
+    "b5f226b",
+    "1be7cf0",
+    "056551f"
+  ],
+  "backend_base": "ba65fbe",
+  "ui_commits": [
+    "555b76e",
+    "fd6e7ab",
+    "681691f"
+  ],
+  "state_schema": 36,
+  "component": {
+    "revision": "0173673a92090eae3cb45ee090d2c14468e7b318",
+    "archive_sha256": "6f8c373abacc9360c7be9618bdef3d608ac2f12d605738e711466a22fe6a1b4a",
+    "runner_postgres_cli_version": "0.1.3",
+    "model_compiler_version": "0.1.0",
+    "host_consumer_version": "0.1.3",
+    "vendor_files": 67,
+    "all_frozen_closures_verified": true
+  },
+  "schema_sha256": "a1009bffcb9b688b7df2b3ebd7d3211946f53d551309e8107c05f1ebef6fff9c",
+  "final_checks": {
+    "new_host_catalog_cases": {
+      "passed": 3,
+      "test_seconds": 0.0,
+      "compile_seconds": 1.38,
+      "notes": [
+        "no State-load fallback",
+        "unsupported interface unavailable, late Unsupported error",
+        "weak support handle does not prolong owner lifecycle"
+      ]
+    },
+    "pure_api_cases": {
+      "passed": 3,
+      "test_seconds": 0.03,
+      "compile_seconds": 41.08,
+      "log": "unit-final.log"
+    },
+    "actual_protected_http_cases": {
+      "passed": 3,
+      "test_seconds": 3.91,
+      "compile_seconds": 41.04,
+      "notes": [
+        "later actual install and activation visible; startup capture unchanged; no workflow admissions",
+        "Owner role/namespace/project/query/unmounted/stop refusals; schema-valid definition/activation DTOs",
+        "actual held read observes subject/issuer/role/user-row-version changes and returns403; denial precedes held engine read error; same-router stop disables capability"
+      ],
+      "record_kind": "curated actual tool output summary, not verbatim log"
+    },
+    "server_strict": {
+      "passed": true,
+      "seconds": 37.96,
+      "scope": "aq-server --lib --test playbook_activation --example current_playbook_catalog_contract --all-features -Dwarnings",
+      "log": "server-strict.log"
+    },
+    "host_strict": {
+      "passed": true,
+      "seconds": 0.7,
+      "scope": "aq-playbook-host --all-targets --all-features -Dwarnings",
+      "log": "host-strict.log"
+    },
+    "schema_regeneration": {
+      "passed": true,
+      "seconds": 0.89,
+      "byte_identical": true,
+      "log": "schema-final.log"
+    },
+    "owned_rustfmt": true,
+    "diff_check": true,
+    "frontend": {
+      "passed": 60,
+      "seconds": 3.12,
+      "full_tsc_b": true,
+      "probe_node_syntax": true,
+      "cases": [
+        "finite request/body deadline and abort",
+        "256KiB preparse cap/fatal UTF8/duplicate/lossy-number rejection",
+        "held401/403 stream cancellation not awaited; bootstrap503 preserves global denial latch; no historical fallback",
+        "matching exact409 fences old roster across selection clearing until fresh epoch; late replaced-stamp409 preserves fresh rows"
+      ]
+    },
+    "whole_workspace_fmt": {
+      "passed": false,
+      "reason": "unchanged ba65fbe crates/aq-server/tests/profiled_results.rs module ordering; owned Rust sources pass scoped rustfmt; unrelated root-owned file not edited"
+    }
+  },
+  "earlier_checks": {
+    "host_suite": {
+      "passed": 10,
+      "ignored": 1,
+      "note": "before final weak-handle corrective source; final new host3 and strict cover that correction"
+    },
+    "actual_host_postgres": {
+      "passed": 1,
+      "seconds": 0.41,
+      "note": "exclusive owner/restart/key failure through protected actual PostgreSQL"
+    },
+    "legacy_loaded_and_inert_cases": {
+      "passed": 3,
+      "seconds": 3.11,
+      "note": "before final additive principal/live-cap correction; final new actual HTTP case also verifies unchanged startup capture/no admissions"
+    }
+  },
+  "browser_fixture": {
+    "path": "/tmp/aq-current-catalog-pin/playbook_activation-final",
+    "sha256": "f36f0257a5e12fd802afe9d54fa48dae7c3e2e82e6a214a074470ead6ae2c751",
+    "test": "catalog::actual_current_catalog_tracks_later_install_and_activation_without_restamping_startup",
+    "browser_script_env": "AQ_TEST_CURRENT_CATALOG_BROWSER_SCRIPT",
+    "dashboard_dir_env": "AQ_TEST_CURRENT_CATALOG_DASHBOARD_DIR",
+    "note": "Compiled-bundle/browser run pending root bundle and independent review; ordinary source tests use no Node/browser. Fixture uses explicitly synthetic local UDS forwarding to disposable55432, not the separate actual private UDS deployment proof."
+  },
+  "review_findings": {
+    "same_router_stop_capability": "fixed weak live CPU-only support handle; actual post-stop bootstrap test passed",
+    "same_uuid_principal_rebind": "fixed original full trusted User and authorization-version pin pre/post await; true403 for denial, hidden foreign404 preserved",
+    "unbounded_browser_body_and_held_auth": "fixed feature-local bounded streamed client with headers-first classification; actual ReadableStream +SessionProvider regression passed",
+    "exact409_roster_staleness": "fixed context-bound refusal persisted until fresh epoch; both matching and late-replaced vectors passed",
+    "malformed_exact_cursor": "guarded and negative pure case passed"
+  },
+  "boundaries": [
+    "no remote publication",
+    "no canonical database/configuration/namespace mutation",
+    "no private actual UDS cluster touched",
+    "no worker/provider/external message effects",
+    "no production frontend build or actual browser acceptance yet",
+    "no merged schema37 qualification or canonical live catalog claim",
+    "no legacy Request/Error/domain error variants changed"
+  ]
+}
