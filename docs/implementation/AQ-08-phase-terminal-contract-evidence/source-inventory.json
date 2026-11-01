@@ -1,0 +1,77 @@
+{
+  "source_revision": "baabe2e3fbc1e10602cba1fddf7185e24bc483c4",
+  "files": {
+    "Cargo.toml": {
+      "sha256": "27c568c10083b86317e6c6e8c5e8493f4d313fb83ebddb1c03c6418f077701c2",
+      "bytes": 2611
+    },
+    "Cargo.lock": {
+      "sha256": "b1fc00a24853b4c012a7680201269e88e134684754ddc4da87768ee7bc4be511",
+      "bytes": 88847
+    },
+    "crates/aq-phase-terminal-protocol/Cargo.toml": {
+      "sha256": "76a48d0d5da4377af95c69dfef514a541180c4622d7643dbc93766a77e1c0c9d",
+      "bytes": 485
+    },
+    "crates/aq-phase-terminal-protocol/README.md": {
+      "sha256": "5f8662f1100b1322732f38bb2b8df703dfe700526411debe7e57121fde78e0fb",
+      "bytes": 3822
+    },
+    "crates/aq-phase-terminal-protocol/artifacts/artifact.json": {
+      "sha256": "edcd3f0afca56ee86e2d0c32899a2660eb9706fef2faa9341bf06aa276759789",
+      "bytes": 139
+    },
+    "crates/aq-phase-terminal-protocol/artifacts/fixtures.json": {
+      "sha256": "a18a0eb240e2d71c41f95758088cc82184e5286a94b56ee8fc80399ef685b2fb",
+      "bytes": 51365
+    },
+    "crates/aq-phase-terminal-protocol/artifacts/invalid.json": {
+      "sha256": "9bdf63cf998a402c922b4dd67a6646932d425fd662df344d31047f4994f24c23",
+      "bytes": 30768
+    },
+    "crates/aq-phase-terminal-protocol/artifacts/manifest.json": {
+      "sha256": "0d11a5b1cbf865328a5a6bbe1f0a857e8ec3b7cebd587d242afc34cbd806e867",
+      "bytes": 349
+    },
+    "crates/aq-phase-terminal-protocol/artifacts/schema.json": {
+      "sha256": "df483fe352d683d50528df54e021c50389e766f101d9e1af3d9846885c224c23",
+      "bytes": 42027
+    },
+    "crates/aq-phase-terminal-protocol/examples/export_phase_terminal.rs": {
+      "sha256": "824fa974aef12737171c8ebf410e373d77039cf3539681962ee3ed48715a2d63",
+      "bytes": 560
+    },
+    "crates/aq-phase-terminal-protocol/scripts/validate_schema.py": {
+      "sha256": "b446a7cd08832680bb2fa8f3b0c3cc2478e4acff0a5a9131cb7cde29be846149",
+      "bytes": 1910
+    },
+    "crates/aq-phase-terminal-protocol/src/lib.rs": {
+      "sha256": "d1487a1d6e884c4789c7dc0c0b66f88773e56c790892da92651e2f95962faccc",
+      "bytes": 20914
+    },
+    "crates/aq-phase-terminal-protocol/tests/common.rs": {
+      "sha256": "e58f2c84796fe9666a6d1c911cf8bc0e7c233abe9a751ceb099dd0c63a13ddb0",
+      "bytes": 11799
+    },
+    "crates/aq-phase-terminal-protocol/tests/contracts.rs": {
+      "sha256": "38e73fd9c220d62b7a512779962a7439a369143ac249f3fae4ba7cb7ffb0c746",
+      "bytes": 11155
+    },
+    "crates/aq-phase-terminal-protocol/tests/data/granted-closure.fixture.json": {
+      "sha256": "fe2865f73c6c70b98f54b51669464f767d7835739df28266c299f5b8498978d7",
+      "bytes": 87402
+    },
+    "crates/aq-phase-terminal-protocol/tests/data/preparation-v2.fixture.json": {
+      "sha256": "62ea2abb887a0368993a9c062399616e06cf4c9ed15fe4a3aad2f3204aedcb7f",
+      "bytes": 218119
+    },
+    "crates/aq-phase-terminal-protocol/tests/data/started.fixture.json": {
+      "sha256": "7bb69786ea9b76225ae3c69ee2ab654114860d00918b01ffea13a5726843cdae",
+      "bytes": 2994
+    },
+    "crates/aq-phase-terminal-protocol/tests/data/stopped.fixture.json": {
+      "sha256": "ae036e04c59704e83bc2455fc6b5e96a176d3c5d994041495ce0b46d60c62965",
+      "bytes": 3344
+    }
+  }
+}

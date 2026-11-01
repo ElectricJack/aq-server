@@ -1,0 +1,16 @@
+   Compiling aq-phase-terminal-protocol v0.1.0 (/tmp/aq-phase-terminal-contract/crates/aq-phase-terminal-protocol)
+error[E0506]: cannot assign to `prepared.revision` because it is borrowed
+   --> crates/aq-phase-terminal-protocol/tests/contracts.rs:269:5
+    |
+267 |     cx.prepared = &prepared;
+    |                   --------- `prepared.revision` is borrowed here
+268 |     assert!(cx.validate().is_err());
+269 |     prepared.revision -= 1;
+    |     ^^^^^^^^^^^^^^^^^^^^^^ `prepared.revision` is assigned to here but it was already borrowed
+270 |     prepared.digest = Digest::of(b"changed");
+271 |     assert!(cx.validate().is_err());
+    |             -- borrow later used here
+
+For more information about this error, try `rustc --explain E0506`.
+error: could not compile `aq-phase-terminal-protocol` (test "contracts") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

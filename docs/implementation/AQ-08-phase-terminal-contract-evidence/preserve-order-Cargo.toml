@@ -1,0 +1,12 @@
+[package]
+name = "phase-terminal-feature-consumer"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+aq-phase-terminal-protocol = { path = "/tmp/aq-phase-terminal-extracted/aq-phase-terminal-protocol-0.1.0", version = "=0.1.0" }
+serde_json = {version="1", features=["preserve_order"]}
+[patch.crates-io]
+aq-admission = { path = "/tmp/aq-phase-terminal-extracted/aq-admission-0.1.9" }
+aq-session-protocol = { path = "/tmp/aq-phase-terminal-extracted/aq-session-protocol-0.1.0" }
+aq-lifecycle-protocol = { path = "/tmp/aq-phase-terminal-extracted/aq-lifecycle-protocol-0.1.0" }

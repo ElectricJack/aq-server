@@ -1,0 +1,38 @@
+   Compiling aq-phase-terminal-protocol v0.1.0 (/tmp/aq-phase-terminal-contract/crates/aq-phase-terminal-protocol)
+    Finished `test` profile [unoptimized] target(s) in 0.78s
+     Running unittests src/lib.rs (/tmp/aq-phase-terminal-target/debug/deps/aq_phase_terminal_protocol-0fb3a21450337ce1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/common.rs (/tmp/aq-phase-terminal-target/debug/deps/common-e4797feb1fe9d24a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (/tmp/aq-phase-terminal-target/debug/deps/contracts-0d5fc4f5a8b8f336)
+
+running 12 tests
+test negotiation_unknown_duplicate_reordered_or_missing_features_refuse ... ok
+test strict_wire_inclusive_bound_unknown_keys_floats_and_duplicate_fields ... ok
+test stopped_rejects_false_echild_guardian_pane_and_changed_origin ... ok
+test closure_direct_phase_checkpoint_both_suppression_and_real_stop_shapes ... ok
+test context_cannot_replace_server_prepared_with_worker_local_commit_or_digest ... ok
+test deterministic_published_schema_manifest_and_fixtures ... ok
+test immutable_outer_identity_and_domain_separation ... ok
+test lost_first_execution_reply_lookup_needs_only_known_keys_no_live_clock ... ok
+test historical_readback_checks_exact_variant_and_request ... ok
+test origin_boot_generation_runtime_and_prepared_must_match_actual_history ... ok
+test published_invalid_documents_are_refused ... ok
+test actual_phase_history_structural_linkage_and_historical_receipts ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Doc-tests aq_phase_terminal_protocol
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,28 @@
+{
+  "files_equal": [
+    "Cargo.toml",
+    "README.md",
+    "artifacts/artifact.json",
+    "artifacts/fixtures.json",
+    "artifacts/invalid.json",
+    "artifacts/manifest.json",
+    "artifacts/schema.json",
+    "examples/export_phase_terminal.rs",
+    "scripts/validate_schema.py",
+    "src/lib.rs",
+    "tests/common.rs",
+    "tests/contracts.rs",
+    "tests/data/granted-closure.fixture.json",
+    "tests/data/preparation-v2.fixture.json",
+    "tests/data/started.fixture.json",
+    "tests/data/stopped.fixture.json"
+  ],
+  "normalized_manifest_unchanged": true,
+  "consumer_patch_only": true,
+  "all_extracted_archive_files_unchanged_after_tests": {
+    "aq-phase-terminal-protocol-0.1.0.crate": 18,
+    "aq-admission-0.1.9.crate": 103,
+    "aq-lifecycle-protocol-0.1.0.crate": 13,
+    "aq-session-protocol-0.1.0.crate": 10
+  }
+}

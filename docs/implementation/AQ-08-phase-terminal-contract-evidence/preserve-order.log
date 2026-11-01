@@ -1,0 +1,15 @@
+     Locking 51 packages to latest Rust 1.96.1 compatible versions
+   Compiling serde_json v1.0.154
+   Compiling equivalent v1.0.3
+   Compiling hashbrown v0.17.1
+   Compiling foldhash v0.2.0
+   Compiling indexmap v2.14.2
+   Compiling schemars v1.2.3
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-phase-terminal-extracted/aq-session-protocol-0.1.0)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-phase-terminal-extracted/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-admission v0.1.9 (/tmp/aq-phase-terminal-extracted/aq-admission-0.1.9)
+   Compiling aq-phase-terminal-protocol v0.1.0 (/tmp/aq-phase-terminal-extracted/aq-phase-terminal-protocol-0.1.0)
+   Compiling phase-terminal-feature-consumer v0.0.0 (/tmp/aq-phase-terminal-preserve-order-consumer)
+    Finished `dev` profile [unoptimized] target(s) in 9.00s
+     Running `/tmp/aq-phase-terminal-extracted-target/debug/phase-terminal-feature-consumer`
+PASS preserve_order: exact contract artifact and outer canonical request digest unchanged

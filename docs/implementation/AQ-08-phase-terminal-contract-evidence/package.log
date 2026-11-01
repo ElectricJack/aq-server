@@ -1,0 +1,5 @@
+warning: manifest has no license, license-file, documentation, homepage or repository
+  |
+  = note: see https://doc.rust-lang.org/cargo/reference/manifest.html#package-metadata for more info
+   Packaging aq-phase-terminal-protocol v0.1.0 (/tmp/aq-phase-terminal-contract/crates/aq-phase-terminal-protocol)
+    Packaged 18 files, 477.2KiB (42.9KiB compressed)

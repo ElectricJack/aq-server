@@ -1,0 +1,18 @@
+{
+  "aq-phase-terminal-protocol-0.1.0.crate": {
+    "sha256": "1b3e4afbd9356f6d7027b0a4be3fe37e2231b55bdfa10269c87a84bf9568f0bb",
+    "bytes": 43951
+  },
+  "aq-admission-0.1.9.crate": {
+    "sha256": "30f4cfca11ff6840eab325026dfea33dd55c23e25099dedb303b52a1ede75b49",
+    "bytes": 159702
+  },
+  "aq-lifecycle-protocol-0.1.0.crate": {
+    "sha256": "945b03a99701035eb7cf6679bd9baa9ad2b50a7cb6329b9ca8de2cf8bd58b92b",
+    "bytes": 28934
+  },
+  "aq-session-protocol-0.1.0.crate": {
+    "sha256": "479778d8ea76f0605b9a20460e0bd3fda73b699337b1e80783ada0d291a68090",
+    "bytes": 22099
+  }
+}

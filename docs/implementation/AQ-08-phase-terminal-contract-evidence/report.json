@@ -1,0 +1,45 @@
+{
+  "source_revision": "baabe2e3fbc1e10602cba1fddf7185e24bc483c4",
+  "base_revision": "92f44e3",
+  "package": "aq-phase-terminal-protocol",
+  "version": "0.1.0",
+  "archive": {
+    "sha256": "1b3e4afbd9356f6d7027b0a4be3fe37e2231b55bdfa10269c87a84bf9568f0bb",
+    "bytes": 43951
+  },
+  "source_tests": {
+    "passed": 12,
+    "failed": 0,
+    "ignored": 0,
+    "test_process_seconds": 0.22
+  },
+  "extracted_tests": {
+    "passed": 12,
+    "failed": 0,
+    "ignored": 0,
+    "test_process_seconds": 0.24
+  },
+  "schema": {
+    "valid": 16,
+    "invalid_shape": 4,
+    "invalid_relational_rust_only": 4
+  },
+  "qualification": {
+    "source_clippy": "pass all-targets all-features -D warnings",
+    "source_fmt": "pass",
+    "extracted_clippy": "pass all-targets all-features -D warnings",
+    "extracted_fmt": "pass",
+    "source_modules_equal_frozen_admission019": 14,
+    "services_or_network": "none; cargo offline",
+    "preserve_order": "exact artifact + outer request digest unchanged under serde_json/preserve_order"
+  },
+  "limitations": [
+    "pure structural contract only",
+    "synthetic fixtures not authenticated host/kernel facts",
+    "no daemon route/migration/worker producer/runtime activation",
+    "history None is snapshot absence, never NeverGranted",
+    "history/ACK has no delivery clock or live permission",
+    "no renewal or resource release",
+    "schema cannot enforce byte bounds or relational owner facts"
+  ]
+}

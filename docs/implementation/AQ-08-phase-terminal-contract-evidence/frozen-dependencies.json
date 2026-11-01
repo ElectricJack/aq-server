@@ -1,0 +1,13 @@
+{
+  "aq-session-protocol-0.1.0.crate": {
+    "sha256": "479778d8ea76f0605b9a20460e0bd3fda73b699337b1e80783ada0d291a68090"
+  },
+  "aq-admission-0.1.9.crate": {
+    "sha256": "30f4cfca11ff6840eab325026dfea33dd55c23e25099dedb303b52a1ede75b49",
+    "source_modules_compared": 14,
+    "mismatches": []
+  },
+  "aq-lifecycle-protocol-0.1.0.crate": {
+    "sha256": "945b03a99701035eb7cf6679bd9baa9ad2b50a7cb6329b9ca8de2cf8bd58b92b"
+  }
+}
