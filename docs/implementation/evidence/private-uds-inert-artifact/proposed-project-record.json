@@ -1,0 +1,60 @@
+{
+  "revision": 1,
+  "binding": {
+    "schema_version": 1,
+    "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784",
+    "name": "Private UDS inert startup fixture - external status unavailable",
+    "enabled": true,
+    "repository_id": "b20c8f39-b66b-4258-9d71-9058f529e4c0",
+    "repository_binding_generation": 1,
+    "repository_adapter_reference": "aq.git.configured",
+    "graph_adapter_reference": "aq.graph.configured",
+    "graph_workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4",
+    "catalog_digest": "e78d54929f7880bf25755744eb4ea4c59f04539c445f44af2648afb5573220ec",
+    "allowed_agent_profiles": [
+      "unavailable-fixture@1"
+    ],
+    "allowed_intelligence_profiles": [
+      "unavailable-fixture@1"
+    ],
+    "allowed_execution_profiles": [
+      "unavailable-fixture@1"
+    ],
+    "allowed_node_ids": [
+      "1442f67f-ac80-486a-a9b0-f263e28e20a9"
+    ],
+    "allowed_worker_groups": [],
+    "allowed_environments": [
+      "unavailable-fixture"
+    ],
+    "policy": {
+      "identity": "private-uds-inert-fixture",
+      "revision": "1",
+      "digest": "be90b02b221a4cf084931255c6108d581560d7a696f72caece452b91f2cbe2d1"
+    },
+    "context": [],
+    "ceilings": {
+      "permissions": [],
+      "context_bytes": 1024,
+      "wall_time_ms": 1000,
+      "memory_bytes": 1048576,
+      "cpu_millis": 1000,
+      "process_limit": 1,
+      "cost_limit_microunits": null,
+      "currency": null,
+      "require_hard_cost_enforcement": false
+    }
+  },
+  "validated_at_ms": 1,
+  "validation": {
+    "repository_id": "b20c8f39-b66b-4258-9d71-9058f529e4c0",
+    "graph_workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4",
+    "repository_adapter_reference": "aq.git.configured",
+    "graph_adapter_reference": "aq.graph.configured",
+    "repository": "unavailable",
+    "graph": "unavailable",
+    "repository_generation": null,
+    "observed_at_ms": 1,
+    "expires_at_ms": 2
+  }
+}

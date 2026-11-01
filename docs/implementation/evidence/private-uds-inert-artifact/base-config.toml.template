@@ -1,0 +1,12 @@
+format_version = 1
+environment = "development"
+[server]
+admin_bind = "127.0.0.1:4294"
+worker_bind = "127.0.0.1:4295"
+public_origin = "http://127.0.0.1:4294"
+[auth]
+mode = "dev"
+dev_email = "private-uds-inert-owner@localhost"
+[bootstrap]
+enabled = true
+owner_email = "private-uds-inert-owner@localhost"

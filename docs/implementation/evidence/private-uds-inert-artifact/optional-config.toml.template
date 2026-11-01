@@ -1,0 +1,48 @@
+format_version = 1
+environment = "development"
+[server]
+admin_bind = "127.0.0.1:4294"
+worker_bind = "127.0.0.1:4295"
+public_origin = "http://127.0.0.1:4294"
+[auth]
+mode = "dev"
+dev_email = "private-uds-inert-owner@localhost"
+[bootstrap]
+enabled = true
+owner_email = "private-uds-inert-owner@localhost"
+
+# REVIEW TEMPLATE: deliberately cannot start before real Owner, private keys,
+# and the fixed first-provisioning expiry are supplied after approval.
+[playbooks]
+enabled = true
+profile = "human_review_v2"
+engine_connection_file = "/tmp/aq-private-uds-n8vgb39f/engine-connection"
+socket_owner_uid = 1000
+engine_keyring_file = "/tmp/aq-private-uds-n8vgb39f/runtime/engine-keyring.json"
+drive_interval_ms = 1000
+[playbooks.namespace]
+namespace_id = "41c70feb-6234-4dc3-beac-c590b60088f8"
+generation = 1
+name = "Private UDS inert startup only"
+workspace_id = "d782222c-2b45-4c0b-8910-d6b924ba72a4"
+project_id = "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+owner_user_id = "REPLACE_WITH_ACTUAL_BOOTSTRAPPED_OWNER"
+[playbooks.protection]
+active_key_id = "private-uds-bridge-1"
+[[playbooks.protection.keys]]
+id = "private-uds-bridge-1"
+file = "/tmp/aq-private-uds-n8vgb39f/runtime/bridge-key"
+[[playbooks.deployments]]
+artifact_file = "/tmp/aq-private-uds-n8vgb39f/development-inert-artifact.json"
+binding = "development-inspection-only"
+grant_id = "cff04b76-1100-4378-8ab6-42c12e237cbf"
+expires_at_ms = 0 # Replace ONCE after approval with now + 1 hour; retain on restart.
+[playbooks.deployments.scope]
+workspace_id = "d782222c-2b45-4c0b-8910-d6b924ba72a4"
+project_id = "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+capabilities = ["operation.get"]
+[[playbooks.deployments.scope.recipients]]
+kind = "task"
+workspace_id = "d782222c-2b45-4c0b-8910-d6b924ba72a4"
+project_id = "fc03b4ce-0e43-4599-93ed-8cfa8d803784"
+task_id = "c0e3754a-838b-4f8d-92d8-27ec13fd9842"

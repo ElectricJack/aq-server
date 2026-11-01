@@ -1,0 +1,14 @@
+{
+  "project_id": "fc03b4ce-0e43-4599-93ed-8cfa8d803784",
+  "workspace_id": "d782222c-2b45-4c0b-8910-d6b924ba72a4",
+  "repository_id": "b20c8f39-b66b-4258-9d71-9058f529e4c0",
+  "reserved_node_id": "1442f67f-ac80-486a-a9b0-f263e28e20a9",
+  "unused_task_id": "c0e3754a-838b-4f8d-92d8-27ec13fd9842",
+  "namespace_id": "41c70feb-6234-4dc3-beac-c590b60088f8",
+  "grant_id": "cff04b76-1100-4378-8ab6-42c12e237cbf",
+  "generation": 1,
+  "owner_user_id": "REPLACE_WITH_ACTUAL_BOOTSTRAPPED_OWNER",
+  "expires_at_ms": "SET_ONCE_AFTER_REVIEW_NOW_PLUS_ONE_HOUR",
+  "fixture_only": true,
+  "runtime_started": false
+}

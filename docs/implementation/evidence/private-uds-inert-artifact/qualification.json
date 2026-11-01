@@ -1,0 +1,30 @@
+{
+  "consumer_root": "/tmp/aq-inert-artifact-export-b9exbr1f",
+  "original_definition_sha256": "692db0cae3ce19143bf166bdc8e5d99cde3da0c32aa4cd00e57202abbe63bad3",
+  "copied_definition_sha256": "692db0cae3ce19143bf166bdc8e5d99cde3da0c32aa4cd00e57202abbe63bad3",
+  "original_main_sha256": "fc45c0a8e10ae6f7d3a540540494255fcc4b40b2b7a2e044eb0e512d6f54b3f1",
+  "host_model_reexport": "pub use aq_playbooks_model as model;",
+  "model_version": "0.1.0",
+  "serde_json_version": "1.0.154",
+  "binary_sha256": "65d709ee01b22eaa39c5e4925790fc0949e07fd1f4307afc1f2497013cdfdfc6",
+  "artifact_sha256": "eb8aec86aafb41ced748d13acb24fd45bf8b5497653b206f6b4f35b28a8d752f",
+  "artifact_bytes": 1978,
+  "repeat_byte_identical": true,
+  "artifact_private_path": "/tmp/aq-private-uds-n8vgb39f/development-inert-artifact.json",
+  "artifact_top_level_keys": [
+    "digest",
+    "executable_fingerprint",
+    "content"
+  ],
+  "offline_build_seconds": 7.75,
+  "jobs": 2,
+  "debug": 0,
+  "dependency_packages": 24,
+  "actual_runtime_started": false,
+  "consumer_main_sha256": "57ea01350f3e3056f04f65c5dc6c80376be136edbfda28ebae9cdb06c883550d",
+  "consumer_lock_sha256": "393fddd9ca54df3862eeb27e56177f1302ba28877ed040924b8c231c8b091cbd",
+  "model_manifest_sha256": "538837919e4326f062c0516b49b55d5659113c95d94c3433acb2218b401d00e5",
+  "host_reexport_source_sha256": "6c2f1666a90b2b6cfe3a6f510809877b2d231c6aa88fcf173e9bccfd5ba76a5e",
+  "source_base": "01e09b6",
+  "build_command": "cargo build --offline --jobs 2 --manifest-path /tmp/aq-inert-artifact-export-b9exbr1f/Cargo.toml --target-dir /tmp/aq-inert-artifact-export-target"
+}

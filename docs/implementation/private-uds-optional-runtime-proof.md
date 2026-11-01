@@ -129,3 +129,8 @@ private PG proof cannot silently change canonical's old cluster/pool pointer.
 ## Actual transport checkpoint
 
 The [retained actual proof](evidence/private-uds-transport/README.md) now verifies one cached-image instance with unchanged reviewed policy. Real peer UID/GID 1000, 0700 directory/0600 socket, peer auth and cluster identity passed. Separate private Core/engine DSN metadata agrees; actual AQ and engine clients/runtime have not started. Existing55432/canonical 4188 configuration and optional capability state remain unchanged.
+
+The [unchanged typed inert artifact export and proposed fresh context](evidence/private-uds-inert-artifact/README.md)
+are now retained separately. Export passed offline without building the server;
+the structural fixture and optional runtime configuration await review and have
+not been applied or launched.
