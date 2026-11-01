@@ -416,7 +416,7 @@ async fn run_worker(mode: Mode) {
             .fetch_one(&case.env.env.pool)
             .await
             .unwrap();
-        std::mem::forget(case.env.env.db.clone());
+        std::mem::forget(case.env.env._db.clone());
         eprintln!("retained_native_demo_database={name}");
     }
 }

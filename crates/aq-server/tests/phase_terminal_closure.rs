@@ -226,8 +226,15 @@ async fn suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_
     p.qualified_runtimes.clear();
     p.context_qualifications.clear();
     p.definition_bodies.retain(|d| {
-        !d.artifact().id.as_str().starts_with("aq.accepted-preparation-policy/")
-            && !d.artifact().id.as_str().starts_with("aq.phase-execution-qualification/")
+        !d.artifact()
+            .id
+            .as_str()
+            .starts_with("aq.accepted-preparation-policy/")
+            && !d
+                .artifact()
+                .id
+                .as_str()
+                .starts_with("aq.phase-execution-qualification/")
     });
     p.revision += 1;
     p.validate().unwrap();
