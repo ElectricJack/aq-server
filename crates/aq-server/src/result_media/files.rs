@@ -379,6 +379,7 @@ impl Root {
         name: &str,
         variant: &aq_result_media::Variant,
     ) -> Result<Vec<u8>> {
+        self.point("content_read")?;
         if !matches!(name, "render.png" | "preview.png")
             || variant.bytes > aq_result_media::MAX_RENDER_BYTES as u64
         {

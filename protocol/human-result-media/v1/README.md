@@ -1,6 +1,8 @@
-# Human result media, proposed version 1
+# Human result media, version 1 optional port
 
-Review-only closed contract. This is not a published route or storage grant yet.
+Closed optional human interface. Configuration is absent by default and upload
+mutations additionally require explicit opt-in. Source/router qualification and
+an isolated actual browser gate precede canonical enablement.
 See [design](../../../docs/specs/result-media-png.md) and
 [implementation delta](../../../docs/implementation/API-11-png-first-plan.md).
 The example contains labelled synthetic contract values, not retained PNG proof.
@@ -30,6 +32,8 @@ Let R be `/api/human/results/{report}/revisions/{revision}`.
 All routes require current human Owner. Admission/content/finalize require the
 upload capability, while finalized media browse/content requires the read
 capability. Actor identity is obtained from AQ authentication, not the request.
+Original-actor status remains readable when upload mutations are disabled; lookup
+never retries a write or silently extends an original deadline.
 Machine credentials are not accepted. Unknown/foreign actor intent returns 404;
 generic malformed/auth/conflicting-operation responses use AQ `{error,message}`
 without a previous actor's private fields. A404 does not authorize a changed
@@ -103,8 +107,10 @@ an arbitrary response URL. HTTP routes and headers are mediated by AQ.
 
 ## Storage and migration review
 
-`proposed-ddl.sql` is deliberately outside migrations and does not update meta or
-SQLx history. Root reserves migration 36 after the conversation 35 freeze. The
-actual implementation must add immutable-column/receipt guards, monotonic
-state/lease/cleanup transitions and race-safe budget accounting, with actual SQL
-tests; this proposal is not permission to execute the DDL on a live database.
+`proposed-ddl.sql` remains an earlier review sketch outside migrations; it is not
+an installation source. Actual migration 36 and its startup refusal guards live
+in `crates/aq-server/migrations/0036_result_media_owner.sql` and
+`store/media36.rs`. See the actual
+[storage qualification](../../../docs/implementation/API-11-storage-owner.md)
+and [optional HTTP port](../../../docs/implementation/API-11-http-port.md).
+No source qualification authorizes executing a migration on a canonical database.

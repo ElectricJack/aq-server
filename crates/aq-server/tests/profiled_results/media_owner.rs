@@ -8,7 +8,7 @@ use aq_server::{
 };
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Condvar, Mutex, atomic::AtomicBool};
-fn png() -> Vec<u8> {
+pub(super) fn png() -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
         out.extend_from_slice(&(data.len() as u32).to_be_bytes());
         let start = out.len();
@@ -42,7 +42,7 @@ fn png() -> Vec<u8> {
     chunk(&mut out, b"IEND", &[]);
     out
 }
-async fn setup() -> (
+pub(super) async fn setup() -> (
     Fixture,
     ResultReport,
     String,
@@ -76,7 +76,7 @@ async fn setup() -> (
         actor,
     )
 }
-fn request(id: Uuid) -> Vec<u8> {
+pub(super) fn request(id: Uuid) -> Vec<u8> {
     let bytes = png();
     serde_json::to_vec(&media::UploadCreate {
         operation_id: media::Id::new(id).unwrap(),
@@ -87,7 +87,7 @@ fn request(id: Uuid) -> Vec<u8> {
     })
     .unwrap()
 }
-async fn retained(owner: &Owner, actor: &User, report: Uuid, revision: &str) -> Uuid {
+pub(super) async fn retained(owner: &Owner, actor: &User, report: Uuid, revision: &str) -> Uuid {
     let id = Uuid::new_v4();
     owner
         .reserve(actor, report, revision, &request(id))
@@ -225,14 +225,14 @@ async fn media_actual_retention_expiry_waits_for_live_content_and_preserves_rece
         media::AvailabilityState::Expired
     );
 }
-struct Gate {
+pub(super) struct Gate {
     open: Mutex<bool>,
     cv: Condvar,
-    entered: tokio::sync::Notify,
+    pub(super) entered: tokio::sync::Notify,
     once: AtomicBool,
 }
 impl Gate {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             open: Mutex::new(false),
             cv: Condvar::new(),
@@ -240,7 +240,7 @@ impl Gate {
             once: AtomicBool::new(false),
         })
     }
-    fn hook(self: &Arc<Self>, point: &'static str) -> aq_server::result_media::TestHook {
+    pub(super) fn hook(self: &Arc<Self>, point: &'static str) -> aq_server::result_media::TestHook {
         let gate = self.clone();
         Arc::new(move |name| {
             if name == point && !gate.once.swap(true, Ordering::SeqCst) {
@@ -253,7 +253,7 @@ impl Gate {
             Ok(())
         })
     }
-    fn release(&self) {
+    pub(super) fn release(&self) {
         *self.open.lock().unwrap() = true;
         self.cv.notify_all();
     }

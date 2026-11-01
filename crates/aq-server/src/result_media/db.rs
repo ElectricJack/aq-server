@@ -68,7 +68,10 @@ pub(super) async fn binding(
 ) -> Result<media::ReportBinding> {
     let result = crate::profiled_execution::results::load_locked(state, tx, report)
         .await
-        .map_err(|_| Error::Owner)?;
+        .map_err(|error| match error {
+            crate::error::AppError::NotFound(_) => Error::NotFound,
+            _ => Error::Owner,
+        })?;
     if result.receipt.report_digest.as_str() != revision.as_str() {
         return Err(Error::NotFound);
     }
@@ -115,7 +118,7 @@ pub(super) struct Intent {
 impl Intent {
     pub fn original(&self, user: &User) -> Result<()> {
         if self.actor != user.id || self.identity != key(user)? {
-            return Err(Error::Access);
+            return Err(Error::NotFound);
         }
         Ok(())
     }

@@ -421,6 +421,7 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
+ "http-body",
  "http-body-util",
  "jsonwebtoken",
  "nix",

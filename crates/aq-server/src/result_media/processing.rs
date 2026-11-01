@@ -274,13 +274,15 @@ impl Owner {
         preview: bool,
     ) -> Result<Content> {
         let revision = media::ReportRevision::parse(revision).map_err(|_| Error::Invalid)?;
-        let guard = self.root.active(id, false)?;
         let mut tx = db::transaction(&self.state).await?;
         db::principal(&mut tx, actor).await?;
         let binding = db::binding(&self.state, &mut tx, report, &revision).await?;
         let row = db::load(&mut tx, id).await?;
-        if row.binding != binding || row.storage != self.root.id || row.withheld {
+        if row.binding != binding || row.storage != self.root.id {
             return Err(Error::NotFound);
+        }
+        if row.withheld {
+            return Err(Error::Withheld);
         }
         let receipt = row.receipt.ok_or(Error::NotFound)?;
         if now(&self.state)? >= receipt.retain_until_ms {
@@ -294,39 +296,42 @@ impl Owner {
         };
         let root = self.root.clone();
         let expected = descriptor.clone();
-        let (bytes, guard) = tokio::task::spawn_blocking(move || {
-            (
-                root.variant(
-                    id,
-                    if preview { "preview.png" } else { "render.png" },
-                    &expected,
-                ),
-                guard,
-            )
-        })
-        .await
-        .map_err(|_| Error::Storage)?;
-        let bytes = bytes?;
+        let (bytes, guard) = match self.root.active(id, false) {
+            Ok(guard) => tokio::task::spawn_blocking(move || {
+                (
+                    root.variant(
+                        id,
+                        if preview { "preview.png" } else { "render.png" },
+                        &expected,
+                    ),
+                    Some(guard),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| (Err(Error::Storage), None)),
+            Err(error) => (Err(error), None),
+        };
         let mut tx = db::transaction(&self.state).await?;
         db::principal(&mut tx, actor).await?;
         if db::binding(&self.state, &mut tx, report, &revision).await? != binding {
             return Err(Error::Owner);
         }
         let current = db::load(&mut tx, id).await?;
-        if current.receipt.as_ref() != Some(&receipt)
-            || current.withheld
-            || current.cleanup != "none"
-        {
+        if current.receipt.as_ref() != Some(&receipt) || current.cleanup != "none" {
             return Err(Error::NotFound);
+        }
+        if current.withheld {
+            return Err(Error::Withheld);
         }
         if now(&self.state)? >= receipt.retain_until_ms {
             return Err(Error::Expired);
         }
         self.root.check()?;
         tx.commit().await.map_err(sql)?;
+        let bytes = bytes?;
         Ok(Content {
             bytes,
-            _guard: guard,
+            _guard: guard.ok_or(Error::Owner)?,
             descriptor,
             receipt_digest: receipt.digest().map_err(|_| Error::Owner)?,
         })

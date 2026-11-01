@@ -1,9 +1,13 @@
-//! Internal supplemental-media owner. Explicit construction only: no route,
-//! AppState/config registration, worker grant, or execution/result authority.
+//! Managed supplemental-media owner and explicitly mounted human adapter.
+//! No default mount, AppState owner cycle, worker grant or execution authority.
+pub mod api;
+mod body;
 mod cleanup;
+pub mod config;
 mod db;
 mod files;
 mod processing;
+pub mod runtime;
 
 use crate::{AppState, store::User};
 use aq_result_media as media;
@@ -31,6 +35,8 @@ pub enum Error {
     Integrity,
     #[error("retained media file missing")]
     Missing,
+    #[error("retained media is withheld")]
+    Withheld,
     #[error("media operation or retention expired")]
     Expired,
     #[error("media owner data unavailable or inconsistent")]
@@ -54,6 +60,10 @@ pub struct Owner {
     state: AppState,
     root: Arc<files::Root>,
     limits: media::Limits,
+}
+pub struct Admission {
+    pub created: bool,
+    pub status: media::UploadStatus,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub type TestHook = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
@@ -92,6 +102,15 @@ impl Owner {
         revision: &str,
         raw: &[u8],
     ) -> Result<media::UploadStatus> {
+        Ok(self.admit(actor, report, revision, raw).await?.status)
+    }
+    pub async fn admit(
+        &self,
+        actor: &User,
+        report: Uuid,
+        revision: &str,
+        raw: &[u8],
+    ) -> Result<Admission> {
         let request = media::UploadCreate::decode(raw).map_err(|_| Error::Invalid)?;
         request
             .validate_with_limits(&self.limits)
@@ -112,7 +131,10 @@ impl Owner {
                 return Err(Error::Conflict);
             }
             tx.commit().await.map_err(sql)?;
-            return self.status(actor, id).await;
+            return Ok(Admission {
+                created: false,
+                status: self.status(actor, id).await?,
+            });
         }
         let at = now(&self.state)?;
         let upload = at
@@ -134,7 +156,10 @@ impl Owner {
         self.root.check()?;
         db::principal(&mut tx, actor).await?;
         tx.commit().await.map_err(sql)?;
-        self.status(actor, id).await
+        Ok(Admission {
+            created: true,
+            status: self.status(actor, id).await?,
+        })
     }
     pub async fn status(&self, actor: &User, id: Uuid) -> Result<media::UploadStatus> {
         let mut tx = db::transaction(&self.state).await?;
