@@ -8,8 +8,11 @@ the default binary build in38.25s. Its exact source pin, SHA and regression are 
 the [capacity qualification](evidence/api11-media-capacity/qualification.json).
 The private4214 rehearsal now runs that fixed binary on its original36
 database/root/storage binding; human data, schema and sequences remain exact.
-Parent review still precedes any canonical change. Uploader enablement also
-requires the separate result/node-before-intent lock-order proof/fix.
+Parent review still precedes any canonical change. The subsequent owner-only
+result/node-before-intent fix `4800aab` passed the
+[actual lock-order qualification](evidence/api11-media-lock-order/qualification.json).
+Its new binary and rehearsal refresh are still required before promotion; the
+running private rehearsal remains the earlier capacity-qualified binary.
 
 The [counts/hash summary](evidence/api11-media36-rehearsal/summary.json) contains
 no message bodies, user names, credentials or raw conversation/actor IDs. Raw

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source_commit": "4800aab9425f04f5aeac2c6056b44436b7514f4d",
+  "state_format": 36,
+  "status": "owner_lock_order_qualified_no_canonical_promotion",
+  "frozen36_ddl_sha256": "f07c43ea22ffaaaa37cdb0db0a7eccb04b871af9d973f3e87a77d669e3b67e99",
+  "changes": [
+    "Operation-only methods discover only immutable original-actor/report/storage scope with a bounded nonlocking PK lookup.",
+    "Both status transactions, initial writer job, and PUT/finalize post-IO transactions lock actual result/node authority before the intent.",
+    "Fresh locked intent is revalidated against immutable peek and actual report proof; flags, lease, deadlines and state never come from the peek.",
+    "List/content retain existing node-before-intent order; cleanup retains installation-budget-before-intent order without node locks. No schema, wire or global mutex change."
+  ],
+  "actual_regressions": [
+    "External transaction holds actual Node; waiting status does not hold Intent (FOR UPDATE NOWAIT succeeds); actual concurrent listing completes after release.",
+    "Held physical receive/finalize checkpoint then external Node lock; waiting post-IO writer does not hold Intent; actual concurrent listing completes.",
+    "Deadline advanced during held post-IO finalize is read fresh after node release; no receipt commits and reservation stays charged.",
+    "Withheld flag changed while status waits for Node is read from fresh locked intent rather than immutable scope peek.",
+    "Existing original-principal rebinding, email-only recovery, root replacement, physical writer/reader cleanup, retention and exact replay checks remain passing."
+  ],
+  "checks": {
+    "actual_owner_http_cases": 24,
+    "runtime_seconds": 27.95,
+    "compile_seconds": 40.98,
+    "strict_clippy_seconds": 20.8,
+    "affected_fmt_diff_clean": true,
+    "whole_workspace_fmt": "Unchanged pre-existing review_inbox module ordering in profiled_results.rs differs; changed files pass rustfmt."
+  },
+  "commands": {
+    "tests": "cargo test -p aq-server --test profiled_results media_ -- --test-threads=1",
+    "strict": "cargo clippy -p aq-server --lib --test profiled_results -- -D warnings",
+    "environment": "Shared existing SERVER target; jobs2, dev debug0, incremental0; actual disposable PostgreSQL17 and managed filesystem fixtures."
+  },
+  "remaining_gates": [
+    "Independent source acceptance",
+    "New pinned default-feature state36 binary and private same-root rehearsal refresh",
+    "Parent review and any required full canonical operational configuration checks",
+    "Fresh quiesced35 backup and reviewed cutover; none performed here"
+  ],
+  "canonical_changed": false,
+  "private_rehearsal_changed": false,
+  "provider_or_external_calls": 0
+}
