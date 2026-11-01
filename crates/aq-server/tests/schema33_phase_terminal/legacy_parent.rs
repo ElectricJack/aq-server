@@ -1,6 +1,7 @@
 //! Actual legacy publication→Accept→Grant→closure owner, synthetic suppression.
-//! This preserves the real legacy parent; never a surrogate for phase authority.
-use super::{common, migrate};
+//! Current33 parent integrity only; prior actual32→33 legacy preservation is
+//! retained separately. Never a surrogate for phase authority.
+use super::common;
 use aq_admission::{
     Digest,
     granted_closure::{Evidence, JournalCheckpoint, Request, SuppressionRecord},
@@ -78,8 +79,8 @@ async fn policy(c: &Prepared, r: &Request, revision: u64) -> Arc<InstalledPolicy
 }
 
 #[tokio::test]
-async fn migrated_actual_legacy_closure_retains_parent_against_delete_and_key_update() {
-    let c = aq_server::test_support::with_state32_store(Box::pin(closure::setup())).await;
+async fn actual_current33_legacy_closure_retains_parent_against_delete_and_key_update() {
+    let c = Box::pin(closure::setup()).await;
     let request = request(&c).await;
     let policy = policy(&c, &request, 1).await;
     let receipt = service::record(
@@ -93,7 +94,13 @@ async fn migrated_actual_legacy_closure_retains_parent_against_delete_and_key_up
     receipt.validate_for(&request).unwrap();
     let pool = &c.case.env.env.pool;
     let before:Vec<u8>=sqlx::query_scalar("SELECT convert_to(to_jsonb(r)::text,'UTF8') FROM profiled_execution_receipts r WHERE node_id=$1 AND operation_id=$2").bind(c.request.identity.node_id).bind(c.request.operation_id).fetch_one(pool).await.unwrap();
-    migrate(pool).await.unwrap();
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(version, aq_server::STATE_FORMAT_VERSION.to_string());
+    assert!(aq_server::STATE_FORMAT_VERSION >= 33);
     let keys:(Option<Uuid>,Option<Uuid>)=sqlx::query_as("SELECT legacy_origin_operation_id,phase_origin_operation_id FROM profiled_launch_closures WHERE attempt_id=$1").bind(request.binding.attempt_id).fetch_one(pool).await.unwrap();
     assert_eq!(keys, (Some(c.request.operation_id), None));
     for statement in [
