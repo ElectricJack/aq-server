@@ -1,0 +1,200 @@
+//! Owner-authorized metadata over exact retained native result claims.
+//! No claim, stop receipt or process outcome establishes acceptance/settlement.
+use crate::{AppState, authz::RequireOwner, error::AppError};
+use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, State},
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use uuid::Uuid;
+type Result<T> = std::result::Result<T, AppError>;
+pub const COVERAGE: &str = "recorded_legacy_native_only";
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResultMetadata {
+    pub report_id: Uuid,
+    pub revision: String,
+    pub project_id: Uuid,
+    pub task_id: Uuid,
+    pub attempt_id: Uuid,
+    pub recorded_at_ms: u64,
+    pub conclusion: String,
+    pub process_outcome: String,
+    pub current_report_head: bool,
+    pub head_report_id: Uuid,
+    pub supersedes: Option<Uuid>,
+    pub repository_id: Uuid,
+    pub source_base: aq_admission::ObjectId,
+    pub source_receipt_ids: Vec<Uuid>,
+    pub pending_effect_ids: Vec<Uuid>,
+}
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResultPage {
+    pub schema_version: u32,
+    pub server_time_ms: u64,
+    pub coverage: String,
+    pub items: Vec<ResultMetadata>,
+    pub next_after: Option<Uuid>,
+}
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Page {
+    pub project_id: Option<Uuid>,
+    pub after: Option<Uuid>,
+    pub limit: Option<u32>,
+}
+fn db(_: sqlx::Error) -> AppError {
+    AppError::Internal
+}
+fn invalid() -> AppError {
+    AppError::BadRequest("invalid result metadata query".into())
+}
+async fn owner(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, actor: Uuid) -> Result<()> {
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id=$1 FOR SHARE")
+        .bind(actor)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?;
+    if role.as_deref() != Some("owner") {
+        return Err(AppError::Forbidden("result metadata requires Owner".into()));
+    }
+    Ok(())
+}
+fn metadata(v: super::results::RecordedResult) -> ResultMetadata {
+    ResultMetadata {
+        report_id: v.report.report_id,
+        revision: v.receipt.report_digest.as_str().into(),
+        project_id: v.spec.lifecycle.project_id,
+        task_id: v.spec.task.task_id,
+        attempt_id: v.report.binding.attempt_id,
+        recorded_at_ms: v.receipt.recorded_at_ms,
+        conclusion: v.report.conclusion.as_str().into(),
+        process_outcome: match v.report.outcome {
+            aq_admission::transport::ProcessOutcome::Success => "success",
+            aq_admission::transport::ProcessOutcome::Failed => "failed",
+            aq_admission::transport::ProcessOutcome::Cancelled => "cancelled",
+            aq_admission::transport::ProcessOutcome::Expired => "expired",
+            aq_admission::transport::ProcessOutcome::Unknown => "unknown",
+        }
+        .into(),
+        current_report_head: v.is_current_report_head,
+        head_report_id: v.head_report_id,
+        supersedes: v.report.supersedes,
+        repository_id: v.spec.source.repository_id,
+        source_base: v.spec.source.resolved_object,
+        source_receipt_ids: v.report.source_receipt_ids,
+        pending_effect_ids: v.report.pending_effect_ids,
+    }
+}
+/// Validated keyset discovery. UUID order is stable; it is not chronological Latest.
+pub async fn read(
+    state: &AppState,
+    actor: Uuid,
+    page: &Page,
+    exact: Option<(Uuid, &str)>,
+) -> Result<ResultPage> {
+    let limit = page.limit.unwrap_or(10);
+    if !(1..=25).contains(&limit)
+        || page.project_id.is_some_and(|v| v.is_nil())
+        || page.after.is_some_and(|v| v.is_nil())
+    {
+        return Err(invalid());
+    }
+    if exact.is_some_and(|(id, revision)| {
+        id.is_nil()
+            || revision.len() != 64
+            || !revision
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(invalid());
+    }
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    sqlx::query("SET LOCAL lock_timeout='1s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    sqlx::query("SET LOCAL statement_timeout='2s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    owner(&mut tx, actor).await?;
+    let ids: Vec<Uuid> = if let Some((id, _)) = exact {
+        vec![id]
+    } else {
+        sqlx::query_scalar("SELECT r.report_id FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')=$1::text) AND ($2::uuid IS NULL OR r.report_id>$2) ORDER BY r.report_id LIMIT $3")
+            .bind(page.project_id).bind(page.after).bind(i64::from(limit)+1).fetch_all(&mut *tx).await.map_err(db)?
+    };
+    let more = ids.len() > limit as usize;
+    let mut items = Vec::new();
+    for id in ids.into_iter().take(limit as usize) {
+        let value = metadata(super::results::load_locked(state, &mut tx, id).await?);
+        if page.project_id.is_some_and(|p| p != value.project_id)
+            || exact.is_some_and(|(_, r)| r != value.revision)
+        {
+            return Err(AppError::NotFound("result revision not found".into()));
+        }
+        items.push(value);
+    }
+    let next_after = if more {
+        items.last().map(|v| v.report_id)
+    } else {
+        None
+    };
+    let server_time_ms =
+        u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
+    tx.commit().await.map_err(db)?;
+    Ok(ResultPage {
+        schema_version: 1,
+        server_time_ms,
+        coverage: COVERAGE.into(),
+        items,
+        next_after,
+    })
+}
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/human/results", get(list))
+        .route("/api/human/results/{id}/revisions/{revision}", get(detail))
+        .layer(Extension(Arc::new(Semaphore::new(2))))
+}
+async fn bounded(
+    state: &AppState,
+    actor: Uuid,
+    page: Page,
+    exact: Option<(Uuid, &str)>,
+    budget: Arc<Semaphore>,
+) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let _permit = budget
+        .try_acquire()
+        .map_err(|_| AppError::IdentityUnavailable("result reads busy".into()))?;
+    let value = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        read(state, actor, &page, exact),
+    )
+    .await
+    .map_err(|_| AppError::IdentityUnavailable("result read unavailable".into()))??;
+    Ok(([("cache-control", "no-store")], Json(value)).into_response())
+}
+async fn list(
+    State(state): State<AppState>,
+    RequireOwner(user): RequireOwner,
+    Query(page): Query<Page>,
+    Extension(budget): Extension<Arc<Semaphore>>,
+) -> Result<axum::response::Response> {
+    bounded(&state, user.id, page, None, budget).await
+}
+async fn detail(
+    State(state): State<AppState>,
+    RequireOwner(user): RequireOwner,
+    Path((id, revision)): Path<(Uuid, String)>,
+    Query(page): Query<Page>,
+    Extension(budget): Extension<Arc<Semaphore>>,
+) -> Result<axum::response::Response> {
+    bounded(&state, user.id, page, Some((id, &revision)), budget).await
+}

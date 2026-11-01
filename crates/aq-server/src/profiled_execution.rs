@@ -21,6 +21,7 @@ pub mod started;
 
 pub mod stopped;
 
+pub mod human_results;
 pub mod results;
 pub mod source_exports;
 
