@@ -232,3 +232,33 @@ stated deterministic-peer/material/harness/node/journal facts at PreparedInputs.
 It must retain sequence2 and the unchanged policy, and make no claim about actual
 model/provider availability. No unchanged retry or automatic runtime refresh is
 authorized by this evidence.
+
+## PreparedInputs assessment helper source checks
+
+Worker source `0b4d4e0` plus `22decdf` adds an opt-in test-support-only pause while
+the actual opaque PreparedInputs owner remains held. Its complete/partial stdin
+continuation is bounded to1KiB and the original CLOCK_BOOTTIME preparation
+deadline, including a silent parent. It rechecks the held root after continuing.
+The smoke binary's five unit cases passed0.04s after a10.40s build, including the
+actual socket/poll silent and partial-parent deadline cases and existing
+config/frame/root refusal checks.
+
+Server source `0e28a77` plus `b30205b` validates the actual fsynced journal checksum,
+PreparedInputs request and no-grant state, actual deterministic peer/host/tmux
+hashes, source and installed synthetic material hashes/permissions, current node
+incarnation, installed harness and revocation state. Only then may the fixture's
+explicit synthetic operator submit a new sequence3 assessment through the real
+owner. The immutable sequence2 operation response remains unchanged. This is a
+deterministic static-fixture assessment, with no real provider availability claim
+and no automatic runtime refresh. The focused fixture no-run build passed4.69s.
+All checks used existing target2/jobs2/debug0/incremental0/offline; the lease was
+released afterward. No database fixture or child host/model was launched.
+
+These helpers are not yet an end-to-end fix. Frozen admission0.1.9 requires the
+current registry artifact equal the original choice's registry, while the real
+observation owner advances that aggregate revision. Both the actual issuer and
+pure fact validation enforce this contract. A separately negotiated compatibility
+profile/package must preserve the original selected reference, record a truthful
+current reference, and independently fence configuration/credential/current
+health before these helpers can qualify the new positive path. No old contract,
+artifact, policy age or timestamp was changed in these helper increments.
