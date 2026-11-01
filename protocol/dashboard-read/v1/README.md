@@ -29,3 +29,20 @@ fixtures using the development `jsonschema` package. The route integration test
 can deliberately replace fixtures with `AQ_DASHBOARD_WRITE_FIXTURES=1`; normal
 checks never rewrite them. Fixtures contain random synthetic UUIDs from their
 retained test execution. They are shape examples, not stable resource handles.
+
+Session rows optionally include `lifecycle: {started_at, stopped_at}` from the
+immutable authenticated worker receipt pair. Both times are nullable. The lookup
+is one indexed join inside the same exact-session inspection transaction; only
+recorded timestamps leave the daemon, never proof bodies or machine credentials.
+This historical evidence does not change `observation.state`, process freshness,
+terminal capability or task completion. `execution_authority` is the separate
+central state. Older responses may omit lifecycle; an object with both times null
+means this implemented projection has received no worker reports. Native facts
+queued only on worker disk appear only after their owning handlers admit them.
+
+The lifecycle columns reuse the existing authorized offer lookup; they add no
+query roundtrip. The existing bounded list still performs per-session authority
+and ACL reads. A warmed one-session fixture sampled five full human detail reads
+at 11.50–13.17 ms (median 12.50 ms). Its receipt/offer join used the three primary-key
+indexes, one row, and 0.167 ms SQL execution. These local shared-host samples are
+not a fleet-scale benchmark or a 500-agent operating envelope.

@@ -847,6 +847,16 @@
             }
           ]
         },
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "observation": {
           "$ref": "#/$defs/ProcessObservation"
         },
@@ -999,6 +1009,33 @@
         }
       ]
     },
+    "SessionLifecycle": {
+      "additionalProperties": false,
+      "description": "Historical authenticated worker receipts, independent of process freshness.",
+      "properties": {
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stopped_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SessionSummary": {
       "additionalProperties": false,
       "properties": {
@@ -1024,6 +1061,16 @@
         },
         "label": {
           "type": "string"
+        },
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionLifecycle"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "observation": {
           "$ref": "#/$defs/ProcessObservation"

@@ -232,6 +232,13 @@ pub struct Controller {
     pub state: String,
     pub label: Option<String>,
 }
+/// Historical authenticated worker receipts, independent of process freshness.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionLifecycle {
+    pub started_at: Option<Timestamp>,
+    pub stopped_at: Option<Timestamp>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSummary {
@@ -250,6 +257,8 @@ pub struct SessionSummary {
     pub record_revision: Option<Revision>,
     pub execution_authority: String,
     pub source_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<SessionLifecycle>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
