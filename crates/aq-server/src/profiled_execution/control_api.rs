@@ -123,26 +123,34 @@ mod diagnostic_tests {
 
     #[tokio::test]
     async fn diagnostic_extension_preserves_the_exact_redacted_wire_failure() {
-        let response = Error(AppError::Conflict(
-            "selection expired during admission locks".into(),
-        ))
-        .into_response();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        assert_eq!(
-            response.extensions().get::<ConflictClass>(),
-            Some(&ConflictClass::SelectionExpired)
-        );
-        let bytes = axum::body::to_bytes(response.into_body(), 65536)
-            .await
-            .unwrap();
         let expected = serde_json::to_vec(&ControlReply::Failure(Failure {
             schema_version: 1,
             code: FailureCode::Conflict,
             operation_id: None,
         }))
         .unwrap();
-        assert_eq!(&bytes[..], expected);
-        assert!(!String::from_utf8_lossy(&bytes).contains("expired"));
+        for (message, classification) in [
+            (
+                "selection expired during admission locks",
+                ConflictClass::SelectionExpired,
+            ),
+            (
+                "phase execution health is not observed available",
+                ConflictClass::PhaseExecutionHealthUnavailable,
+            ),
+        ] {
+            let response = Error(AppError::Conflict(message.into())).into_response();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(
+                response.extensions().get::<ConflictClass>(),
+                Some(&classification)
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            assert_eq!(&bytes[..], expected);
+            assert!(!String::from_utf8_lossy(&bytes).contains(message));
+        }
     }
 }

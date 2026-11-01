@@ -9,6 +9,7 @@ pub enum ConflictClass {
     PhasePreparationUnavailable,
     PhaseExecutionAuthorityUnavailable,
     PhaseExecutionInputsChanged,
+    PhaseExecutionHealthUnavailable,
     OriginalOfferUnavailable,
     SourceObservationUnavailable,
     CapabilitySnapshotChanged,
@@ -35,6 +36,9 @@ pub(crate) fn classify(error: &AppError) -> Option<ConflictClass> {
             ConflictClass::PhaseExecutionAuthorityUnavailable
         }
         "pinned phase execution inputs changed" => ConflictClass::PhaseExecutionInputsChanged,
+        "phase execution health is not observed available" => {
+            ConflictClass::PhaseExecutionHealthUnavailable
+        }
         "original native offer unavailable or inconsistent" => {
             ConflictClass::OriginalOfferUnavailable
         }

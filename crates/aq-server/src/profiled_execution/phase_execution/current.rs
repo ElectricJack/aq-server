@@ -333,6 +333,14 @@ pub(super) async fn fence_locked(
         time,
     )?;
     if health.state != renewal::HealthState::ObservedAvailable {
+        // Same refusal and redacted wire in all builds. A fixed test-only
+        // classification identifies this actual branch without logging health
+        // source details, credential scopes or arbitrary error strings.
+        #[cfg(feature = "test-support")]
+        return Err(AppError::Conflict(
+            "phase execution health is not observed available".into(),
+        ));
+        #[cfg(not(feature = "test-support"))]
         return Err(refused());
     }
     let availability_expires_at_ms = availability_ceiling(
