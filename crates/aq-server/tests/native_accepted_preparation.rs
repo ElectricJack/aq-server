@@ -614,3 +614,177 @@ async fn changed_current_project_and_private_bytes_cannot_deliver_inputs() {
     assert_ne!(artifact(&c, &q, &p).await.status(), 200);
     assert_ne!(source(&c, &q).await.status(), 200);
 }
+#[tokio::test]
+async fn reopened_store_and_reloaded_protected_policy_replay_exact_accepted_receipt() {
+    let (c, p, q) = setup().await;
+    let first = owner::accept(&c.env.env.state, &auth(&c).await, &q, Uuid::new_v4())
+        .await
+        .unwrap();
+    let mut config = (*c.env.env.state.config).clone();
+    config.intelligence = Some(std::sync::Arc::new(
+        config
+            .intelligence
+            .as_ref()
+            .unwrap()
+            .config
+            .clone()
+            .load()
+            .unwrap(),
+    ));
+    let policy = serde_json::to_value(config.profiled_execution.as_deref().unwrap()).unwrap();
+    config.profiled_execution = Some(std::sync::Arc::new(serde_json::from_value(policy).unwrap()));
+    c.env.env.state.store.close().await;
+    let store = aq_server::store::Store::connect_with(c.env.env._db.options())
+        .await
+        .unwrap();
+    let clock = p.original.offered.clock.expires_at_ms + 1;
+    let reopened = aq_server::AppState {
+        store,
+        config: std::sync::Arc::new(config),
+        clock: std::sync::Arc::new(move || {
+            chrono::DateTime::from_timestamp_millis(clock as i64).unwrap()
+        }),
+        ..c.env.env.state.clone()
+    };
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "authorization",
+        format!("Bearer {}", c.env.env.credential).parse().unwrap(),
+    );
+    let auth = worker_api::authenticate_context(&reopened, &headers)
+        .await
+        .unwrap();
+    let second = owner::accept(&reopened, &auth, &q, Uuid::new_v4())
+        .await
+        .unwrap();
+    assert_eq!(
+        first.receipt.digest().unwrap(),
+        second.receipt.digest().unwrap()
+    );
+    assert_eq!(
+        first.receipt.lease.expires_at_ms,
+        second.receipt.lease.expires_at_ms
+    );
+    let mut changed = (*reopened.config).clone();
+    let mut policy = (**changed.profiled_execution.as_ref().unwrap()).clone();
+    policy.definition_bodies.retain(|d| {
+        !d.artifact()
+            .id
+            .as_str()
+            .starts_with("aq.accepted-preparation-policy/")
+    });
+    changed.profiled_execution = Some(std::sync::Arc::new(policy));
+    let disabled = aq_server::AppState {
+        config: std::sync::Arc::new(changed),
+        ..reopened.clone()
+    };
+    assert!(
+        owner::accept(&disabled, &auth, &q, Uuid::new_v4())
+            .await
+            .is_err()
+    );
+    let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM admission_material_leases),(SELECT count(*) FROM profiled_v2_accepts)").fetch_one(&c.env.env.pool).await.unwrap();
+    assert_eq!(counts, (1, 1));
+    reopened.store.close().await;
+}
+#[tokio::test]
+async fn structurally_complete_v2_prepare_never_falls_back_to_legacy_execution_issuer() {
+    let (c, p, q) = setup().await;
+    let auth = auth(&c).await;
+    let a = owner::accept(&c.env.env.state, &auth, &q, Uuid::new_v4())
+        .await
+        .unwrap()
+        .receipt;
+    let mut artifacts = p
+        .original
+        .offered
+        .artifacts
+        .iter()
+        .map(|d| aq_admission::transport::ArtifactReceipt {
+            artifact: d.artifact.clone(),
+            bytes: d.bytes,
+            digest: d.artifact.digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    let manifest: Value =
+        sqlx::query_scalar("SELECT manifest FROM source_bases WHERE attempt_id=$1")
+            .bind(q.original.acceptance.binding.attempt_id)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    let manifest: aq_worker_protocol::TransferManifest = serde_json::from_value(manifest).unwrap();
+    for (name, digest, bytes) in [
+        (
+            "manifest",
+            manifest.manifest_digest.as_str(),
+            manifest.manifest_bytes,
+        ),
+        (
+            "bundle",
+            manifest.bundle_digest.as_deref().unwrap(),
+            manifest.bundle_bytes,
+        ),
+    ] {
+        let digest: Digest = serde_json::from_value(serde_json::json!(digest)).unwrap();
+        artifacts.push(aq_admission::transport::ArtifactReceipt {
+            artifact: ArtifactRef {
+                id: Text::new(format!("aq.source-{name}/{}", manifest.transfer_id)).unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: digest.clone(),
+            },
+            bytes,
+            digest,
+        });
+    }
+    let materials = a
+        .lease
+        .materials
+        .iter()
+        .map(|m| aq_admission::MaterialReceipt {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            lease_id: m.lease_id,
+            binding: m.binding.clone(),
+            material_digest: m.material_digest.clone(),
+            private_binding: ArtifactRef {
+                id: Text::new(format!("aq.private-material/{}", m.lease_id)).unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: Digest::of(b"synthetic worker installation claim, no physical host"),
+            },
+            received_at_ms: a.lease.issued_at_ms,
+        })
+        .collect();
+    let prepared = phase::PrepareRequest {
+        schema_version: 2,
+        negotiation: q.negotiation.clone(),
+        accepted_receipt_digest: a.digest().unwrap(),
+        expected_preparation_revision: a.lease.revision,
+        original: aq_admission::transport::Prepare {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            identity: q.original.identity.clone(),
+            binding: q.original.acceptance.binding.clone(),
+            reservation: q.original.reservation.clone(),
+            guardian_id: q.original.guardian_id,
+            launch_id: q.original.launch_id,
+            journal_revision: q.original.journal_revision + 1,
+            journal_digest: Digest::of(b"synthetic durable Prepared record"),
+            artifacts,
+            materials,
+        },
+    };
+    prepared.validate_for(&a, &q, &p).unwrap();
+    assert!(
+        aq_server::profiled_execution::initial_grant::prepare(
+            &c.env.env.state,
+            &auth,
+            &prepared.original,
+            Uuid::new_v4()
+        )
+        .await
+        .is_err()
+    );
+    let (granted,receipts):(bool,i64)=sqlx::query_as("SELECT state->'grant'<>'null'::jsonb,(SELECT count(*) FROM admission_material_receipts) FROM profiled_authority_hot WHERE attempt_id=$1").bind(q.original.acceptance.binding.attempt_id).fetch_one(&c.env.env.pool).await.unwrap();
+    assert!(!granted);
+    assert_eq!(receipts, 0);
+}
