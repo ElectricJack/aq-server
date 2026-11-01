@@ -103,6 +103,19 @@ async fn human_metadata_projects_exact_revisions_corrections_and_bounded_pages()
         get(&f, "/api/human/results?limit=0").await.0,
         StatusCode::BAD_REQUEST
     );
+    if std::env::var("AQ_TEST_RETAIN_RESULTS_DEMO").as_deref() == Ok("1") {
+        // Explicit isolated preview fixture, after assertions. No provider run.
+        let name: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&f.db.pool().await)
+            .await
+            .unwrap();
+        std::mem::forget(f.db.clone());
+        eprintln!(
+            "retained_results_demo_database={name} report_id={} revision={}",
+            report.report_id,
+            receipt.report_digest.as_str()
+        );
+    }
 }
 #[tokio::test]
 async fn stopped_without_report_is_empty_and_current_viewer_cannot_read_results() {
