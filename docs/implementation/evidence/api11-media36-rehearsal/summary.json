@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "status": "migration_and_backup_rollback_rehearsed_promotion_blocked_capacity_fix",
+  "private_artifact_directory": "/tmp/aq-media36-rehearsal-b600e6a570",
+  "privacy": "All raw dumps/config/bootstrap/snapshot files remain private0600 under0700 directories; committed record contains counts and hashes only. Old executable copy is owner-only0500.",
+  "candidate": {
+    "code_source": "55b1dc67ea93aa098377150923dcf1473cd5942f",
+    "state_format": 36,
+    "binary_sha256": "49006758bfcf378f54a24343b6444563c55adf32cc214c0904c29ec3f58b30e8",
+    "bundle_manifest_sha256": "af51fe1636a87934ff0ef85ad03336c8e3a0b3bffc97817e6b8087bb3d58c127",
+    "promotion_approved": false,
+    "known_blocker": "Expired pending cleanup releases byte quota but previously left report slot states counted. Owner-only capacity fix and fixed binary qualification are required; frozen36DDL remains unchanged."
+  },
+  "canonical": {
+    "state_format": 35,
+    "binary_sha256": "8ad0aad8a1cb156660decdebc0fbbef8e4ea04a0e7c80a84c8921bb0681153ad",
+    "bundle_manifest_sha256": "5c0fcfa4fe11cd95a9081edeb7323ef07f9d2c66bcf24b2add1ef546200ac667",
+    "process_unchanged": true,
+    "all109_table_bags_and_sequences_unchanged_during_rehearsal": true,
+    "service_config_or_database_cutover": false,
+    "conversation_identity_sha256": "f189cfdabc4a9a6e235320642565b9eca4a0b0acb7fb008ce88631f988686fb0",
+    "owner_identity_sha256": "db2e1cb5e610c644878fd4bae16eae1eb0d653f39154cb215767e667feee82b9"
+  },
+  "snapshot_backup": {
+    "sha256": "85d266f752d07df309336199c8202c8d17bb440bc4dd73685427cbf393fac6d3",
+    "bytes": 547211,
+    "snapshot_matched_read_only_manifest": true,
+    "logical_custom_archive": true,
+    "restored_to_new_disposable_database": true,
+    "source_owner_acl_default_rules_preserved": true
+  },
+  "preservation": {
+    "all109_preexisting_tables_compared": true,
+    "unchanged_preexisting_table_bags": 106,
+    "only_changed_tables": [
+      "meta",
+      "notification_budget",
+      "schema_migrations"
+    ],
+    "allowed_changes": {
+      "meta": "only state_format_version35\u219236",
+      "schema_migrations": "only new36ledger entry; old35rows exact",
+      "notification_budget": "only dispatcher_id rotated; other columns exact"
+    },
+    "all1919_preexisting_schema_objects_exact": true,
+    "new_media_tables": [
+      "result_media_budgets",
+      "result_media_intents",
+      "result_media_storage"
+    ],
+    "media_intents": 0,
+    "media_storage_roots": 1,
+    "media_budget_rows": 1,
+    "conversation_identity_preserved": true,
+    "all_sequence_states_exact": true,
+    "all_actor_project_mailbox_message_receipt_history_bags_preserved": true
+  },
+  "rollback": {
+    "all109_restored_table_bags_exact": true,
+    "all1919_old_schema_objects_exact": true,
+    "original35_binary_started_from_restored35": true,
+    "rollback_state_format": 35,
+    "only_startup_delta": "notification_budget dispatcher_id",
+    "all_human_data_and_sequences_preserved": true,
+    "rehearsal36_restarted": true,
+    "ports": [
+      4214,
+      4215
+    ],
+    "canonical_process_signal_count": 0
+  },
+  "old35_reader_refusal": {
+    "exit_code": 2,
+    "whole36_capture_unchanged": true,
+    "merely_switching_binary_is_not_rollback": true
+  },
+  "read_only_media": {
+    "ports": [
+      4214,
+      4215
+    ],
+    "uploads_enabled": false,
+    "maintenance_marker": "private rehearsal-only",
+    "ready_health_bootstrap": 200,
+    "existing_owner_identity_preserved": true,
+    "results_discovery": {
+      "status": 200,
+      "coverage": "recorded_legacy_native_only",
+      "items": 0
+    },
+    "unknown_report_media": {
+      "status": 404,
+      "shape": "genericAQnot_found",
+      "successful_empty_media_page_inferred": false
+    },
+    "canonical_retained_report_rows": 0,
+    "positive_known_report_media_proof": "Separate disposable4206fixture, not canonical data",
+    "media_intents": 0
+  },
+  "remote_provider_graph_or_user_messages_sent": 0,
+  "scope_limitations": [
+    "Minimal no-external-owner rehearsal config, not full canonical operational config",
+    "Canonical mail tables currently empty; every existing row bag and conversation singleton still checked",
+    "No actual OS/power loss was injected",
+    "No canonical promotion is authorized by this record"
+  ]
+}
