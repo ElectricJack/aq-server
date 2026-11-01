@@ -51,3 +51,32 @@ status/selected history booleans before the assertion. They do not dump raw erro
 chains, credentials, material or arbitrary journal content. No timeout, lease,
 DDL, provider route or actual Codex execution is changed. Compilation and another
 actual static attempt require separate lease/authorization; none has run yet.
+
+
+## Third attempt: diagnosed local source hydration refusal
+
+The bounded diagnostics compiled on the existing target2 cache in1m46s. The
+single authorized diagnostic case ran8.71s and refused at exact constant stage
+`phase_hydrate`. All observed HTTP responses were200, including source metadata,
+manifest and bundle downloads. Journal revision was18. No execution grant was
+issued (`issued=[]`); execution deadline was absent, baseline/Running/Stopped and
+both ACK flags were false, and ECHILD was absent. No terminal registration,
+Watch pull, upload or authorized tail assertion was reached. The
+[bounded log](hydration-diagnostic-negative.log) and
+[structured diagnostic](hydration-diagnostic-negative.json) retain this failure.
+
+Read-only source inspection found a strong explanation: the actual Git fixture
+selects default artifact limits. Git import reserves its full10GiB expanded bound
+plus256MiB free reserve before quarantine import. Required available space is
+11005853696B; the run had7082278912B available, below that threshold. This is a
+source-supported explanation, not a captured exact Git error code. The actual
+storage-admission refusal must remain intact. No bound, timeout, lease or profile
+was changed to obtain a passing test.
+
+The diagnostic worker build used jobs2/debug0/incremental0 and passed in22.38s;
+its copied binary SHA256 is
+`adbf3230fc6c9d19de9c29a744e8f8ee0eccaa5aa6bacbcadb50c512c3638b20`.
+The earlier worker and both previous negatives remain recorded separately.
+An accepted-output proof still requires an independently sufficient environment
+or an explicitly reviewed/provisioned stopped-node fixture profile, then a new
+authorized attempt. No Codex or provider was invoked and no retry occurred.

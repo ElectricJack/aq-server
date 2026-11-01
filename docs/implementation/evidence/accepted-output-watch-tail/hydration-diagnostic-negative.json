@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "authority": "historical fixture diagnostic; no accepted output, execution Grant or host proof",
+  "worker_source": "04b8f13",
+  "server_source": "8c477d4",
+  "worker_sha256": "adbf3230fc6c9d19de9c29a744e8f8ee0eccaa5aa6bacbcadb50c512c3638b20",
+  "historical_schema": "genuine ordered32 prefix followed by existing33 setup",
+  "server_compile_seconds": 106,
+  "case_seconds": 8.71,
+  "case_result": "failed before execution issuance",
+  "constant_stage": "phase_hydrate",
+  "journal_revision": 18,
+  "all_observed_http_statuses": 200,
+  "http_reached": [
+    "registration",
+    "poll",
+    "proposal",
+    "accept and replay",
+    "artifact reads",
+    "material read",
+    "source metadata",
+    "source manifest",
+    "source bundle"
+  ],
+  "execution_issued_count": 0,
+  "execution_deadline_ns": null,
+  "baseline": false,
+  "running": false,
+  "stopped": false,
+  "kernel_echild": null,
+  "started_ack": false,
+  "stopped_ack": false,
+  "disk_available_after_case_bytes": 7082278912,
+  "source_diagnosis": {
+    "status": "source-supported explanation; exact Git error code was not emitted by this case",
+    "default_max_expanded_bytes": 10737418240,
+    "default_disk_reserve_bytes": 268435456,
+    "import_minimum_available_bytes": 11005853696,
+    "actual_below_minimum": true,
+    "runtime_limits_changed": false,
+    "next_action": "preserve actual admission check; reclaim disposable disk or independently review an explicit stopped-node fixture profile"
+  },
+  "no_claims": [
+    "accepted UploadAck",
+    "authorized output read-tail",
+    "host execution or cleanup",
+    "latest-format startup",
+    "production runtime or credential isolation",
+    "Codex or provider calls"
+  ]
+}

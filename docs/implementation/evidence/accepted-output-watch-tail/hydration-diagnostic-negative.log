@@ -1,0 +1,18 @@
+
+running 1 test
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ... bounded phase failure clocks (historical, no execution permission): {"availability":[{"expires_at_ms":1793565670761,"received_at_ms":1793565640761,"sequence":2,"state":"available"}],"issued":[],"server_now_ms":1793565647083}
+bounded output fixture refusal: {"baseline":false,"execution_deadline_ns":null,"http_statuses":[["/v1/worker/profiled/register",200,45],["/v1/worker/profiled/poll",200,490],["/v1/worker/profiled-v2/proposal",200,86],["/v1/worker/profiled-v2/accept",200,180],["/v1/worker/profiled-v2/accept",200,73],["/v1/worker/profiled/artifact",200,79],["/v1/worker/profiled/artifact",200,134],["/v1/worker/profiled/artifact",200,73],["/v1/worker/profiled/artifact",200,127],["/v1/worker/profiled/artifact",200,48],["/v1/worker/profiled/artifact",200,93],["/v1/worker/profiled/artifact",200,47],["/v1/worker/profiled/artifact",200,90],["/v1/worker/profiled/artifact",200,51],["/v1/worker/profiled/artifact",200,103],["/v1/worker/profiled/artifact",200,50],["/v1/worker/profiled/artifact",200,97],["/v1/worker/profiled/artifact",200,48],["/v1/worker/profiled/artifact",200,96],["/v1/worker/profiled/artifact",200,49],["/v1/worker/profiled/artifact",200,94],["/v1/worker/profiled/artifact",200,55],["/v1/worker/profiled/artifact",200,109],["/v1/worker/profiled/artifact",200,47],["/v1/worker/profiled/artifact",200,90],["/v1/worker/profiled/artifact",200,47],["/v1/worker/profiled/artifact",200,91],["/v1/worker/profiled/artifact",200,48],["/v1/worker/profiled/artifact",200,95],["/v1/worker/profiled/artifact",200,48],["/v1/worker/profiled/artifact",200,91],["/v1/worker/profiled/artifact",200,47],["/v1/worker/profiled/artifact",200,90],["/v1/worker/profiled/artifact",200,45],["/v1/worker/profiled/artifact",200,89],["/v1/worker/profiled/artifact",200,47],["/v1/worker/profiled/artifact",200,91],["/v1/worker/profiled/artifact",200,46],["/v1/worker/profiled/artifact",200,90],["/v1/worker/profiled/artifact",200,46],["/v1/worker/profiled/artifact",200,91],["/v1/worker/profiled/material",200,50],["/v1/worker/profiled/artifact",200,49],["/v1/worker/profiled/source/27c1d075-9714-5103-85e5-253a528bdeb6",200,106],["/v1/worker/profiled/source/27c1d075-9714-5103-85e5-253a528bdeb6/manifest",200,108],["/v1/worker/profiled/source/27c1d075-9714-5103-85e5-253a528bdeb6/bundle",200,95]],"journal_revision":18,"kernel_wait_echild":null,"phase":"refused","running":false,"stage":"phase_hydrate","started_ack":false,"stopped":false,"stopped_ack":false}
+
+thread 'published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop' (831777) panicked at crates/aq-server/tests/native_initial_grant/published/actual_git/worker_assembly/phase_output.rs:147:5:
+assertion `left == right` failed: worker refusal stage=Some(String("phase_hydrate"))
+  left: String("refused")
+ right: "terminal_registered"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 8.71s
