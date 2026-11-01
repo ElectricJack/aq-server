@@ -246,6 +246,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!("../migrations/0031_presence_binding_barrier.sql"),
     ),
     (32, include_str!("../migrations/0032_phase_execution.sql")),
+    (33, include_str!("../migrations/0033_phase_terminal.sql")),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
