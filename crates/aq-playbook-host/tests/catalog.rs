@@ -169,3 +169,28 @@ async fn unsupported_backend_is_not_advertised_and_legacy_request_json_stays_clo
         Err(Error::Stopped)
     ));
 }
+
+#[tokio::test]
+async fn support_handle_observes_stop_and_does_not_prolong_owner_lifetime() {
+    let store = Counted::default();
+    let observed = store.clone();
+    let owner = Owner::start("weak-support".into(), Limits::default(), move || Ok(store))
+        .await
+        .unwrap();
+    let support = owner.catalog_support();
+    assert!(support.available());
+    drop(owner);
+    assert!(!support.available());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if observed.inner.acquire("weak-support", "successor").is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("weak support handle must not retain an owning client");
+    observed.inner.release("weak-support", "successor").unwrap();
+    assert!(!support.available());
+}

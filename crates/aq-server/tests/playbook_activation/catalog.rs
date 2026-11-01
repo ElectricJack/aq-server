@@ -67,6 +67,14 @@ async fn actual_current_catalog_tracks_later_install_and_activation_without_rest
     )
     .await;
     assert_eq!(status, 200, "{first}");
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/playbooks-current-catalog/v1/schema.json"
+    ))
+    .unwrap();
+    assert!(
+        aq_agent_api::check(&schema, &schema, &first),
+        "current definition page must match the frozen closed schema"
+    );
     assert_eq!(first["api_version"], "playbooks-current-catalog-1");
     assert_eq!(first["component_api_version"], "playbooks-catalog-1");
     assert_eq!(first["source"], "current_namespace_state");
@@ -182,6 +190,10 @@ async fn actual_current_catalog_tracks_later_install_and_activation_without_rest
     );
     optional_browser(&s, &runtime, &original.digest, &later.digest).await;
     runtime.shutdown().await.unwrap();
+    assert!(
+        !supported(&app, "owner@localhost").await,
+        "same mounted router must observe acknowledged owner stop"
+    );
     assert_eq!(
         read(
             &app,
@@ -302,7 +314,7 @@ async fn optional_browser(
     let bundle = std::env::var_os("AQ_TEST_CURRENT_CATALOG_DASHBOARD_DIR")
         .expect("explicit compiled current catalog assets required");
     let assets = aq_server::dashboard_assets::DashboardAssets::load(Path::new(&bundle)).unwrap();
-    let digest = assets.digest().to_owned();
+    let bundle_digest = assets.digest().to_owned();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let mut state = s.f.state.clone();
@@ -321,7 +333,7 @@ async fn optional_browser(
         .env("AQ_LIVE_URL", origin)
         .env("AQ_LIVE_CATALOG_ORIGINAL", original)
         .env("AQ_LIVE_CATALOG_LATER", later)
-        .env("AQ_LIVE_BUNDLE_MANIFEST_SHA256", digest)
+        .env("AQ_LIVE_BUNDLE_MANIFEST_SHA256", bundle_digest)
         .kill_on_drop(true)
         .spawn()
         .unwrap();
@@ -333,4 +345,104 @@ async fn optional_browser(
             .unwrap()
             .success()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn held_catalog_read_pins_original_owner_binding_and_authorization_version() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let runtime = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router_with_playbooks(
+        s.f.state.clone(),
+        Some(runtime.driver.clone()),
+    );
+    let pool = s.f.db.pool().await;
+    let engine_namespace = runtime.driver.service.namespace.engine_namespace();
+    let pid: i32 = sqlx::query_scalar(
+        "SELECT owner_backend_pid FROM aq_playbooks.namespaces WHERE namespace=$1",
+    )
+    .bind(engine_namespace)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for action in [
+        "subject",
+        "issuer",
+        "role",
+        "same-value-update",
+        "engine-error",
+    ] {
+        let mut blocker = pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE aq_playbooks.catalog_rows IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let held_app = app.clone();
+        let pending = tokio::spawn(async move {
+            read(
+                &held_app,
+                "owner@localhost",
+                "/api/playbooks/inspection/catalog/definitions",
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1),async {loop {
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock' AND query LIKE '%FROM aq_playbooks.catalog_rows WHERE namespace=%')").bind(pid).fetch_one(&pool).await.unwrap();
+            if waiting {break;}tokio::time::sleep(Duration::from_millis(5)).await;
+        }}).await.expect("actual owner catalog read must enter controlled storage wait after preauthorization");
+        let sql = match action {
+            "subject" | "engine-error" => {
+                "UPDATE users SET subject='rebound-owner-subject' WHERE id=$1"
+            }
+            "issuer" => "UPDATE users SET issuer='rebound-owner-issuer' WHERE id=$1",
+            "role" => "UPDATE users SET role='viewer' WHERE id=$1",
+            _ => "UPDATE users SET role='owner' WHERE id=$1",
+        };
+        sqlx::query(sql)
+            .bind(s.f.actor)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let deferred_blocker = if action == "engine-error" {
+            Some(blocker)
+        } else {
+            blocker.rollback().await.unwrap();
+            None
+        };
+        let (status, body) = tokio::time::timeout(Duration::from_secs(3), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        if let Some(blocker) = deferred_blocker {
+            blocker.rollback().await.unwrap();
+        }
+        assert_eq!(status, 403, "held {action}: {body}");
+        assert!(body.get("items").is_none());
+        assert!(!body.to_string().contains("current_namespace_state"));
+        sqlx::query(
+            "UPDATE users SET role='owner',issuer='dev',subject='owner@localhost' WHERE id=$1",
+        )
+        .bind(s.f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            read(
+                &app,
+                "owner@localhost",
+                "/api/playbooks/inspection/catalog/definitions"
+            )
+            .await
+            .0,
+            200,
+            "fresh original binding reads after restoration"
+        );
+    }
+    runtime.shutdown().await.unwrap();
+    assert!(!supported(&app, "owner@localhost").await);
 }

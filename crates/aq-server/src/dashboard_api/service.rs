@@ -293,7 +293,11 @@ pub(super) async fn bootstrap(
         ),
         capability(
             "playbooks.catalog.read",
-            playbooks && mounted.playbook_catalog,
+            playbooks
+                && mounted
+                    .playbook_catalog
+                    .as_ref()
+                    .is_some_and(|support| support.available()),
             "Current catalog inspection requires the mounted component query and namespace owner",
         ),
     ];

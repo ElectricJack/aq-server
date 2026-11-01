@@ -102,7 +102,9 @@ A single actual bounded query after Engine acquisition establishes
 never claims cached current contents or later health; bootstrap need not query
 the engine. Later ownership loss, unsupported profiles or corrupt projections
 remain errors, never empty lists or startup-configuration fallbacks. Stop clears
-support before its acknowledgement. No State snapshot fallback is permitted.
+support before its acknowledgement. `Owner::catalog_support()` returns a weak
+live handle: capability checks can observe stop/thread exit without engine I/O
+or extending the owner client lifetime. No State snapshot fallback is permitted.
 
 Component migration4/writer-format2 fences previously opened legacy writers.
 Retire a prior owner before deployment; do not apply this candidate to an active

@@ -1474,3 +1474,6 @@ impl Service {
 
 #[path = "inspection/admissions.rs"]
 mod inspection_admissions;
+
+#[path = "inspection/catalog_auth.rs"]
+mod catalog_auth;

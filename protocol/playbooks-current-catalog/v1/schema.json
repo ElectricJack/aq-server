@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CatalogPage",
+  "type": "object",
+  "properties": {
+    "api_version": {
+      "type": "string",
+      "const": "playbooks-current-catalog-1"
+    },
+    "component_api_version": {
+      "type": "string",
+      "const": "playbooks-catalog-1"
+    },
+    "current_catalog": {
+      "type": "boolean",
+      "const": true
+    },
+    "incarnation": {
+      "type": "string"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Item"
+      },
+      "maxItems": 25
+    },
+    "kind": {
+      "$ref": "#/$defs/Kind"
+    },
+    "metadata_revision": {
+      "type": "string"
+    },
+    "namespace": {
+      "$ref": "#/$defs/CatalogNamespace"
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "server_time_ms": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "source": {
+      "type": "string",
+      "const": "current_namespace_state"
+    },
+    "state_revision": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "component_api_version",
+    "source",
+    "current_catalog",
+    "namespace",
+    "server_time_ms",
+    "kind",
+    "state_revision",
+    "incarnation",
+    "metadata_revision",
+    "items"
+  ],
+  "$defs": {
+    "Activation": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "artifact_execution_denied": {
+          "type": "boolean"
+        },
+        "binding": {
+          "type": "string"
+        },
+        "controls": {
+          "$ref": "#/$defs/Controls"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "binding",
+        "artifact",
+        "revision",
+        "controls",
+        "artifact_execution_denied"
+      ]
+    },
+    "CatalogNamespace": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "generation",
+        "name",
+        "project_id"
+      ]
+    },
+    "Controls": {
+      "type": "object",
+      "properties": {
+        "calls_enabled": {
+          "type": "boolean"
+        },
+        "event_starts_enabled": {
+          "type": "boolean"
+        },
+        "execution_enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "calls_enabled",
+        "event_starts_enabled",
+        "execution_enabled"
+      ]
+    },
+    "Definition": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "compiler": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Dependency"
+          }
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "executable_fingerprint": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "purpose_truncated": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "executable_fingerprint",
+        "source_digest",
+        "name",
+        "scope",
+        "compiler",
+        "purpose",
+        "purpose_truncated",
+        "entries",
+        "dependencies"
+      ]
+    },
+    "Dependency": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "reference_artifact": {
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "binding",
+        "reference_artifact",
+        "selection"
+      ]
+    },
+    "Item": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/Record"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "record"
+      ]
+    },
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "definitions",
+        "activations"
+      ]
+    },
+    "Record": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "definition"
+            },
+            "metadata": {
+              "$ref": "#/$defs/Definition"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "metadata"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "activation"
+            },
+            "metadata": {
+              "$ref": "#/$defs/Activation"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "metadata"
+          ]
+        }
+      ]
+    },
+    "Selection": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "catalog"
+      ]
+    }
+  }
+}

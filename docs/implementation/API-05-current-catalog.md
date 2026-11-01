@@ -20,7 +20,12 @@ requires both stamp fields. Exact lookup can optionally carry that same pair.
 The server reconstructs the component stamp from its actual engine namespace and
 fixed route kind; callers cannot select another engine namespace. A supplied
 project must match the namespace project. Current human Owner and exact namespace
-owner authorization run before and after the awaited owner query.
+owner authorization run before and after the awaited owner query. The original
+trusted User ID/issuer/subject/Owner role are retained; empty identity bindings
+are refused, with email and user row-version pinned across the wait as well.
+Same-principal revocation/rebind returns 403 for the dashboard denial latch,
+while an unrelated namespace Owner retains the existing hidden-scope 404.
+Reauthorization takes precedence even if the engine query itself failed.
 
 The closed `playbooks-current-catalog-1` response has `source` equal to
 `current_namespace_state`, `current_catalog=true`, `component_api_version` equal
@@ -58,7 +63,10 @@ and stamp joins check the exact response namespace/kind/continuation context.
 owner whose initial bounded component query established support, and the current
 human Owner matching the configured namespace owner. This is interface support,
 not cached current metadata or a guarantee that every later profile is supported.
-Bootstrap does not query the engine. Later Unsupported/corruption remains an
+Bootstrap does not query the engine. Mounted state retains only a weak live
+interface-support handle; atomic support/closing state is rechecked at each
+bootstrap without extending owner lifetime. Acknowledged stop disables the
+capability on the same existing router. Later Unsupported/corruption remains an
 explicit read failure and never falls back to stale startup configuration.
 
 The existing `playbooks.loaded-definitions.read@1` API and startup capture remain
@@ -75,6 +83,11 @@ its capability is negotiated. Definition selection, exact detail/reload, immutab
 pins, declared dependencies and current activation controls have strict local
 adapters. Bound loaded pages to 100 entries and retain namespace/stamp joins.
 Read errors cannot display cached successful catalog data under changed context.
+A feature-local JSON client bounds request/body time to five seconds, streams at
+most 256 KiB before parse, and refuses duplicate keys, lossy numeric syntax and
+invalid UTF-8. Fetch is same-origin, no-store and redirect:error. HTTP 401/403
+headers are classified immediately; body cancellation is never awaited, so a
+held error body and unavailable bootstrap cannot retain old catalog metadata.
 Run pins/timeline and historical startup definitions remain separate sources.
 
 Source tests must cover legacy-wire compatibility, actual owner delegation with

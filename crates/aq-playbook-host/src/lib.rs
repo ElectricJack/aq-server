@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -255,6 +255,28 @@ struct Shared {
     limits: Limits,
     registry: Registry,
     catalog_supported: AtomicBool,
+}
+impl Shared {
+    fn catalog_supported(&self) -> bool {
+        self.catalog_supported.load(Ordering::Acquire)
+            && !self
+                .queues
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .closing
+    }
+}
+/// CPU-only live interface support; does not retain an Owner client or metadata.
+#[derive(Clone)]
+pub struct CatalogSupport {
+    shared: Weak<Shared>,
+}
+impl CatalogSupport {
+    pub fn available(&self) -> bool {
+        self.shared
+            .upgrade()
+            .is_some_and(|shared| shared.catalog_supported())
+    }
 }
 /// Cloning this handle never creates a second namespace owner. Drop does not join
 /// the thread: a stuck storage call retains its ownership until it really returns.
@@ -505,13 +527,12 @@ impl Owner {
     /// Interface support established once by an actual acquired bounded query.
     /// It does not cache metadata or promise later profile/ownership availability.
     pub fn catalog_supported(&self) -> bool {
-        self.shared.catalog_supported.load(Ordering::Acquire)
-            && !self
-                .shared
-                .queues
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .closing
+        self.shared.catalog_supported()
+    }
+    pub fn catalog_support(&self) -> CatalogSupport {
+        CatalogSupport {
+            shared: Arc::downgrade(&self.shared),
+        }
     }
     pub async fn inspect_catalog(
         &self,

@@ -13,13 +13,38 @@ use aq_playbook_host::{
     CatalogCallError,
     runner::{self, catalog_inspection as component},
 };
-use axum::{Extension, Json, extract::Query};
+use axum::{
+    Extension, Json,
+    extract::Query,
+    response::{IntoResponse, Response},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 pub const VERSION: &str = "playbooks-current-catalog-1";
+/// New-interface principal denial stays distinct from legacy hidden-scope 404.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogReadError {
+    #[error("playbook_catalog_access_refused")]
+    Access,
+    #[error(transparent)]
+    Domain(#[from] Error),
+}
+impl From<sqlx::Error> for CatalogReadError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Domain(Error::from(error))
+    }
+}
+impl IntoResponse for CatalogReadError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Domain(error) => error.into_response(),
+            Self::Access => (axum::http::StatusCode::FORBIDDEN, Json(serde_json::json!({"code":"playbook_catalog_access_refused","disposition":"refused","retryable":false}))).into_response(),
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -283,6 +308,9 @@ fn public_page(
     if verified.next_cursor.is_some() {
         return Err(Error::Unknown);
     }
+    if query.exact.is_some() && raw.next_cursor.is_some() {
+        return Err(Error::Unknown);
+    }
     if raw
         .next_cursor
         .as_ref()
@@ -331,49 +359,55 @@ impl Driver {
     pub fn catalog_supported(&self) -> bool {
         self.owner.catalog_supported()
     }
+    pub fn catalog_support(&self) -> aq_playbook_host::CatalogSupport {
+        self.owner.catalog_support()
+    }
+
     pub async fn inspect_current_catalog(
         &self,
-        actor: Uuid,
+        actor: &crate::store::User,
         kind: Kind,
         query: CatalogQuery,
-    ) -> Result<CatalogPage> {
+    ) -> std::result::Result<CatalogPage, CatalogReadError> {
         let query = query.component(&self.service.namespace, kind)?;
-        self.service.authorize_inspection(actor).await?;
+        let authorization = self.service.authorize_current_catalog(actor).await?;
         let raw = self
             .owner
             .inspect_catalog(query.clone(), Duration::from_secs(2))
             .await;
-        self.service.authorize_inspection(actor).await?;
-        public_page(
+        if self.service.authorize_current_catalog(actor).await? != authorization {
+            return Err(CatalogReadError::Access);
+        }
+        Ok(public_page(
             &self.service.namespace,
             kind,
             &query,
             raw.map_err(owner_error)?,
             self.service.current_time(),
-        )
+        )?)
     }
 }
 pub(super) async fn definitions(
     RequireOwner(actor): RequireOwner,
     Extension(driver): Extension<Arc<Driver>>,
     Query(query): Query<CatalogQuery>,
-) -> Result<Json<CatalogPage>> {
-    bounded(
+) -> std::result::Result<Json<CatalogPage>, CatalogReadError> {
+    Ok(bounded(
         driver
-            .inspect_current_catalog(actor.id, Kind::Definitions, query)
+            .inspect_current_catalog(&actor, Kind::Definitions, query)
             .await?,
-    )
+    )?)
 }
 pub(super) async fn activations(
     RequireOwner(actor): RequireOwner,
     Extension(driver): Extension<Arc<Driver>>,
     Query(query): Query<CatalogQuery>,
-) -> Result<Json<CatalogPage>> {
-    bounded(
+) -> std::result::Result<Json<CatalogPage>, CatalogReadError> {
+    Ok(bounded(
         driver
-            .inspect_current_catalog(actor.id, Kind::Activations, query)
+            .inspect_current_catalog(&actor, Kind::Activations, query)
             .await?,
-    )
+    )?)
 }
 pub fn schema_bytes() -> Vec<u8> {
     serde_json::to_vec_pretty(&schemars::schema_for!(CatalogPage))
@@ -505,6 +539,9 @@ mod tests {
                 Error::Conflict
             );
         }
+        let mut malformed_exact = raw(&n, vec![item.clone()]);
+        malformed_exact.next_cursor = Some(item.key.clone());
+        assert!(public_page(&n, Kind::Definitions, &q, malformed_exact, 1).is_err());
         let mut bad = raw(&n, vec![item.clone()]);
         bad.items[0].key = fixture_item(2).key;
         assert!(public_page(&n, Kind::Definitions, &q, bad, 1).is_err());
@@ -518,14 +555,32 @@ mod tests {
         let mut n = namespace();
         n.name = "\n".repeat(128);
         let query = runner::CatalogQuery::first(runner::CatalogKind::Definitions, 25);
-        let mut rows = (0..25).map(fixture_item).collect::<Vec<_>>();
+        let mut rows = (0..10).map(fixture_item).collect::<Vec<_>>();
         rows.sort_by(|a, b| a.key.cmp(&b.key));
         for row in &mut rows {
             let component::CatalogRecord::Definition(d) = &mut row.record else {
                 unreachable!()
             };
             d.purpose = "\0".repeat(4096);
+            d.compiler = "c".into();
         }
+        // Fill the component budget exactly, leaving only its 257-byte framing
+        // reserve. AQ's additional namespace/source wrapper must shorten it.
+        let mut room = super::super::MAX_BYTES
+            - 257
+            - serde_json::to_vec(&raw(&n, rows.clone())).unwrap().len();
+        for row in &mut rows {
+            let component::CatalogRecord::Definition(d) = &mut row.record else {
+                unreachable!()
+            };
+            let zeros = (room / 6).min(255);
+            d.compiler.push_str(&"\0".repeat(zeros));
+            room -= zeros * 6;
+            let ascii = room.min(256 - d.compiler.len());
+            d.compiler.push_str(&"c".repeat(ascii));
+            room -= ascii;
+        }
+        assert_eq!(room, 0);
         let stamp = raw(&n, vec![]).stamp;
         let raw = component::make_page(&query, stamp, 9, rows, false).unwrap();
         let keys = raw
@@ -536,6 +591,10 @@ mod tests {
         let page = public_page(&n, Kind::Definitions, &query, raw, 1).unwrap();
         assert!(serde_json::to_vec(&page).unwrap().len() <= super::super::MAX_BYTES);
         assert!(!page.items.is_empty());
+        assert!(
+            page.items.len() < keys.len(),
+            "AQ wrapper must actually exercise shorter-page packing"
+        );
         assert_eq!(
             page.next_cursor.as_ref(),
             page.items.last().map(|last| &last.key)
