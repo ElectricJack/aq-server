@@ -247,6 +247,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
     ),
     (32, include_str!("../migrations/0032_phase_execution.sql")),
     (33, include_str!("../migrations/0033_phase_terminal.sql")),
+    (
+        34,
+        include_str!("../migrations/0034_human_graph_operations.sql"),
+    ),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
@@ -390,6 +394,15 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
             return Err(StoreError::Corrupt(
                 "phase terminal origin/capacity storage missing or disabled in current schema"
                     .into(),
+            ));
+        }
+    }
+    if supported >= 34 {
+        let complete: bool = sqlx::query_scalar("SELECT to_regclass('human_graph_operations') IS NOT NULL AND to_regclass('human_graph_operation_actor') IS NOT NULL AND to_regprocedure('guard_human_graph_operation_identity()') IS NOT NULL AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('human_graph_operations') AND tgname='human_graph_operation_identity_guard' AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgfoid=to_regprocedure('guard_human_graph_operation_identity()'))")
+            .fetch_one(&mut *tx).await?;
+        if !complete {
+            return Err(StoreError::Corrupt(
+                "human Graph intent journal storage missing from current schema".into(),
             ));
         }
     }
