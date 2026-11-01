@@ -7,6 +7,9 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 #[cfg(feature = "test-support")]
+pub mod control_diagnostics;
+
+#[cfg(feature = "test-support")]
 tokio::task_local! { static STATE32_STORE: (); }
 
 /// Scope a fixture to a real frozen32 migration prefix. It does not relabel a

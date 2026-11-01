@@ -599,6 +599,46 @@ pub(super) async fn diagnostics(case: &Case) {
         .fetch_all(&case.env.env.pool).await.unwrap();
     let issued:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('operation_id',operation_id,'grant_id',grant_id,'issued_at_ms',issued_at_ms,'expires_at_ms',expires_at_ms,'execution_deadline_ms',execution_deadline_ms,'graph',convert_from(provenance_bytes,'UTF8')::JSONB->'graph','private_started_at_ms',convert_from(provenance_bytes,'UTF8')::JSONB->'private_started_at_ms','private_received_at_ms',convert_from(provenance_bytes,'UTF8')::JSONB->'private_received_at_ms') FROM profiled_phase_execution_grants WHERE node_id=$1 ORDER BY operation_id LIMIT 2")
         .bind(case.env.env.node).fetch_all(&case.env.env.pool).await.unwrap();
+    // Numeric original clocks only. Never log proposal bodies, source paths,
+    // credential/account references, contexts or arbitrary provider messages.
+    let mut clocks: Vec<Value> = sqlx::query_scalar(r#"
+        SELECT jsonb_build_object(
+          'proposal_published_at_ms',p.published_at_ms,
+          'offer_server_time_ms',p.proposal#>'{original,offered,clock,server_time_ms}',
+          'offer_expires_at_ms',p.proposal#>'{original,offered,clock,expires_at_ms}',
+          'maximum_observation_ms',p.proposal#>'{policy,maximum_observation_ms}',
+          'selection_now_ms',d.decision#>'{inputs,now_ms}',
+          'budget_observed_at_ms',d.decision#>'{inputs,budget,observed_at_ms}',
+          'budget_expires_at_ms',d.decision#>'{inputs,budget,expires_at_ms}',
+          'project_expires_at_ms',d.decision#>'{inputs,project,expires_at_ms}',
+          'node_observed_at_ms',d.decision#>'{inputs,node,observed_at_ms}',
+          'node_expires_at_ms',d.decision#>'{inputs,node,expires_at_ms}',
+          'selection_expires_at_ms',d.decision#>'{outcome,resolved,expires_at_ms}',
+          'source_observed_at_ms',l.execution_spec#>'{source,observed_at_ms}',
+          'source_expires_at_ms',l.execution_spec#>'{source,expires_at_ms}',
+          'ready_requested_at_ms',l.graph_task_observation#>'{read_provenance,ready_requested_at_ms}',
+          'ready_received_at_ms',l.graph_task_observation#>'{read_provenance,ready_received_at_ms}',
+          'ready_expires_at_ms',l.graph_task_observation#>'{read_provenance,ready_expires_at_ms}',
+          'context_requested_at_ms',l.graph_task_observation#>'{read_provenance,context_requested_at_ms}',
+          'context_received_at_ms',l.graph_task_observation#>'{read_provenance,context_received_at_ms}',
+          'context_expires_at_ms',l.graph_task_observation#>'{read_provenance,context_expires_at_ms}')
+        FROM profiled_v2_proposals p
+        JOIN profiled_launches l USING(attempt_id)
+        JOIN intelligence_decisions d ON d.decision_id=l.decision_id
+        WHERE p.node_id=$1 ORDER BY p.published_at_ms DESC LIMIT 2
+    "#).bind(case.env.env.node).fetch_all(&case.env.env.pool).await.unwrap();
+    for record in &mut clocks {
+        if let Some(fields) = record.as_object_mut() {
+            for value in fields.values_mut() {
+                if value.as_u64().is_none() {
+                    *value = Value::Null;
+                }
+            }
+        } else {
+            *record = Value::Null;
+        }
+    }
+    eprintln!("bounded original offer clocks: {}", json!(clocks));
     eprintln!(
         "bounded phase failure clocks (historical, no execution permission): {}",
         json!({"server_now_ms":chrono::Utc::now().timestamp_millis(),"availability":availability,"issued":issued})

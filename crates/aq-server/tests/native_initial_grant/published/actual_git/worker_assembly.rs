@@ -169,6 +169,7 @@ async fn run_worker(mode: Mode) {
     let observed = http_statuses.clone();
     let output_exchanges = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured_output = output_exchanges.clone();
+    let admission_clock = case.env.env.state.clock.clone();
     let mut app = aq_server::build_worker_router(case.env.env.state.clone());
     if execute_phase && !terminal {
         let routes = phase::execution_routes(case.env.env.state.clone());
@@ -182,11 +183,28 @@ async fn run_worker(mode: Mode) {
         move |request: axum::extract::Request, next: axum::middleware::Next| {
             let observed = observed.clone();
             let captured_output = captured_output.clone();
+            let admission_clock = admission_clock.clone();
             async move {
                 let path = request.uri().path().to_owned();
                 let started = std::time::Instant::now();
+                let request_started_ms = (admission_clock)().timestamp_millis();
                 let (request, output_upload) = phase_output::capture_upload_request(request).await;
                 let response = next.run(request).await;
+                if path == "/v1/worker/profiled-v2/accept" {
+                    let classification =
+                        response
+                            .extensions()
+                            .get::<aq_server::test_support::control_diagnostics::ConflictClass>();
+                    eprintln!(
+                        "bounded accept response: {}",
+                        json!({
+                            "request_started_at_ms":request_started_ms,
+                            "response_completed_at_ms":(admission_clock)().timestamp_millis(),
+                            "status":response.status().as_u16(),
+                            "conflict_class":classification
+                        })
+                    );
+                }
                 phase_output::record_upload(&captured_output, output_upload, response.status());
                 let mut values = observed.lock().unwrap();
                 if values.len() < 160 {

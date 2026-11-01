@@ -21,6 +21,8 @@ impl From<AppError> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        #[cfg(feature = "test-support")]
+        let classification = crate::test_support::control_diagnostics::classify(&self.0);
         let status = self.0.status();
         let code = match status {
             StatusCode::UNAUTHORIZED => FailureCode::AuthenticationRequired,
@@ -42,6 +44,12 @@ impl IntoResponse for Error {
         reply
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        // In-process test observation only. Extensions are never HTTP headers
+        // or body fields; the public failure remains deliberately redacted.
+        #[cfg(feature = "test-support")]
+        if let Some(classification) = classification {
+            reply.extensions_mut().insert(classification);
+        }
         reply
     }
 }
@@ -106,4 +114,35 @@ async fn prepare(
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     Ok(response)
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod diagnostic_tests {
+    use super::*;
+    use crate::test_support::control_diagnostics::ConflictClass;
+
+    #[tokio::test]
+    async fn diagnostic_extension_preserves_the_exact_redacted_wire_failure() {
+        let response = Error(AppError::Conflict(
+            "selection expired during admission locks".into(),
+        ))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.extensions().get::<ConflictClass>(),
+            Some(&ConflictClass::SelectionExpired)
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let expected = serde_json::to_vec(&ControlReply::Failure(Failure {
+            schema_version: 1,
+            code: FailureCode::Conflict,
+            operation_id: None,
+        }))
+        .unwrap();
+        assert_eq!(&bytes[..], expected);
+        assert!(!String::from_utf8_lossy(&bytes).contains("expired"));
+    }
 }

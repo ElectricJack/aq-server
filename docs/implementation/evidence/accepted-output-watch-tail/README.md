@@ -104,3 +104,32 @@ This distinct earlier refusal cannot verify or disprove the prior source-support
 disk diagnosis. No timer, profile or admission check was weakened, no retry followed,
 and no Codex/provider call, host execution, accepted output or production claim
 follows from this attempt. The shared build target was released after completion.
+
+
+## Source-only acceptance classification and original clocks
+
+The real control API deliberately erases internal errors into public generic
+failure codes, so reading an HTTP409 body cannot recover its branch. A narrow
+`test-support` response extension now exposes only a fixed `ConflictClass` enum
+inside the router; it adds no header/body field and does not change production
+builds. Exact known literals map to fixed categories; dynamic/unknown conflicts
+become `other_conflict`. No error string, credential or body is retained. Regression
+sources check unknown-message redaction and byte-identical public failure output.
+
+The fixture also records the original proposal publication/offer clocks,
+selection budget/node/project/source expiries, Graph read stamps, and local
+reservation/phase-accept intent/deadline fields. Selected SQL clock fields are
+reduced to unsigned integers or null before logging. No sealed timestamp or
+observation is rewritten. Compilation/tests for this increment are pending a
+separate explicit shared build lease; no further process case has run.
+
+Source inspection distinguishes the clocks: production already re-reads actual
+Graph/context, resolves selection again and obtains a real configured-source
+observation after external Git export. Source observations last30s. The retained
+selection budget has a separate2000ms freshness bound that first acceptance
+repeatedly fences. A30s preparation lease starts only after accepted publication.
+Therefore the earlier long preparation run does not itself establish why first
+acceptance refused. The new fixed classification and original clocks must identify
+that cause before any fixture boundary, build profile or performance change is
+proposed. No source renewal, fabricated observation, TTL or timeout relaxation
+is introduced by these diagnostics.
