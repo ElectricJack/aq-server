@@ -1,0 +1,82 @@
+{
+  "binding": {
+    "assignment_generation": 1,
+    "attempt_id": "00000000-0000-0000-0000-00000000000d",
+    "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+    "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+    "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+    "offer_id": "00000000-0000-0000-0000-00000000000f",
+    "schema_version": 1,
+    "session": {
+      "assignment_generation": 1,
+      "attempt_id": "00000000-0000-0000-0000-00000000000d",
+      "boot_id": "00000000-0000-0000-0000-00000000000c",
+      "kind": "remote",
+      "node_id": "00000000-0000-0000-0000-00000000000b",
+      "session_id": "00000000-0000-0000-0000-00000000000e"
+    }
+  },
+  "grant_id": "00000000-0000-0000-0000-000000000049",
+  "guardian_id": "00000000-0000-0000-0000-000000000046",
+  "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+  "journal_revision": 3,
+  "launch_id": "00000000-0000-0000-0000-000000000047",
+  "observation": {
+    "guardian": {
+      "intent": {
+        "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+        "launch_id": "00000000-0000-0000-0000-000000000047",
+        "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "session_id": "00000000-0000-0000-0000-00000000000e"
+        }
+      },
+      "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+      "nonce": "00000000-0000-0000-0000-00000000004f",
+      "pid_namespace": "pid:[4026532000]",
+      "process": {
+        "pid": 10,
+        "start_ticks": 100
+      }
+    },
+    "kernel_wait_echild": false,
+    "observed_boot_ms": 1500,
+    "pane": {
+      "pane": {
+        "pid": 12,
+        "start_ticks": 102
+      },
+      "pane_id": "%0",
+      "server": {
+        "pid": 11,
+        "start_ticks": 101
+      },
+      "session_name": "aq"
+    },
+    "permit_deadline_boot_ms": 30000,
+    "permit_sequence": 1,
+    "phase": "running",
+    "reaped_count": 0,
+    "root_status": null,
+    "stop_reason": null
+  },
+  "observation_digest": "6b910ffd66db5dec50df85c934108e993928b05719cc31aa8438b27e0cf14d0e",
+  "operation_id": "00000000-0000-0000-0000-000000000048",
+  "qualification": {
+    "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+    "id": "host-start-qualification",
+    "version": "1"
+  },
+  "reservation_id": "00000000-0000-0000-0000-00000000004a",
+  "runtime": {
+    "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+    "id": "qualified-worker-runtime",
+    "version": "1"
+  },
+  "schema_version": 1
+}

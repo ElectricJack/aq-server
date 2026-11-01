@@ -1,0 +1,733 @@
+{
+  "invalid": [
+    {
+      "case": "unknown_mutation_field",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+          "journal_revision": 4,
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": false,
+            "observed_boot_ms": 1500,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "running",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": null
+          },
+          "observation_digest": "315a9bfade52fbd471f8fa060b63ae5c955b3915d5776f706b151f93c1382a90",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 1,
+        "secret": "refuse"
+      },
+      "family": "started_request",
+      "requires_relational_validation": false
+    },
+    {
+      "case": "unknown_feature",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "future_feature",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+          "journal_revision": 4,
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": false,
+            "observed_boot_ms": 1500,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "running",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": null
+          },
+          "observation_digest": "315a9bfade52fbd471f8fa060b63ae5c955b3915d5776f706b151f93c1382a90",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      "family": "started_request",
+      "requires_relational_validation": false
+    },
+    {
+      "case": "changed_origin",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+          "journal_revision": 4,
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": false,
+            "observed_boot_ms": 1500,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "running",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": null
+          },
+          "observation_digest": "315a9bfade52fbd471f8fa060b63ae5c955b3915d5776f706b151f93c1382a90",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      "family": "started_request",
+      "requires_relational_validation": true
+    },
+    {
+      "case": "wrong_version",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+          "journal_revision": 4,
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": false,
+            "observed_boot_ms": 1500,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "running",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": null
+          },
+          "observation_digest": "315a9bfade52fbd471f8fa060b63ae5c955b3915d5776f706b151f93c1382a90",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 2
+      },
+      "family": "started_request",
+      "requires_relational_validation": false
+    },
+    {
+      "case": "wrong_runtime",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "journal_digest": "7d74e9f0f83c7aaadbfbf728c688aea32119438e173c513b0afdbfb31a9babd5",
+          "journal_revision": 4,
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": false,
+            "observed_boot_ms": 1500,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "running",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": null
+          },
+          "observation_digest": "315a9bfade52fbd471f8fa060b63ae5c955b3915d5776f706b151f93c1382a90",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "03cbe761a56ca7af8650a10ca9032a6cf98fda1b2541099e39bcd17af8dc3e9c",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      "family": "started_request",
+      "requires_relational_validation": true
+    },
+    {
+      "case": "false_echild",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "evidence": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "disposition": {
+              "grant_id": "00000000-0000-0000-0000-000000000384",
+              "kind": "stopped",
+              "stop_receipt_digest": "f9f1775685efd16f9088d83789e8ad8205d7da775742cd02b322fcbb62684bcd"
+            },
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "journal": {
+              "digest": "8c8fe68f8ad29a7606fb92d5663badff46bda5e5ac428a57a4a976f1be58fea5",
+              "kind": "recorded",
+              "revision": 5
+            },
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "reason": "execution_expiry",
+            "schema_version": 1,
+            "stop_operation_id": "00000000-0000-0000-0000-000000000091"
+          },
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": false,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "qualification": {
+            "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+            "id": "host-start-qualification",
+            "version": "1"
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "runtime": {
+            "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+            "id": "qualified-worker-runtime",
+            "version": "1"
+          },
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      "family": "stopped_request",
+      "requires_relational_validation": true
+    },
+    {
+      "case": "wrong_outer_receipt_digest",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "origin": {
+          "accepted_receipt_digest": "3b8d0c2e2cb431957d1a928eacf5e3e3f92fd010c528d24b69be1164b98efa7f",
+          "execution_receipt_digest": "3dd954e0286b87b18685f6b444819e734a0e42fea715507b2f8dd69b097d8ac6",
+          "kind": "phase_execution_v2"
+        },
+        "original": {
+          "authority_revision_at_record": 10,
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a30f3c088d39d25687eafc7d466190c55ade61537fb5537298e69f2efbc8e7e5",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "d91e0a4d90462ff119223c2145e34d67355134322a08a62ccfb3f06e37c3a516",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000384",
+          "operation_id": "00000000-0000-0000-0000-000000000048",
+          "recorded_at_ms": 999999,
+          "request_digest": "e5942503b565ab4cee67d731a4639e250591e8ba86cbf3eae569488df0919bba",
+          "schema_version": 1
+        },
+        "request_digest": "813f4b34ec2e77e4a2f721e5b370fd4a8fd8ae113681ed4827c297f409d10ba6",
+        "schema_version": 1
+      },
+      "family": "started_receipt",
+      "requires_relational_validation": true
+    },
+    {
+      "case": "omitted_nullable_identity",
+      "document": {
+        "negotiation": {
+          "contract": {
+            "digest": "292c30eba95b8dd6f1d9a7bf75775bc5d0f9ecb54644047747f9593d538c0a4a",
+            "id": "aq.phase-terminal.contract",
+            "version": "1"
+          },
+          "features": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "protocol": "aq.phase-terminal.v1"
+        },
+        "observed_at_ms": 999999,
+        "request_digest": "a828245f778301ead1782983754497c4941a794ff3544139af053b059fcc98fe",
+        "schema_version": 1
+      },
+      "family": "history_receipt",
+      "requires_relational_validation": false
+    }
+  ],
+  "profile": "all documents must refuse; schema cannot prove relational cases"
+}

@@ -1,0 +1,12 @@
+{
+  "admission": "0.1.9",
+  "max_bytes": 65536,
+  "protocol": "aq.phase-terminal.v1",
+  "publication": "aq-phase-terminal-protocol/0.1.0",
+  "required_features": [
+    "started_stopped_closure_v1",
+    "original_lease_no_renewal_v1"
+  ],
+  "schema_digest": "7086acc593079504cd066482ec7975823a23cf71d86197b19e336109d44cb56b",
+  "schema_version": 1
+}

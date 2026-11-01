@@ -1,0 +1,1754 @@
+{
+  "$comment": "Every wire document <=65536 bytes inclusive. Relational validation mandatory. Structural correlation is not authorization, kernel proof, live authority, renewal or resource release.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ClosureReceipt": {
+      "additionalProperties": false,
+      "description": "Historical acknowledgment only; never a delivery clock or permit.",
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Receipt3"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "Binds the complete wrapper as well as the original body's digest."
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "request_digest",
+        "original"
+      ],
+      "type": "object"
+    },
+    "ClosureRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Request3"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "original"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Disposition": {
+      "enum": [
+        "launch_closed_awaiting_settlement"
+      ],
+      "type": "string"
+    },
+    "DriverIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "guardian_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "host": {
+          "$ref": "#/$defs/LaunchIntent"
+        },
+        "journal": {
+          "$ref": "#/$defs/JournalCheckpoint"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "grant_id",
+        "guardian_id",
+        "reservation_id",
+        "host",
+        "journal"
+      ],
+      "type": "object"
+    },
+    "Evidence": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "suppressed",
+              "type": "string"
+            },
+            "record": {
+              "$ref": "#/$defs/SuppressionRecord"
+            },
+            "record_digest": {
+              "$ref": "#/$defs/Digest"
+            }
+          },
+          "required": [
+            "kind",
+            "record",
+            "record_digest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "driver_intent": {
+              "$ref": "#/$defs/DriverIntent"
+            },
+            "kind": {
+              "const": "host_stopped",
+              "type": "string"
+            },
+            "proof": {
+              "$ref": "#/$defs/HostStoppedProof2"
+            },
+            "proof_digest": {
+              "$ref": "#/$defs/Digest"
+            }
+          },
+          "required": [
+            "kind",
+            "driver_intent",
+            "proof",
+            "proof_digest"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Feature": {
+      "enum": [
+        "started_stopped_closure_v1",
+        "original_lease_no_renewal_v1"
+      ],
+      "type": "string"
+    },
+    "GuardianIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/LaunchIntent"
+        },
+        "machine_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "nonce": {
+          "description": "Physical guardian nonce allocated by aq-session-host after permission to\nlaunch. This is distinct from Request.guardian_id's pre-grant owner.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "pid_namespace": {
+          "$ref": "#/$defs/Label"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessEvidence"
+        }
+      },
+      "required": [
+        "intent",
+        "nonce",
+        "process",
+        "machine_boot_id",
+        "pid_namespace"
+      ],
+      "type": "object"
+    },
+    "HistoricalGrantIdentity": {
+      "additionalProperties": false,
+      "description": "Historical identity only, deliberately omitting delivery/remaining/local clock\nsamples. It cannot reconstruct an opaque worker execution observation.",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "execution_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "guardian_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "prepare_request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "prepared": {
+          "$ref": "#/$defs/JournalCheckpoint"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "versions": {
+          "$ref": "#/$defs/Versions"
+        }
+      },
+      "required": [
+        "origin",
+        "binding",
+        "grant_id",
+        "guardian_id",
+        "launch_id",
+        "reservation_id",
+        "runtime",
+        "qualification",
+        "prepared",
+        "execution_operation_id",
+        "prepare_request_digest",
+        "versions",
+        "execution_deadline_ms"
+      ],
+      "type": "object"
+    },
+    "HistoricalReadback": {
+      "description": "Exactly one retained historical acknowledgment, fetched under independent\ncurrent inspection authorization. No delivery or permission semantics.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "started",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/StartedReceipt"
+            }
+          },
+          "required": [
+            "kind",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "stopped",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/StoppedReceipt"
+            }
+          },
+          "required": [
+            "kind",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "closure",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/ClosureReceipt"
+            }
+          },
+          "required": [
+            "kind",
+            "receipt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HistoryReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoricalGrantIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Read snapshots may advance None to Some for the same lookup request.\nNull is never proof that a grant was not issued."
+        },
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "observed_at_ms": {
+          "description": "Server projection sample only; never delivery/live authority.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "request_digest",
+        "observed_at_ms",
+        "identity"
+      ],
+      "type": "object"
+    },
+    "HistoryRequest": {
+      "additionalProperties": false,
+      "description": "Lookup by keys known even when the first execution delivery was lost.",
+      "properties": {
+        "accepted_receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "prepare_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "operation_id",
+        "binding",
+        "accepted_receipt_digest",
+        "prepare_operation_id"
+      ],
+      "type": "object"
+    },
+    "HostStoppedProof": {
+      "additionalProperties": false,
+      "description": "Exact serialized public host StoppedProof shape, narrowed to the previously\nRunning case. A pre-start stop belongs to a separate no-start recovery path.",
+      "properties": {
+        "observation": {
+          "$ref": "#/$defs/StoppedObservation"
+        }
+      },
+      "required": [
+        "observation"
+      ],
+      "type": "object"
+    },
+    "HostStoppedProof2": {
+      "additionalProperties": false,
+      "properties": {
+        "observation": {
+          "$ref": "#/$defs/StoppedObservation2"
+        }
+      },
+      "required": [
+        "observation"
+      ],
+      "type": "object"
+    },
+    "JournalCheckpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "JournalEvidence": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "recorded",
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "revision",
+            "digest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unavailable",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/JournalUnavailable"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JournalUnavailable": {
+      "enum": [
+        "missing",
+        "unreadable",
+        "corrupt",
+        "guardian_unavailable"
+      ],
+      "type": "string"
+    },
+    "Label": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "LaunchBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "assignment_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "execution_spec_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "graph_access_profile_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "launch_manifest_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        }
+      },
+      "required": [
+        "session",
+        "schema_version",
+        "offer_id",
+        "attempt_id",
+        "assignment_generation",
+        "execution_spec_digest",
+        "launch_manifest_digest",
+        "graph_access_profile_digest"
+      ],
+      "type": "object"
+    },
+    "LaunchIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        }
+      },
+      "required": [
+        "launch_id",
+        "session",
+        "manifest_digest",
+        "configuration_digest"
+      ],
+      "type": "object"
+    },
+    "Negotiation": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "features": {
+          "const": [
+            "started_stopped_closure_v1",
+            "original_lease_no_renewal_v1"
+          ],
+          "items": {
+            "$ref": "#/$defs/Feature"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "protocol": {
+          "const": "aq.phase-terminal.v1",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "contract",
+        "features"
+      ],
+      "type": "object"
+    },
+    "NoLaunchReservation": {
+      "additionalProperties": false,
+      "properties": {
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reservation_journal_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "reservation_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "reservation_operation_id",
+        "reservation_journal_digest"
+      ],
+      "type": "object"
+    },
+    "Origin": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "execution_receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "kind": {
+          "$ref": "#/$defs/OriginKind"
+        }
+      },
+      "required": [
+        "kind",
+        "execution_receipt_digest",
+        "accepted_receipt_digest"
+      ],
+      "type": "object"
+    },
+    "OriginKind": {
+      "enum": [
+        "phase_execution_v2"
+      ],
+      "type": "string"
+    },
+    "PaneIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "pane": {
+          "$ref": "#/$defs/ProcessEvidence"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "server": {
+          "$ref": "#/$defs/ProcessEvidence"
+        },
+        "session_name": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "server",
+        "pane",
+        "pane_id",
+        "session_name"
+      ],
+      "type": "object"
+    },
+    "ProcessEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ticks": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid",
+        "start_ticks"
+      ],
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "description": "Immutable historical acknowledgment. It grants no execution, renews no\ndeadline and does not assert that the host is still running on replay.",
+      "properties": {
+        "authority_revision_at_record": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "recorded_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "binding",
+        "grant_id",
+        "request_digest",
+        "recorded_at_ms",
+        "authority_revision_at_record"
+      ],
+      "type": "object"
+    },
+    "Receipt2": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_revision_at_record": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "recorded_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "binding",
+        "grant_id",
+        "request_digest",
+        "recorded_at_ms",
+        "authority_revision_at_record"
+      ],
+      "type": "object"
+    },
+    "Receipt3": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_revision_at_record": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "disposition": {
+          "$ref": "#/$defs/Disposition"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "recorded_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "binding",
+        "grant_id",
+        "request_digest",
+        "recorded_at_ms",
+        "authority_revision_at_record",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "Request": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "guardian_id": {
+          "description": "Logical launch/reservation owner established before the grant.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "journal_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "journal_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "observation": {
+          "$ref": "#/$defs/RunningObservation"
+        },
+        "observation_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "operation_id": {
+          "description": "The original durable started operation, never a new ID on retry/renewal.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "binding",
+        "grant_id",
+        "guardian_id",
+        "launch_id",
+        "reservation_id",
+        "runtime",
+        "qualification",
+        "journal_revision",
+        "journal_digest",
+        "observation",
+        "observation_digest"
+      ],
+      "type": "object"
+    },
+    "Request2": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/WorkerStopEvidence"
+        },
+        "proof": {
+          "$ref": "#/$defs/HostStoppedProof"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "evidence",
+        "reservation_id",
+        "runtime",
+        "qualification",
+        "proof"
+      ],
+      "type": "object"
+    },
+    "Request3": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "guardian_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "journal": {
+          "$ref": "#/$defs/JournalCheckpoint"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "binding",
+        "grant_id",
+        "guardian_id",
+        "launch_id",
+        "reservation_id",
+        "runtime",
+        "qualification",
+        "journal",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "RunningObservation": {
+      "additionalProperties": false,
+      "description": "The exact public HostObservation JSON shape, restricted to a genuine live\nRunning snapshot. Unknown/starting/stopped reports cannot decode as this type.",
+      "properties": {
+        "guardian": {
+          "$ref": "#/$defs/GuardianIdentity"
+        },
+        "kernel_wait_echild": {
+          "type": "boolean"
+        },
+        "observed_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pane": {
+          "$ref": "#/$defs/PaneIdentity"
+        },
+        "permit_deadline_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit_sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/RunningPhase"
+        },
+        "reaped_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_status": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "guardian",
+        "phase",
+        "pane",
+        "permit_sequence",
+        "permit_deadline_boot_ms",
+        "observed_boot_ms",
+        "reaped_count",
+        "kernel_wait_echild"
+      ],
+      "type": "object"
+    },
+    "RunningPhase": {
+      "enum": [
+        "running"
+      ],
+      "type": "string"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "remote",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StartedReceipt": {
+      "additionalProperties": false,
+      "description": "Historical acknowledgment only; never a delivery clock or permit.",
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Receipt"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "Binds the complete wrapper as well as the original body's digest."
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "request_digest",
+        "original"
+      ],
+      "type": "object"
+    },
+    "StartedRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Request"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "original"
+      ],
+      "type": "object"
+    },
+    "StopDisposition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "grant_id": {
+              "description": "Last observed grant; None means durable reservation closed before\nobserving a grant, not a claim that the server never issued one.",
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "not_started",
+              "type": "string"
+            },
+            "reservation": {
+              "$ref": "#/$defs/NoLaunchReservation"
+            }
+          },
+          "required": [
+            "kind",
+            "reservation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "grant_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "stopped",
+              "type": "string"
+            },
+            "stop_receipt_digest": {
+              "$ref": "#/$defs/Digest"
+            }
+          },
+          "required": [
+            "kind",
+            "grant_id",
+            "stop_receipt_digest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "grant_id": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StopReason": {
+      "enum": [
+        "cancellation",
+        "execution_expiry",
+        "completed",
+        "failed",
+        "guardian_failure",
+        "reconciliation",
+        "preparation_aborted"
+      ],
+      "type": "string"
+    },
+    "StoppedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "guardian": {
+          "$ref": "#/$defs/GuardianIdentity"
+        },
+        "kernel_wait_echild": {
+          "type": "boolean"
+        },
+        "observed_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pane": {
+          "$ref": "#/$defs/PaneIdentity"
+        },
+        "permit_deadline_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit_sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/StoppedPhase"
+        },
+        "reaped_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_status": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "guardian",
+        "phase",
+        "pane",
+        "permit_sequence",
+        "permit_deadline_boot_ms",
+        "observed_boot_ms",
+        "reaped_count",
+        "kernel_wait_echild",
+        "root_status"
+      ],
+      "type": "object"
+    },
+    "StoppedObservation2": {
+      "additionalProperties": false,
+      "description": "Exact host JSON shape with legitimately absent pre-start identities. No\nplaceholder pane/root status or invented positive reap count is permitted.",
+      "properties": {
+        "guardian": {
+          "$ref": "#/$defs/GuardianIdentity"
+        },
+        "kernel_wait_echild": {
+          "type": "boolean"
+        },
+        "observed_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaneIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permit_deadline_boot_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit_sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/StoppedPhase"
+        },
+        "reaped_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root_status": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "guardian",
+        "phase",
+        "permit_sequence",
+        "permit_deadline_boot_ms",
+        "observed_boot_ms",
+        "reaped_count",
+        "kernel_wait_echild"
+      ],
+      "type": "object"
+    },
+    "StoppedPhase": {
+      "enum": [
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "StoppedReceipt": {
+      "additionalProperties": false,
+      "description": "Historical acknowledgment only; never a delivery clock or permit.",
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Receipt2"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "Binds the complete wrapper as well as the original body's digest."
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "request_digest",
+        "original"
+      ],
+      "type": "object"
+    },
+    "StoppedRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "negotiation": {
+          "$ref": "#/$defs/Negotiation"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "original": {
+          "$ref": "#/$defs/Request2"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "negotiation",
+        "origin",
+        "original"
+      ],
+      "type": "object"
+    },
+    "SuppressionRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "guardian_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "original_kernel_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "previous": {
+          "$ref": "#/$defs/JournalCheckpoint"
+        },
+        "recording_kernel_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "suppression_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "terminal_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "suppression_id",
+        "binding",
+        "grant_id",
+        "guardian_id",
+        "launch_id",
+        "reservation_id",
+        "original_kernel_boot_id",
+        "recording_kernel_boot_id",
+        "previous",
+        "terminal_revision"
+      ],
+      "type": "object"
+    },
+    "TerminalRequest": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "started",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/StartedRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "stopped",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/StoppedRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "closure",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/ClosureRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Versions": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grant_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "record_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "record_revision",
+        "authority_revision",
+        "grant_revision"
+      ],
+      "type": "object"
+    },
+    "WorkerStopEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "disposition": {
+          "$ref": "#/$defs/StopDisposition"
+        },
+        "guardian_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "journal": {
+          "$ref": "#/$defs/JournalEvidence"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stop_operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "binding",
+        "guardian_id",
+        "launch_id",
+        "stop_operation_id",
+        "journal",
+        "disposition",
+        "reason"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:aq:phase-terminal:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "closure_receipt": {
+      "$ref": "#/$defs/ClosureReceipt"
+    },
+    "closure_request": {
+      "$ref": "#/$defs/ClosureRequest"
+    },
+    "historical_readback": {
+      "$ref": "#/$defs/HistoricalReadback"
+    },
+    "history_receipt": {
+      "$ref": "#/$defs/HistoryReceipt"
+    },
+    "history_request": {
+      "$ref": "#/$defs/HistoryRequest"
+    },
+    "started_receipt": {
+      "$ref": "#/$defs/StartedReceipt"
+    },
+    "started_request": {
+      "$ref": "#/$defs/StartedRequest"
+    },
+    "stopped_receipt": {
+      "$ref": "#/$defs/StoppedReceipt"
+    },
+    "stopped_request": {
+      "$ref": "#/$defs/StoppedRequest"
+    },
+    "terminal_request": {
+      "$ref": "#/$defs/TerminalRequest"
+    }
+  },
+  "required": [
+    "started_request",
+    "stopped_request",
+    "closure_request",
+    "started_receipt",
+    "stopped_receipt",
+    "closure_receipt",
+    "historical_readback",
+    "terminal_request",
+    "history_request",
+    "history_receipt"
+  ],
+  "title": "Documents",
+  "type": "object"
+}

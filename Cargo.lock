@@ -216,6 +216,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-phase-terminal-protocol"
+version = "0.1.0"
+dependencies = [
+ "aq-admission",
+ "aq-session-protocol",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-playbook-host"
 version = "0.1.2"
 dependencies = [
