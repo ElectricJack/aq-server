@@ -416,6 +416,9 @@ impl Owner {
                             ..
                         }
                     );
+                    if stop {
+                        shared.catalog_supported.store(false, Ordering::Release);
+                    }
                     match envelope {
                         Envelope::Operation { request, reply } => {
                             let result = if stop {
