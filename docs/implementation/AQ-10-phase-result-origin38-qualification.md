@@ -47,6 +47,7 @@ made from them.
 | Existing legacy result compatibility |7/7 PASS,7.684s; target compile4.29s |
 | Reviewed fresh37→38 catalog/startup and drift cases |2/2 PASS,1.15s; libtest rebuild1m38s |
 | Affected strict Clippy, all features, lib + both test targets |PASS,26.83s |
+| Actual populated archive37→38 follow-up |1/1 PASS,0.71s; dedicated target compile1.88s, strict0.39s |
 | Affected Rust formatting |PASS,11files; `git diff --check` clean |
 
 The18 cases cover each nominal profile separately: actual record/exact replay/
@@ -131,3 +132,52 @@ The shared SERVER target was explicitly returned to Root after strict completion
 No executables, backups or source artifacts were deleted by this lane. Public
 phase Results coverage, agent-facing producer integration, B2/C and any canonical
 schema activation remain separate integration gates.
+
+
+## Populated archive37→38 follow-up
+
+The fresh-schema case above did not prove populated legacy result preservation.
+Root required this separate actual retained-data qualification before main38
+integration. The immutable `/tmp/aq-retained36-37-proof/before.dump` is a508147byte
+state36 archive with an actual legacy result and two actual retained PNG receipts,
+SHA256 `c3f6f2e310f64ec60214de4c74eb27fd17ddfa0dff04c6bd712bdc29f84ad93d`.
+It was restored only into a new explicitly owned private rehearsal database. The
+original database/archive/media roots were not changed. No media owner/runtime
+was activated and no upload occurred.
+
+`tests/result_origin_migration.rs` is ignored by default and requires an explicit
+owned-clone URL (restricted name prefix+UUID) and a new private0700 evidence
+directory. It uses the existing `test_support::migrate_profile` wrapper around the
+actual production migration/guard implementation. It applies37 if needed, then
+captures every original table through its exact captured37columns and performs
+real38 migration/startup validation. It does not stamp schema versions or bypass
+guards.
+
+Qualified preservation:
+
+- All116original table bags across910old columns, their original column
+  definitions and all5sequence states matched exactly.
+- Only the explicit format metadata change37→38 and additional migration38ledger
+  row were excluded from old-row bag comparison; both were independently checked.
+- The actual legacy report and its Recorded receipt were compared as raw byte
+  vectors before/after migration, as were both retained PNG receipts.
+- Every original result received exactly `legacy_prepare_v1` with NULL phase
+  pins/generated phase attempt. No receipt or source identity was relabeled.
+- Private before37/after38 manifests were byte-identical, SHA256
+  `70f4d499bfe6419548e87c43a5808844f8fda81071940719bf24afa91d72dbf3`.
+
+Actual pass:1case in0.71s after1.88s dedicated integration-target compile.
+Affected all-feature strict Clippy for lib+that target passed0.39s; formatting and
+`git diff --check` passed. The initial unit-target attempt took1m27s compile and
+caught a missing table alias in the new snapshot helper before capturing data or
+applying38; the already completed real36→37 migration was retained honestly. The
+helper was corrected and moved to its dedicated integration target, using the
+existing public test-support migration seam. No production code/DDL changed in
+this follow-up.
+
+Private0600 artifacts are under `/tmp/aq-result38-populated-proof`: `clone.json`,
+`before37.json`, `after38.json`, `proof.json`, `restore.log`,
+`first-alias-negative.log`, `test.log`, and `strict.log`. The owned clone remains
+available for Root inspection. Existing six-file/root identity evidence belongs
+to the earlier36→37 proof; this SQL-only follow-up deliberately did not touch
+those files. SERVER was explicitly returned to Root immediately after strict.
