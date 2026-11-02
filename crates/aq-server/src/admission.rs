@@ -119,7 +119,10 @@ pub fn classify(path: &str) -> Class {
     if path == "/api/notifications" || path.starts_with("/api/notifications/") {
         return Class::Notification;
     }
-    if path == "/v1/terminal-relay/poll" {
+    if matches!(
+        path,
+        "/v1/terminal-relay/poll" | "/v1/terminal-relay/output-poll"
+    ) {
         return Class::TerminalPoll;
     }
     if path == "/v1/terminal-relay/upload" {
@@ -271,5 +274,29 @@ pub async fn gate(
             &path,
             "request deadline exceeded; reconcile or retry the same operation",
         ),
+    }
+}
+
+#[cfg(test)]
+mod output_poll_tests {
+    use super::*;
+    #[test]
+    fn explicit_output_poll_shares_only_the_terminal_poll_admission_lane() {
+        assert!(matches!(
+            classify("/v1/terminal-relay/output-poll"),
+            Class::TerminalPoll
+        ));
+        assert!(matches!(
+            classify("/v1/terminal-relay/poll"),
+            Class::TerminalPoll
+        ));
+        assert!(matches!(
+            classify("/v1/terminal-relay/control-upload"),
+            Class::TerminalInteractive
+        ));
+        assert!(matches!(
+            classify("/v1/terminal-relay/upload"),
+            Class::TerminalOutput
+        ));
     }
 }

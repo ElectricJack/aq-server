@@ -245,24 +245,66 @@ pub async fn poll(
             ));
         }
     }
-    let first = poll_once(&state, node, r).await?;
+    let first = poll_once(&state, node, r, PollMode::Full).await?;
     if !first.effects.is_empty() || r.hold_ms == 0 {
         return Ok(first);
     }
     // No SQL connection or authority lock survives this wait.
     slot.wait(r.hold_ms).await;
-    poll_once(&state, node, r).await
+    poll_once(&state, node, r, PollMode::Full).await
+}
+/// Explicit output subscription delivery. Activity hints on the full poll keep
+/// their original meaning; this route cannot claim or execute control effects.
+pub async fn output_poll(
+    state: &AppState,
+    node: &AuthenticatedNode,
+    r: &draft::RelayPoll,
+) -> Result<draft::Envelope> {
+    r.validate()
+        .map_err(|_| AppError::BadRequest("invalid terminal output poll".into()))?;
+    if r.hold_ms != 0 || r.active_controllers != 0 {
+        return Err(AppError::BadRequest(
+            "terminal output poll requires zero hold and controllers".into(),
+        ));
+    }
+    let state = state.terminal_view();
+    let config = configured(&state)?;
+    let _slot = config.runtime.poll(node.id())?;
+    poll_once(&state, node, r, PollMode::Output).await
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PollMode {
+    Full,
+    Output,
 }
 async fn poll_once(
     state: &AppState,
     node: &AuthenticatedNode,
     r: &draft::RelayPoll,
+    mode: PollMode,
 ) -> Result<draft::Envelope> {
     use sqlx::Row;
     let config = configured(state)?;
     let mut initial = super::persistence::begin(state).await?;
     current_peer(state, &mut initial, node, &r.peer).await?;
-    let rows=sqlx::query("SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND o.outbox_id>$2 AND o.kind NOT IN('input','epoch_input') AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64").bind(node.id()).bind(dbtime(r.cursor)?).bind(dbtime(now(state))?).bind(remote_boot(&r.peer)?).fetch_all(&mut *initial).await.map_err(|_|AppError::Internal)?;
+    // Filter before LIMIT and cursor calculation: unrelated control entries
+    // cannot consume an output page or advance its transport watermark.
+    let query = match mode {
+        PollMode::Full => {
+            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND o.outbox_id>$2 AND o.kind NOT IN('input','epoch_input') AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
+        }
+        PollMode::Output => {
+            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND o.outbox_id>$2 AND o.kind='watch' AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
+        }
+    };
+    let rows = sqlx::query(query)
+        .bind(node.id())
+        .bind(dbtime(r.cursor)?)
+        .bind(dbtime(now(state))?)
+        .bind(remote_boot(&r.peer)?)
+        .fetch_all(&mut *initial)
+        .await
+        .map_err(|_| AppError::Internal)?;
     let mut grouped = BTreeMap::<Uuid, (TerminalIdentity, Vec<i64>)>::new();
     let mut cursor = r.cursor;
     for row in rows {
@@ -333,6 +375,9 @@ async fn poll_once(
             let effect: draft::Effect =
                 serde_json::from_slice(&bytes).map_err(|_| AppError::Internal)?;
             effect.validate().map_err(|_| AppError::Internal)?;
+            if mode == PollMode::Output && !matches!(effect, draft::Effect::Watch(_)) {
+                return Err(AppError::Internal);
+            }
             if effect.terminal() != t
                 || !r.peer.matches(t)
                 || matches!(
@@ -374,6 +419,11 @@ async fn poll_once(
         let loaded = load(state, &mut tx, t, &view).await?;
         require_mode(&loaded.ledger, &r.capability)?;
         if loaded.runtime_id != config.runtime_id {
+            if mode == PollMode::Output {
+                return Err(AppError::IdentityUnavailable(
+                    "terminal output subscription requires current runtime".into(),
+                ));
+            }
             let mut journal = SqlJournal {
                 state,
                 tx: Some(tx),
@@ -422,7 +472,8 @@ async fn poll_once(
     }
     // Dispatch at most one canonical FIFO input per poll, with fresh current
     // role/ACL and TerminalActive checks. Projection rows are only candidate hints.
-    if effects.len() < 64
+    if mode == PollMode::Full
+        && effects.len() < 64
         && let Some(effect) = dispatch_next(state, node, r).await?
     {
         effects.push(effect);

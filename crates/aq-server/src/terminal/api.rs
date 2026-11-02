@@ -67,6 +67,7 @@ pub fn worker_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/terminal-relay/register", post(register))
         .route("/v1/terminal-relay/poll", post(poll))
+        .route("/v1/terminal-relay/output-poll", post(output_poll))
         .route(
             "/v1/terminal-relay/control-upload",
             post(control_upload).layer(DefaultBodyLimit::max(262144)),
@@ -126,6 +127,23 @@ async fn poll(
     .map_err(|_| AppError::IdentityUnavailable("terminal poll deadline exceeded".into()))??;
     Ok(Json(value))
 }
+async fn output_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    SafeJson(request): SafeJson<aq_terminal_relay::draft::RelayPoll>,
+) -> Result<Json<aq_terminal_relay::draft::Envelope>> {
+    let node = super::peer::authenticate(&state, &headers).await?;
+    let value = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        super::peer::output_poll(&state, &node, &request),
+    )
+    .await
+    .map_err(|_| {
+        AppError::IdentityUnavailable("terminal output poll deadline exceeded".into())
+    })??;
+    Ok(Json(value))
+}
+
 async fn upload(
     State(state): State<AppState>,
     headers: HeaderMap,
