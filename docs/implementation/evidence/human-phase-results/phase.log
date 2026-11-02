@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-phase-human-results-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 46.71s
+     Running tests/phase_results.rs (/tmp/aq-native-union-target/debug/deps/phase_results-d9088aa29969e0d3)
+
+running 6 tests
+test frozen::human_metadata::opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait ... ok
+test frozen::human_metadata::opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only ... ok
+test frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin ... ok
+test refresh::human_metadata::opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait ... ok
+test refresh::human_metadata::opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only ... ok
+test refresh::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 24.62s
+

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "status": "isolated_qualified_not_promoted",
+  "base": "cd64196",
+  "source": "451e51a29c42645d7ccda97dc2dfc5b11a61dc75",
+  "earlier_source": "d1b6e268cc2a594e117cbe7585590ffa840f7898",
+  "source_sha256": {
+    "crates/aq-server/src/profiled_execution/human_results.rs": "8bf28c1864a99dea41ca1b94ae9828af2908c0d928115ecffa93992c85d1f143",
+    "crates/aq-server/tests/phase_results.rs": "d876bdaad0907f722cc0357803e6b149b365fad48ab94d49367172c026f5c667",
+    "crates/aq-server/tests/phase_results/human_results.rs": "3007397e6a17152e39dd9a7f294883d742391e4b215d00962fed1aee470fca48",
+    "crates/aq-server/tests/profiled_results/human_results.rs": "a97f9c146e7fa3bea2be5f0b6b1293e4a754ab73954f5a1023d52bf7b9b04eac"
+  },
+  "profile": {
+    "query": "profile=recorded_native_v2",
+    "coverage": "recorded_native_v2",
+    "origins": [
+      "legacy_prepare_v1",
+      "phase_execution_v2",
+      "phase_refresh_execution_v1"
+    ],
+    "default_v1_coverage": "recorded_legacy_native_only",
+    "default_v1_origin_omitted": true,
+    "v2_identity_fence": "full_User_and_xmin_ActorPin_after_common_B1_locks"
+  },
+  "environment": {
+    "database": "existing loopback test PostgreSQL55432, per-test existing fresh UUID TestDb guard",
+    "target": "/tmp/aq-native-union-target",
+    "jobs": 2,
+    "offline": true,
+    "dev_debug": 0,
+    "test_debug": 0,
+    "incremental": false,
+    "free_bytes_before_compile": 11779600384,
+    "free_bytes_before_legacy": 11568873472,
+    "extra_executable_pins_or_copies": false
+  },
+  "checks": [
+    {
+      "name": "earlier_pre_identity_fix",
+      "command": "cargo test --offline -p aq-server --test phase_results human_metadata -- --test-threads=1",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 18,
+      "test_seconds": 18.32,
+      "compile_reported": "1m09s",
+      "log": "earlier-functional.log",
+      "final_identity_qualification": false
+    },
+    {
+      "name": "final_phase",
+      "command": "cargo test --offline -p aq-server --test phase_results human_metadata -- --test-threads=1",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 18,
+      "test_seconds": 24.62,
+      "compile_seconds": 46.71,
+      "log": "phase.log"
+    },
+    {
+      "name": "legacy",
+      "command": "cargo test --offline -p aq-server --test profiled_results human_results:: -- --test-threads=1",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 47,
+      "test_seconds": 1.75,
+      "compile_seconds": 5.09,
+      "log": "legacy.log"
+    },
+    {
+      "name": "affected_strict",
+      "command": "cargo clippy --offline -p aq-server --test phase_results --test profiled_results -- -D warnings",
+      "exit_code": 0,
+      "reported_seconds": 39.09,
+      "log": "strict.log"
+    }
+  ],
+  "qualified": [
+    "Actual Frozen/Refresh owner list/detail/source associations/head/cursor",
+    "Default v1 exclusion/fieldset and normalized legacy byte compatibility",
+    "Unknown query/profile, foreign project, stale revision and current Viewer refusal",
+    "Corrupt nominal qualification409 and foreign stored origin500",
+    "Real common Node-lock wait, Owner rebind/ABA restoration, stale403/fresh200, unchanged authority"
+  ],
+  "independent_source_review": {
+    "reviewer": "Decisions owner",
+    "accepted_source": "451e51a29c42645d7ccda97dc2dfc5b11a61dc75"
+  },
+  "limits": [
+    "Actual SQL/router tests use synthetic proof/source/runtime fixtures, not physical harness/provider evidence",
+    "Source/effect IDs are references, not verification/retention/settlement",
+    "Legacy media unchanged; phase media unavailable",
+    "No UI/capability/new schema/owner/canonical/Graph completion changes",
+    "Default v1 inherited UUID/role identity behavior unchanged, not full-principal race protection",
+    "Isolated pending separate actual execution proof/integration review; full18phase suite not rerun"
+  ]
+}

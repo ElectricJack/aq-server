@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-phase-human-results-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 5.09s
+     Running tests/profiled_results.rs (/tmp/aq-native-union-target/debug/deps/profiled_results-bc3baa115283f78e)
+
+running 2 tests
+test human_results::human_metadata_projects_exact_revisions_corrections_and_bounded_pages ... ok
+test human_results::stopped_without_report_is_empty_and_current_viewer_cannot_read_results ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 1.75s
+

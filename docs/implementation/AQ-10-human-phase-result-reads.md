@@ -2,8 +2,8 @@
 
 Base: `cd64196`. This bounded API slice reads existing qualified B1 records;
 it creates no report, proof, acceptance, completion, media grant or new SQL owner.
-The implementation remains isolated pending focused qualification and actual
-execution integration review.
+The implementation remains isolated after focused qualification and independent
+source review. Actual execution integration and Root promotion remain separate.
 
 The existing `GET /api/human/results` list and exact revision route currently
 filter/refuse phase origins even though `results::load_locked` verifies actual
@@ -84,3 +84,30 @@ affected strict checks under an assigned lease, not the full phase pipeline.
 
 No canonical schema, service, database, dashboard bundle or project is changed.
 Actual provider/physical execution and phase media remain separately qualified.
+
+## Qualified isolated candidate
+
+Final product/test source `451e51a29c42645d7ccda97dc2dfc5b11a61dc75` passed six
+focused phase SQL/router cases in **24.62s** (18 unrelated phase cases filtered)
+and two legacy human-result cases in **1.75s** (47 unrelated cases filtered).
+Their affected test compilation took 46.71s and 5.09s respectively. Strict clippy
+for those two targets passed in 39.09s. Earlier pre-identity-fix source `d1b6e26`
+passed the four functional cases in 18.32s; that log is retained as an earlier
+increment, not final identity qualification.
+
+Independent source review accepted actual historical origin dispatch, default
+wire/filter compatibility, source-reference meanings, unchanged legacy-only
+media and the final full-principal fix. The two new actual Node-lock barrier
+vectors rebind then restore the same Owner fields before allowing B1 reads to
+continue: the stale request returns 403 and a fresh request 200, with authority
+invariants unchanged. Malformed nominal qualification returns 409; relabeling a
+stored origin to the other phase family returns 500 rather than a successful or
+empty read. Legacy v2 metadata becomes byte-equivalent to default v1 after
+removing only the opt-in origin and restoring its coverage discriminator.
+
+[Machine qualification and source hashes](evidence/human-phase-results/qualification.json)
+and [retained logs](evidence/human-phase-results/README.md) preserve the exact
+commands, counts and limits. These are actual disposable SQL/router owners with
+explicitly synthetic proof/source/runtime fixtures. No actual Codex, provider,
+Graph completion, canonical service, dashboard bundle or phase media was run or
+changed in this qualification. No full 18-case phase suite was rerun.
