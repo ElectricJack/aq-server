@@ -336,3 +336,35 @@ fn normative_schema_contract_and_facts_are_exact_and_never_claim_owner_authentic
             .contains("no authentication")
     );
 }
+
+#[test]
+fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
+    let c = case();
+    let mut policy = c.proposal.policy.clone();
+    policy.maximum_execution_lease_ms = 120000;
+    assert!(policy.validate().is_ok());
+    policy.maximum_execution_lease_ms += 1;
+    assert!(
+        policy.validate().is_err(),
+        "old policy2 keeps its exact two-minute bound"
+    );
+    policy.schema_version = 3;
+    policy.maximum_execution_lease_ms = 3_600_000;
+    assert!(policy.validate().is_ok());
+    let mut manifest = c.proposal.original.offered.offer.manifest.clone();
+    assert!(policy.validate_for_manifest(&manifest).is_err());
+    manifest.terminal.input_enabled = true;
+    manifest.harness.harness = aq_session_protocol::Text::new("codex").unwrap();
+    manifest.harness.cli_version = aq_session_protocol::Text::new("0.166.0").unwrap();
+    assert!(
+        policy.validate_for_manifest(&manifest).is_err(),
+        "input flag alone is not this factory"
+    );
+    manifest.harness.adapter.id =
+        aq_session_protocol::Text::new("aq.codex-result-local-adapter").unwrap();
+    manifest.harness.adapter.version = aq_session_protocol::Text::new("1").unwrap();
+    // Correlation only; the actual server checks the whole installed definition.
+    assert!(policy.validate_for_manifest(&manifest).is_ok());
+    policy.maximum_execution_lease_ms += 1;
+    assert!(policy.validate_for_manifest(&manifest).is_err());
+}

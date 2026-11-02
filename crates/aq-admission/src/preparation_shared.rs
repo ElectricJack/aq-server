@@ -38,6 +38,7 @@ use std::collections::BTreeSet;
 use transport::{Accept, NoLaunchReservation, Prepare, WorkerIdentity};
 pub const MAX_BYTES: usize = 131072;
 pub const MAX_PREPARATION_MS: u64 = 120000;
+pub const MAX_INTERACTIVE_EXECUTION_MS: u64 = 3_600_000;
 fn same(a: &impl Serialize, b: &impl Serialize) -> Result<bool> {
     Ok(
         serde_json::to_value(a).map_err(|_| Invalid("phase encoding"))?
@@ -131,12 +132,26 @@ pub struct PhasePolicy {
 impl PhasePolicy {
     pub fn validate(&self) -> Result<()> {
         require(
-            self.schema_version == 2
+            ((self.schema_version == 2 && (1..=120000).contains(&self.maximum_execution_lease_ms))
+                || (self.schema_version == 3 && (1..=MAX_INTERACTIVE_EXECUTION_MS).contains(&self.maximum_execution_lease_ms)))
                 && (1..=MAX_PREPARATION_MS).contains(&self.maximum_preparation_ms)
-                && (1..=120000).contains(&self.maximum_execution_lease_ms)
                 && (1..=30000).contains(&self.maximum_observation_ms),
             "phase policy bounds",
         )
+    }
+    /// Policy3 is an explicit long interactive selection, never a wider
+    /// interpretation of an old policy2. Data validation is not installation.
+    pub fn validate_for_manifest(&self, manifest: &aq_session_protocol::LaunchManifest) -> Result<()> {
+        self.validate()?;
+        if self.schema_version == 3 {
+            require(manifest.terminal.input_enabled
+                && manifest.harness.harness.as_str() == "codex"
+                && manifest.harness.cli_version.as_str() == "0.166.0"
+                && manifest.harness.adapter.id.as_str() == "aq.codex-result-local-adapter"
+                && manifest.harness.adapter.version.as_str() == "1",
+                "long execution requires explicit interactive Codex manifest")?;
+        }
+        Ok(())
     }
     pub fn digest(&self) -> Result<Digest> {
         self.validate()?;
@@ -219,6 +234,7 @@ impl Proposal {
         )?;
         self.choice.digest()?;
         let m = &self.original.offered.offer.manifest;
+        self.policy.validate_for_manifest(m)?;
         require(
             self.choice.permission_digest == Digest::of(&bytes(&m.permissions)?),
             "phase original permission digest",

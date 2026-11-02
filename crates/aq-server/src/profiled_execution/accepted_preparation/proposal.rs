@@ -150,6 +150,14 @@ pub(super) async fn build_locked(
         owners: policy.owners,
     };
     proposal.validate().map_err(|_| refused())?;
+    if proposal.policy.schema_version == 3
+        && !super::super::producer::interactive_adapter(
+            state,
+            &proposal.original.offered.offer.manifest.harness.adapter,
+        )?
+    {
+        return Err(refused());
+    }
     if now(state)? >= proposal.original.offered.clock.expires_at_ms {
         return Err(refused());
     }

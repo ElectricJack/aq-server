@@ -93,6 +93,27 @@ pub(super) fn from_definitions(
         interactive: opt.profile == INTERACTIVE_PROFILE,
     }))
 }
+pub(super) fn interactive_runtime(
+    runtime: &ArtifactRef,
+    definitions: &[Definition],
+) -> Result<bool, AppError> {
+    #[derive(Deserialize)]
+    struct RuntimePin {
+        runtime: ArtifactRef,
+        profile: String,
+    }
+    for definition in definitions {
+        if definition.artifact().id.as_str() != ADAPTER_ID {
+            continue;
+        }
+        let pin: RuntimePin = serde_json::from_str(definition.body()).map_err(|_| refused())?;
+        if pin.runtime == *runtime && pin.profile == INTERACTIVE_PROFILE {
+            return Ok(from_definitions(definition.artifact(), definitions)?
+                .is_some_and(|value| value.interactive));
+        }
+    }
+    Ok(false)
+}
 pub(super) fn for_adapter(
     state: &AppState,
     adapter: &ArtifactRef,
@@ -223,6 +244,27 @@ mod tests {
             let (adapter, defs) = definitions(value.clone());
             assert!(from_definitions(&adapter, &defs).is_err());
         }
+    }
+    #[test]
+    fn long_session_factory_uses_actual_interactive_definition_and_runtime() {
+        let runtime = reference("runtime-code");
+        let (_, defs) = definitions(body());
+        assert!(!interactive_runtime(&runtime, &defs).unwrap());
+        let mut value = body();
+        value["profile"] = json!(INTERACTIVE_PROFILE);
+        value["recipe"] = json!(
+            public_reference(
+                "aq.codex-interactive-result-local-recipe",
+                INTERACTIVE_RECIPE_DIGEST,
+            )
+            .unwrap()
+        );
+        let (_, defs) = definitions(value.clone());
+        assert!(interactive_runtime(&runtime, &defs).unwrap());
+        assert!(!interactive_runtime(&reference("other-runtime"), &defs).unwrap());
+        value["recipe"] = json!(reference("unqualified-recipe"));
+        let (_, defs) = definitions(value);
+        assert!(interactive_runtime(&runtime, &defs).is_err());
     }
     #[test]
     fn unsupported_profile_or_contract_and_missing_or_changed_public_bytes_refuse() {

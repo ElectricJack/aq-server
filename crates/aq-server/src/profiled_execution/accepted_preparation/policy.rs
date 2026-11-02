@@ -81,6 +81,12 @@ pub fn validate_catalog(config: &super::super::config::ProfiledConfig) -> Result
         let p: PolicyDefinition =
             serde_json::from_str(d.body()).map_err(|_| "phase policy body")?;
         p.validate()?;
+        if p.phase.schema_version == 3
+            && !super::super::producer::interactive_runtime(config, &p.runtime)
+                .map_err(|_| "interactive phase factory unavailable")?
+        {
+            return Err("long phase policy requires actual interactive factory".into());
+        }
         if !config
             .qualified_runtimes
             .iter()
