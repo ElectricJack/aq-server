@@ -365,6 +365,11 @@ fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
     manifest.harness.adapter.version = aq_session_protocol::Text::new("1").unwrap();
     // Correlation only; the actual server checks the whole installed definition.
     assert!(policy.validate_for_manifest(&manifest).is_ok());
+    manifest.harness.adapter.version = aq_session_protocol::Text::new("2").unwrap();
+    assert!(
+        policy.validate_for_manifest(&manifest).is_ok(),
+        "definition revision is not schema/recipe version"
+    );
     policy.maximum_execution_lease_ms += 1;
     assert!(policy.validate_for_manifest(&manifest).is_err());
 }

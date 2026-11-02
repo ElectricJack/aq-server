@@ -147,8 +147,7 @@ impl PhasePolicy {
             require(manifest.terminal.input_enabled
                 && manifest.harness.harness.as_str() == "codex"
                 && manifest.harness.cli_version.as_str() == "0.166.0"
-                && manifest.harness.adapter.id.as_str() == "aq.codex-result-local-adapter"
-                && manifest.harness.adapter.version.as_str() == "1",
+                && manifest.harness.adapter.id.as_str() == "aq.codex-result-local-adapter",
                 "long execution requires explicit interactive Codex manifest")?;
         }
         Ok(())
