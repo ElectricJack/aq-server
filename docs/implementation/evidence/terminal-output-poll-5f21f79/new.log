@@ -1,0 +1,8 @@
+
+running 3 tests
+test output_poll_filters_revoked_and_expired_watches_without_repair ... ok
+test output_poll_refuses_non_output_modes_stale_credentials_boot_and_runtime_without_control_recovery ... ok
+test output_poll_returns_watch_only_without_claiming_input_or_control_and_full_poll_is_unchanged ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+

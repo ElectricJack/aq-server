@@ -1,0 +1,57 @@
+{
+  "source_commit": "5f21f7911bb4fb7ed39322f3b11392e972e4ea0f",
+  "source_base": "f9a45c3",
+  "recorded_utc": "2026-11-02T06:00:40.369876+00:00",
+  "source_sha256": {
+    "crates/aq-server/src/admission.rs": "03cfc2b76c1999a1c8bbd3743d94ab718d4dbd425c5e1ad70cddd28ad6db5db3",
+    "crates/aq-server/src/terminal/api.rs": "5bbeda96ce2dacfa283dcda6776f95ba757f6837da65c9da750b89dbc017d19d",
+    "crates/aq-server/src/terminal/peer.rs": "bafc7eea3715ae32da02e922df8d9ca7cb7c9878d2d1fcb7ac8a7c00808ce87b",
+    "crates/aq-server/tests/terminal_output_poll.rs": "e2d68cf3575475bf3865c26556138104fbd3acaa42edf96bc92926cd30a00a7a"
+  },
+  "tested_binary_sha256": {
+    "aq_server-df42f820fd8688bc": "f131be3103a073c5c7a1cd991513362c6f880e70d23d555aa28b465f006dd8d6",
+    "terminal_output_poll-0a059058ee3a4446": "59f6bec153db3842d9f7c3636bfefdeda2fe22cc55a5f9a122b2f5acaafc6ac6",
+    "terminal_store-74035dddd49cfe26": "e2cdec5a44f62353ee563505ff1c97296d21f0edb17f90b923f8d3b4fbf3bad5"
+  },
+  "result": "pass",
+  "unique_focused_cases": 10,
+  "new_route_cases": 3,
+  "admission_classifier_cases": 1,
+  "selected_old_cases": 6,
+  "compile_cargo_seconds": 116,
+  "new_route_seconds": 2.87,
+  "classifier_seconds": 0.0,
+  "selected_old_seconds": 5.674,
+  "strict_cargo_seconds": 36.93,
+  "build_environment": {
+    "target_dir": "/tmp/aq-native-union-target",
+    "jobs": 2,
+    "debug": 0,
+    "incremental": 0,
+    "offline": true
+  },
+  "commands": {
+    "compile": "cargo test -p aq-server --lib --test terminal_output_poll --test terminal_store --offline --no-run",
+    "new": "terminal_output_poll-0a059058ee3a4446 --test-threads=1 --nocapture",
+    "unit": "aq_server-df42f820fd8688bc admission::output_poll_tests --nocapture",
+    "old": "terminal_store-74035dddd49cfe26 EACH_FILTER --exact --nocapture",
+    "strict": "cargo clippy -p aq-server --lib --test terminal_output_poll --test terminal_store --all-features --offline -- -D warnings"
+  },
+  "selected_old_filters": [
+    "lost_poll_response_never_redispatches_input_and_expiry_is_durable_unknown",
+    "viewer_inspection_is_exact_revocable_historical_and_never_control_authority",
+    "actual_http_separates_listeners_csrf_identity_binding_and_sensitive_errors",
+    "owner_replacement_recovers_lost_response_unknown_before_any_new_input",
+    "observed_held_poll_releases_all_sql_and_common_locks_then_rechecks_revocation_on_wake",
+    "corrupted_plaintext_outbox_claim_and_kind_cannot_redispatch_protected_input"
+  ],
+  "database_scope": "Existing disposable TCP127.0.0.1:55432 admin fixture; each TestDb creates and drops its own named database. No service startup, shutdown, canonical or private-UDS access.",
+  "limits": [
+    "Actual protected SQL/relay owners over synthetic running-execution metadata.",
+    "No input injection, native process, physical terminal or provider qualification.",
+    "No worker output-only publisher composition or live dashboard claim.",
+    "Watch filtering before LIMIT and watermark is additionally inspected in source; no control-flood capacity claim.",
+    "Old full poll activity hints, dispatch and recovery remain unchanged.",
+    "No schema, protocol DTO, migration or canonical rollout."
+  ]
+}
