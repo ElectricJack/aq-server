@@ -7,7 +7,10 @@ use axum::{
 use tower::ServiceExt;
 
 async fn get(f: &terminal::Prepared, path: &str) -> (StatusCode, Value) {
-    let response = aq_server::build_admin_router(f.c.env.env.state.clone())
+    get_state(f.c.env.env.state.clone(), path).await
+}
+async fn get_state(state: aq_server::AppState, path: &str) -> (StatusCode, Value) {
+    let response = aq_server::build_admin_router(state)
         .oneshot(
             Request::builder()
                 .uri(path)
@@ -39,6 +42,69 @@ fn detail(report: &ResultReport, revision: &str, profile: bool) -> String {
             ""
         }
     )
+}
+#[tokio::test]
+async fn opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait() {
+    let (f, report) = Box::pin(ready()).await;
+    let auth = terminal::auth(&f).await;
+    let receipt = results::record(&f.c.env.env.state, &auth, &report)
+        .await
+        .unwrap();
+    let pool = &f.c.env.env.pool;
+    let (actor, email, issuer, subject): (Uuid, String, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT id,email,issuer,subject FROM users WHERE email='owner@localhost'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let before = invariant(&f).await;
+    let mut held = pool.begin().await.unwrap();
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(report.identity.node_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let state = f.c.env.env.state.clone();
+    let path = detail(&report, receipt.report_digest.as_str(), true);
+    let request_path = path.clone();
+    let reading = tokio::spawn(async move { get_state(state, &request_path).await });
+    // The real common-owner lock wait proves HTTP authentication and the initial
+    // full-principal observation happened before identity changes.
+    tokio::time::timeout(std::time::Duration::from_millis(750), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))").bind(blocker).fetch_one(pool).await.unwrap();
+            if blocked { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }).await.unwrap();
+    // Rebind then restore identical visible fields: xmin must fence this ABA,
+    // even though role remains Owner and the final identity looks unchanged.
+    sqlx::query(
+        "UPDATE users SET email='rebound@localhost',issuer='rebound',subject='foreign' WHERE id=$1",
+    )
+    .bind(actor)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE users SET email=$2,issuer=$3,subject=$4 WHERE id=$1")
+        .bind(actor)
+        .bind(email)
+        .bind(issuer)
+        .bind(subject)
+        .execute(pool)
+        .await
+        .unwrap();
+    held.commit().await.unwrap();
+    assert_eq!(reading.await.unwrap().0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&f, &path).await.0,
+        StatusCode::OK,
+        "fresh principal can read the same historical result"
+    );
+    assert_eq!(before, invariant(&f).await);
 }
 #[tokio::test]
 async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only() {

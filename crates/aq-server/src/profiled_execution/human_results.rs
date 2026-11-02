@@ -1,6 +1,7 @@
 //! Owner-authorized metadata over exact retained native result claims.
 //! No claim, stop receipt or process outcome establishes acceptance/settlement.
 use crate::{AppState, authz::RequireOwner, error::AppError};
+use crate::{profiled_execution::settlement::actor::ActorPin, store::User};
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
@@ -121,6 +122,34 @@ pub async fn read(
     page: &Page,
     exact: Option<(Uuid, &str)>,
 ) -> Result<ResultPage> {
+    if page.profile.is_some() {
+        return Err(AppError::Forbidden(
+            "native v2 result reads require the authenticated full principal".into(),
+        ));
+    }
+    read_inner(state, actor, page, exact, None).await
+}
+/// The new profile retains the exact HTTP principal across common B1 lock waits.
+/// The old UUID-only wrapper remains legacy-only for existing internal callers.
+pub async fn read_as(
+    state: &AppState,
+    actor: &User,
+    page: &Page,
+    exact: Option<(Uuid, &str)>,
+) -> Result<ResultPage> {
+    if page.profile.is_none() {
+        return read(state, actor.id, page, exact).await;
+    }
+    let pin = ActorPin::observe(state, actor).await?;
+    read_inner(state, actor.id, page, exact, Some(pin)).await
+}
+async fn read_inner(
+    state: &AppState,
+    actor: Uuid,
+    page: &Page,
+    exact: Option<(Uuid, &str)>,
+    pin: Option<ActorPin>,
+) -> Result<ResultPage> {
     let limit = page.limit.unwrap_or(10);
     if !(1..=25).contains(&limit)
         || page.project_id.is_some_and(|v| v.is_nil())
@@ -146,7 +175,9 @@ pub async fn read(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    owner(&mut tx, actor).await?;
+    if pin.is_none() {
+        owner(&mut tx, actor).await?;
+    }
     let ids: Vec<Uuid> = if let Some((id, _)) = exact {
         vec![id]
     } else {
@@ -179,6 +210,11 @@ pub async fn read(
     };
     let server_time_ms =
         u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
+    // B1 takes common Node/attempt locks. Acquire human identity only afterward,
+    // and retain the user SHARE lock through commit; never user -> common owner.
+    if let Some(pin) = pin {
+        pin.fence(&mut tx).await?;
+    }
     tx.commit().await.map_err(db)?;
     Ok(ResultPage {
         schema_version: 1,
@@ -201,7 +237,7 @@ pub fn routes() -> Router<AppState> {
 }
 async fn bounded(
     state: &AppState,
-    actor: Uuid,
+    actor: User,
     page: Page,
     exact: Option<(Uuid, &str)>,
     budget: Arc<Semaphore>,
@@ -212,7 +248,7 @@ async fn bounded(
         .map_err(|_| AppError::IdentityUnavailable("result reads busy".into()))?;
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(4),
-        read(state, actor, &page, exact),
+        read_as(state, &actor, &page, exact),
     )
     .await
     .map_err(|_| AppError::IdentityUnavailable("result read unavailable".into()))??;
@@ -224,7 +260,7 @@ async fn list(
     Query(page): Query<Page>,
     Extension(budget): Extension<Arc<Semaphore>>,
 ) -> Result<axum::response::Response> {
-    bounded(&state, user.id, page, None, budget).await
+    bounded(&state, user, page, None, budget).await
 }
 async fn detail(
     State(state): State<AppState>,
@@ -233,5 +269,5 @@ async fn detail(
     Query(page): Query<Page>,
     Extension(budget): Extension<Arc<Semaphore>>,
 ) -> Result<axum::response::Response> {
-    bounded(&state, user.id, page, Some((id, &revision)), budget).await
+    bounded(&state, user, page, Some((id, &revision)), budget).await
 }

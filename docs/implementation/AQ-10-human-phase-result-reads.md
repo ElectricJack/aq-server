@@ -21,6 +21,15 @@ silently falling back. The v2 page uses honest coverage `recorded_native_v2` and
 the same page/metadata shape, limits, UUID keyset ordering, exact report digest,
 Owner authorization, no-store response and bounded work budget.
 
+Opt-in v2 retains the authenticated full `User` and the existing `ActorPin`
+identity/revision observation before B1 I/O. It fences that pin after common
+Node/attempt locks and before commit/response, holding the user SHARE lock until
+commit. This rejects same-UUID identity rebinding and an ABA restoration while
+waiting on a common owner. The legacy UUID-only `read` entry remains legacy-only;
+new v2 calls require `read_as(full_user)`. Default v1 HTTP keeps its inherited
+UUID/role authorization behavior; this slice does not claim a full-principal
+race fix for v1.
+
 Root approved this minimal additive v2-only metadata field:
 
 ```json
@@ -63,11 +72,12 @@ report digests and foreign project scopes still refuse.
 ## Focused qualification
 
 Reuse the actual disposable Frozen and Refresh issuance/terminal/result owners
-from `phase_results` with explicitly synthetic proof DTOs. Add one focused router
-case per family covering opt-in list/exact detail, honest origin/coverage,
+from `phase_results` with explicitly synthetic proof DTOs. Add focused router
+cases per family covering opt-in list/exact detail, honest origin/coverage,
 repository/base/source references, corrected head and UUID pagination, default
 v1 omission/refusal, foreign project/revision, unknown query/profile, and current
-Owner revocation. Reuse existing corruption vectors through the new public read
+Owner revocation and a real held-common-lock identity-rebind ABA refusal. Reuse
+existing corruption vectors through the new public read
 to prove nominal owner verification is retained. Add opt-in v2 assertions to the
 two existing legacy human result tests. Run only these focused cases plus the
 affected strict checks under an assigned lease, not the full phase pipeline.
