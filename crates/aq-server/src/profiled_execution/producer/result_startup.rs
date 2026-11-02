@@ -13,6 +13,9 @@ const STARTUP_DIGEST: &str = "667d48a537baa35335fb3da1e589846e9d294a2bc24a8df58c
 const CONTRACT_DIGEST: &str = "4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9";
 const ADAPTER_ID: &str = "aq.codex-result-local-adapter";
 const PROFILE: &str = "codex-0.166-trusted-node-named-readonly-result-local-v1";
+const INTERACTIVE_PROFILE: &str = "codex-0.166-chatgpt-interactive-result-local-v1";
+const INTERACTIVE_RECIPE_DIGEST: &str =
+    "563a2303cd64d6f481b662327ab5dcb3ccbe34554443c446850574a0f14fe254";
 // This is a metadata projection of the independently selected whole definition,
 // not a second executable-adapter parser. Its installed owner validates the full
 // body; ignoring other fields here neither executes nor qualifies them.
@@ -53,11 +56,23 @@ pub(super) fn from_definitions(
         return Err(refused());
     }
     let opt: OptIn = serde_json::from_str(selected.body()).map_err(|_| refused())?;
+    let recipe_matches = match opt.profile.as_str() {
+        PROFILE => {
+            opt.recipe.id.as_str() == "aq.codex-result-local-recipe"
+                && opt.recipe.version.as_str() == "1"
+        }
+        INTERACTIVE_PROFILE => {
+            opt.recipe
+                == public_reference(
+                    "aq.codex-interactive-result-local-recipe",
+                    INTERACTIVE_RECIPE_DIGEST,
+                )?
+        }
+        _ => false,
+    };
     if opt.schema_version != 1
-        || opt.profile != PROFILE
+        || !recipe_matches
         || opt.contract != public_reference("aq.agent-result-local", CONTRACT_DIGEST)?
-        || opt.recipe.id.as_str() != "aq.codex-result-local-recipe"
-        || opt.recipe.version.as_str() != "1"
     {
         return Err(refused());
     }
@@ -180,6 +195,30 @@ mod tests {
         let mut changed = context.source;
         changed.digest = Digest::of(b"changed").as_str().into();
         assert!(!reporting.matches(&changed));
+    }
+    #[test]
+    fn interactive_profile_requires_its_exact_public_recipe_and_keeps_counted_startup() {
+        let mut value = body();
+        value["profile"] = json!(INTERACTIVE_PROFILE);
+        value["recipe"] = json!(
+            public_reference(
+                "aq.codex-interactive-result-local-recipe",
+                INTERACTIVE_RECIPE_DIGEST,
+            )
+            .unwrap()
+        );
+        let (adapter, defs) = definitions(value.clone());
+        let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
+        assert_eq!(reporting.text, TEXT);
+        assert!(reporting.context().required);
+        for recipe in [
+            reference("aq.codex-interactive-result-local-recipe"),
+            public_reference("aq.codex-result-local-recipe", INTERACTIVE_RECIPE_DIGEST).unwrap(),
+        ] {
+            value["recipe"] = json!(recipe);
+            let (adapter, defs) = definitions(value.clone());
+            assert!(from_definitions(&adapter, &defs).is_err());
+        }
     }
     #[test]
     fn unsupported_profile_or_contract_and_missing_or_changed_public_bytes_refuse() {
