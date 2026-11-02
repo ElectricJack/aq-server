@@ -188,6 +188,25 @@ async fn selection(
     )
     .await
 }
+async fn first_eligible_task<F, Fut>(
+    ready: &crate::agent_access::scheduling::ReadyPage,
+    mut counts: F,
+) -> Result<Option<aq_admission::TaskRevision>, AppError>
+where
+    F: FnMut(Uuid) -> Fut,
+    Fut: std::future::Future<Output = Result<super::super::no_grant::AttemptCounts, AppError>>,
+{
+    for candidate in &ready.items {
+        let counts = counts(candidate.revision.task_id).await?;
+        // Graph readiness is independent of AQ's retained task claims. A held
+        // or previously started task, or an exhausted never-granted retry
+        // budget, must not starve later tasks on this same bounded page.
+        if counts.started == 0 && counts.check_retry_bound().is_ok() {
+            return Ok(Some(candidate.revision.clone()));
+        }
+    }
+    Ok(None)
+}
 /// Authenticated daemon-owned scheduling entry. The public request carries only
 /// this worker's inventory revision/capacity, never task/composition/source facts.
 pub async fn poll(
@@ -259,15 +278,13 @@ pub async fn poll(
         .scheduling_ready(record.binding.graph_workspace_id, 8, None)
         .await
         .map_err(|_| refused())?;
-    let Some(task) = ready.items.first().map(|t| t.revision.clone()) else {
+    let Some(task) = first_eligible_task(&ready, |task| {
+        super::super::no_grant::attempt_counts(&state.store.pool, task)
+    })
+    .await?
+    else {
         return Ok(page);
     };
-    let counts = super::super::no_grant::attempt_counts(&state.store.pool, task.task_id)
-        .await?
-        .check_retry_bound()?;
-    if counts.started != 0 {
-        return Err(refused());
-    }
     let generation =
         super::super::no_grant::next_generation(&state.store.pool, task.task_id).await?;
     let context = graph
@@ -397,4 +414,105 @@ pub async fn poll(
     page.offers.push(offer);
     page.validate_for(request).map_err(|_| refused())?;
     Ok(page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        agent_access::scheduling::{GraphReadStamp, ReadyPage, ReadyTask},
+        profiled_execution::no_grant::{AttemptCounts, MAX_UNGRANTED_RETRIES},
+    };
+
+    fn ready(count: usize) -> ReadyPage {
+        let workspace_id = Uuid::new_v4();
+        ReadyPage {
+            workspace_id,
+            items: (0..count)
+                .map(|_| ReadyTask {
+                    revision: aq_admission::TaskRevision {
+                        workspace_id,
+                        task_id: Uuid::new_v4(),
+                        version: 1,
+                        content_revision: 1,
+                    },
+                    node: serde_json::json!({}),
+                })
+                .collect(),
+            next_cursor: None,
+            stamp: GraphReadStamp {
+                requested_at_ms: 1,
+                received_at_ms: 1,
+                expires_at_ms: 2,
+                response_digest: "a".repeat(64),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_selection_skips_held_and_exhausted_tasks_without_starving_later_retry() {
+        let ready = ready(4);
+        let counts = [
+            // `started` includes held offers, not only actual kernel starts.
+            AttemptCounts {
+                started: 1,
+                history: 1,
+                never_granted: 0,
+            },
+            AttemptCounts {
+                started: 0,
+                history: MAX_UNGRANTED_RETRIES,
+                never_granted: MAX_UNGRANTED_RETRIES,
+            },
+            // An owner-verified never-granted closure may retry below the cap.
+            AttemptCounts {
+                started: 0,
+                history: 1,
+                never_granted: 1,
+            },
+        ];
+        let mut observed = Vec::new();
+        let selected = first_eligible_task(&ready, |task| {
+            let index = observed.len();
+            observed.push(task);
+            std::future::ready(Ok(counts[index]))
+        })
+        .await
+        .unwrap();
+        assert_eq!(selected, Some(ready.items[2].revision.clone()));
+        assert_eq!(
+            observed,
+            ready.items[..3]
+                .iter()
+                .map(|r| r.revision.task_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_selection_returns_empty_when_blocked_but_never_skips_owner_read_errors() {
+        let ready = ready(2);
+        let held = AttemptCounts {
+            started: 1,
+            history: 1,
+            never_granted: 0,
+        };
+        assert!(
+            first_eligible_task(&ready, |_| std::future::ready(Ok(held)))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mut reads = 0;
+        let result = first_eligible_task(&ready, |_| {
+            reads += 1;
+            std::future::ready(Err(AppError::Internal))
+        })
+        .await;
+        assert!(matches!(result, Err(AppError::Internal)));
+        assert_eq!(
+            reads, 1,
+            "a failed owner read cannot make another task eligible"
+        );
+    }
 }
