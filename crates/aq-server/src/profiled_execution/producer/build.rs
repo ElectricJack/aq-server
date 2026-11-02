@@ -564,7 +564,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         },
         terminal: wire::TerminalPolicy {
             host: wire::TerminalHost::Tmux,
-            input_enabled: false,
+            input_enabled: super::result_startup::for_adapter(state, &selected.choice.adapter)?
+                .is_some_and(|reporting| reporting.interactive),
             max_input_bytes: 4096,
             max_pending_input_bytes: 32768,
             max_frame_bytes: 65536,

@@ -30,6 +30,7 @@ struct OptIn {
 pub(super) struct ReportingInstruction {
     pub artifact: ArtifactRef,
     pub text: String,
+    pub interactive: bool,
 }
 fn public_reference(id: &str, digest: &str) -> Result<ArtifactRef, AppError> {
     Ok(ArtifactRef {
@@ -89,6 +90,7 @@ pub(super) fn from_definitions(
     Ok(Some(ReportingInstruction {
         artifact,
         text: instruction.body().to_owned(),
+        interactive: opt.profile == INTERACTIVE_PROFILE,
     }))
 }
 pub(super) fn for_adapter(
@@ -185,6 +187,7 @@ mod tests {
         let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
         assert_eq!(reporting.text, TEXT);
         assert_eq!(reporting.text.len(), 1929);
+        assert!(!reporting.interactive);
         assert_eq!(
             reporting.artifact,
             public_reference(STARTUP_ID, STARTUP_DIGEST).unwrap()
@@ -210,6 +213,7 @@ mod tests {
         let (adapter, defs) = definitions(value.clone());
         let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
         assert_eq!(reporting.text, TEXT);
+        assert!(reporting.interactive);
         assert!(reporting.context().required);
         for recipe in [
             reference("aq.codex-interactive-result-local-recipe"),
