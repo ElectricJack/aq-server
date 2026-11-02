@@ -74,10 +74,56 @@ pub async fn close_expired(
         .await
         .map_err(|_| AppError::Internal)?
         .ok_or_else(|| AppError::NotFound("node not found".into()))?;
+    // Same node -> exact attempt/hot order as grant issuance. History loading
+    // below performs no external IO and cannot mint a live worker principal.
+    let current = sqlx::query("SELECT l.launch_binding,h.state AS hot FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) JOIN profiled_launches l USING(attempt_id) WHERE a.attempt_id=$1 AND a.node_id=$2 FOR UPDATE OF a,h")
+        .bind(attempt).bind(node).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
+    let binding: LaunchBinding =
+        serde_json::from_value(current.get("launch_binding")).map_err(|_| AppError::Internal)?;
+    let hot: crate::execution::authority::hot::HotState =
+        serde_json::from_value(current.get("hot")).map_err(|_| AppError::Internal)?;
+    hot.validate_against(&binding)
+        .map_err(|_| AppError::Internal)?;
+    let phase = super::phase_profile::for_attempt_locked(&mut tx, attempt).await?;
+    if hot.status == crate::execution::profiled::Status::Preparing && phase.is_some() {
+        // Historical validators retain the exact Frozen/Refresh nominal types;
+        // neither lease is reinterpreted as a legacy PreparationPlan.
+        macro_rules! validate_phase {
+            ($owner:path) => {{
+                use $owner as owner;
+                let history = owner::load_accepted_history_locked(&mut tx, &binding).await?;
+                let lease = &history.receipt.lease;
+                let owner = hot
+                    .owner
+                    .as_ref()
+                    .ok_or_else(|| AppError::Conflict("phase absence owner missing".into()))?;
+                if lease.binding != binding
+                    || Some(history.request.original.operation_id) != hot.preparation_operation_id
+                    || lease.guardian_id != owner.guardian_id
+                    || lease.launch_id != owner.launch_id
+                    || lease.hold.reservation.reservation_id != owner.reservation_id
+                {
+                    return Err(AppError::Conflict(
+                        "phase absence historical owner differs".into(),
+                    ));
+                }
+            }};
+        }
+        match phase.unwrap() {
+            super::phase_profile::Profile::Frozen => validate_phase!(super::accepted_preparation),
+            super::phase_profile::Profile::Refresh => validate_phase!(super::accepted_refresh),
+        }
+        sqlx::query(
+            "SELECT set_config('aq.phase_no_grant_owner','aq.phase-no-grant-owner.1',true)",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    }
     let preparation:Option<serde_json::Value>=sqlx::query_scalar("SELECT r.response FROM profiled_authority_hot h LEFT JOIN profiled_execution_receipts r ON r.node_id=$2 AND r.operation_id=(h.state->>'preparation_operation_id')::UUID WHERE h.attempt_id=$1 AND h.state->>'status'='preparing'")
         .bind(attempt).bind(node).fetch_optional(&mut *tx).await.map_err(|_|AppError::Internal)?.flatten();
     let preparing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_authority_hot WHERE attempt_id=$1 AND state->>'status'='preparing')").bind(attempt).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
-    if preparing {
+    if preparing && phase.is_none() {
         let document: aq_admission::transport::TransportDocument =
             serde_json::from_value(preparation.ok_or_else(|| {
                 AppError::Conflict("accepted preparation authority unavailable".into())

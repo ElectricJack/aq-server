@@ -268,6 +268,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!("../migrations/0038_profiled_result_origins.sql"),
     ),
     (39, include_str!("../migrations/0039_pilot_settlement.sql")),
+    (40, include_str!("../migrations/0040_phase_never_granted.sql")),
 ];
 
 /// Applies missing migrations in one transaction under an advisory lock.
@@ -450,6 +451,9 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
     }
     if supported >= 39 {
         settlement39::validate(&mut tx).await?;
+    }
+    if supported >= 40 {
+        never_granted40::validate(&mut tx).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -1017,3 +1021,6 @@ mod settlement39;
 #[cfg(test)]
 #[path = "store/settlement39_tests.rs"]
 mod settlement39_tests;
+
+#[path = "store/never_granted40.rs"]
+mod never_granted40;
