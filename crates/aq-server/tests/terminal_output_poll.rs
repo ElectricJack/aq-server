@@ -23,7 +23,7 @@ use axum::{
 };
 use common::profiled::{Fixture, NOW, fixture, insert};
 use http_body_util::BodyExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     os::unix::fs::PermissionsExt,
     sync::{Arc, atomic::Ordering},
