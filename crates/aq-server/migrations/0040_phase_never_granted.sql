@@ -130,4 +130,13 @@ BEGIN
 END $$;
 CREATE TRIGGER profiled_phase_never_granted_fence BEFORE INSERT ON profiled_phase_execution_grants
  FOR EACH ROW EXECUTE FUNCTION profiled_phase_never_granted_fence();
+-- Central absence is a separate valid release reason, never Graph completion.
+CREATE OR REPLACE FUNCTION settlement_claim_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.kind='profiled_v1' AND OLD.holds_task AND NOT NEW.holds_task AND EXISTS(SELECT 1 FROM profiled_authority_hot WHERE attempt_id=OLD.attempt_id)
+ AND NOT profiled_never_granted_valid(OLD.attempt_id)
+ AND NOT EXISTS(SELECT 1 FROM profiled_task_completions c JOIN profiled_settlement_evaluations e ON e.operation_id=c.evaluation_operation_id JOIN profiled_verified_releases r ON r.attempt_id=c.attempt_id AND r.release_id=c.release_id WHERE c.attempt_id=OLD.attempt_id AND c.state='confirmed' AND e.disposition='accepted' AND e.operation_id=r.settlement_operation_id AND c.receipt IS NOT NULL AND c.outbox IS NOT NULL)
+ THEN RAISE EXCEPTION 'claim remains held until actual Graph completion receipt'; END IF;
+ RETURN NEW;
+END $$;
 UPDATE meta SET value='40' WHERE key='state_format_version';

@@ -163,6 +163,9 @@ pub async fn close_expired(
                     }
                     "central no-grant proof contradicts current owners" => "proof_guard",
                     "actual owner-verified release record required" => "claim_release_guard",
+                    "claim remains held until actual Graph completion receipt" => {
+                        "settlement_claim_guard"
+                    }
                     _ => "unclassified_sql_refusal",
                 };
                 return AppError::Conflict(format!(

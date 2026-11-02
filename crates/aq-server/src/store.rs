@@ -449,7 +449,9 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
     if supported == 38 {
         result38::validate(&mut tx).await?;
     }
-    if supported >= 39 {
+    if supported >= 40 {
+        settlement39::validate_phase_absence(&mut tx).await?;
+    } else if supported >= 39 {
         settlement39::validate(&mut tx).await?;
     }
     if supported >= 40 {

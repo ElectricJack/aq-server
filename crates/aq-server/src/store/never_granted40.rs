@@ -4,6 +4,14 @@ use sqlx::{Postgres, Transaction};
 fn corrupt() -> StoreError {
     StoreError::Corrupt("phase never-granted owner40 guard drift".into())
 }
+pub(super) fn function_body(name: &str) -> Result<&'static str> {
+    include_str!("../../migrations/0040_phase_never_granted.sql")
+        .split_once(&format!("FUNCTION {name}("))
+        .and_then(|(_, tail)| tail.split_once("AS $$"))
+        .and_then(|(_, tail)| tail.split_once("$$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(corrupt)
+}
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     let sql = include_str!("../../migrations/0040_phase_never_granted.sql");
     for (name, signature) in [
@@ -13,6 +21,7 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
             "uuid,uuid,bigint,uuid,uuid",
         ),
         ("profiled_phase_never_granted_fence", ""),
+        ("settlement_claim_guard", ""),
     ] {
         let tail = sql
             .split_once(&format!("FUNCTION {name}("))
