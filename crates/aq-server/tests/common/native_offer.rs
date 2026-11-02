@@ -42,6 +42,14 @@ impl Drop for Case {
 fn art(id: &str, body: &str) -> ArtifactRef {
     super::profiled::artifact(id, body.as_bytes())
 }
+/// Actual-owner base only. No synthetic model registry, node snapshot, runtime,
+/// Graph/Git peer, heartbeat, inventory, health or Poll is installed by this path.
+/// The outer caller owns real process evidence and actual recipe qualification.
+pub async fn setup_actual(
+    input: &selection::ActualSetup,
+) -> anyhow::Result<selection::ActualSelectionFixture> {
+    selection::setup_actual(input).await
+}
 pub async fn setup() -> Case {
     let mut env = selection::selection_fixture().await;
     let pool = env.env.pool.clone();

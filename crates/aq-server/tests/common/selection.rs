@@ -105,15 +105,21 @@ pub async fn call(
             .unwrap_or_else(|_| json!({"raw":String::from_utf8_lossy(&bytes)})),
     )
 }
-pub async fn setup(real: bool) -> Env {
-    // The production external gate is deliberately process-wide and fail-fast.
-    // Independent fixture tests serialize so they do not manufacture overload.
+#[path = "selection_actual.rs"]
+mod actual;
+pub use actual::{ActualProfileChoice, ActualSelectionFixture, ActualSetup, setup_actual};
+
+// Actual and historical fixtures share the existing test-only serialization
+// gate. Neither constructor creates a second admission driver.
+async fn fixture_gate() -> tokio::sync::OwnedMutexGuard<()> {
     static GATE: std::sync::OnceLock<Arc<tokio::sync::Mutex<()>>> = std::sync::OnceLock::new();
-    let gate = GATE
-        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+    GATE.get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
         .lock_owned()
-        .await;
+        .await
+}
+pub async fn setup(real: bool) -> Env {
+    let gate = fixture_gate().await;
     let db = Arc::new(TestDb::create().await);
     let store = db.store().await;
     let pool = db.pool().await;
