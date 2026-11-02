@@ -148,7 +148,31 @@ pub async fn close_expired(
         .bind(Uuid::new_v4())
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|_| AppError::Conflict("ungranted closure refused by current owners".into()))?;
+        .map_err(|error| {
+            #[cfg(feature = "test-support")]
+            if let Some(database) = error.as_database_error() {
+                let stage = match database.message() {
+                    "actual sealed/common assignment binding mismatch" => "sealed_binding",
+                    "typed phase absence owner required" => "typed_owner_marker",
+                    "actual phase acceptance absence join refused" => "phase_acceptance_join",
+                    "accepted preparation authority unavailable/unsupported" => {
+                        "legacy_acceptance_join"
+                    }
+                    "actual grant/source/effect records contradict no-execution proof" => {
+                        "effect_absence"
+                    }
+                    "central no-grant proof contradicts current owners" => "proof_guard",
+                    "actual owner-verified release record required" => "claim_release_guard",
+                    _ => "unclassified_sql_refusal",
+                };
+                return AppError::Conflict(format!(
+                    "ungranted closure refused by current owners [{}:{stage}]",
+                    database.code().as_deref().unwrap_or("unknown")
+                ));
+            }
+            let _ = error;
+            AppError::Conflict("ungranted closure refused by current owners".into())
+        })?;
     let result = row
         .map(|row| {
             let bytes: Vec<u8> = row.get("body_bytes");
