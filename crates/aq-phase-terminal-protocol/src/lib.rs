@@ -40,11 +40,17 @@ impl Profile {
         if *contract
             == aq_admission::preparation_v2::contract_artifact()
                 .map_err(|_| Invalid("admission contract"))?
+            || *contract
+                == aq_admission::preparation_v2::long_contract_artifact()
+                    .map_err(|_| Invalid("long admission contract"))?
         {
             Ok(Self::FrozenV1)
         } else if *contract
             == aq_admission::preparation_refresh_v1::contract_artifact()
                 .map_err(|_| Invalid("refresh admission contract"))?
+            || *contract
+                == aq_admission::preparation_refresh_v1::long_contract_artifact()
+                    .map_err(|_| Invalid("long refresh admission contract"))?
         {
             Ok(Self::RegistryRefreshV1)
         } else {

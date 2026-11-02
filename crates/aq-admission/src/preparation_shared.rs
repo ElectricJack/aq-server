@@ -106,7 +106,7 @@ pub struct Negotiation {
 impl Negotiation {
     pub fn validate(&self) -> Result<()> {
         require(
-            self.contract == contract_artifact()?,
+            self.contract == contract_artifact()? || self.contract == long_contract_artifact()?,
             "unsupported exact phase contract",
         )?;
         require(
@@ -221,6 +221,8 @@ impl Proposal {
         require(self.schema_version == 2, "phase proposal version")?;
         self.negotiation.validate()?;
         self.policy.validate()?;
+        require(self.negotiation.contract == policy_contract(&self.policy)?,
+            "exact phase policy contract selection")?;
         self.original.validate()?;
         self.spec.validate_retained(
             &self.original.offered.offer,
@@ -763,8 +765,15 @@ impl ExecutionDelivery {
                 && self.delivery.clock.server_time_ms >= self.receipt.issued_at_ms,
             "phase execution delivery time",
         )?;
-        self.delivery
-            .validate_for(nonce, self.receipt.grant.expires_at_ms)?;
+        if p.policy.schema_version == 3 {
+            self.delivery.clock.validate_interactive_session()?;
+            id(nonce)?; id(self.delivery.nonce)?;
+            require(self.delivery.nonce == nonce
+                && self.delivery.clock.expires_at_ms == self.receipt.grant.expires_at_ms,
+                "interactive delivery nonce/expiry")?;
+        } else {
+            self.delivery.validate_for(nonce, self.receipt.grant.expires_at_ms)?;
+        }
         bound(self)
     }
     /// No live authorization is returned. Owners must authenticate and resolve the
@@ -783,7 +792,9 @@ impl ExecutionDelivery {
         previous: Option<&DeadlineSample>,
     ) -> Result<DeadlineSample> {
         self.validate_for(q, a, r, p, nonce)?;
-        let deadline = self.delivery.clock.client_deadline_ns(sent, received)?;
+        let deadline = if p.policy.schema_version == 3 {
+            self.delivery.clock.client_interactive_deadline_ns(sent, received)?
+        } else { self.delivery.clock.client_deadline_ns(sent, received)? };
         let hard = self
             .receipt
             .execution_deadline_ms
@@ -920,7 +931,9 @@ impl Document {
             }
             Self::ExecutionDelivery(v) => {
                 Document::Execution(Box::new(v.receipt.clone())).validate_shape()?;
-                v.delivery.clock.validate()?;
+                // Structural decoding cannot authenticate the proposal's policy.
+                // validate_for/sample still enforce policy2's original120s bound.
+                v.delivery.clock.validate_interactive_session()?;
                 id(v.delivery.nonce)?;
                 v.schema_version
             }
@@ -966,6 +979,26 @@ pub fn schema() -> Value {
         "<=131072 bytes. Relational validators mandatory; no authentication, owner truth, physical proof or live authority follows from schema/DTO presence."
     );
     s
+}
+/// Additive interactive dialect; the original schema/artifact remain byte exact.
+pub fn long_schema() -> Value {
+    let mut value = schema();
+    value["$id"] = serde_json::json!(format!("{}:interactive-long-v1", $schema_urn));
+    value["$defs"][$PhasePolicy]["properties"]["schema_version"]["const"] = serde_json::json!(3);
+    value["$defs"][$PhasePolicy]["properties"]["maximum_execution_lease_ms"]["maximum"] = serde_json::json!(MAX_INTERACTIVE_EXECUTION_MS);
+    value["$defs"]["DeliveryClock"]["properties"]["valid_for_ms"]["maximum"] = serde_json::json!(MAX_INTERACTIVE_EXECUTION_MS);
+    value
+}
+pub fn long_contract_artifact() -> Result<ArtifactRef> {
+    let manifest = serde_json::json!({"schema_version":3,"publication":"aq-admission/0.1.11",
+        "scope":"explicit-interactive-one-hour","schema_digest":Digest::of(&bytes(&long_schema())?),
+        "required_features":required_features()});
+    Ok(ArtifactRef { id:Text::new(format!("{}.interactive-long-v1",$contract_id))?,
+        version:Text::new("1")?,digest:hash("aq.phase.contract.v2",&manifest)? })
+}
+pub fn policy_contract(policy: &PhasePolicy) -> Result<ArtifactRef> {
+    policy.validate()?;
+    if policy.schema_version == 3 { long_contract_artifact() } else { contract_artifact() }
 }
 pub fn contract_manifest() -> Result<Value> {
     Ok(

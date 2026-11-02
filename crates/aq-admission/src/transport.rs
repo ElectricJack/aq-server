@@ -90,10 +90,28 @@ impl DeliveryClock {
         result.validate()?;
         Ok(result)
     }
+    /// Explicit long interactive execution only; normal delivery TTLs stay120s.
+    pub fn new_interactive_session(server_time_ms: u64, expires_at_ms: u64) -> Result<Self> {
+        let value = Self {
+            server_time_ms,
+            expires_at_ms,
+            valid_for_ms: expires_at_ms
+                .checked_sub(server_time_ms)
+                .ok_or(Invalid("expired delivery"))?,
+        };
+        value.validate_interactive_session()?;
+        Ok(value)
+    }
     pub fn validate(&self) -> Result<()> {
+        self.validate_bounded(120_000)
+    }
+    pub fn validate_interactive_session(&self) -> Result<()> {
+        self.validate_bounded(3_600_000)
+    }
+    fn validate_bounded(&self, maximum: u64) -> Result<()> {
         require(
             self.server_time_ms > 0
-                && (1..=120_000).contains(&self.valid_for_ms)
+                && (1..=maximum).contains(&self.valid_for_ms)
                 && self.server_time_ms.checked_add(self.valid_for_ms) == Some(self.expires_at_ms),
             "conservative delivery TTL",
         )
@@ -102,6 +120,13 @@ impl DeliveryClock {
     /// to a new retry: the server MUST retime every response from immutable expiry.
     pub fn client_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
         self.validate()?;
+        self.project_deadline(sent_ns, received_ns)
+    }
+    pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+        self.validate_interactive_session()?;
+        self.project_deadline(sent_ns, received_ns)
+    }
+    fn project_deadline(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
         require(received_ns >= sent_ns, "monotonic response interval")?;
         let deadline = sent_ns
             .checked_add(self.valid_for_ms * 1_000_000)

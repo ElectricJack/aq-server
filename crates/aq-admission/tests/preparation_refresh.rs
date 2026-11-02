@@ -368,3 +368,54 @@ fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
     policy.maximum_execution_lease_ms += 1;
     assert!(policy.validate_for_manifest(&manifest).is_err());
 }
+
+#[test]
+fn long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract() {
+    use aq_admission::transport::DeliveryClock;
+    assert!(DeliveryClock::new(1000, 3_601_000).is_err());
+    let clock = DeliveryClock::new_interactive_session(1000, 3_601_000).unwrap();
+    assert!(clock.validate().is_err());
+    assert!(
+        clock
+            .client_deadline_ns(10_000_000_000, 10_100_000_000)
+            .is_err()
+    );
+    assert_eq!(
+        clock
+            .client_interactive_deadline_ns(10_000_000_000, 10_100_000_000)
+            .unwrap(),
+        3_610_000_000_000
+    );
+    assert!(
+        clock
+            .client_interactive_deadline_ns(10_000_000_000, 3_610_000_000_000)
+            .is_err()
+    );
+    assert!(DeliveryClock::new_interactive_session(1000, 3_601_001).is_err());
+    let old = contract_artifact().unwrap();
+    let long = long_contract_artifact().unwrap();
+    assert_ne!(old, long);
+    assert_eq!(
+        schema()["$defs"]["PreparationRefreshV1PhasePolicy"]["properties"]["schema_version"]["const"],
+        json!(2)
+    );
+    assert_eq!(
+        long_schema()["$defs"]["PreparationRefreshV1PhasePolicy"]["properties"]["schema_version"]["const"],
+        json!(3)
+    );
+    Negotiation {
+        contract: long.clone(),
+        features: required_features(),
+    }
+    .validate()
+    .unwrap();
+    println!(
+        "LONG_REFRESH_CONTRACT {}",
+        serde_json::to_string(&long).unwrap()
+    );
+    println!(
+        "LONG_FROZEN_CONTRACT {}",
+        serde_json::to_string(&aq_admission::preparation_v2::long_contract_artifact().unwrap())
+            .unwrap()
+    );
+}

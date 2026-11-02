@@ -8,6 +8,19 @@ fn refused() -> AppError {
 fn db(_: sqlx::Error) -> AppError {
     AppError::Internal
 }
+fn execution_clock(
+    time: u64,
+    expiry: u64,
+    policy_version: u32,
+) -> Result<aq_admission::transport::DeliveryClock, AppError> {
+    use aq_admission::transport::DeliveryClock;
+    if policy_version == 3 {
+        DeliveryClock::new_interactive_session(time, expiry)
+    } else {
+        DeliveryClock::new(time, expiry)
+    }
+    .map_err(|_| refused())
+}
 fn now(state: &AppState) -> Result<u64, AppError> {
     u64::try_from((state.clock)().timestamp_millis())
         .ok()
@@ -116,7 +129,7 @@ async fn prepare_inner(
     nonce: uuid::Uuid,
 ) -> Result<PreparationOutcome, AppError> {
     use crate::execution::profiled::Status;
-    use aq_admission::{control::DeliveryStamp, transport::DeliveryClock};
+    use aq_admission::control::DeliveryStamp;
     use phase::{ExecutionDelivery, ExecutionReceipt};
     use sqlx::Row;
     use uuid::Uuid;
@@ -315,7 +328,11 @@ async fn prepare_inner(
         receipt,
         delivery: DeliveryStamp {
             nonce,
-            clock: DeliveryClock::new(now(state)?, expiry).map_err(|_| refused())?,
+            clock: execution_clock(
+                now(state)?,
+                expiry,
+                after.history.proposal.policy.schema_version,
+            )?,
         },
     };
     reply
@@ -371,7 +388,7 @@ async fn replay_locked(
         authority::{self, Policy, hot::HotState},
         profiled::Status,
     };
-    use aq_admission::{control::DeliveryStamp, transport::DeliveryClock};
+    use aq_admission::control::DeliveryStamp;
     use phase::ExecutionDelivery;
     use sqlx::Row;
     use uuid::Uuid;
@@ -498,8 +515,11 @@ async fn replay_locked(
         schema_version: 2,
         delivery: DeliveryStamp {
             nonce,
-            clock: DeliveryClock::new(time, original.receipt.grant.expires_at_ms)
-                .map_err(|_| refused())?,
+            clock: execution_clock(
+                time,
+                original.receipt.grant.expires_at_ms,
+                original.accepted.proposal.policy.schema_version,
+            )?,
         },
         receipt: original.receipt.clone(),
     };
@@ -605,9 +625,11 @@ async fn finish_replay(
         return Err(refused());
     }
     let mut reply = original.reply;
-    reply.delivery.clock =
-        aq_admission::transport::DeliveryClock::new(delivery_at, reply.receipt.grant.expires_at_ms)
-            .map_err(|_| refused())?;
+    reply.delivery.clock = execution_clock(
+        delivery_at,
+        reply.receipt.grant.expires_at_ms,
+        after.history.proposal.policy.schema_version,
+    )?;
     reply
         .validate_for(
             request,

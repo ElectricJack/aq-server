@@ -19,7 +19,7 @@ pub struct PolicyDefinition {
 impl PolicyDefinition {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
-            || self.contract != phase::contract_artifact().map_err(|_| "phase contract")?
+            || self.contract != phase::policy_contract(&self.phase).map_err(|_| "phase contract")?
             || self.owners.len() != 9
             || !(1..=68_719_476_736).contains(&self.source_disk_bytes)
         {

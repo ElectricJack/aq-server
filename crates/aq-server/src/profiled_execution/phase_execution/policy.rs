@@ -16,8 +16,10 @@ pub struct ExecutionQualification {
 impl ExecutionQualification {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
-            || self.contract
+            || (self.contract
                 != phase::contract_artifact().map_err(|_| "phase execution contract")?
+                && self.contract
+                    != phase::long_contract_artifact().map_err(|_| "long execution contract")?)
         {
             return Err("unsupported phase execution qualification".into());
         }
@@ -57,10 +59,12 @@ pub(crate) fn validate_catalog(
                 .qualified_runtimes
                 .iter()
                 .any(|r| r.runtime == q.runtime && r.qualification == q.runtime_qualification)
-            || !config
-                .definition_bodies
-                .iter()
-                .any(|p| p.artifact() == &q.proposal_policy)
+            || !config.definition_bodies.iter().any(|p| {
+                p.artifact() == &q.proposal_policy
+                    && serde_json::from_str::<serde_json::Value>(p.body())
+                        .ok()
+                        .is_some_and(|value| value["contract"] == serde_json::json!(q.contract))
+            })
         {
             return Err("unqualified execution runtime/proposal policy".into());
         }
@@ -86,6 +90,7 @@ pub(super) fn current(
         if q.runtime == runtime.runtime
             && q.runtime_qualification == runtime.qualification
             && q.proposal_policy == history.policy
+            && q.contract == history.proposal.negotiation.contract
         {
             return Ok(d.artifact().clone());
         }
