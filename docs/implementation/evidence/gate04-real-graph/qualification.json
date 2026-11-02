@@ -1,0 +1,106 @@
+{
+  "component": "GATE04 real Graph test-only fixture",
+  "status": "actual_graph_component_qualified_not_model_cycle",
+  "base_commit": "1db85bbb59cd13a44e5271b149221bb15348122c",
+  "plan_commit": "a18c3388bc30b4094432a37ef161f35d171ad781",
+  "independent_review": "Runner accepted actual process/authority path; total database teardown wall deadline explicitly not proven",
+  "source_sha256": {
+    "crates/aq-server/tests/support/real_graph.rs": "55b050a90cf8632a1a206b7824dc7eb309323b00ec32b1b7be6b4fbba96dd319",
+    "crates/aq-server/tests/real_graph_fixture.rs": "6e043a5b9bdd0e4b8875854fe0709bcb85cd8e461de47b968a6a948b9dcb8d33"
+  },
+  "fixture_binary": {
+    "path": "/tmp/aq-worker-artifact-overlap-target/debug/deps/real_graph_fixture-618f36272a7c353b",
+    "sha256": "23981f9b3a208f220374d22f69511c7931108e81b669012aa5703ccabb562bf4"
+  },
+  "graph_binary": {
+    "path": "/home/jkern/dev/aq-graph/target/release/aq-graph",
+    "sha256": "eb9c8f41002cb5d9675f87de0cadbe34e7d74cfc60d2449cd23ac4df76921fea",
+    "source_commit": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+    "package": "0.1.0",
+    "schema": 8,
+    "execution": "private copied and rehashed bytes; original canonical binary unchanged"
+  },
+  "runs": {
+    "compile": {
+      "passed": true,
+      "seconds": 68,
+      "offline_locked": true,
+      "jobs": 2,
+      "debug": 0,
+      "incremental": 0
+    },
+    "pure": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 1,
+      "seconds": 0.0
+    },
+    "strict": {
+      "passed": true,
+      "seconds": 42.82,
+      "scope": "aq-server real_graph_fixture target and library, warnings denied"
+    },
+    "actual": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 1,
+      "seconds": 0.86,
+      "explicit_ignored_case_selected": true,
+      "service_launch_count": 1
+    }
+  },
+  "actual_facts": {
+    "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c",
+    "task_id": "e2370e57-11d5-4e96-9fc9-fa64a7812302",
+    "service_actor": "gate04-service-298873b6aa7b4b9f9d5b0c419930ecb0",
+    "initial_CAS_version": 1,
+    "initial_logical_revision": 1,
+    "completed_CAS_version": 2,
+    "completed_logical_revision": 2,
+    "node_count": 1,
+    "edge_count": 0,
+    "creation_change_set_id": "2f96c9ff-d45c-478a-bdf2-fc91c827764a",
+    "completion_change_set_id": "a7494506-f2f9-4b33-b02b-2be7d1d07494",
+    "writer_receipt_count_before": 1,
+    "writer_receipt_count_after": 2,
+    "actual_writer_credentials_verified": true,
+    "stable_create_replay": true,
+    "stable_completion_replay": true,
+    "stale_CAS_conflict_409": true
+  },
+  "cleanup": {
+    "child_pid": 1000405,
+    "child_reaped": true,
+    "database_removed": true,
+    "directory_removed": true,
+    "kill_fallback": false,
+    "successful_exit": true,
+    "read_only_postcheck_child_proc_absent": true,
+    "database_absence_verified_by": "actual helper admin query after exact TestDb guard Drop",
+    "private_directory_removal_verified_by": "successful TempDir.close after actual child reap/database absence",
+    "resource_names_not_in_receipts": "database name/private directory remain fixture-internal; cleanup verification is explicit in reviewed helper",
+    "total_database_teardown_wall_deadline_proven": false
+  },
+  "environment": {
+    "test_cluster": "existing PostgreSQL127.0.0.1:55432 administrative database/user postgres",
+    "fresh_graph_database": "existing TestDb-generated aq_test_<UUIDsimple>; no AQ Store migration or direct SQL domain seeding",
+    "new_container_or_dependency": false,
+    "canonical4195_modified": false,
+    "main_user_documents_modified": false,
+    "Git_or_provider_or_worker_calls": false
+  },
+  "scope_limits": [
+    "actual Graph process/API/SQL component only, no Codex execution/B1/B2/C/settlement success",
+    "fixture must be configured before first project verification/Poll, never restamp a synthetic observation",
+    "fresh pilot admits mutable Graph set exactly task; no required neighbors/dependencies",
+    "task CAS does not atomically assert absence of every arbitrary incoming relationship",
+    "broader mutable input set requires future owner transaction assertions; no no-op writes",
+    "Graph committed-observation schema9/profile absent",
+    "existing TestDb drop join/pool close has no proven total wall deadline",
+    "owner_evidence.task is immutable ORIGINAL seed pin even in after record; current task2 is completion receipt/task read",
+    "startup_log_sha256 is digest of then-current bounded process log and may change as metadata logs append"
+  ],
+  "source_commit": "5fec17cbd17c3d7b0b583c95940cfed3df65230f"
+}

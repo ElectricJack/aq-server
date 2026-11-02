@@ -1,0 +1,7 @@
+
+running 1 test
+test actual_pinned_graph_fixture_cas_receipts_context_and_owned_cleanup ... actual Graph component PASS: task=e2370e57-11d5-4e96-9fc9-fa64a7812302 CAS=1→2, actual receipts retained; exact child/database/tempdir cleanup confirmed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.86s
+

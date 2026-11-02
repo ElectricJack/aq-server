@@ -1,8 +1,9 @@
 # GATE04 disposable actual Graph owner fixture
 
-Status: source plan only, based on agent-q `1db85bb` and aq-graph `225329c`.
-No fixture database/service or provider call has been started. Root must review
-these exact pins, ownership and cleanup before execution. Existing canonical
+Status: approved plan, based on agent-q `1db85bb` and aq-graph `225329c`.
+The reviewed helper5fec17c passed compile/strict and one authorized Graph-only smoke;
+[qualification evidence](evidence/gate04-real-graph/README.md) preserves actual
+receipts and cleanup. No provider or actual Codex cycle is claimed. Existing canonical
 Graph4195 and its database, AQ canonical state and main user documents stay intact.
 
 ## Smallest reusable seam
@@ -116,7 +117,12 @@ CAS version and logical content_revision join the original execution spec, sourc
 commit/artifact, report/stop, review and effect-disposition receipts under B2/C.
 The context must be proven complete with zero relationships/dependencies/other
 mutable nodes; immutable catalog/source artifacts are separate admitted pins.
-Broader tasks are refused, not trimmed or rebound.
+Broader tasks are refused, not trimmed or rebound. This is an admission/input-set
+restriction, not a claim that taskCAS atomically asserts absence of every incoming
+nonstructural citation. Existing Graph checkpoints source for nonstructural edges,
+and both endpoints for blocks/parent-child. A policy requiring zero-any-edges at
+completion commit needs the deferred explicit Graph guard; it cannot be inferred
+from this pilot's task-only CAS.
 
 C uses the real Graph `/mutations` transaction: one `update_node` for the original
 task with `expected_version=ORIGINAL_ADMITTED_VERSION`, patchtask_state=completed,

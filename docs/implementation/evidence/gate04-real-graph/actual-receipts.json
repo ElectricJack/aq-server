@@ -1,0 +1,117 @@
+{
+  "after": {
+    "actual_writer_credential_verified": true,
+    "actual_writer_receipt_count": 2,
+    "binary_sha256": "eb9c8f41002cb5d9675f87de0cadbe34e7d74cfc60d2449cd23ac4df76921fea",
+    "child_pid": 1000405,
+    "edge_count": 0,
+    "node_count": 1,
+    "schema": 8,
+    "service_actor": "gate04-service-298873b6aa7b4b9f9d5b0c419930ecb0",
+    "startup_log_sha256": "322e3380fecb992301da9437ba6a46660b24290004e8c011a754dbe06b886138",
+    "task": {
+      "content_revision": 1,
+      "task_id": "e2370e57-11d5-4e96-9fc9-fa64a7812302",
+      "version": 1,
+      "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+    },
+    "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+  },
+  "before": {
+    "actual_writer_credential_verified": true,
+    "actual_writer_receipt_count": 1,
+    "binary_sha256": "eb9c8f41002cb5d9675f87de0cadbe34e7d74cfc60d2449cd23ac4df76921fea",
+    "child_pid": 1000405,
+    "edge_count": 0,
+    "node_count": 1,
+    "schema": 8,
+    "service_actor": "gate04-service-298873b6aa7b4b9f9d5b0c419930ecb0",
+    "startup_log_sha256": "2b90f8cf92599795a2033a2b6de1fe535340e0131b23f9624219962e449900e0",
+    "task": {
+      "content_revision": 1,
+      "task_id": "e2370e57-11d5-4e96-9fc9-fa64a7812302",
+      "version": 1,
+      "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+    },
+    "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+  },
+  "cleanup": {
+    "child_pid": 1000405,
+    "child_reaped": true,
+    "database_removed": true,
+    "directory_removed": true,
+    "kill_fallback": false,
+    "successful_exit": true
+  },
+  "completion_receipt": {
+    "change_set_id": "a7494506-f2f9-4b33-b02b-2be7d1d07494",
+    "results": [
+      {
+        "acceptance_criteria": "Verify actual CAS/idempotency receipt and owned cleanup.",
+        "body": "Component-only task. This is not an admitted model task or AQ completion proof.",
+        "content_revision": 2,
+        "content_type": "note",
+        "created_at": "2026-11-02T02:17:49.783829Z",
+        "created_by": "gate04-service-298873b6aa7b4b9f9d5b0c419930ecb0",
+        "deleted": false,
+        "id": "e2370e57-11d5-4e96-9fc9-fa64a7812302",
+        "kind": "task",
+        "labels": [],
+        "last_verified_at": null,
+        "last_verified_by": null,
+        "metadata": {},
+        "provenance": [],
+        "retired": false,
+        "retirement_reason": null,
+        "review_at": null,
+        "successor_id": null,
+        "summary": null,
+        "summary_of_revision": null,
+        "task_state": "completed",
+        "title": "Disposable Graph fixture smoke",
+        "updated_at": "2026-11-02T02:17:49.854123Z",
+        "valid_from": null,
+        "valid_until": null,
+        "verification": "unverified",
+        "version": 2,
+        "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+      }
+    ]
+  },
+  "creation_receipt": {
+    "change_set_id": "2f96c9ff-d45c-478a-bdf2-fc91c827764a",
+    "results": [
+      {
+        "acceptance_criteria": "Verify actual CAS/idempotency receipt and owned cleanup.",
+        "body": "Component-only task. This is not an admitted model task or AQ completion proof.",
+        "content_revision": 1,
+        "content_type": "note",
+        "created_at": "2026-11-02T02:17:49.783829Z",
+        "created_by": "gate04-service-298873b6aa7b4b9f9d5b0c419930ecb0",
+        "deleted": false,
+        "id": "e2370e57-11d5-4e96-9fc9-fa64a7812302",
+        "kind": "task",
+        "labels": [],
+        "last_verified_at": null,
+        "last_verified_by": null,
+        "metadata": {},
+        "provenance": [],
+        "retired": false,
+        "retirement_reason": null,
+        "review_at": null,
+        "successor_id": null,
+        "summary": null,
+        "summary_of_revision": null,
+        "task_state": "active",
+        "title": "Disposable Graph fixture smoke",
+        "updated_at": "2026-11-02T02:17:49.783829Z",
+        "valid_from": null,
+        "valid_until": null,
+        "verification": "unverified",
+        "version": 1,
+        "workspace_id": "e33104ef-cc73-4bf9-9db2-a1804e38db8c"
+      }
+    ]
+  },
+  "scope": "actual pinned Graph component only; no GATE04 harness/settlement/admission claim"
+}

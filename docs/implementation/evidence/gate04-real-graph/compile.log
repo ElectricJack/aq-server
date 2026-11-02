@@ -1,0 +1,37 @@
+   Compiling aq-session-protocol v0.1.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-session-protocol-0.1.0)
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling aq-playbooks-model v0.1.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-session-api)
+   Compiling crc32fast v1.5.3
+   Compiling miniz_oxide v0.9.1
+   Compiling aq-lifecycle-api v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-lifecycle-api)
+   Compiling flate2 v1.1.10
+   Compiling aq-playbooks-runner v0.1.3 (/tmp/aq-real-graph-fixture-v2/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling aq-agent-api v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.2 (/tmp/aq-real-graph-fixture-v2/crates/aq-profiles)
+   Compiling png v0.18.1 (/tmp/aq-real-graph-fixture-v2/vendor/png-0.18.1-aq1)
+   Compiling aq-playbooks-postgres v0.1.3 (/tmp/aq-real-graph-fixture-v2/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling aq-admission v0.1.10 (/tmp/aq-real-graph-fixture-v2/crates/aq-admission)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.3 (/tmp/aq-real-graph-fixture-v2/crates/aq-playbook-host)
+   Compiling aq-selection v0.1.4 (/tmp/aq-real-graph-fixture-v2/crates/aq-selection)
+   Compiling aq-phase-terminal-protocol v0.1.1 (/tmp/aq-real-graph-fixture-v2/crates/aq-phase-terminal-protocol)
+   Compiling aq-notifications v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-notifications)
+   Compiling aq-result-media v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-result-media)
+   Compiling aq-observation-api v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-observation-api)
+   Compiling aq-observation-admission v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-observation-admission)
+   Compiling aq-accounting v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-accounting)
+   Compiling aq-review-protocol v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-review-protocol)
+   Compiling aq-central-authority v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-central-authority)
+   Compiling aq-protocol v0.1.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-server v0.1.0 (/tmp/aq-real-graph-fixture-v2/crates/aq-server)
+   Compiling aq-playbooks-compiler v0.1.0 (/tmp/aq-real-graph-fixture-v2/vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler)
+    Finished `test` profile [unoptimized] target(s) in 1m 08s
+  Executable tests/real_graph_fixture.rs (/tmp/aq-worker-artifact-overlap-target/debug/deps/real_graph_fixture-618f36272a7c353b)
