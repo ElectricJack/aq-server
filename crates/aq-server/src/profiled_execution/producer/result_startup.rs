@@ -46,9 +46,8 @@ pub(super) fn from_definitions(
     if adapter.id.as_str() != ADAPTER_ID {
         return Ok(None);
     }
-    if adapter.version.as_str() != "1" {
-        return Err(refused());
-    }
+    // Definition revisions advance when whole runtime/environment bytes change.
+    // The Definition owner validates the revision; protocol versions stay below.
     let selected = definitions
         .iter()
         .find(|d| d.artifact() == adapter)
@@ -244,6 +243,54 @@ mod tests {
             let (adapter, defs) = definitions(value.clone());
             assert!(from_definitions(&adapter, &defs).is_err());
         }
+    }
+    #[test]
+    fn definition_revision_two_preserves_schema_recipe_and_contract_one() {
+        fn revision_two(body: Value) -> (ArtifactRef, Vec<Definition>) {
+            let (mut adapter, mut defs) = definitions(body);
+            adapter.version = Text::new("2").unwrap();
+            defs[0] = Definition::new(
+                adapter.clone(),
+                ArtifactKind::Definition,
+                defs[0].body().to_owned(),
+            )
+            .unwrap();
+            (adapter, defs)
+        }
+        let mut value = body();
+        value["profile"] = json!(INTERACTIVE_PROFILE);
+        value["recipe"] = json!(
+            public_reference(
+                "aq.codex-interactive-result-local-recipe",
+                INTERACTIVE_RECIPE_DIGEST,
+            )
+            .unwrap()
+        );
+        let (adapter, defs) = revision_two(value.clone());
+        assert!(
+            from_definitions(&adapter, &defs)
+                .unwrap()
+                .unwrap()
+                .interactive
+        );
+        assert!(interactive_runtime(&reference("runtime-code"), &defs).unwrap());
+        for (field, bad) in [
+            ("schema_version", json!(2)),
+            ("profile", json!("unqualified-profile")),
+            ("recipe", json!(reference("unqualified-recipe"))),
+            ("contract", json!(reference("unqualified-contract"))),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = bad;
+            let (adapter, defs) = revision_two(changed);
+            assert!(from_definitions(&adapter, &defs).is_err(), "{field}");
+        }
+        let mut wrong_hash = adapter.clone();
+        wrong_hash.digest = Digest::of(b"other body");
+        assert!(from_definitions(&wrong_hash, &defs).is_err());
+        let mut malformed = serde_json::to_value(adapter).unwrap();
+        malformed["version"] = json!("");
+        assert!(serde_json::from_value::<ArtifactRef>(malformed).is_err());
     }
     #[test]
     fn long_session_factory_uses_actual_interactive_definition_and_runtime() {
