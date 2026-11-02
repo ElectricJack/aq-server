@@ -153,6 +153,14 @@ net for panic/setup failure. No PID name search, service restart, directory glob
 container stop or canonical cleanup exists. Startup failures preserve bounded
 sanitized stage/status evidence while deleting only owned resources.
 
+Independent source review accepted helper5fec17c with one explicit timing limit:
+child TERM/KILL polling, startup/HTTP and the post-drop absence check are bounded,
+but the reused existing `TestDb::drop` performs a blocking thread.join and
+`pool.close().await` has no separately proven total wall-time deadline. The fixture
+therefore does **not** advertise universally bounded database teardown. A successful
+smoke must record actual child exit, database absence and directory removal; an
+unconfirmed exit/cleanup remains uncertainty with exact owned resources preserved.
+
 Before execution: review this plan/pin and helper source; coordinate Runner's
 SERVER and cold-Git tests. Compile focused helper/consumer checks under a target
 lease. Then one explicit opt-in smoke can exercise real health/auth/task creation,
