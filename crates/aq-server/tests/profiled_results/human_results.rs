@@ -51,6 +51,18 @@ async fn human_metadata_projects_exact_revisions_corrections_and_bounded_pages()
     assert_eq!(old["conclusion"], report.conclusion.as_str());
     assert_eq!(old["project_id"], json!(f.selection.lineage.project_id));
     assert_eq!(old["task_id"], json!(f.selection.lineage.task_id));
+    assert!(old.get("origin").is_none(), "default v1 field set changed");
+    let (status, mut v2) = get(&f, &format!("{path}?profile=recorded_native_v2")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v2["coverage"], human_results::NATIVE_V2_COVERAGE);
+    assert_eq!(v2["items"][0]["origin"], "legacy_prepare_v1");
+    v2["items"][0].as_object_mut().unwrap().remove("origin");
+    v2["coverage"] = json!(human_results::COVERAGE);
+    assert_eq!(
+        serde_json::to_vec(&detail).unwrap(),
+        serde_json::to_vec(&v2).unwrap(),
+        "opt-in origin must not alter legacy metadata bytes/fields"
+    );
     for forbidden in [
         "credential",
         "execution_spec",
@@ -130,6 +142,12 @@ async fn stopped_without_report_is_empty_and_current_viewer_cannot_read_results(
         .await
         .unwrap();
     assert_eq!(get(&f, "/api/human/results").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&f, "/api/human/results?profile=recorded_native_v2")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
     assert!(
         human_results::read(&f.state, f.actor, &Page::default(), None)
             .await

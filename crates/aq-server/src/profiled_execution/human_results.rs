@@ -12,9 +12,25 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, AppError>;
 pub const COVERAGE: &str = "recorded_legacy_native_only";
+pub const NATIVE_V2_COVERAGE: &str = "recorded_native_v2";
+#[derive(Clone, Copy, Debug, Deserialize, schemars::JsonSchema)]
+pub enum ReadProfile {
+    #[serde(rename = "recorded_native_v2")]
+    RecordedNativeV2,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultOrigin {
+    LegacyPrepareV1,
+    PhaseExecutionV2,
+    PhaseRefreshExecutionV1,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResultMetadata {
+    /// Only opt-in v2 pages expose origin. Default v1 retains its old field set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ResultOrigin>,
     pub report_id: Uuid,
     pub revision: String,
     pub project_id: Uuid,
@@ -43,6 +59,7 @@ pub struct ResultPage {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
+    pub profile: Option<ReadProfile>,
     pub project_id: Option<Uuid>,
     pub after: Option<Uuid>,
     pub limit: Option<u32>,
@@ -64,8 +81,15 @@ async fn owner(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, actor: Uuid) -> R
     }
     Ok(())
 }
-fn metadata(v: super::results::RecordedResult) -> ResultMetadata {
+fn metadata(v: super::results::RecordedResult, profile: Option<ReadProfile>) -> ResultMetadata {
     ResultMetadata {
+        origin: profile.map(|_| match v.origin {
+            super::results::RecordedOrigin::LegacyPrepareV1 => ResultOrigin::LegacyPrepareV1,
+            super::results::RecordedOrigin::PhaseExecutionV2 => ResultOrigin::PhaseExecutionV2,
+            super::results::RecordedOrigin::PhaseRefreshExecutionV1 => {
+                ResultOrigin::PhaseRefreshExecutionV1
+            }
+        }),
         report_id: v.report.report_id,
         revision: v.receipt.report_digest.as_str().into(),
         project_id: v.spec.lifecycle.project_id,
@@ -126,19 +150,21 @@ pub async fn read(
     let ids: Vec<Uuid> = if let Some((id, _)) = exact {
         vec![id]
     } else {
-        sqlx::query_scalar("SELECT r.report_id FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=r.attempt_id) AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')=$1::text) AND ($2::uuid IS NULL OR r.report_id>$2) ORDER BY r.report_id LIMIT $3")
-            .bind(page.project_id).bind(page.after).bind(i64::from(limit)+1).fetch_all(&mut *tx).await.map_err(db)?
+        sqlx::query_scalar("SELECT r.report_id FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE ($4 OR NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=r.attempt_id)) AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')=$1::text) AND ($2::uuid IS NULL OR r.report_id>$2) ORDER BY r.report_id LIMIT $3")
+            .bind(page.project_id).bind(page.after).bind(i64::from(limit)+1).bind(page.profile.is_some()).fetch_all(&mut *tx).await.map_err(db)?
     };
     let more = ids.len() > limit as usize;
     let mut items = Vec::new();
     for id in ids.into_iter().take(limit as usize) {
         let retained = super::results::load_locked(state, &mut tx, id).await?;
-        if retained.origin != super::results::RecordedOrigin::LegacyPrepareV1 {
+        if page.profile.is_none()
+            && retained.origin != super::results::RecordedOrigin::LegacyPrepareV1
+        {
             return Err(AppError::NotFound(
                 "result origin is outside current metadata coverage".into(),
             ));
         }
-        let value = metadata(retained);
+        let value = metadata(retained, page.profile);
         if page.project_id.is_some_and(|p| p != value.project_id)
             || exact.is_some_and(|(_, r)| r != value.revision)
         {
@@ -157,7 +183,12 @@ pub async fn read(
     Ok(ResultPage {
         schema_version: 1,
         server_time_ms,
-        coverage: COVERAGE.into(),
+        coverage: if page.profile.is_some() {
+            NATIVE_V2_COVERAGE
+        } else {
+            COVERAGE
+        }
+        .into(),
         items,
         next_after,
     })
