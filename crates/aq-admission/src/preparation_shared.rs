@@ -931,9 +931,9 @@ impl Document {
             }
             Self::ExecutionDelivery(v) => {
                 Document::Execution(Box::new(v.receipt.clone())).validate_shape()?;
-                // Structural decoding cannot authenticate the proposal's policy.
-                // validate_for/sample still enforce policy2's original120s bound.
-                v.delivery.clock.validate_interactive_session()?;
+                if v.receipt.negotiation.contract == long_contract_artifact()? {
+                    v.delivery.clock.validate_interactive_session()?;
+                } else { v.delivery.clock.validate()?; }
                 id(v.delivery.nonce)?;
                 v.schema_version
             }
@@ -993,8 +993,8 @@ pub fn long_contract_artifact() -> Result<ArtifactRef> {
     let manifest = serde_json::json!({"schema_version":3,"publication":"aq-admission/0.1.11",
         "scope":"explicit-interactive-one-hour","schema_digest":Digest::of(&bytes(&long_schema())?),
         "required_features":required_features()});
-    Ok(ArtifactRef { id:Text::new(format!("{}.interactive-long-v1",$contract_id))?,
-        version:Text::new("1")?,digest:hash("aq.phase.contract.v2",&manifest)? })
+    Ok(ArtifactRef { id:Text::new(format!("{}.interactive-long-v1",$contract_id)).map_err(|_| Invalid("long phase contract id"))?,
+        version:Text::new("1").map_err(|_| Invalid("long phase contract version"))?,digest:hash("aq.phase.contract.v2",&manifest)? })
 }
 pub fn policy_contract(policy: &PhasePolicy) -> Result<ArtifactRef> {
     policy.validate()?;
