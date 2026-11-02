@@ -1,0 +1,4 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-real-graph-injection-v2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 3.59s
+  Executable tests/actual_owner_setup.rs (/tmp/aq-worker-artifact-overlap-target/debug/deps/actual_owner_setup-a5635b598f500b3f)
+  Executable tests/native_offers.rs (/tmp/aq-worker-artifact-overlap-target/debug/deps/native_offers-15bd6fb7b673e47e)

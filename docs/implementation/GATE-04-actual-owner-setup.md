@@ -1,7 +1,10 @@
 # Actual owner setup before native selection
 
-Status: source-only test integration from Root union6727cce. No new database,
-Graph/Git/worker/provider process, build or canonical effect has run for this seam.
+Status: reviewed test integration from Root union6727cce, with
+[compile/pure/historical-regression evidence](evidence/gate04-actual-owner-setup/README.md).
+No new actual Graph/Git/worker/provider process or actual-constructor consumer proof
+is claimed; the historical regression uses its existing disposable AQ databases and
+explicit synthetic peers. Canonical state remains untouched.
 The already-qualified real Graph helper5fec17c remains a separate held child/DB
 owner. Runner owns its actual Codex/FD transport/runtime recipe; this change owns
 only the common actual project setup path. Historical synthetic fixtures remain
@@ -85,13 +88,17 @@ input/absence policies remain unsupported pending the separately deferred Graph
 transaction assertion owner. The initial fixture pin is never rebound; the actual
 published/execution task must join the caller's original task and source receipts.
 
-## Checks still required
+## Checks and actual-consumer proof
 
-Compile/pure/strict and relevant historical wrapper regression checks need a target
-lease; both Root SERVER and Human Target2 were active during source preparation.
-No additional Graph process is started merely to decorate this source work with
-another component smoke. A changed-consumer proof, if required, must be reviewed
-and join real Graph +real central Git before first project verification. The actual
-Codex composition is Runner's consumer and should carry the existing qualified
-helper's ordered cleanup and teardown timing limits. No source-only claim is a
-successful model cycle or B1/B2/C settlement.
+Reviewed source77ccceb plus diagnostic compiler correctionab74e03 passed the three
+pure validation cases, four historical native-offer wrapper regressions and focused
+strict checks. Exact logs/counts/timings and immutable wrapper comparison are in the
+linked evidence. Historical synthetic peer tests are not real-owner qualification.
+
+No additional Graph process was started merely to decorate source work with another
+component smoke. A changed-consumer proof must join real Graph +real central Git
+before first project verification; Runner's actual Codex composition is that consumer.
+It retains the existing qualified Graph helper's ordered cleanup and database teardown
+timing limits. Real heartbeat/registration/presence, actual runtime/finite-peer facts,
+single Poll and B1/B2/C settlement remain their owners' execution proof. No source-only
+or local validation result is a successful model cycle or settlement.

@@ -1,0 +1,8 @@
+
+running 3 tests
+test actual_setup_has_no_implicit_global_or_remote_source_fallback ... ok
+test actual_setup_refuses_mismatched_scope_digest_and_noncanonical_artifact ... ok
+test explicit_canonical_catalog_scope_is_validated_without_owner_effects ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

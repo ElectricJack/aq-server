@@ -1,0 +1,10 @@
+{
+  "crates/aq-server/tests/common/selection.rs": {
+    "byte_identical_historical_body": true,
+    "sha256": "a749ce4af605654039ede31deb4d0962d0e5a86251525c79140030b975a8ef79"
+  },
+  "crates/aq-server/tests/common/native_offer.rs": {
+    "byte_identical_historical_body": true,
+    "sha256": "043c178e8ef1099ae2c1c0d7a6079d88c3ac3cfc6193bd6053cac77436fcef39"
+  }
+}

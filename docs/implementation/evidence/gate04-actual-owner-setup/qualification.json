@@ -1,0 +1,90 @@
+{
+  "scope": "test-only actual owner constructor source/configuration and historical wrapper regression",
+  "status": "compiled_pure_and_legacy_qualified_actual_consumer_pending",
+  "source_commit": "ab74e03c1c35361148f9218100686587dc640cac",
+  "accepted_initial_source": "77ccceb0c5fe9775bc71f8e932922f089fb5a14a",
+  "base_commit": "6727cced07524fcc880da9fef5aca69fc52c83e0",
+  "source_sha256": {
+    "crates/aq-server/tests/common/selection.rs": "1f60dec391be530852ec3d65feba209a27d637aac7f8b69971ffe839e6ded59a",
+    "crates/aq-server/tests/common/selection_actual.rs": "509f0e19d3aa39923e43848368ec98e6f64993d93b0132ce50de0414233322b6",
+    "crates/aq-server/tests/common/native_offer.rs": "c598d5f51a0312947b37c20f49c05c4cef1dbfe0497acd5ade3af7bdb5209bc6",
+    "crates/aq-server/tests/actual_owner_setup.rs": "cd590e182fba08821118258ed5e5550edf3c1e34424395b7cba77fce742fa79f"
+  },
+  "binary_sha256": {
+    "actual_owner_setup": "12a88a242139615c5d5303c86c79c37175eb6e9564bc587e30a2eafb5723363b",
+    "native_offers": "74480db56327c05f07584169d7d54de6cf910717b70fc4f35edabe40d4e40b77"
+  },
+  "independent_review": "Runner source-accepted77ccceb; diagnostic-only compiler fix follows without data/authority/API shape change",
+  "runs": {
+    "first_compile": {
+      "passed": false,
+      "failure": "AppError is not StdError, so anyhow Context unavailable; one unused ProfileChoice reexport warning",
+      "preserved": true
+    },
+    "corrected_compile": {
+      "passed": true,
+      "seconds": 3.59
+    },
+    "pure": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "seconds": 0.01,
+      "owner_or_network_effects": false
+    },
+    "historical_native_offers": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "seconds": 4.03,
+      "backend": "fresh AQ TestDb UUIDs on existing test55432; actual SQL/router with explicitly synthetic Graph/Git peers",
+      "actual_model_provider_Graph_child": false
+    },
+    "strict": {
+      "passed": true,
+      "seconds": 36.81,
+      "scope": "aq-server library +actual_owner_setup/native_offers targets",
+      "warnings_denied": true
+    }
+  },
+  "historical_body_comparison": {
+    "crates/aq-server/tests/common/selection.rs": {
+      "byte_identical_historical_body": true,
+      "sha256": "a749ce4af605654039ede31deb4d0962d0e5a86251525c79140030b975a8ef79"
+    },
+    "crates/aq-server/tests/common/native_offer.rs": {
+      "byte_identical_historical_body": true,
+      "sha256": "043c178e8ef1099ae2c1c0d7a6079d88c3ac3cfc6193bd6053cac77436fcef39"
+    }
+  },
+  "configuration": {
+    "target": "/tmp/aq-worker-artifact-overlap-target",
+    "offline_locked": true,
+    "jobs": 2,
+    "debug": 0,
+    "incremental": 0,
+    "test_threads": 1,
+    "new_Rust_dependency_or_service": false,
+    "canonical_or_main_user_changes": false
+  },
+  "data_contract": [
+    "caller exact canonical catalog and full ProjectBinding before initial activation/PUT",
+    "real Graph config and real SourceRetentionConfig before first binding observation",
+    "original actual TaskRevision and complete bounded ready/context retained without rebinding",
+    "fresh Owner/enrollment only; declared worker version is metadata, not liveness",
+    "no last_seen/protocol2 registration/inventory/model registry/credential definitions/health/decisions/launches seeded",
+    "ordinary preflight then actual heartbeat/register/presence/singlePoll remains authoritative",
+    "optional freeze_after_heartbeat is diagnostic, not a new admission/proposal gate"
+  ],
+  "not_qualified": [
+    "actual constructor executed against real Graph and real central Git together",
+    "real worker registration/heartbeat/presence from this constructor",
+    "actual Codex/provider/tool/task cycle or B1/B2/C settlement",
+    "maximum node capacity/production performance",
+    "atomic absence of all incoming Graph citations"
+  ],
+  "no_additional_Graph_process": true,
+  "legacy_cleanup": "existing AQ TestDb guards; no independently retained per-database names from historical fixture output"
+}
