@@ -131,7 +131,7 @@ impl ActualSelectionFixture {
             &request,
         )
         .await
-        .context("actual current project eligibility refused")?;
+        .map_err(|_| anyhow::anyhow!("actual current project eligibility refused"))?;
         ensure!(
             current.eligible,
             "actual worker/project not eligible: {:?}",

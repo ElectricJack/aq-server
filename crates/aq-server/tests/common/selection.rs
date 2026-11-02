@@ -107,7 +107,8 @@ pub async fn call(
 }
 #[path = "selection_actual.rs"]
 mod actual;
-pub use actual::{ActualProfileChoice, ActualSelectionFixture, ActualSetup, setup_actual};
+pub use actual::{ActualSelectionFixture, ActualSetup, setup_actual};
+pub type ActualProfileChoice = actual::ActualProfileChoice;
 
 // Actual and historical fixtures share the existing test-only serialization
 // gate. Neither constructor creates a second admission driver.
