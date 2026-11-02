@@ -210,12 +210,12 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert_ne!(get(&f, &path).await.0, StatusCode::OK);
-    assert_ne!(
+    assert_eq!(get(&f, &path).await.0, StatusCode::CONFLICT);
+    assert_eq!(
         get(&f, "/api/human/results?profile=recorded_native_v2")
             .await
             .0,
-        StatusCode::OK
+        StatusCode::CONFLICT
     );
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_stopped_receipts DISABLE TRIGGER profiled_stopped_immutable")
@@ -258,12 +258,12 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert_ne!(get(&f, &path).await.0, StatusCode::OK);
-    assert_ne!(
+    assert_eq!(get(&f, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
         get(&f, "/api/human/results?profile=recorded_native_v2")
             .await
             .0,
-        StatusCode::OK
+        StatusCode::INTERNAL_SERVER_ERROR
     );
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")

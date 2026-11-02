@@ -24,10 +24,11 @@ Owner authorization, no-store response and bounded work budget.
 Root approved this minimal additive v2-only metadata field:
 
 ```json
-{"origin":"legacy_prepare_v1 | phase_execution_v2 | phase_refresh_execution_v1"}
+{"origin":"phase_refresh_execution_v1"}
 ```
 
-`origin` is one closed enum string per item, derived exclusively from the generic
+`origin` is the closed enum `legacy_prepare_v1`, `phase_execution_v2`, or
+`phase_refresh_execution_v1`, derived exclusively from the generic
 historical `RecordedResult.origin` after full owner verification. The field is
 omitted in default v1 responses. No new origin comes from caller input, launch
 labels, current allowlists or a raw result-row string. The existing
