@@ -5,6 +5,7 @@ pub mod api;
 pub mod artifact_api;
 pub mod artifacts;
 pub mod config;
+pub(crate) mod compute;
 pub mod context_budget;
 pub mod context_projection;
 pub mod expiry;

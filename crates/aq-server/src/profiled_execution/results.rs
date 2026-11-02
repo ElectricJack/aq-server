@@ -33,6 +33,32 @@ fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
     value.sort_all_objects();
     serde_json::to_vec(&value).map_err(|_| AppError::Internal)
 }
+/// Historical compute occupancy only. This cannot release a task/source claim
+/// or create current launch authority. Caller holds node -> attempt/hot locks.
+pub(crate) async fn compute_stop_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: Uuid,
+    binding: &aq_admission::LaunchBinding,
+    grant: Uuid,
+    expected_stop: &aq_admission::ArtifactRef,
+) -> Result<serde_json::Value, AppError> {
+    if super::phase_profile::for_attempt_locked(tx, binding.attempt_id)
+        .await?
+        .is_none()
+    {
+        return Err(conflict());
+    }
+    let verified = origin::load_locked(tx, node, binding, grant, false).await?;
+    if verified.artifact()? != *expected_stop {
+        return Err(conflict());
+    }
+    let pin = verified.pin();
+    Ok(serde_json::json!({
+        "kind": pin.kind,
+        "execution": pin.execution.ok_or_else(conflict)?,
+        "stopped_ack": pin.stopped_ack_bytes.ok_or_else(conflict)?,
+    }))
+}
 pub async fn record(
     state: &AppState,
     node: &AuthenticatedNode,

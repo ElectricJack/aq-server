@@ -66,8 +66,15 @@ pub async fn publish(
     }
     // SERIALIZABLE plus the common task-claim unique index arbitrates competing
     // schedulers; no worker-selected task state or legacy discriminator is used.
-    let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE holds_task AND (node_id=$1 OR task_id=$2))").bind(node).bind(built.spec.task.task_id).fetch_one(&mut *tx).await.map_err(db)?;
-    if busy {
+    let node_busy = super::super::compute::busy_locked(&mut tx, node).await?;
+    let task_held: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE holds_task AND task_id=$1)",
+    )
+    .bind(built.spec.task.task_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    if node_busy || task_held {
         return Err(refused());
     }
     crate::intelligence::resolver::fence_for_offer(state, &mut tx, &built.decision).await?;

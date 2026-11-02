@@ -177,13 +177,7 @@ pub async fn register(
                     == serde_json::to_value(&request.identity).ok().as_ref()
         });
     if existing.is_some() && !unchanged {
-        let held: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE node_id=$1 AND holds_task)",
-        )
-        .bind(auth.id())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| AppError::Internal)?;
+        let held = super::compute::busy_locked(&mut tx, auth.id()).await?;
         if held {
             return Err(AppError::Conflict(
                 "prior execution claims remain held".into(),

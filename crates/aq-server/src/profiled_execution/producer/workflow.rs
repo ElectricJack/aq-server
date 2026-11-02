@@ -243,13 +243,10 @@ pub async fn poll(
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
     }
-    let busy: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE node_id=$1 AND holds_task)",
-    )
-    .bind(auth.id())
-    .fetch_one(&state.store.pool)
-    .await
-    .map_err(db)?;
+    let mut occupancy = state.store.pool.begin().await.map_err(db)?;
+    crate::worker_api::lock_current_node(&mut occupancy, auth).await?;
+    let busy = super::super::compute::busy_locked(&mut occupancy, auth.id()).await?;
+    occupancy.commit().await.map_err(db)?;
     if busy {
         return Ok(page);
     }

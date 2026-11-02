@@ -5,12 +5,19 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("settlement39 schema, bounds or retained owner joins inconsistent".into())
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    validate_composed(tx, false).await
+    validate_composed(tx, false, false).await
 }
 pub(super) async fn validate_phase_absence(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    validate_composed(tx, true).await
+    validate_composed(tx, true, false).await
 }
-async fn validate_composed(tx: &mut Transaction<'_, Postgres>, phase_absence: bool) -> Result<()> {
+pub(super) async fn validate_compute_reuse(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    validate_composed(tx, true, true).await
+}
+async fn validate_composed(
+    tx: &mut Transaction<'_, Postgres>,
+    phase_absence: bool,
+    compute_reuse: bool,
+) -> Result<()> {
     let mut expected: serde_json::Value =
         serde_json::from_str(include_str!("settlement39_catalog.json")).map_err(|_| corrupt())?;
     if expected.as_array().is_none_or(Vec::is_empty) {
@@ -25,6 +32,17 @@ async fn validate_composed(tx: &mut Transaction<'_, Postgres>, phase_absence: bo
             .ok_or_else(corrupt)?;
         row["body"]["body"] = serde_json::Value::String(
             super::never_granted40::function_body("settlement_claim_guard")?.into(),
+        );
+    }
+    if compute_reuse {
+        let row = expected
+            .as_array_mut()
+            .ok_or_else(corrupt)?
+            .iter_mut()
+            .find(|row| row["kind"] == "function" && row["name"] == "profiled_result_origin_valid")
+            .ok_or_else(corrupt)?;
+        row["body"]["body"] = serde_json::Value::String(
+            super::compute41::function_body("profiled_result_origin_valid")?.into(),
         );
     }
     let actual: serde_json::Value = sqlx::query_scalar(include_str!("settlement39_catalog.sql"))
