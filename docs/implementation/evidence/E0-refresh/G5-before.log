@@ -1,0 +1,8 @@
+file:///home/jkern/.local/state/aq-platform-e0-final/dashboard-refresh-c0a7399/scripts/probe-core-overview.mjs:26
+ expect(overview.api_version).toBe('dashboard-read-1');expect(overview.scope.project_id).toBe(project);expect(Array.isArray(overview.data.attention)).toBe(true);expect(Array.isArray(overview.data.in_motion)).toBe(true);expect(Array.isArray(overview.data.recent_outcomes)).toBe(true);expect(overview.data.sources.length).toBeGreaterThan(0);
+                                                                                                                                                                                                                                                                                                                        ^
+
+TypeError: Cannot read properties of undefined (reading 'length')
+    at file:///home/jkern/.local/state/aq-platform-e0-final/dashboard-refresh-c0a7399/scripts/probe-core-overview.mjs:26:313
+
+Node.js v24.15.0

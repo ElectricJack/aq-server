@@ -1,0 +1,21 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-a3b-main-isolation-20261103/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.36s
+     Running tests/phase_terminal_closure.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_terminal_closure-d615e61739dac0a0)
+
+running 1 test
+test failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity ... 
+thread 'failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity' (2151461) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"unavailable","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 500
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.22s
+
+error: test failed, to rerun pass `-p aq-server --test phase_terminal_closure`

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-28770f5c51aa9b83)
+
+running 1 test
+test supervisor_restart_resumes_without_duplicate_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.76s
+

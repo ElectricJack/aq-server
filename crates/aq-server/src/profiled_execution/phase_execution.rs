@@ -3,6 +3,8 @@
 // A module alias would cross the old/new contract boundary instead.
 #![allow(clippy::duplicate_mod)]
 mod current;
+mod delegated_renewal;
+pub use delegated_renewal::renew_delegated;
 mod facts;
 pub(crate) mod history;
 mod observations;
@@ -148,6 +150,7 @@ async fn observe_ready(
     crate::agent_access::scheduling::ReadyPage,
     crate::agent_access::scheduling::SchedulingReadError,
 > {
-    let _ = state;
-    graph.scheduling_ready(workspace, 8, None).await
+    graph
+        .scheduling_ready_current(workspace, 8, None, state.clock.as_ref())
+        .await
 }

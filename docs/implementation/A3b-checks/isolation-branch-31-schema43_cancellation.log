@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/schema43_cancellation.rs (target/debug/deps/schema43_cancellation-b9b8f67484f84774)
+
+running 1 test
+test cancellation43_upgrade_preserves_prior_records_and_old41_refuses ... 
+thread 'cancellation43_upgrade_preserves_prior_records_and_old41_refuses' (2121206) panicked at crates/aq-server/tests/schema43_cancellation.rs:24:5:
+assertion failed: matches!(test_support::migrate_profile(&pool, 41).await,
+    Err(StoreError::IncompatibleState { found: 43, supported: 41 }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    cancellation43_upgrade_preserves_prior_records_and_old41_refuses
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.25s
+
+error: test failed, to rerun pass `-p aq-server --test schema43_cancellation`

@@ -1,0 +1,17 @@
+    Checking aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-selection)
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+error[E0063]: missing field `allowed_backends` in initializer of `aq_selection::AuthorizedCredential`
+  --> crates/aq-server/tests/dashboard_aggregation.rs:35:22
+   |
+35 |     let credential = AuthorizedCredential {
+   |                      ^^^^^^^^^^^^^^^^^^^^ missing `allowed_backends`
+
+error[E0063]: missing fields `allowed_backends` and `kind` in initializer of `aq_server::intelligence::config::CredentialConfig`
+  --> crates/aq-server/tests/dashboard_aggregation.rs:53:27
+   |
+53 |         .map(|credential| CredentialConfig {
+   |                           ^^^^^^^^^^^^^^^^ missing `allowed_backends` and `kind`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `aq-server` (test "dashboard_aggregation") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

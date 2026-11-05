@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/granted_closure.rs (target/debug/deps/granted_closure-083b8f36ccb7d06d)
+
+running 1 test
+test actual_grant_closes_once_and_replays_without_release_or_execution_clock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.39s
+

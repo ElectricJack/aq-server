@@ -154,3 +154,49 @@ async fn stopped_without_report_is_empty_and_current_viewer_cannot_read_results(
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn dashboard_search_uses_retained_result_metadata_and_digest() {
+    let (f, _, mut report) = prepare(true, true).await;
+    report.conclusion = Label::new("example result").unwrap();
+    let auth = context(&f).await;
+    let receipt = results::record(&f.state, &auth, &report).await.unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let response = app
+        .oneshot(
+            Request::get("/api/v1/search?q=example&types=result")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 262144).await.unwrap()).unwrap();
+    let group = body["data"]["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["type"] == "result")
+        .unwrap();
+    assert_eq!(group["hits"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(group["hits"][0]["title"], "example result");
+    assert_eq!(group["hits"][0]["ref"]["id"], json!(report.report_id));
+    assert_eq!(
+        group["hits"][0]["ref"]["revision"],
+        format!("sha256:{}", receipt.report_digest.as_str())
+    );
+    assert_eq!(
+        group["hits"][0]["project"]["id"],
+        json!(f.selection.lineage.project_id)
+    );
+    for excluded in [
+        "execution_spec",
+        "launch_manifest",
+        "credentials",
+        "source_receipt_ids",
+    ] {
+        assert!(!body.to_string().contains(excluded));
+    }
+}

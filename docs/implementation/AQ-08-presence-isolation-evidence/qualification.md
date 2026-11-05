@@ -4,10 +4,14 @@ Frozen source `b71bdf05cbaf62b6f7071183bf107d6a8e70ae6c` from root state31 `c3f2
 
 The first command filters the native test to4 isolation cases and also invokes schema31 with0 selected cases. The separate unfiltered schema31 command supplies all3 schema cases; no zero-selected run is counted as schema qualification.
 
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
+
 ```sh
-CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test native_initial_grant published::presence::isolation --test schema31_presence_barrier
-CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test schema31_presence_barrier
-CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test native_initial_grant published::presence::isolation --test schema31_presence_barrier
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test schema31_presence_barrier
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
 cargo fmt --package aq-server --check
 ```
 

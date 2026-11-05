@@ -1,0 +1,30 @@
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+    Finished `test` profile [unoptimized] target(s) in 8.36s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-7e6cf9f618dafba6)
+
+running 7 tests
+test concurrent_start_has_one_guardian_and_cancel_prevents_revival ... ok
+test expired_supervisor_is_stopped_and_scratch_is_retained ... ok
+test mismatched_host_plan_never_creates_a_writer ... ok
+test revoked_policy_stops_instead_of_readopting ... FAILED
+test successor_requires_stop_and_retains_prior_generation ... ok
+test supervisor_restart_resumes_without_duplicate_session ... ok
+test supervisor_session_starts_under_central_permit ... ok
+
+failures:
+
+---- revoked_policy_stops_instead_of_readopting stdout ----
+
+thread 'revoked_policy_stops_instead_of_readopting' (2481823) panicked at crates/aq-supervisor-host/tests/supervisor_session.rs:149:5:
+assertion `left == right` failed
+  left: RunningReported
+ right: StoppedReported
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    revoked_policy_stops_instead_of_readopting
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.17s
+
+error: test failed, to rerun pass `-p aq-supervisor-host --test supervisor_session`

@@ -1,4 +1,5 @@
 //! Optional startup-verified immutable dashboard bundle; never a filesystem server.
+mod manifest;
 use crate::{AppState, authz::CurrentUser, error::AppError};
 use anyhow::{Context, Result, ensure};
 use axum::{
@@ -9,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use manifest::Manifest;
 use serde::{
     Deserialize,
     de::{MapAccess, Visitor},
@@ -31,13 +33,6 @@ use std::{
 const MAX_FILES: usize = 512;
 const MAX_TOTAL: u64 = 32 * 1024 * 1024;
 const MAX_MANIFEST: u64 = 256 * 1024;
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Manifest {
-    schema_version: u32,
-    api_version: String,
-    files: Files,
-}
 struct Files(BTreeMap<String, Entry>);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,12 +70,14 @@ impl<'de> Deserialize<'de> for Files {
 struct Asset {
     bytes: Bytes,
     mime: &'static str,
+    cache_control: &'static str,
 }
 /// A configured trusted operator bundle, verified once before background owners
 /// start. Cloned responses share bounded bytes; requests never open a pathname.
 pub struct DashboardAssets {
     digest: String,
     files: BTreeMap<String, Asset>,
+    manifest: Asset,
 }
 impl DashboardAssets {
     /// Lowercase SHA256 of the exact verified manifest bytes, not a re-encoding.
@@ -106,10 +103,7 @@ impl DashboardAssets {
         let bytes = read_file(&root, "dashboard-manifest.json", MAX_MANIFEST, None)?;
         let manifest: Manifest =
             serde_json::from_slice(&bytes).context("invalid dashboard manifest")?;
-        ensure!(
-            manifest.schema_version == 1 && manifest.api_version == "dashboard-read-1",
-            "unsupported dashboard manifest version"
-        );
+        manifest.validate_compatibility()?;
         ensure!(
             !manifest.files.0.is_empty() && manifest.files.0.contains_key("index.html"),
             "dashboard index missing"
@@ -165,6 +159,7 @@ impl DashboardAssets {
                 Asset {
                     bytes: Bytes::from(bytes),
                     mime: mime(&name).context("dashboard MIME missing")?,
+                    cache_control: asset_cache_control(&name),
                 },
             );
         }
@@ -176,6 +171,11 @@ impl DashboardAssets {
         Ok(Self {
             files,
             digest: hex::encode(Sha256::digest(&bytes)),
+            manifest: Asset {
+                bytes: Bytes::from(bytes),
+                mime: "application/json",
+                cache_control: "no-cache",
+            },
         })
     }
 }
@@ -280,6 +280,27 @@ fn spa(path: &str) -> bool {
         _ => false,
     }
 }
+fn asset_cache_control(name: &str) -> &'static str {
+    let Some(base) = name
+        .strip_prefix("assets/")
+        .and_then(|file| file.rsplit_once('.').map(|(base, _)| base))
+    else {
+        return "no-cache";
+    };
+    // Vite's content hashes use URL-safe base64, including '_' and '-'.
+    if base.match_indices('-').any(|(offset, _)| {
+        let hash = &base[offset + 1..];
+        offset > 0
+            && hash.len() >= 8
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    }) {
+        "private, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
 fn handler(asset: Asset, spa_route: bool) -> axum::routing::MethodRouter<AppState> {
     get(move |State(state): State<AppState>, request: Request| {
         let asset = asset.clone();
@@ -296,6 +317,10 @@ fn handler(asset: Asset, spa_route: bool) -> axum::routing::MethodRouter<AppStat
             response
                 .headers_mut()
                 .insert(header::CONTENT_LENGTH, HeaderValue::from(asset.bytes.len()));
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static(asset.cache_control),
+            );
             Ok::<Response, AppError>(response)
         }
     })
@@ -306,7 +331,12 @@ pub(crate) fn routes(assets: Arc<DashboardAssets>) -> Router<AppState> {
         .get("index.html")
         .expect("validated dashboard index")
         .clone();
-    let mut router = Router::new();
+    let mut router = Router::new()
+        .route("/index.html", handler(index.clone(), false))
+        .route(
+            "/dashboard-manifest.json",
+            handler(assets.manifest.clone(), false),
+        );
     for path in [
         "/",
         "/overview",
@@ -340,7 +370,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::os::unix::fs::{PermissionsExt, symlink};
-    fn bundle() -> tempfile::TempDir {
+    pub(super) fn bundle() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::create_dir(root.path().join("assets")).unwrap();
@@ -527,5 +557,114 @@ mod tests {
         ] {
             assert!(!spa(p), "{p}");
         }
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_hash_named_assets_are_immutable() {
+        for name in [
+            "assets/index-abcd1234.js",
+            "assets/TaskGraph-CA-h6BEc.js",
+            "assets/agents-040M5_Uq.js",
+            "assets/index-ABCD1234.css",
+        ] {
+            assert_eq!(
+                asset_cache_control(name),
+                "private, max-age=31536000, immutable"
+            );
+        }
+        for name in [
+            "index.html",
+            "dashboard-manifest.json",
+            "assets/app.js",
+            "assets/app-short.js",
+            "assets/short.js",
+            "assets/.js",
+        ] {
+            assert_eq!(asset_cache_control(name), "no-cache");
+        }
+    }
+    #[test]
+    fn schema_two_checks_required_contracts_capabilities_and_provenance() {
+        let root = super::tests::bundle();
+        let path = root.path().join("dashboard-manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["schema_version"] = json!(2);
+        manifest["version"] = json!("0.1.0");
+        manifest["source"] = json!({"revision":"a".repeat(40), "dirty":false, "official":true});
+        manifest["toolchain"] =
+            json!({"node":"v24.15.0", "pnpm":"10.34.5", "lockfile_sha256":"b".repeat(64)});
+        manifest["required_api_versions"] = json!(["dashboard-read-1", "dashboard-actions-1"]);
+        manifest["required_capabilities"] =
+            json!(["dashboard.overview", "tasks.read", "results.media.read"]);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(DashboardAssets::load(root.path()).is_ok());
+        for mode in [
+            "api",
+            "capability",
+            "unimplemented-capability",
+            "missing",
+            "missing-version",
+            "missing-source",
+            "missing-toolchain",
+            "missing-contracts",
+            "no-read-contract",
+            "revision",
+            "lockfile",
+            "dirty-official",
+            "unknown",
+            "future",
+        ] {
+            let mut invalid = manifest.clone();
+            match mode {
+                "api" => invalid["required_api_versions"] = json!(["dashboard-read-2"]),
+                "capability" => invalid["required_capabilities"] = json!(["future.capability"]),
+                "unimplemented-capability" => {
+                    invalid["required_capabilities"] = json!(["supervisor.conversation"])
+                }
+                "missing-version" => {
+                    invalid.as_object_mut().unwrap().remove("version");
+                }
+                "missing-source" => {
+                    invalid.as_object_mut().unwrap().remove("source");
+                }
+                "missing-toolchain" => {
+                    invalid.as_object_mut().unwrap().remove("toolchain");
+                }
+                "missing-contracts" => {
+                    invalid
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("required_api_versions");
+                }
+                "no-read-contract" => {
+                    invalid["required_api_versions"] = json!(["dashboard-actions-1"])
+                }
+                "missing" => {
+                    invalid
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("required_capabilities");
+                }
+                "revision" => invalid["source"]["revision"] = json!("main"),
+                "lockfile" => invalid["toolchain"]["lockfile_sha256"] = json!("bad"),
+                "dirty-official" => invalid["source"]["dirty"] = json!(true),
+                "unknown" => invalid["toolchain"]["unexpected"] = json!(true),
+                "future" => invalid["schema_version"] = json!(3),
+                _ => unreachable!(),
+            }
+            std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(DashboardAssets::load(root.path()).is_err(), "{mode}");
+        }
+        manifest["source"]["dirty"] = json!(true);
+        manifest["source"]["official"] = json!(false);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(DashboardAssets::load(root.path()).is_ok());
     }
 }

@@ -1,0 +1,9 @@
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-supervisor-host)
+    Finished `test` profile [unoptimized] target(s) in 3.63s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-c961a195480fe6f1)
+
+running 1 test
+test owner_message_reaches_supervisor_and_reply_is_recorded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2.47s
+

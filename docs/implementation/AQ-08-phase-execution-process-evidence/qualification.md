@@ -10,8 +10,12 @@ Final strict all-target/all-feature server Clippy passed2.36s; its owner indepen
 
 Development negatives are retained: one test module-path compile error; registration attempted before the child registered; stale provider source age6183ms correctly refused; and an incorrect private-journal audit field after actual grant success. Corrected handshake/pause behavior applies only to the new worker execution probe. These negatives are not counted as passing qualification.
 
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
+
 ```sh
-CARGO_TARGET_DIR=/tmp/aq-phase30-qualification-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=1 AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git AQ_TEST_NATIVE_WORKER=/tmp/aq-native-prepare-smoke-artifact/phase8-execution-prompt-release/native-prepare-smoke AQ_TEST_NATIVE_WORKER_SHA256=077e21136716a6826bb7df89cc8e8fb11d7cd9b3bb8e891c49626dcaddac6d79 cargo test -p aq-server --test native_initial_grant --all-features --locked --offline published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer -- --exact --ignored --test-threads=1 --nocapture
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=1 AQ_TEST_GIT_CANDIDATE=/tmp/aq-wrk08-git-pin/aq-git AQ_TEST_GIT_EXECUTABLE=/usr/bin/git AQ_TEST_NATIVE_WORKER=/tmp/aq-native-prepare-smoke-artifact/phase8-execution-prompt-release/native-prepare-smoke AQ_TEST_NATIVE_WORKER_SHA256=077e21136716a6826bb7df89cc8e8fb11d7cd9b3bb8e891c49626dcaddac6d79 cargo test -p aq-server --test native_initial_grant --all-features --locked --offline published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer -- --exact --ignored --test-threads=1 --nocapture
 ```
 
 External binaries are referenced by exact digest, not copied into this evidence directory. Source and compiler/build ownership remain separate from this process claim. No full production/fleet acceptance is implied.

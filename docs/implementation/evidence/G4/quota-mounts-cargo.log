@@ -1,0 +1,11 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.07s
+     Running tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-7f9c2e86d9485c39)
+
+running 3 tests
+test configured_graph_and_injected_review_owner_are_visible_only_to_owner ... ok
+test mounted_routes_and_absent_owners_have_granular_truthful_capabilities ... ok
+test unsupported_saved_graph_adapter_is_refused_before_upstream_io ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s
+

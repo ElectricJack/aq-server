@@ -1,0 +1,24 @@
+    Checking typenum v1.20.1
+    Checking serde_core v1.0.229
+    Checking generic-array v0.14.7
+    Checking zmij v1.0.23
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking itoa v1.0.18
+    Checking sha1_smol v1.0.1
+    Checking memchr v2.8.3
+    Checking serde v1.0.229
+    Checking serde_json v1.0.154
+    Checking uuid v1.29.0
+    Checking ref-cast v1.0.27
+    Checking digest v0.10.7
+    Checking cpufeatures v0.2.17
+    Checking dyn-clone v1.0.20
+    Checking cfg-if v1.0.5
+    Checking schemars v1.2.3
+    Checking sha2 v0.10.9
+    Checking thiserror v2.0.21
+    Checking aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/vendor/aq-session-protocol-0.1.0)
+    Checking aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/crates/aq-admission)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.97s

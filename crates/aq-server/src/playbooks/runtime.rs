@@ -91,9 +91,61 @@ impl Runtime {
             return Err(refused());
         }
         config.check_socket().map_err(|_| refused())?;
-        let service = Service::new_profile2(state, config.namespace.clone(), config.keys.clone())
+        let service = if config.profile == super::review_domain::CatalogProfile::Monitoring6 {
+            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            Service::new_monitoring6(
+                state,
+                config.namespace.clone(),
+                config.keys.clone(),
+                Arc::new(super::host_adapters::GatewayGraph(graph)),
+            )
             .await
-            .map_err(|_| refused())?;
+        } else if config.profile.is_host2() {
+            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            // No production sandbox check executor (server->node check-attempt
+            // execution with profiled check evidence) or judgment provider
+            // (credential lease) exists yet. The ports stay unbound, so
+            // check.request refuses `unavailable` and judgment.request refuses
+            // `no_permitted_profile`; nothing is fabricated.
+            //
+            // The D7 integration port binds to D1 delivery only when an
+            // integration policy is configured and aq-git (source retention)
+            // is available; otherwise candidate.* refuses `unavailable`.
+            let integration = match (&config.integration, state.delivery()) {
+                (Some(settings), Some(delivery)) => {
+                    Some(Arc::new(super::host_adapters::DeliveryIntegration::new(
+                        state.clone(),
+                        delivery,
+                        settings.clone(),
+                        Arc::new(reviews::Service::new(state.clone(), config.keys.clone())),
+                        &config.namespace,
+                    ))
+                        as Arc<dyn super::host_adapters::Integration>)
+                }
+                (Some(_), None) => return Err(refused()),
+                (None, _) => None,
+            };
+            Service::new_host2(
+                state,
+                config.namespace.clone(),
+                config.keys.clone(),
+                config.profile,
+                Arc::new(super::host_adapters::GatewayGraph(graph)),
+                None,
+                None,
+                integration,
+            )
+            .await
+        } else {
+            Service::with_profile(
+                state,
+                config.namespace.clone(),
+                config.keys.clone(),
+                config.profile,
+            )
+            .await
+        }
+        .map_err(|_| refused())?;
         service
             .initialize(config.namespace.owner_user_id)
             .await

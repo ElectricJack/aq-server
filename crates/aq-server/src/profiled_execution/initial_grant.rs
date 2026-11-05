@@ -475,6 +475,7 @@ pub async fn prepare(
     let registry = state.config.intelligence.clone().ok_or_else(refused)?;
     let lease = before.material.clone();
     let node = auth.id();
+    let source = super::login_refresh::lease_source(&state.store.pool, &registry, &lease).await?;
     static READS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
         std::sync::OnceLock::new();
     let permit = READS
@@ -486,7 +487,7 @@ pub async fn prepare(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            material::read_for_lease(&registry, &lease, node)
+            material::read_for_lease_from(&registry, &lease, node, source.as_ref())
         }),
     )
     .await

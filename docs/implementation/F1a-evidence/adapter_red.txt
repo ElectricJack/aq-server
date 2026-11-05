@@ -1,0 +1,10 @@
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+error[E0432]: unresolved import `aq_supervisor_host::adapter`
+ --> crates/aq-supervisor-host/tests/adapter.rs:1:25
+  |
+1 | use aq_supervisor_host::adapter::native_recipe;
+  |                         ^^^^^^^ could not find `adapter` in `aq_supervisor_host`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `aq-supervisor-host` (test "adapter") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

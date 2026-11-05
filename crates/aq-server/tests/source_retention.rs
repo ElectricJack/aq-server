@@ -142,6 +142,8 @@ impl Harness {
         };
         let dir = tempfile::tempdir().unwrap();
         let settings = SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             staging_root: dir.path().join("staging"),
             git_root: dir.path().join("git"),
             git_socket: dir.path().join("git.sock"),
@@ -847,6 +849,8 @@ fn runtime_rejects_symlink_before_changing_target_permissions() {
     let link = dir.path().join("link");
     symlink(&target, &link).unwrap();
     let cfg = SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
         staging_root: link,
         git_root: dir.path().join("git"),
         git_socket: dir.path().join("git.sock"),
@@ -1087,3 +1091,8 @@ async fn credential_rotation_during_import_keeps_uncertain_intent_and_current_ke
         .unwrap()
         .unwrap();
 }
+
+#[path = "source_retention/delivery.rs"]
+mod delivery;
+#[path = "source_retention/publication.rs"]
+mod publication;

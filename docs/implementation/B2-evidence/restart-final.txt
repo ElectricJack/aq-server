@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 8.73s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-420ace213f61fd3d)
+
+running 1 test
+test server_restart_mid_attempt_resumes_or_preserves ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.10s
+

@@ -17,9 +17,13 @@ creates global availability or authorizes execution. Actual daemon owners,
 compatibility epochs, current authority and qualified physical worker I/O remain
 separate gates.
 
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
+
 ```sh
-env CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo test -p aq-admission --locked --offline
-env CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-admission --all-targets --locked --offline -- -D warnings
+env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p aq-admission --locked --offline
+env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-admission --all-targets --locked --offline -- -D warnings
 cargo fmt --package aq-admission --check
 python3 crates/aq-admission/tools/scoped_presence_vectors.py
 ```

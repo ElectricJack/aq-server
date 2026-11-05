@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 3.37s
+     Running tests/supervisor_conversation.rs (target/debug/deps/supervisor_conversation-b44a249bebf0add1)
+
+running 6 tests
+test dropped_http_reply_recovers_byte_identical_receipt_and_one_committed_message ... ok
+test actual_mount_has_owner_caps_and_csrf_while_standalone_and_viewer_do_not ... ok
+test finite_retention_preserves_original_replay_and_lookup_at_capacity ... ok
+test history_replay_retained_refusals_and_shared_owner_scope_use_one_mailbox ... ok
+test owner_current_identity_and_input_bounds_refuse_without_mail_or_worker_fallback ... ok
+test max_body_pages_trim_to_byte_budget_and_preserve_both_cursor_directions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.10s
+

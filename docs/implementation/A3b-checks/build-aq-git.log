@@ -1,0 +1,75 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.aq-git
+#1 transferring dockerfile: 1.82kB 0.0s done
+#1 DONE 0.1s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#3 DONE 0.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 136B done
+#4 DONE 0.0s
+
+#5 [stage-2 1/5] FROM docker.io/library/debian:bookworm-slim
+#5 DONE 0.0s
+
+#6 [aq-git-build 1/6] FROM docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 64.62MB 0.9s done
+#7 DONE 1.0s
+
+#8 [aq-git-build 2/6] WORKDIR /src
+#8 CACHED
+
+#9 [aq-git-build 3/6] COPY vendor/aq-git-source.tar.gz /tmp/source.tar.gz
+#9 DONE 0.4s
+
+#10 [aq-git-build 4/6] RUN echo 'f64891f03e2d28263cf3af20b38123935ae08d6917699becb9d77e76af2fd3c6  /tmp/source.tar.gz' | sha256sum -c -
+#10 1.152 /tmp/source.tar.gz: OK
+#10 DONE 1.2s
+
+#11 [aq-git-build 5/6] COPY vendor/aq-git-v0.2.0-linux-x86_64 /src/target/release/aq-git
+#11 DONE 0.3s
+
+#12 [aq-git-build 6/6] RUN echo '3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2  /src/target/release/aq-git' | sha256sum -c - && chmod 755 /src/target/release/aq-git
+#12 0.519 /src/target/release/aq-git: OK
+#12 DONE 0.6s
+
+#13 [git-build 5/6] WORKDIR /git
+#13 CACHED
+
+#14 [git-build 6/6] RUN make -j4 prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease all && make prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease install
+#14 CACHED
+
+#15 [stage-2 2/5] RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 libexpat1 libssl3 zlib1g && rm -rf /var/lib/apt/lists/*
+#15 CACHED
+
+#16 [git-build 3/6] COPY vendor/aq-git-0.2.0/git-2.56.0.tar.xz /tmp/git.tar.xz
+#16 CACHED
+
+#17 [stage-2 3/5] COPY --from=git-build /opt/aq-git-runtime /opt/aq-git-runtime
+#17 CACHED
+
+#18 [git-build 2/6] RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev libcurl4-openssl-dev libexpat1-dev gettext zlib1g-dev && rm -rf /var/lib/apt/lists/*
+#18 CACHED
+
+#19 [git-build 4/6] RUN echo '26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3  /tmp/git.tar.xz' | sha256sum -c - && mkdir /git && tar -xf /tmp/git.tar.xz -C /git --strip-components=1
+#19 CACHED
+
+#20 [stage-2 4/5] RUN ln -s /opt/aq-git-runtime/bin/git /usr/bin/git
+#20 CACHED
+
+#21 [stage-2 5/5] COPY --from=aq-git-build /src/target/release/aq-git /usr/local/bin/aq-git
+#21 DONE 0.2s
+
+#22 exporting to image
+#22 exporting layers 0.1s done
+#22 writing image sha256:4e405e60f637f766582fcb182d1e3bd963ba8e78c94d2cc57203d28f0f358642 done
+#22 naming to docker.io/library/aq-git-a3b:0.2.0 0.0s done
+#22 DONE 0.2s

@@ -308,3 +308,82 @@ async fn changed_artifact_bytes_and_large_request_never_enter_namespace() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn engine_admission_capacity_is_typed_and_keeps_existing_work() {
+    use aq_playbooks_runner::KeyedAdmissionRequest;
+    let store = MemoryStorage::default();
+    let inspect = store.clone();
+    let mut limits = HostLimits::default();
+    limits.engine.max_runs = 1;
+    let owner = Owner::start("bounded-admissions".into(), limits, move || Ok(store))
+        .await
+        .unwrap();
+    let a = artifact();
+    owner
+        .call(
+            Request::Install {
+                artifact: Box::new(a.clone()),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    owner
+        .call(
+            Request::Activate {
+                binding: "bounded".into(),
+                artifact: a.digest.clone(),
+                authority: common::authority(),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    let request = |key: &str| KeyedAdmissionRequest {
+        key: key.into(),
+        binding: "bounded".into(),
+        expected_activation_revision: 1,
+        entry: "main".into(),
+        input: serde_json::Value::Null,
+        authority: common::authority(),
+    };
+    let first = owner
+        .call(
+            Request::AdmitOnce {
+                request: Box::new(request("one")),
+                now_ms: 1,
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        owner
+            .call(
+                Request::AdmitOnce {
+                    request: Box::new(request("two")),
+                    now_ms: 2
+                },
+                DEADLINE
+            )
+            .await,
+        Err(Error::Overloaded)
+    ));
+    let replay = owner
+        .call(
+            Request::AdmitOnce {
+                request: Box::new(request("one")),
+                now_ms: 3,
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first["receipt"], replay["receipt"]);
+    assert_eq!(
+        inspect.load("bounded-admissions").unwrap().state.runs.len(),
+        1
+    );
+    owner.call(Request::Stop, DEADLINE).await.unwrap();
+}

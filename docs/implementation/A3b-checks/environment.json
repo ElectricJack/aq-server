@@ -1,0 +1,58 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "python": "3.12.3",
+  "base_commit": "ab314605eeccf89bb49cc2d23e4fc6e98c230bd7",
+  "task_branch": "aq/eager-grove-45.3",
+  "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+  "cargo": "cargo 1.96.1 (356927216 2026-06-26)",
+  "docker": "Docker version 29.3.1, build c2be9cc",
+  "resource_controls": {
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_TEST_THREADS": "1",
+    "python_tests": "aq test defaults (-n 6, loadfile)"
+  },
+  "database": "disposable PostgreSQL 17 bookworm, scripts/test-db, loopback port 55432",
+  "qualification_source_commit": "912155a13392ab4a3176d2202acf9355b5170d1c",
+  "prerequisite_repair_commit": "d6ed24319745d8030e71c526b498b83f5bdde5e0",
+  "clippy_source_commit": "1cf77fc1e6a2d1d4ee72fb75f8dabde63d6bb368",
+  "lint_repair_main_commit": "c13cf4bf",
+  "latest_sync_source_commit": "256ccccf39cfee0c9062b58b822d4c679c90b051",
+  "latest_fetched_main_commit": "18af3900f5fae76bdc9797017cd4cbd9f4987b8a",
+  "workspace_diagnostic_exit": 130,
+  "workspace_prerequisite_source_commit": "46fb7a19db91d3f6cd08fa2c46084c7cf507c0f7",
+  "prerequisite_branch": "aq/eager-grove-45.3.3",
+  "prerequisite_pull_request": 19,
+  "stack_authorization_message": "msg-41efaa94f6ce40f093a85cb3b25549b1",
+  "final_clippy_source_commit": "46fb7a19db91d3f6cd08fa2c46084c7cf507c0f7",
+  "timing_triage": {
+    "evidence": "timing-triage.json",
+    "investigation": "smart-delta-18",
+    "supervisor_disposition_message": "msg-e40950af47e1431dbacdefa146c507cd",
+    "explicit_test_threads": [
+      1,
+      2
+    ]
+  },
+  "full_workspace_source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+  "full_workspace_result": {
+    "exit_code": 101,
+    "target_results": 225,
+    "passed": 1393,
+    "failed": 32,
+    "ignored": 30,
+    "evidence": "workspace-suite-results.json"
+  },
+  "baseline_source_commit": "ea28da1ca62184e9f5f945b73b62320edbe903e0",
+  "baseline_checkout": "/tmp/aq-a3b-main-isolation-20261103",
+  "graph_fixture": "graph-test-binary.json",
+  "baseline_checkout_removed_after_tests": true,
+  "accepted_workspace_disposition": {
+    "message": "msg-ca59a3e2ee0142fda8c632fbd677fb97",
+    "pre_existing_identical_on_main": 19,
+    "missing_graph_fixture_corrected": 1,
+    "persistent_branch_only": 0,
+    "evidence": "baseline-comparison.json",
+    "passed_in_unchanged_isolation_or_recheck": 12
+  }
+}

@@ -1,0 +1,357 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 4.31kB done
+#1 DONE 0.1s
+
+#2 [internal] load metadata for docker.io/library/rust:1.96.1-bookworm
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 136B done
+#5 DONE 0.0s
+
+#6 [runtime 1/2] FROM docker.io/library/debian:bookworm-slim
+#6 DONE 0.0s
+
+#7 [build 1/7] FROM docker.io/library/rust:1.96.1-bookworm
+#7 DONE 0.0s
+
+#8 [git-build 1/6] FROM docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 87.14MB 1.7s done
+#9 DONE 1.8s
+
+#10 [build 2/7] WORKDIR /build
+#10 CACHED
+
+#11 [build 3/7] COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+#11 DONE 0.7s
+
+#12 [build 4/7] COPY crates ./crates
+#12 DONE 0.5s
+
+#13 [build 5/7] COPY vendor ./vendor
+#13 DONE 1.2s
+
+#14 [build 6/7] COPY protocol ./protocol
+#14 DONE 0.3s
+
+#15 [build 7/7] RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,sharing=locked,target=/build/target     cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol     && cargo build --locked --release --bin aq-server     && mkdir -p /out     && cp target/release/aq-server /out/
+#15 2.766      Removed 36 files, 294.3MiB total
+#15 3.866    Compiling aq-admission v0.1.11 (/build/crates/aq-admission)
+#15 3.867    Compiling aq-release v0.1.0 (/build/crates/aq-release)
+#15 3.880    Compiling aq-worker-protocol v0.2.0 (/build/vendor/aq-worker-protocol-0.2.0)
+#15 3.880    Compiling aq-protocol v0.1.0 (/build/vendor/aq-protocol-0.1.0)
+#15 7.222 error[E0592]: duplicate definitions with name `new_interactive_session`
+#15 7.222  --> crates/aq-admission/src/delivery_clock_interactive.rs:7:5
+#15 7.222   |
+#15 7.222 7 |     pub fn new_interactive_session(server_time_ms: u64, expires_at_ms: u64) -> Result<Self> {
+#15 7.222   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ duplicate definitions for `new_interactive_session`
+#15 7.222   |
+#15 7.222  ::: crates/aq-admission/src/interactive_delivery.rs:6:5
+#15 7.222   |
+#15 7.222 6 |     pub fn new_interactive_session(server_time_ms: u64, expires_at_ms: u64) -> Result<Self> {
+#15 7.222   |     --------------------------------------------------------------------------------------- other definition for `new_interactive_session`
+#15 7.222 
+#15 7.222 error[E0592]: duplicate definitions with name `validate_interactive_session`
+#15 7.222   --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 7.222    |
+#15 7.222 19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 7.222    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ duplicate definitions for `validate_interactive_session`
+#15 7.222    |
+#15 7.222   ::: crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 7.222    |
+#15 7.222 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 7.222    |     -------------------------------------------------------- other definition for `validate_interactive_session`
+#15 7.222 
+#15 7.222 error[E0592]: duplicate definitions with name `client_interactive_deadline_ns`
+#15 7.222   --> crates/aq-admission/src/delivery_clock_interactive.rs:29:5
+#15 7.222    |
+#15 7.222 29 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 7.222    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ duplicate definitions for `client_interactive_deadline_ns`
+#15 7.222    |
+#15 7.222   ::: crates/aq-admission/src/interactive_delivery.rs:27:5
+#15 7.222    |
+#15 7.222 27 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 7.222    |     ------------------------------------------------------------------------------------------- other definition for `client_interactive_deadline_ns`
+#15 7.222 
+#15 9.274 error[E0034]: multiple applicable items in scope
+#15 9.274    --> crates/aq-admission/src/preparation_shared.rs:768:33
+#15 9.274     |
+#15 9.274 768 |               self.delivery.clock.validate_interactive_session()?;
+#15 9.274     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 9.274     |
+#15 9.274    ::: crates/aq-admission/src/preparation_v2.rs:3:1
+#15 9.274     |
+#15 9.274   3 | / crate::preparation_shared::phase_profile! {
+#15 9.274   4 | |     PhaseFeature: "PreparationV2PhaseFeature",
+#15 9.274   5 | |     Negotiation: "PreparationV2Negotiation",
+#15 9.274   6 | |     PhasePolicy: "PreparationV2PhasePolicy",
+#15 9.274 ...   |
+#15 9.274  25 | |     lease_fields: [],
+#15 9.274  26 | | }
+#15 9.274     | |_- in this macro invocation
+#15 9.274     |
+#15 9.274 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 9.274    --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 9.274     |
+#15 9.274  19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.274     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.274 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 9.274    --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 9.274     |
+#15 9.274  18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.274     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.274     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 9.274 
+#15 9.278 error[E0034]: multiple applicable items in scope
+#15 9.278    --> crates/aq-admission/src/preparation_shared.rs:795:33
+#15 9.279     |
+#15 9.279 795 |               self.delivery.clock.client_interactive_deadline_ns(sent, received)?
+#15 9.279     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `client_interactive_deadline_ns` found
+#15 9.279     |
+#15 9.279    ::: crates/aq-admission/src/preparation_v2.rs:3:1
+#15 9.279     |
+#15 9.279   3 | / crate::preparation_shared::phase_profile! {
+#15 9.279   4 | |     PhaseFeature: "PreparationV2PhaseFeature",
+#15 9.279   5 | |     Negotiation: "PreparationV2Negotiation",
+#15 9.279   6 | |     PhasePolicy: "PreparationV2PhasePolicy",
+#15 9.279 ...   |
+#15 9.279  25 | |     lease_fields: [],
+#15 9.279  26 | | }
+#15 9.279     | |_- in this macro invocation
+#15 9.279     |
+#15 9.279 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 9.279    --> crates/aq-admission/src/delivery_clock_interactive.rs:29:5
+#15 9.279     |
+#15 9.279  29 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 9.279     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.279 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 9.279    --> crates/aq-admission/src/interactive_delivery.rs:27:5
+#15 9.279     |
+#15 9.279  27 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 9.279     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.279     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 9.279 
+#15 9.325 error[E0034]: multiple applicable items in scope
+#15 9.325    --> crates/aq-admission/src/preparation_shared.rs:934:38
+#15 9.325     |
+#15 9.325 934 |                       v.delivery.clock.validate_interactive_session()?;
+#15 9.325     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 9.325     |
+#15 9.325    ::: crates/aq-admission/src/preparation_v2.rs:3:1
+#15 9.325     |
+#15 9.325   3 | / crate::preparation_shared::phase_profile! {
+#15 9.325   4 | |     PhaseFeature: "PreparationV2PhaseFeature",
+#15 9.325   5 | |     Negotiation: "PreparationV2Negotiation",
+#15 9.325   6 | |     PhasePolicy: "PreparationV2PhasePolicy",
+#15 9.325 ...   |
+#15 9.325  25 | |     lease_fields: [],
+#15 9.325  26 | | }
+#15 9.325     | |_- in this macro invocation
+#15 9.325     |
+#15 9.325 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 9.325    --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 9.325     |
+#15 9.325  19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.325     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.325 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 9.325    --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 9.325     |
+#15 9.325  18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.325     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.325     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 9.325 
+#15 9.612 error[E0034]: multiple applicable items in scope
+#15 9.612   --> crates/aq-admission/src/delivery_clock_interactive.rs:15:15
+#15 9.612    |
+#15 9.616 15 |         value.validate_interactive_session()?;
+#15 9.616    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 9.616    |
+#15 9.616 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 9.616   --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 9.616    |
+#15 9.616 19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.618    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.618 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 9.618   --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 9.618    |
+#15 9.618 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.620    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.620 
+#15 9.621 error[E0034]: multiple applicable items in scope
+#15 9.621   --> crates/aq-admission/src/delivery_clock_interactive.rs:30:14
+#15 9.621    |
+#15 9.622 30 |         self.validate_interactive_session()?;
+#15 9.622    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 9.622    |
+#15 9.622 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 9.622   --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 9.623    |
+#15 9.624 19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.624    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.625 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 9.625   --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 9.625    |
+#15 9.625 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 9.625    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 9.625 
+#15 10.11 error[E0034]: multiple applicable items in scope
+#15 10.11    --> crates/aq-admission/src/preparation_shared.rs:768:33
+#15 10.11     |
+#15 10.11 768 |               self.delivery.clock.validate_interactive_session()?;
+#15 10.11     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 10.11     |
+#15 10.11    ::: crates/aq-admission/src/preparation_refresh_v1.rs:3:1
+#15 10.11     |
+#15 10.11   3 | / crate::preparation_shared::phase_profile! {
+#15 10.11   4 | |     PhaseFeature: "PreparationRefreshV1PhaseFeature",
+#15 10.11   5 | |     Negotiation: "PreparationRefreshV1Negotiation",
+#15 10.11   6 | |     PhasePolicy: "PreparationRefreshV1PhasePolicy",
+#15 10.11 ...   |
+#15 10.11  25 | |     lease_fields: [registry_at_accept: crate::ArtifactRef],
+#15 10.11  26 | | }
+#15 10.11     | |_- in this macro invocation
+#15 10.11     |
+#15 10.11 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 10.11    --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 10.11     |
+#15 10.11  19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.11     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.11 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 10.11    --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 10.11     |
+#15 10.11  18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.11     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.11     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 10.11 
+#15 10.11 error[E0034]: multiple applicable items in scope
+#15 10.11    --> crates/aq-admission/src/preparation_shared.rs:795:33
+#15 10.11     |
+#15 10.11 795 |               self.delivery.clock.client_interactive_deadline_ns(sent, received)?
+#15 10.11     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `client_interactive_deadline_ns` found
+#15 10.11     |
+#15 10.11    ::: crates/aq-admission/src/preparation_refresh_v1.rs:3:1
+#15 10.11     |
+#15 10.11   3 | / crate::preparation_shared::phase_profile! {
+#15 10.11   4 | |     PhaseFeature: "PreparationRefreshV1PhaseFeature",
+#15 10.11   5 | |     Negotiation: "PreparationRefreshV1Negotiation",
+#15 10.11   6 | |     PhasePolicy: "PreparationRefreshV1PhasePolicy",
+#15 10.11 ...   |
+#15 10.11  25 | |     lease_fields: [registry_at_accept: crate::ArtifactRef],
+#15 10.11  26 | | }
+#15 10.11     | |_- in this macro invocation
+#15 10.11     |
+#15 10.11 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 10.11    --> crates/aq-admission/src/delivery_clock_interactive.rs:29:5
+#15 10.11     |
+#15 10.11  29 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 10.11     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.11 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 10.11    --> crates/aq-admission/src/interactive_delivery.rs:27:5
+#15 10.11     |
+#15 10.11  27 |     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
+#15 10.11     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.11     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 10.11 
+#15 10.14 error[E0034]: multiple applicable items in scope
+#15 10.14    --> crates/aq-admission/src/preparation_shared.rs:934:38
+#15 10.14     |
+#15 10.14 934 |                       v.delivery.clock.validate_interactive_session()?;
+#15 10.14     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 10.14     |
+#15 10.14    ::: crates/aq-admission/src/preparation_refresh_v1.rs:3:1
+#15 10.14     |
+#15 10.14   3 | / crate::preparation_shared::phase_profile! {
+#15 10.14   4 | |     PhaseFeature: "PreparationRefreshV1PhaseFeature",
+#15 10.14   5 | |     Negotiation: "PreparationRefreshV1Negotiation",
+#15 10.14   6 | |     PhasePolicy: "PreparationRefreshV1PhasePolicy",
+#15 10.14 ...   |
+#15 10.14  25 | |     lease_fields: [registry_at_accept: crate::ArtifactRef],
+#15 10.14  26 | | }
+#15 10.14     | |_- in this macro invocation
+#15 10.14     |
+#15 10.14 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 10.14    --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 10.14     |
+#15 10.14  19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.14     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.14 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 10.14    --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 10.14     |
+#15 10.14  18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.14     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.14     = note: this error originates in the macro `crate::preparation_shared::phase_profile` (in Nightly builds, run with -Z macro-backtrace for more info)
+#15 10.14 
+#15 10.17 error[E0034]: multiple applicable items in scope
+#15 10.17   --> crates/aq-admission/src/interactive_delivery.rs:14:15
+#15 10.17    |
+#15 10.17 14 |         value.validate_interactive_session()?;
+#15 10.17    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 10.17    |
+#15 10.17 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 10.17   --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 10.17    |
+#15 10.17 19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.17 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 10.17   --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 10.17    |
+#15 10.17 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.17 
+#15 10.17 error[E0034]: multiple applicable items in scope
+#15 10.17   --> crates/aq-admission/src/interactive_delivery.rs:28:14
+#15 10.17    |
+#15 10.17 28 |         self.validate_interactive_session()?;
+#15 10.17    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ multiple `validate_interactive_session` found
+#15 10.17    |
+#15 10.17 note: candidate #1 is defined in an impl for the type `DeliveryClock`
+#15 10.17   --> crates/aq-admission/src/delivery_clock_interactive.rs:19:5
+#15 10.17    |
+#15 10.17 19 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.17 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+#15 10.17   --> crates/aq-admission/src/interactive_delivery.rs:18:5
+#15 10.17    |
+#15 10.17 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+#15 10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#15 10.17 
+#15 14.57 Some errors have detailed explanations: E0034, E0592.
+#15 14.57 For more information about an error, try `rustc --explain E0034`.
+#15 14.63 error: could not compile `aq-admission` (lib) due to 13 previous errors
+#15 ERROR: process "/bin/sh -c cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol     && cargo build --locked --release --bin aq-server     && mkdir -p /out     && cp target/release/aq-server /out/" did not complete successfully: exit code: 101
+------
+ > [build 7/7] RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,sharing=locked,target=/build/target     cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol     && cargo build --locked --release --bin aq-server     && mkdir -p /out     && cp target/release/aq-server /out/:
+10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10.17 note: candidate #2 is defined in an impl for the type `DeliveryClock`
+10.17   --> crates/aq-admission/src/interactive_delivery.rs:18:5
+10.17    |
+10.17 18 |     pub fn validate_interactive_session(&self) -> Result<()> {
+10.17    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10.17 
+14.57 Some errors have detailed explanations: E0034, E0592.
+14.57 For more information about an error, try `rustc --explain E0034`.
+14.63 error: could not compile `aq-admission` (lib) due to 13 previous errors
+------
+Dockerfile:39
+--------------------
+  38 |     # cached target directory is not part of the image: copy the binaries out.
+  39 | >>> RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  40 | >>>     --mount=type=cache,sharing=locked,target=/build/target \
+  41 | >>>     cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol \
+  42 | >>>     && cargo build --locked --release --bin aq-server \
+  43 | >>>     && mkdir -p /out \
+  44 | >>>     && cp target/release/aq-server /out/
+  45 |     
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol     && cargo build --locked --release --bin aq-server     && mkdir -p /out     && cp target/release/aq-server /out/" did not complete successfully: exit code: 101

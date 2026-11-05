@@ -1,0 +1,6 @@
+{
+  "request_id": "00000000-0000-4000-8000-000000000101",
+  "code": "request_too_large",
+  "message": "Synthetic contract fixture",
+  "retryable": false
+}

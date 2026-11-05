@@ -263,6 +263,8 @@ async fn source(root: &Path, repository: Uuid) -> Result<Source> {
     let checkpoint=owner.call(repository,"workspace.checkpoint",json!({"workspace_id":workspace["workspace_id"],"expected_generation":1,"expected_head":wire,"quiescent":true,"mode":"head"})).await;
     let retention = serde_json::from_value(checkpoint["retention_handle"].clone())?;
     let configuration = aq_server::source_retention::SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
         git_root: owner.root.clone(),
         git_socket: owner.socket.clone(),
         staging_root: root.join("central-staging"),

@@ -15,6 +15,11 @@ pub const MAX_SNAPSHOT_BYTES: usize = 196608;
 pub const MAX_BATCH_BYTES: usize = 1048576;
 pub const PROFILED_LAUNCH_CAPABILITY: &str = "aq.profiled-launch";
 pub const TERMINAL_CAPABILITY: &str = "aq.terminal";
+/// Harness-native confinement: the harness's own sandbox confines the agent to the worktree.
+pub const NATIVE_CONFINEMENT_CAPABILITY: &str = "aq.harness.confined-worktree";
+/// Container confinement (0005 SBX19): the harness sandbox is disabled and the backend
+/// sandbox is the boundary. Admission still requires explicit profile permission.
+pub const CONTAINER_CONFINEMENT_CAPABILITY: &str = "aq.harness.container-confinement";
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ContractError {
     #[error("invalid contract: {0}")]
@@ -158,6 +163,7 @@ pub fn require_capabilities(
                     | "aq.terminal"
                     | "aq.harness.startup-context"
                     | "aq.harness.confined-worktree"
+                    | "aq.harness.container-confinement"
                     | "aq.harness.stop"
                     | "aq.harness.native-message"
                     | "aq.harness.resume"
@@ -282,11 +288,17 @@ impl Validate for LaunchManifest {
                 && self.context.references.len() <= 128,
             "manifest cardinality",
         )?;
-        for id in [
-            "aq.harness.startup-context",
-            "aq.harness.confined-worktree",
-            "aq.harness.stop",
-        ] {
+        let declared = |id: &str| {
+            self.harness
+                .required_capabilities
+                .iter()
+                .any(|c| c.id.as_str() == id && c.version == 1)
+        };
+        ensure(
+            declared(NATIVE_CONFINEMENT_CAPABILITY) != declared(CONTAINER_CONFINEMENT_CAPABILITY),
+            "exactly one harness confinement mode",
+        )?;
+        for id in ["aq.harness.startup-context", "aq.harness.stop"] {
             ensure(
                 self.harness.required_capabilities.contains(&Capability {
                     id: Text::new(id)?,

@@ -130,7 +130,8 @@ async fn current32_missing_execution_history_refuses_reopen_without_repair() {
     let store = db.store().await;
     store.close().await;
     assert!(present(&pool).await);
-    sqlx::query("DROP TABLE profiled_phase_execution_grants")
+    // Newer terminal/result tables reference this immutable history.
+    sqlx::query("DROP TABLE profiled_phase_execution_grants CASCADE")
         .execute(&pool)
         .await
         .unwrap();

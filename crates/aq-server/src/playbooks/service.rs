@@ -61,11 +61,12 @@ pub struct RuntimeOwner {
 #[derive(Clone)]
 pub struct Service {
     pub namespace: Namespace,
-    pool: PgPool,
-    keys: Arc<Keyring>,
+    pub(super) pool: PgPool,
+    pub(super) keys: Arc<Keyring>,
     clock: Clock,
     pub(crate) profile: CatalogProfile,
     pub(super) reviews: Option<Arc<crate::reviews::Service>>,
+    pub(super) host: Option<Arc<super::host_adapters::HostPorts>>,
 }
 #[derive(Clone, Debug)]
 pub enum MessageResult {
@@ -89,7 +90,142 @@ impl Service {
     ) -> Result<Self> {
         Self::with_profile(state, namespace, keys, CatalogProfile::HumanReview2).await
     }
-    async fn with_profile(
+    /// Explicit D4 host catalog (profile 5) for a new namespace/generation.
+    /// The graph port is the gateway in production and a fake in tests.
+    pub async fn new_host5(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+    ) -> Result<Self> {
+        let mut service = Self::with_profile(state, namespace, keys, CatalogProfile::Host5).await?;
+        service.host = Some(Arc::new(super::host_adapters::HostPorts {
+            state: state.clone(),
+            graph,
+            checks: None,
+            judgments: None,
+            integration: None,
+        }));
+        Ok(service)
+    }
+    /// D6 host catalog 2.0.0 (profile 6) for a new namespace/generation. The
+    /// sandbox check executor and judgment provider are injected ports; an
+    /// unbound port refuses with a typed outcome, never a fabricated result.
+    pub async fn new_host7(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+        checks: Option<Arc<dyn super::host_adapters::CheckExecutor>>,
+        judgments: Option<Arc<dyn super::host_adapters::JudgmentProvider>>,
+    ) -> Result<Self> {
+        Self::new_host7_integration(state, namespace, keys, graph, checks, judgments, None).await
+    }
+    /// Profile 7 with the D7 integration port (D1 delivery service); `None`
+    /// refuses candidate.prepare / candidate.publish `unavailable`.
+    pub async fn new_host7_integration(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+        checks: Option<Arc<dyn super::host_adapters::CheckExecutor>>,
+        judgments: Option<Arc<dyn super::host_adapters::JudgmentProvider>>,
+        integration: Option<Arc<dyn super::host_adapters::Integration>>,
+    ) -> Result<Self> {
+        Self::new_host2(
+            state,
+            namespace,
+            keys,
+            CatalogProfile::Host7,
+            graph,
+            checks,
+            judgments,
+            integration,
+        )
+        .await
+    }
+    /// Host catalog 2.1.0 (profile 8) with the D7 integration port: the Host7
+    /// adapters, with candidate.prepare emitting the prepared source OID.
+    pub async fn new_host8_integration(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+        checks: Option<Arc<dyn super::host_adapters::CheckExecutor>>,
+        judgments: Option<Arc<dyn super::host_adapters::JudgmentProvider>>,
+        integration: Option<Arc<dyn super::host_adapters::Integration>>,
+    ) -> Result<Self> {
+        Self::new_host2(
+            state,
+            namespace,
+            keys,
+            CatalogProfile::Host8,
+            graph,
+            checks,
+            judgments,
+            integration,
+        )
+        .await
+    }
+    /// A catalog 2.x host profile (Host7 or Host8) with its ports.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn new_host2(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        profile: CatalogProfile,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+        checks: Option<Arc<dyn super::host_adapters::CheckExecutor>>,
+        judgments: Option<Arc<dyn super::host_adapters::JudgmentProvider>>,
+        integration: Option<Arc<dyn super::host_adapters::Integration>>,
+    ) -> Result<Self> {
+        if !profile.is_host2() {
+            return Err(Error::Invalid);
+        }
+        let mut service = Self::with_profile(state, namespace, keys, profile).await?;
+        service.host = Some(Arc::new(super::host_adapters::HostPorts {
+            state: state.clone(),
+            graph,
+            checks,
+            judgments,
+            integration,
+        }));
+        Ok(service)
+    }
+    /// D8 host services with the existing D4 contracts and confirmed domain events.
+    pub async fn new_monitoring6(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+        graph: Arc<dyn super::host_adapters::WorkGraph>,
+    ) -> Result<Self> {
+        let mut service =
+            Self::with_profile(state, namespace, keys, CatalogProfile::Monitoring6).await?;
+        service.host = Some(Arc::new(super::host_adapters::HostPorts {
+            state: state.clone(),
+            graph,
+            checks: None,
+            judgments: None,
+            integration: None,
+        }));
+        Ok(service)
+    }
+    /// Profile 2 plus delivery of confirmed graph operations as typed events.
+    pub async fn new_profile3(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+    ) -> Result<Self> {
+        Self::with_profile(state, namespace, keys, CatalogProfile::GraphEvents3).await
+    }
+    pub async fn new_profile4(
+        state: &crate::AppState,
+        namespace: Namespace,
+        keys: Arc<Keyring>,
+    ) -> Result<Self> {
+        Self::with_profile(state, namespace, keys, CatalogProfile::SettlementEvents4).await
+    }
+    pub(crate) async fn with_profile(
         state: &crate::AppState,
         namespace: Namespace,
         keys: Arc<Keyring>,
@@ -109,7 +245,7 @@ impl Service {
                     .application_name("aq-playbook-bridge"),
             )
             .await?;
-        let reviews = if profile == CatalogProfile::HumanReview2 {
+        let reviews = if profile.has_reviews() {
             Some(Arc::new(crate::reviews::Service::new(
                 state.clone(),
                 keys.clone(),
@@ -124,23 +260,24 @@ impl Service {
             clock: state.clock.clone(),
             profile,
             reviews,
+            host: None,
         })
     }
-    fn now(&self) -> Result<i64> {
+    pub(super) fn now(&self) -> Result<i64> {
         let at = (self.clock)().timestamp_millis();
         if at < 0 {
             return Err(Error::Invalid);
         }
         Ok(at)
     }
-    async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
+    pub(super) async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT set_config('statement_timeout','2000ms',true),set_config('lock_timeout','500ms',true)")
             .execute(&mut *tx)
             .await?;
         Ok(tx)
     }
-    async fn owner(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
+    pub(super) async fn owner(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
         let role: Option<String> =
             sqlx::query_scalar("SELECT role FROM users WHERE id=$1 FOR SHARE")
                 .bind(id)
@@ -151,7 +288,7 @@ impl Service {
         }
         Ok(())
     }
-    async fn namespace_locked(
+    pub(super) async fn namespace_locked(
         &self,
         tx: &mut Transaction<'_, Postgres>,
     ) -> Result<sqlx::postgres::PgRow> {
@@ -175,7 +312,7 @@ impl Service {
         }
         Ok(row)
     }
-    async fn budget(
+    pub(super) async fn budget(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         admissions: i64,
@@ -216,7 +353,7 @@ impl Service {
         if self.profile == CatalogProfile::Mail1 {
             sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(namespace_id) DO NOTHING").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&self.namespace.name).bind(self.namespace.workspace_id).bind(self.namespace.project_id).bind(actor).bind(digest(&self.profile.registry())?).bind(SOURCE).execute(&mut *tx).await?;
         } else {
-            sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest,catalog_profile) VALUES($1,$2,$3,$4,$5,$6,$7,$8,2) ON CONFLICT(namespace_id) DO NOTHING").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&self.namespace.name).bind(self.namespace.workspace_id).bind(self.namespace.project_id).bind(actor).bind(digest(&self.profile.registry())?).bind(SOURCE).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest,catalog_profile) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(namespace_id) DO NOTHING").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&self.namespace.name).bind(self.namespace.workspace_id).bind(self.namespace.project_id).bind(actor).bind(digest(&self.profile.registry())?).bind(SOURCE).bind(self.profile.number()).execute(&mut *tx).await?;
         }
         self.namespace_locked(&mut tx).await?;
         tx.commit().await?;
@@ -254,7 +391,7 @@ impl Service {
             revision: expected + 1,
         })
     }
-    fn runtime(&self, row: &sqlx::postgres::PgRow, owner: &RuntimeOwner) -> Result<()> {
+    pub(super) fn runtime(&self, row: &sqlx::postgres::PgRow, owner: &RuntimeOwner) -> Result<()> {
         if owner.namespace_id != self.namespace.namespace_id
             || owner.generation != self.namespace.generation
             || row.get::<Option<Uuid>, _>("runtime_incarnation") != Some(owner.incarnation)
@@ -336,7 +473,7 @@ impl Service {
         tx.commit().await?;
         Ok(())
     }
-    async fn grant_locked(
+    pub(super) async fn grant_locked(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -372,7 +509,7 @@ impl Service {
         self.profile.validate_scope(&scope)?;
         Ok(scope)
     }
-    fn intent_authority(
+    pub(super) fn intent_authority(
         &self,
         intent: &Intent,
         id: Uuid,
@@ -429,7 +566,7 @@ impl Service {
         tx.commit().await?;
         Ok(authority)
     }
-    fn identity(&self, intent: &Intent) -> Result<String> {
+    pub(super) fn identity(&self, intent: &Intent) -> Result<String> {
         digest(&(
             self.namespace.namespace_id,
             self.namespace.generation,
@@ -443,7 +580,11 @@ impl Service {
             &intent.authority,
         ))
     }
-    async fn check_expiry(&self, tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
+    pub(super) async fn check_expiry(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: Uuid,
+    ) -> Result<()> {
         let expiry: i64 =
             sqlx::query_scalar("SELECT expires_at_ms FROM playbook_grants WHERE grant_id=$1")
                 .bind(id)
@@ -680,7 +821,7 @@ pub struct RetainedAdmission {
     pub(super) grant_revision: i64,
 }
 impl Service {
-    fn aad(&self, domain: &str, id: Uuid, digest: &str) -> Result<Vec<u8>> {
+    pub(super) fn aad(&self, domain: &str, id: Uuid, digest: &str) -> Result<Vec<u8>> {
         canonical_bytes(&(
             domain,
             1,
@@ -722,6 +863,7 @@ impl Service {
         let scope = self
             .grant_locked(&mut tx, request.grant_id, request.grant_revision, false)
             .await?;
+        let binding = request.binding.clone();
         let engine_request = aq_playbook_host::runner::KeyedAdmissionRequest {
             key: key.clone(),
             binding: request.binding,
@@ -749,7 +891,7 @@ impl Service {
             .map_err(|_| Error::Unknown)?;
         self.budget(&mut tx, 1, 0, 0, 0, sealed.ciphertext.len() as i64 + 4096)
             .await?;
-        sqlx::query("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(request.request_id).bind(digest).bind(&key).bind(request.grant_id).bind(request.grant_revision).bind(request.expected_activation_revision as i64).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(self.now()?).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(request.request_id).bind(digest).bind(&key).bind(request.grant_id).bind(request.grant_revision).bind(request.expected_activation_revision as i64).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(self.now()?).bind(&binding).execute(&mut *tx).await?;
         self.check_expiry(&mut tx, request.grant_id).await?;
         tx.commit().await?;
         Ok(AdmissionStatus {
@@ -907,7 +1049,16 @@ impl Service {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        let row=sqlx::query("SELECT producer,engine_receipt FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 FOR UPDATE").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).fetch_optional(&mut *tx).await?.ok_or(Error::Forbidden)?;
+        let rows=sqlx::query("SELECT producer,engine_receipt FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 FOR UPDATE").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).fetch_all(&mut *tx).await?;
+        let row = rows
+            .into_iter()
+            .find(|row| {
+                let producer: String = row.get("producer");
+                digest(&(&producer, 0_u64, id.to_string()))
+                    .ok()
+                    .is_some_and(|key| stable["key"] == key)
+            })
+            .ok_or(Error::Conflict)?;
         let producer: String = row.get("producer");
         let expected = digest(&(&producer, 0_u64, id.to_string()))?;
         if stable["key"] != expected
@@ -924,7 +1075,22 @@ impl Service {
         if old.is_some_and(|v| v != stable) {
             return Err(Error::Conflict);
         }
-        sqlx::query("UPDATE playbook_outbox SET status='engine_accepted',engine_receipt=$4,fanout_complete=fanout_complete OR $5 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(stable).bind(fanout_complete).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_outbox SET status='engine_accepted',engine_receipt=$4,fanout_complete=fanout_complete OR $5 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND producer=$6").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(stable).bind(fanout_complete).bind(&producer).execute(&mut *tx).await?;
+        if producer == super::review_domain::GRAPH_PRODUCER {
+            // The engine has durably accepted this exact event key; only now is
+            // the graph outbox row delivered. The owner route keeps the row.
+            sqlx::query("UPDATE agent_graph_outbox SET delivered=true WHERE event_id=$1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if producer == super::review_domain::SETTLEMENT_PRODUCER {
+            sqlx::query("SELECT set_config('aq.settlement_owner','aq.settlement-owner.1',true)")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE profiled_task_completions SET outbox_acknowledged=true WHERE operation_id=$1 AND state='confirmed' AND NOT outbox_acknowledged")
+                .bind(id).execute(&mut *tx).await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -1005,7 +1171,7 @@ impl Service {
         self.reviews.clone()
     }
     fn decision_input(&self, intent: &Intent) -> Result<super::review_domain::DecisionInput> {
-        if self.profile != CatalogProfile::HumanReview2
+        if !self.profile.has_reviews()
             || intent.command != super::review_domain::decision_contract()
         {
             return Err(Error::Forbidden);
@@ -1244,7 +1410,7 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<DecisionResult> {
-        if self.profile != CatalogProfile::HumanReview2
+        if !self.profile.has_reviews()
             || intent.command != super::review_domain::operation_contract()
             || intent.input_digest != digest(&intent.input)?
         {
@@ -1368,7 +1534,7 @@ impl Service {
     /// Only this namespace's retained accepted questions; expiry admits no new
     /// vote. Release namespace locks before taking the review budget lock.
     pub(super) async fn expire_decisions(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
-        if self.profile == CatalogProfile::Mail1 {
+        if !self.profile.has_reviews() {
             return Ok(0);
         }
         if !(1..=2).contains(&limit) {
@@ -1398,7 +1564,7 @@ impl Service {
         owner: &RuntimeOwner,
         limit: u32,
     ) -> Result<usize> {
-        if self.profile == CatalogProfile::Mail1 {
+        if !self.profile.has_reviews() {
             return Ok(0);
         }
         if !(1..=2).contains(&limit) {
@@ -1446,7 +1612,7 @@ impl Service {
             aq_playbook_host::model::validate_event(&event, &self.profile.registry())
                 .map_err(|_| Error::Invalid)?;
             let digest = digest(&event)?;
-            let old:Option<String>=sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).fetch_optional(&mut *tx).await?;
+            let old:Option<String>=sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND producer='aq.human.decisions@1' AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).fetch_optional(&mut *tx).await?;
             if let Some(old) = old {
                 if old != digest {
                     return Err(Error::Conflict);
@@ -1470,6 +1636,82 @@ impl Service {
         tx.commit().await?;
         Ok(rows.len())
     }
+    /// Bounded seal of undelivered confirmed graph operations bound to this
+    /// namespace's project into the engine outbox. `delivered` is set only by
+    /// `acknowledge_event`, after durable engine acceptance; a crash between
+    /// seal and ACK replays the same sealed event and the engine dedups on
+    /// (producer, epoch 0, event_id).
+    pub(super) async fn collect_graph_events(
+        &self,
+        owner: &RuntimeOwner,
+        limit: u32,
+    ) -> Result<usize> {
+        if !matches!(
+            self.profile,
+            CatalogProfile::GraphEvents3
+                | CatalogProfile::SettlementEvents4
+                | CatalogProfile::Monitoring6
+        ) {
+            return Ok(0);
+        }
+        if !(1..=2).contains(&limit) {
+            return Err(Error::Invalid);
+        }
+        let producer = super::review_domain::GRAPH_PRODUCER;
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        let rows = sqlx::query("SELECT o.event_id,g.operation_id,g.attempt_id,b.binding->>'task_id' AS task_id FROM agent_graph_outbox o JOIN agent_graph_operations g ON g.operation_id=o.operation_id JOIN agent_launch_bindings b ON b.attempt_id=g.attempt_id WHERE NOT o.delivered AND g.phase='confirmed' AND b.binding->>'project_id'=$1 AND b.binding->>'workspace_id'=$2 AND NOT EXISTS(SELECT 1 FROM playbook_outbox p WHERE p.namespace_id=$3 AND p.generation=$4 AND p.producer='aq.graph.operations@1' AND p.event_id=o.event_id) ORDER BY g.operation_seq LIMIT $5")
+            .bind(self.namespace.project_id.to_string())
+            .bind(self.namespace.workspace_id.to_string())
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(limit as i64)
+            .fetch_all(&mut *tx)
+            .await?;
+        let c = super::review_domain::graph_operation_event();
+        let fingerprint = c.fingerprint().map_err(|_| Error::Invalid)?;
+        for row in &rows {
+            let id: Uuid = row.get("event_id");
+            let operation: Uuid = row.get("operation_id");
+            let attempt: Uuid = row.get("attempt_id");
+            let task: Uuid = row
+                .get::<Option<String>, _>("task_id")
+                .and_then(|t| t.parse().ok())
+                .ok_or(Error::Conflict)?;
+            let at = self.now()?;
+            let event = EventEnvelope {
+                producer: producer.into(),
+                event_id: id.to_string(),
+                contract: ContractRef {
+                    name: c.name.clone(),
+                    fingerprint: fingerprint.clone(),
+                },
+                scope: "project".into(),
+                correlation: BTreeMap::from([("operation".into(), operation.to_string())]),
+                subject: None,
+                revision: None,
+                causation: None,
+                occurred_at_ms: None,
+                observed_at_ms: Some(at),
+                payload: json!({"operation_id":operation,"task_id":task,"attempt_id":attempt}),
+            };
+            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
+                .map_err(|_| Error::Invalid)?;
+            let digest = digest(&event)?;
+            let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
+            let sealed = self
+                .keys
+                .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
+                .map_err(|_| Error::Unknown)?;
+            self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
+                .await?;
+            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
+        }
+        Self::owner(&mut tx, self.namespace.owner_user_id).await?;
+        tx.commit().await?;
+        Ok(rows.len())
+    }
 }
 
 #[path = "inspection/admissions.rs"]
@@ -1477,3 +1719,6 @@ mod inspection_admissions;
 
 #[path = "inspection/catalog_auth.rs"]
 mod catalog_auth;
+
+#[path = "settlement_events.rs"]
+mod settlement_events;

@@ -1,0 +1,21 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-a3b-main-isolation-20261103/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.94s
+     Running tests/phase_execution_transport.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_execution_transport-ad4a54b68873b533)
+
+running 1 test
+test genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity ... 
+thread 'genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity' (2148846) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"unavailable","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 500
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.19s
+
+error: test failed, to rerun pass `-p aq-server --test phase_execution_transport`

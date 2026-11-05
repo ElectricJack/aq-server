@@ -1,0 +1,180 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized] target(s) in 3.18s
+     Running tests/native_initial_grant.rs (target/debug/deps/native_initial_grant-92a380e18e39de88)
+
+running 54 tests
+test published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease ... ignored, qualification requires explicit pinned actual aq-git and Git executable paths
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::worker_assembly::actual_worker_downloads_installs_hydrates_and_prepares_against_real_daemon ... ignored, requires explicit pinned native worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_durably_accepts_new_phase_and_replays_after_proposal_expiry ... ignored, requires explicit pinned phase-capable worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_phase_execution_launches_and_stops_actual_tmux_host ... ignored, requires pinned worker, aq-git/Git, host helper, synthetic ELF and actual tmux
+test published::actual_git::worker_assembly::actual_worker_prepares_phase_inputs_after_proposal_expiry ... ignored, requires explicit pinned phase-input worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_reads_history_after_withheld_first_execution_reply ... ignored, requires pinned history-capable worker and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... ignored, requires explicit pinned phase execution worker and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_reports_real_host_lifecycle_and_persists_daemon_acknowledgments ... ignored, requires pinned actual worker/Git/tmux and qualified phase terminal owner
+test published::actual_git::worker_assembly::current_store_actual_worker_output_reaches_authorized_tail_after_physical_stop ... ignored, requires pinned output-capable worker, periodic ELF, Git and tmux
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ... ignored, requires pinned output-capable worker, periodic ELF, Git and tmux
+test published::actual_git::worker_refresh_assembly::current_store_refresh_worker_output_reaches_real_watch_upload_ack_and_authorized_tail ... ignored, requires explicitly pinned worker0.4.0/FORMAT11, Git/tmux/static peer; no model/provider
+test prepare_uses_reserved_control_capacity ... ok
+test published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity ... FAILED
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time ... FAILED
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... FAILED
+test published::presence::expired_permit_cannot_make_a_delayed_positive_fresh_on_receipt ... ok
+test published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress ... ok
+test published::presence::isolation::independent_same_node_storage_heads_keep_other_present_after_one_missing ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... FAILED
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::presence::isolation::occupied_presence_pg_connections_do_not_consume_renewal_pool ... ok
+test published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation ... FAILED
+test published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row ... FAILED
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary has been running for over 60 seconds
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation has been running for over 60 seconds
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes has been running for over 60 seconds
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement has been running for over 60 seconds
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant has been running for over 60 seconds
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original has been running for over 60 seconds
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs has been running for over 60 seconds
+test published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused has been running for over 60 seconds
+test published::material_receipts::grant_failure_rolls_back_new_installation_receipt_with_authority has been running for over 60 seconds
+test published::material_receipts::retained_installation_json_bytes_refuse_new_grant_under_shared_budget has been running for over 60 seconds
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener has been running for over 60 seconds
+test published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present has been running for over 60 seconds
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read has been running for over 60 seconds
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation ... ok
+test published::presence::present_fact_never_bypasses_current_private_backing_or_agent_revocation has been running for over 60 seconds
+test published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present ... FAILED
+test published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed has been running for over 60 seconds
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::material_receipts::retained_installation_json_bytes_refuse_new_grant_under_shared_budget ... ok
+test published::presence::scoped_receipt_and_authority_forgery_refuse_without_retaining_a_head has been running for over 60 seconds
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... FAILED
+test published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact has been running for over 60 seconds
+test published::material_receipts::grant_failure_rolls_back_new_installation_receipt_with_authority ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds has been running for over 60 seconds
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::renewal::changed_private_material_and_revoked_agent_scope_cannot_extend_a_permit has been running for over 60 seconds
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... FAILED
+test published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority has been running for over 60 seconds
+test published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read ... FAILED
+test published::renewal::expired_server_permit_cannot_be_resurrected_by_fresh_observations has been running for over 60 seconds
+test published::presence::present_fact_never_bypasses_current_private_backing_or_agent_revocation ... ok
+test published::renewal::missing_actual_installation_receipt_cannot_be_reconstructed_from_preparation has been running for over 60 seconds
+test published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed ... ok
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test published::renewal::newer_unavailable_inventory_cannot_be_rewritten_by_original_installation has been running for over 60 seconds
+test published::presence::scoped_receipt_and_authority_forgery_refuse_without_retaining_a_head ... ok
+test published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact ... ok
+test published::renewal::original_cold_inventory_actual_installation_can_renew_without_retiming_originals has been running for over 60 seconds
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+test published::renewal::changed_private_material_and_revoked_agent_scope_cannot_extend_a_permit ... ok
+test published::renewal::races::changed_task_cas_and_content_refuse_without_reusing_admission_observation has been running for over 60 seconds
+test published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority ... FAILED
+test published::renewal::races::delayed_actual_started_keeps_physical_checkpoint_separate_from_latest_renew_counter has been running for over 60 seconds
+test published::renewal::expired_server_permit_cannot_be_resurrected_by_fresh_observations ... ok
+test published::renewal::races::observed_final_quota_wait_crossing_old_expiry_rolls_back_extension_and_receipt has been running for over 60 seconds
+test published::renewal::missing_actual_installation_receipt_cannot_be_reconstructed_from_preparation ... ok
+test published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed has been running for over 60 seconds
+test published::renewal::newer_unavailable_inventory_cannot_be_rewritten_by_original_installation ... ok
+test published::renewal::original_cold_inventory_actual_installation_can_renew_without_retiming_originals ... ok
+test published::renewal::races::changed_task_cas_and_content_refuse_without_reusing_admission_observation ... ok
+test published::renewal::races::delayed_actual_started_keeps_physical_checkpoint_separate_from_latest_renew_counter ... ok
+test published::renewal::races::observed_final_quota_wait_crossing_old_expiry_rolls_back_extension_and_receipt ... ok
+test published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed ... FAILED
+test published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused ... ok
+
+failures:
+
+---- published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity stdout ----
+
+thread 'published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity' (1780108) panicked at crates/aq-server/tests/native_initial_grant/published/presence/isolation.rs:57:5:
+assertion `left == right` failed: Failure(Failure { schema_version: 1, code: Conflict, operation_id: None })
+  left: 409
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time stdout ----
+
+thread 'published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time' (1780101) panicked at crates/aq-server/tests/native_initial_grant/published.rs:699:34:
+called `Result::unwrap()` on an `Err` value: Conflict("native initial grant is not currently available")
+
+---- published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held stdout ----
+
+thread 'published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held' (1780097) panicked at crates/aq-server/tests/native_initial_grant/published.rs:431:10:
+actual private Git request must reach gate: Elapsed(())
+
+---- published::exact_full_artifact_and_material_receipt_coverage_is_mandatory stdout ----
+
+thread 'published::exact_full_artifact_and_material_receipt_coverage_is_mandatory' (1780098) panicked at crates/aq-server/tests/native_initial_grant/published.rs:289:21:
+called `Result::unwrap()` on an `Err` value: Conflict("native initial grant is not currently available")
+
+---- published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation stdout ----
+
+thread 'published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation' (1780112) panicked at crates/aq-server/tests/common/native_offer.rs:450:5:
+assertion `left == right` failed: {"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+  left: 409
+ right: 200
+
+---- published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row stdout ----
+
+thread 'published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row' (1780104) panicked at crates/aq-server/tests/native_initial_grant/published/material_receipts.rs:26:33:
+called `Result::unwrap()` on an `Err` value: Conflict("native initial grant is not currently available")
+
+---- published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present stdout ----
+
+thread 'published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present' (1780113) panicked at crates/aq-server/tests/native_initial_grant/published/presence.rs:97:35:
+called `Result::unwrap()` on an `Err` value: Conflict("native initial grant is not currently available")
+
+---- published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original stdout ----
+
+thread 'published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original' (1780096) panicked at crates/aq-server/tests/native_initial_grant/published.rs:310:28:
+at least one original grant: Conflict("selection expired during admission locks")
+
+---- published::graph_changes_during_preparation_refuse_without_retiming_original_inputs stdout ----
+
+thread 'published::graph_changes_during_preparation_refuse_without_retiming_original_inputs' (1780100) panicked at crates/aq-server/tests/native_initial_grant/published.rs:572:33:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+
+---- published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read stdout ----
+
+thread 'published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read' (1780327) panicked at crates/aq-server/tests/native_initial_grant/published/presence.rs:97:35:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+
+---- published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority stdout ----
+
+thread 'published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority' (1782949) panicked at crates/aq-server/tests/native_initial_grant/published/renewal.rs:161:5:
+assertion `left == right` failed: Failure(Failure { schema_version: 1, code: Conflict, operation_id: None })
+  left: 409
+ right: 200
+
+---- published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed stdout ----
+
+thread 'published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed' (1784967) panicked at crates/aq-server/tests/native_initial_grant/published/renewal/races.rs:10:5:
+assertion `left == right` failed
+  left: 409
+ right: 500
+
+
+failures:
+    published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original
+    published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held
+    published::exact_full_artifact_and_material_receipt_coverage_is_mandatory
+    published::graph_changes_during_preparation_refuse_without_retiming_original_inputs
+    published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time
+    published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row
+    published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity
+    published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation
+    published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present
+    published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read
+    published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority
+    published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed
+
+test result: FAILED. 29 passed; 12 failed; 13 ignored; 0 measured; 0 filtered out; finished in 164.70s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

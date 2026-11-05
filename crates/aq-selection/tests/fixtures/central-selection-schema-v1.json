@@ -58,6 +58,13 @@
         "account_reference": {
           "type": "string"
         },
+        "allowed_backends": {
+          "description": "Derived from the operator credential profile, independently of node bindings.",
+          "items": {
+            "$ref": "#/$defs/BackendKind"
+          },
+          "type": "array"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -164,6 +171,14 @@
         "cooldown_until_ms"
       ],
       "type": "object"
+    },
+    "BackendKind": {
+      "enum": [
+        "docker-local",
+        "boat",
+        "cloudflare-containers"
+      ],
+      "type": "string"
     },
     "BudgetBasis": {
       "enum": [

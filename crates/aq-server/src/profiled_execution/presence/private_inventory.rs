@@ -43,6 +43,7 @@ impl Readers {
                             &job.delivery,
                             job.observed,
                             job.expires,
+                            None,
                         );
                         let _ = job.reply.send(result);
                     }

@@ -109,16 +109,35 @@ fn cost(
     }
     Ok(())
 }
+/// Upper bound for a live offer decision and its server-owned budget snapshot.
+/// Actual input expirations can shorten this window; admission must recheck them.
+pub const OFFER_SELECTION_TTL_MS: u64 = 30_000;
+
 pub fn select(
     catalog: &aq_profiles::ValidatedCatalog,
     input: &SelectionInputs,
+) -> Result<SelectionOutcome> {
+    select_native(catalog, input, 2000)
+}
+/// Select for a live native offer, allowing time for poll, proposal and accept.
+/// The historical `select` entrypoint retains its two-second replay behavior.
+pub fn select_for_offer(
+    catalog: &aq_profiles::ValidatedCatalog,
+    input: &SelectionInputs,
+) -> Result<SelectionOutcome> {
+    select_native(catalog, input, OFFER_SELECTION_TTL_MS)
+}
+fn select_native(
+    catalog: &aq_profiles::ValidatedCatalog,
+    input: &SelectionInputs,
+    ttl_ms: u64,
 ) -> Result<SelectionOutcome> {
     for composition in &input.compositions {
         composition.composition.validate_native_v2().map_err(|_| {
             SelectionError::Invalid("native selection requires schema2 composition".into())
         })?;
     }
-    select_internal(catalog, input)
+    select_internal(catalog, input, ttl_ms)
 }
 /// Historical schema1 inspection/replay compatibility only. Never use this
 /// entrypoint for a new native admission or offer fence.
@@ -135,11 +154,12 @@ pub fn select_legacy_for_inspection(
         }),
         "legacy composition shape",
     )?;
-    select_internal(catalog, input)
+    select_internal(catalog, input, 2000)
 }
 fn select_internal(
     catalog: &aq_profiles::ValidatedCatalog,
     input: &SelectionInputs,
+    ttl_ms: u64,
 ) -> Result<SelectionOutcome> {
     validate(catalog, input)?;
     let definitions = &catalog.artifact().catalog;
@@ -206,6 +226,7 @@ fn select_internal(
         execution,
         policy,
         &CoreInputs {
+            backend_kind: input.node.backend_kind,
             target,
             installation: CoreInstallation {
                 harnesses: &input.node.harnesses,
@@ -218,6 +239,7 @@ fn select_internal(
             compositions: &compositions,
             ceilings: &input.project.ceilings,
             allowed_environments: &input.project.allowed_environments,
+            placement: input.placement.as_ref(),
             now_ms: input.now_ms,
             global: global_budget(input, policy),
             environment_denied: "project_environment_denied",
@@ -233,7 +255,7 @@ fn select_internal(
             .expires_at_ms
             .min(input.budget.expires_at_ms)
             .min(input.project.expires_at_ms)
-            .min(input.now_ms.saturating_add(2000));
+            .min(input.now_ms.saturating_add(ttl_ms));
         for binding in &input.node.credential_bindings {
             if binding.credential_profile == choice.credential_profile
                 && binding.credential_revision == credential_revision

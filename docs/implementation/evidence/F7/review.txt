@@ -1,0 +1,9 @@
+Fresh whole-change read-only review: /root/f7_review, 2026-11-03 UTC.
+
+P2: Decision request files silently collapsed duplicate choice or nested subject fields. Fixed with recursive unique-key JSON parsing.
+P2: A project-qualified task-list 404 was classified unsupported. Fixed to retain not_found and http_status 404.
+P3 advice, regraded Important: Positional --json message content changed output mode. Fixed to honor parsed cli.json and stop preparse flag scanning at --.
+
+All three review_regression_* tests were observed failing before the single fix pass and passing in the final area suite (16 CLI tests). No findings deferred.
+
+Reviewer found no retry/fallback/auth regression in shared transport, confirmed explicit live-chat refusal is allowed by the currently unavailable human-only contract, and declined deployment/live-provider/digest binding qualification. See F7.md for limits.

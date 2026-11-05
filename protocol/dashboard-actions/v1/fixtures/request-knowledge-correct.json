@@ -1,0 +1,18 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000208",
+  "kind": "knowledge.correct",
+  "subject": {
+    "type": "knowledge",
+    "id": "00000000-0000-4000-8000-000000000030",
+    "revision": "2"
+  },
+  "expected_versions": {
+    "knowledge": "2"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000208",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "2",
+    "title": "Corrected runbook"
+  }
+}

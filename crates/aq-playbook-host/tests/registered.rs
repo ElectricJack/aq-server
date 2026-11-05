@@ -215,7 +215,7 @@ async fn generic_command_and_unsafe_recovery_catalogs_refuse_before_factory() {
         let mut c = contract();
         c.name = name.into();
         if name == "message.send" {
-            c.recovery = Recovery::KeyedIdempotent;
+            c.recovery = Recovery::Unsafe;
         }
         let counts = Counts::default();
         let observed = counts.dispatch.clone();
@@ -241,5 +241,52 @@ async fn generic_command_and_unsafe_recovery_catalogs_refuse_before_factory() {
         .await;
         assert!(matches!(result, Err(Error::Invalid)));
         assert_eq!(observed.load(Ordering::SeqCst), 0);
+    }
+}
+#[tokio::test]
+async fn d4_host_catalog_recovery_classes_are_admitted() {
+    let registry: Registry = serde_json::from_str(include_str!(
+        "../../../vendor/aq-host-catalog-1.0.0/registry.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        digest(&("1.0.0", &registry)).unwrap(),
+        "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1"
+    );
+    let counts = Counts::default();
+    let owner = Owner::start_registered(
+        "d4-catalog".into(),
+        aq_playbook_host::Limits::default(),
+        registry,
+        || Ok(MemoryStorage::default()),
+        move |_| {
+            Ok(Peer {
+                counts,
+                mode: HostMode::Dispatch,
+            })
+        },
+    )
+    .await;
+    assert!(owner.is_ok());
+    for refused in [Recovery::Unsafe, Recovery::NaturallyIdempotent] {
+        let mut c = contract();
+        c.recovery = refused;
+        let result = Owner::start_registered(
+            "d4-refused".into(),
+            aq_playbook_host::Limits::default(),
+            Registry {
+                commands: BTreeMap::from([(c.name.clone(), c)]),
+                events: BTreeMap::new(),
+            },
+            || Ok(MemoryStorage::default()),
+            move |_| {
+                Ok(Peer {
+                    counts: Counts::default(),
+                    mode: HostMode::Dispatch,
+                })
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Invalid)));
     }
 }

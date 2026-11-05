@@ -88,6 +88,13 @@ peer may reject the new capability or route. Refusal never permits raw-keystroke
 fallback or borrowing a graph capability. The server checks current authority at
 each admission, including body chunks and node delivery acknowledgements.
 
+`SupervisorMailbox` (`global_supervisor` plus the current `conversation_id`) and
+`SupervisorMessageSender` (`central_supervisor`) are additive strict branches of
+`MailboxRecipient` and `MessageSender`; existing documents remain valid. An agent
+session credential may send to the current supervisor conversation only, with
+`thread_id` equal to that conversation. Agent and owner inbox, ack and body reads
+of the supervisor mailbox are refused; owners use the conversation API.
+
 See [messaging operations](../../../docs/operations/messaging.md) for owner routes,
 limits, cursor semantics, immutable task/session identity, separate agent versus
 node/harness receipts, and explicit oversized-body recovery. Worker polling is

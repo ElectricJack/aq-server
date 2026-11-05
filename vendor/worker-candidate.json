@@ -1,13 +1,14 @@
 {
   "candidate_format": 1,
   "source_repository": "aq-worker",
-  "source_revision": "3fb2bcb2f63f73838ddd97e44580fe721a539bdd",
-  "version": "0.3.1",
+  "source_revision": "44fe1a5e2edc10e8bfa7e6819c94c12dc81ecd12",
+  "version": "0.5.1",
   "archive": "aq-worker-source.tar.gz",
-  "archive_sha256": "ed33076d62d37884cab04f1206d1fda3dd5e06181ddb1ccdebec58fda789b535",
-  "lockfile_sha256": "8df379105458d4ecdd10929edf9eecbf62b61c6b7787f5b46c05c435dcc6e830",
+  "archive_sha256": "ceb76d7184091349ffac211f67599a4f2885158f13e5a968d0f312c02aa8cc52",
+  "lockfile_sha256": "8025b8ed630cd67253382b889d061fab2dfb9771a5de78abf1d44d7e6d23cbd9",
   "foundation_protocol": 1,
   "execution_protocol": 2,
-  "worker_journal_format": 3,
+  "worker_journal_format": 4,
+  "controller_journal_format": 1,
   "distribution": "Immutable local integration source candidate; not a published or hosted release. Builds require no sibling source checkout."
 }

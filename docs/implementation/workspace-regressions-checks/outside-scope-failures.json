@@ -1,0 +1,206 @@
+[
+  {
+    "case": "granted_closure::actual_host_stopped_variant_retains_absent_prestart_pane_without_inventing_started",
+    "package": "aq-server"
+  },
+  {
+    "case": "granted_closure::actual_grant_closes_once_and_replays_without_release_or_execution_clock",
+    "package": "aq-server"
+  },
+  {
+    "case": "granted_closure::expiry_and_active_policy_retirement_do_not_block_historical_closure",
+    "package": "aq-server"
+  },
+  {
+    "case": "granted_closure::failed_receipt_insert_rolls_back_revocation_and_preserves_retry",
+    "package": "aq-server"
+  },
+  {
+    "case": "granted_closure::renewal_counter_fences_old_suppression_and_closure_fences_all_later_authority",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_accepted_preparation::changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_accepted_preparation::changed_current_project_and_private_bytes_cannot_deliver_inputs",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_accepted_preparation::real_timed_accept_retains_independent_lease_and_exact_replay",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_accepted_preparation::structurally_complete_v2_prepare_never_falls_back_to_legacy_execution_issuer",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_cancellation::native_cancel_owner_validation_attempt_replay_and_concurrency",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_cancellation::native_cancel_slow_offer_continues_after_prompt_directive",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::exact_full_artifact_and_material_receipt_coverage_is_mandatory",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::graph_changes_during_preparation_refuse_without_retiming_original_inputs",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::isolation::occupied_presence_pg_connections_do_not_consume_renewal_pool",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::present_fact_never_bypasses_current_private_backing_or_agent_revocation",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::renewal::expired_server_permit_cannot_be_resurrected_by_fresh_observations",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::renewal::missing_actual_installation_receipt_cannot_be_reconstructed_from_preparation",
+    "package": "aq-server"
+  },
+  {
+    "case": "native_initial_grant::published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::compute::running_or_missing_stopped_owner_keeps_node_compute_busy",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::actual_origin_records_replays_reads_and_never_accepts_or_releases",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::compute::verified_stopped_frees_node_compute_without_releasing_task_or_requiring_result",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::historical_phase_read_and_replay_survive_expiry_cancellation_and_runtime_retirement",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::human_metadata::opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::origin_pin_forgery_and_legacy_ui_coverage_refuse",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::retained_origin_rechecks_qualification_and_proof_instead_of_trusting_report_row",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::running_claim_cannot_become_recorded_without_actual_stopped_owner",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_results::frozen::sql_no_marker_and_even_forged_release_inputs_cannot_cross_settlement_gate",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_fixture::qualified_terminal_fixture_preserves_actual_phase_origin_without_legacy_grant",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_history::lost_first_reply_lookup_advances_from_absence_to_history_without_effects",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::changed_project_and_current_principal_cannot_gain_started_authority",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::actual_phase_started_records_original_ack_without_extending_grant_and_replays_after_expiry",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::clock_tests::final_insert_expiry_and_backward_clock_each_roll_back_actual_started",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::clock_tests::server_clock_regression_before_receipt_stamp_cannot_precede_issuance",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::retired_installed_policy_refuses_first_started_even_with_current_configuration",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::stale_authenticated_context_is_rechecked_before_any_started_mutation",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_started::wrong_outer_origin_or_inner_scope_refuses_without_partial_state",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_stopped::expired_cancelled_paired_stop_retains_claim_and_exact_ack_after_runtime_retirement",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_stopped::missing_started_and_foreign_proof_refuse_without_authority_mutation",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_stopped::paired_stop_does_not_qualify_old_sql_result_or_release_owners",
+    "package": "aq-server"
+  },
+  {
+    "case": "phase_terminal_stopped::stopped_insert_failure_rolls_back_journal_and_hot_then_same_intent_retries",
+    "package": "aq-server"
+  }
+]

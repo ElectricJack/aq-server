@@ -1,0 +1,156 @@
+{
+  "observed_at_utc": "2026-11-03T10:04:24.880780+00:00",
+  "operations": "read-only; no model run or settlement mutation",
+  "qualification_seed": {
+    "project_id": "e0a10000-0000-4000-8000-000000000002",
+    "workspace_id": "e0a10000-0000-4000-8000-000000000001",
+    "task_id": "e0a10000-0000-4000-8000-000000000004",
+    "repository_id": "e0a10000-0000-4000-8000-000000000003",
+    "node_id": "f761410b-43f5-4106-ab80-f044dd446da0"
+  },
+  "recorded_base_source": {
+    "base": {
+      "algorithm": "sha1",
+      "hex": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+    },
+    "retention_handle": "e0a10000-0000-4000-8000-000000000011",
+    "binding_generation": 1
+  },
+  "run11_attempt": {
+    "http_status": 404,
+    "verified": false
+  },
+  "graph_task_0004": {
+    "http_status": 200,
+    "top_level_keys": [
+      "acceptance_criteria",
+      "body",
+      "content_revision",
+      "content_type",
+      "created_at",
+      "created_by",
+      "deleted",
+      "id",
+      "kind",
+      "labels",
+      "last_verified_at",
+      "last_verified_by",
+      "metadata",
+      "provenance",
+      "retired",
+      "retirement_reason",
+      "review_at",
+      "successor_id",
+      "summary",
+      "summary_of_revision",
+      "task_state",
+      "title",
+      "updated_at",
+      "valid_from",
+      "valid_until",
+      "verification",
+      "version",
+      "workspace_id"
+    ],
+    "public_state": {
+      "id": "e0a10000-0000-4000-8000-000000000004",
+      "kind": "task",
+      "title": "E0 qualification scratch task",
+      "task_state": "active"
+    }
+  },
+  "graph_task_0005": {
+    "http_status": 200,
+    "top_level_keys": [
+      "acceptance_criteria",
+      "body",
+      "content_revision",
+      "content_type",
+      "created_at",
+      "created_by",
+      "deleted",
+      "id",
+      "kind",
+      "labels",
+      "last_verified_at",
+      "last_verified_by",
+      "metadata",
+      "provenance",
+      "retired",
+      "retirement_reason",
+      "review_at",
+      "successor_id",
+      "summary",
+      "summary_of_revision",
+      "task_state",
+      "title",
+      "updated_at",
+      "valid_from",
+      "valid_until",
+      "verification",
+      "version",
+      "workspace_id"
+    ],
+    "public_state": {
+      "id": "e0a10000-0000-4000-8000-000000000005",
+      "kind": "task",
+      "title": "E0 qualification scratch task",
+      "task_state": "active"
+    }
+  },
+  "containers": {
+    "aq-e0-qual-server-1": {
+      "returncode": 0,
+      "health_and_image": "\"healthy\" \"sha256:6f119d44a482162e7c8d8c04255e56e1e571b9b9e518efd03a8c0fbbd4fd4f96\""
+    },
+    "aq-e0-qual-aq-graph-1": {
+      "returncode": 0,
+      "health_and_image": "\"healthy\" \"sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be\""
+    },
+    "aq-e0-qual-aq-git-1": {
+      "returncode": 0,
+      "health_and_image": "\"healthy\" \"sha256:94a3d9adea2cf2f693cde66e8c0b58dd9d9cd3a2b47eced78545092dbefdb638\""
+    },
+    "aq-e0-qual-postgres-1": {
+      "returncode": 0,
+      "health_and_image": "\"healthy\" \"sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a\""
+    },
+    "aq-e0-final-server-1": {
+      "returncode": 0,
+      "health_and_image": "\"healthy\" \"sha256:6f119d44a482162e7c8d8c04255e56e1e571b9b9e518efd03a8c0fbbd4fd4f96\""
+    }
+  },
+  "i0_image": {
+    "returncode": 0,
+    "image_id": "sha256:0b7defe69f3e4cfde180f1de332cdae169aa16ac71805875770c4537ce9ddc7d"
+  },
+  "i0_report": {
+    "commit": "17bb649da4aa8c5dd9d42bb12b585f6b3ad3a42a",
+    "sha256": "5ff8f69256fb7229f688cc1d51a2c8573fbd0daf0cd744eb835fe5271bb187dc",
+    "snapshot": "I0-first-real-run.md"
+  },
+  "live_base_retention": {
+    "returncode": 0,
+    "correlation_matches": true,
+    "ok": true,
+    "retention": {
+      "handle_id": null,
+      "state": "active",
+      "generation": 9,
+      "repository_id": "e0a10000-0000-4000-8000-000000000003",
+      "binding_generation": 1,
+      "refs": [
+        {
+          "name": "refs/aq-git/checkpoints/e0a10000-0000-4000-8000-000000000011",
+          "oid": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+        }
+      ]
+    },
+    "requested_handle": "e0a10000-0000-4000-8000-000000000011"
+  },
+  "environment": {
+    "kernel": "Linux 6.18.33.2-microsoft-standard-WSL2",
+    "python": "Python 3.12.3",
+    "docker": "29.3.1 / 29.3.1"
+  }
+}

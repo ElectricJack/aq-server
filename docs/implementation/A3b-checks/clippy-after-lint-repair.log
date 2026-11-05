@@ -1,0 +1,7 @@
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Checking aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-accounting)
+    Checking aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-session-api)
+    Checking aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-terminal-relay-protocol)
+    Checking aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)
+    Checking aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-review-protocol)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 56s

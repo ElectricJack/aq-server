@@ -1,0 +1,411 @@
+{
+  "$comment": "Artifact JSON <=262144 bytes. Relational lineage/session/project/source/task/manifest/digest checks are enforced by validate_against; schema alone conveys no authority. task.version is graph CAS version; task.content_revision is retained independently.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "Binding": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "lineage_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        },
+        "task_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "task_id",
+        "lineage_id",
+        "attempt_id",
+        "attempt_generation",
+        "session"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string",
+      "x-utf8-maxBytes": 64
+    },
+    "Label": {
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          }
+        }
+      ],
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-maxBytes": 512
+    },
+    "ObjectFormat": {
+      "enum": [
+        "sha1",
+        "sha256"
+      ],
+      "maxLength": 512,
+      "type": "string",
+      "x-utf8-maxBytes": 512
+    },
+    "ObjectId": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "maxLength": 64,
+          "minLength": 40,
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$",
+          "type": "string",
+          "x-utf8-maxBytes": 64
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "boot_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "kind": {
+              "const": "remote",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "node_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "session_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "session_id": {
+              "format": "uuid",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SourceAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "observed_at_ms": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "project_id": {
+          "format": "uuid",
+          "maxLength": 512,
+          "type": "string",
+          "x-utf8-maxBytes": 512
+        },
+        "project_revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "repository_binding_generation": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "maxLength": 512,
+          "type": "string",
+          "x-utf8-maxBytes": 512
+        },
+        "resolved_object": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "selection": {
+          "$ref": "#/$defs/SourceSelection"
+        }
+      },
+      "required": [
+        "schema_version",
+        "project_id",
+        "project_revision",
+        "repository_id",
+        "repository_binding_generation",
+        "policy",
+        "selection",
+        "resolved_object",
+        "observed_at_ms",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "SourceSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "immutable",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "object": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          },
+          "required": [
+            "kind",
+            "object"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "named_ref",
+              "maxLength": 512,
+              "type": "string",
+              "x-utf8-maxBytes": 512
+            },
+            "reference": {
+              "$ref": "#/$defs/Label"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "content_revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "task_id": {
+          "format": "uuid",
+          "maxLength": 512,
+          "type": "string",
+          "x-utf8-maxBytes": 512
+        },
+        "version": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "maxLength": 512,
+          "type": "string",
+          "x-utf8-maxBytes": 512
+        }
+      },
+      "required": [
+        "workspace_id",
+        "task_id",
+        "version",
+        "content_revision"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-maxBytes": 512
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "graph_access_profile": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/Binding"
+    },
+    "outcome_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "project_revision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "selection_digest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceAdmission"
+    },
+    "source_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "task": {
+      "$ref": "#/$defs/TaskRevision"
+    },
+    "task_context": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "task_observation": {
+      "$ref": "#/$defs/ArtifactRef"
+    }
+  },
+  "required": [
+    "schema_version",
+    "lifecycle",
+    "project_revision",
+    "task",
+    "source",
+    "source_artifact",
+    "outcome_artifact",
+    "graph_access_profile",
+    "task_observation",
+    "task_context",
+    "selection_digest"
+  ],
+  "title": "ProfiledExecutionSpec",
+  "type": "object"
+}

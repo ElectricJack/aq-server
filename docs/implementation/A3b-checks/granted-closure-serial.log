@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.50s
+     Running tests/granted_closure.rs (target/debug/deps/granted_closure-083b8f36ccb7d06d)
+
+running 10 tests
+test actual_grant_closes_once_and_replays_without_release_or_execution_clock ... ok
+test actual_host_stopped_variant_retains_absent_prestart_pane_without_inventing_started ... ok
+test closure_http_uses_reserved_control_capacity_and_refuses_at_its_shared_bound ... ok
+test closure_path_is_explicit_reserved_control ... ok
+test credential_rotation_during_node_lock_wait_cannot_commit_a_closure ... ok
+test expiry_and_active_policy_retirement_do_not_block_historical_closure ... ok
+test failed_receipt_insert_rolls_back_revocation_and_preserves_retry ... ok
+test policy_replacement_fences_old_owner_but_exact_history_can_use_new_current_policy ... ok
+test renewal_counter_fences_old_suppression_and_closure_fences_all_later_authority ... ok
+test started_and_closure_serialize_to_exactly_one_terminal_history ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.02s
+

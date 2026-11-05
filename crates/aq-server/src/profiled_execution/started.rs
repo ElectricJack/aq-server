@@ -26,6 +26,16 @@ fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
     value.sort_all_objects();
     serde_json::to_vec(&value).map_err(|_| AppError::Internal)
 }
+/// Production attempt path (H2): best-effort enrollment of the attempt's trusted
+/// catalog observation source once the attempt has started. A failure here
+/// never fails `started`; the batch route retries enrollment before ingest.
+async fn enroll_observation_source(state: &AppState, attempt: uuid::Uuid, node: uuid::Uuid) {
+    if let Err(error) =
+        crate::observations::catalog::register_attempt(state, attempt, Some(node)).await
+    {
+        tracing::debug!(%attempt, ?error, "observation source enrollment deferred");
+    }
+}
 pub async fn record(
     state: &AppState,
     node: &AuthenticatedNode,
@@ -109,6 +119,7 @@ pub async fn record(
                 .map_err(|_| AppError::Internal)?;
         // Exact historical ack: cancellation/expiry/stop are not undone.
         tx.commit().await.map_err(db)?;
+        enroll_observation_source(state, request.binding.attempt_id, node_id).await;
         return Ok(receipt);
     }
     if !matches!(hot.stop, Stop::Unknown) {
@@ -160,6 +171,7 @@ pub async fn record(
         return Err(AppError::Internal);
     }
     tx.commit().await.map_err(db)?;
+    enroll_observation_source(state, request.binding.attempt_id, node_id).await;
     Ok(receipt)
 }
 pub fn routes(state: AppState) -> axum::Router<AppState> {
@@ -175,6 +187,13 @@ async fn report(
     headers: axum::http::HeaderMap,
     crate::admin_api::ApiJson(request): crate::admin_api::ApiJson<Request>,
 ) -> Result<axum::Json<Receipt>, AppError> {
-    let node = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let node = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::Started,
+        None,
+    )
+    .await?;
+    crate::delegated_permits::runtime::require_binding(&node, &request.binding)?;
     Ok(axum::Json(record(&state, &node, &request).await?))
 }

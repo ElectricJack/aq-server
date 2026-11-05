@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 1m 57s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-420ace213f61fd3d)
+
+running 7 tests
+test delegated_runner_scope_is_rechecked_after_authentication ... ok
+test delegated_typed_attempt_checks_reject_foreign_and_mixed_bindings ... ok
+test accept_issues_and_grant_atomically_upgrades_same_permit ... ok
+test node_reboot_requires_readoption_before_renewal_extends ... ok
+test reboot_after_native_stop_readopts_only_result_and_exact_stopped_replay ... ok
+test reconstructed_auth_fences_revocation_and_stale_boot ... ok
+test readoption_refuses_backend_template_capability_changes_and_expired_grants ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.32s

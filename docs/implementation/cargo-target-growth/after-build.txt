@@ -1,0 +1,435 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling cfg-if v1.0.5
+   Compiling libc v0.2.191
+   Compiling syn v3.0.9
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling typenum v1.20.1
+   Compiling serde_derive v1.0.229
+   Compiling getrandom v0.2.17
+   Compiling memchr v2.8.3
+   Compiling version_check v0.9.5
+   Compiling itoa v1.0.18
+   Compiling generic-array v0.14.7
+   Compiling rand_core v0.6.4
+   Compiling subtle v2.6.1
+   Compiling crypto-common v0.1.7
+   Compiling zmij v1.0.23
+   Compiling const-oid v0.9.6
+   Compiling serde_json v1.0.154
+   Compiling getrandom v0.4.3
+   Compiling rand_core v0.10.1
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling thiserror v2.0.21
+   Compiling thiserror-impl v2.0.21
+   Compiling smallvec v1.16.4
+   Compiling sha2 v0.10.9
+   Compiling sha1_smol v1.0.1
+   Compiling uuid v1.29.0
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling futures-core v0.3.34
+   Compiling zeroize v1.9.1
+   Compiling parking_lot_core v0.9.12
+   Compiling synstructure v0.14.0
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling ref-cast v1.0.27
+   Compiling zerofrom-derive v0.1.8
+   Compiling parking_lot v0.12.5
+   Compiling ref-cast-impl v1.0.27
+   Compiling serde_derive_internals v0.30.0
+   Compiling errno v0.3.14
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling schemars_derive v1.2.3
+   Compiling num-traits v0.2.19
+   Compiling signal-hook-registry v1.4.8
+   Compiling zerofrom v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling tokio-macros v2.7.2
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling stable_deref_trait v1.2.1
+   Compiling dyn-clone v1.0.20
+   Compiling schemars v1.2.3
+   Compiling tokio v1.54.1
+   Compiling yoke v0.8.4
+   Compiling once_cell v1.21.4
+   Compiling log v0.4.34
+   Compiling zerovec-derive v0.11.7
+   Compiling futures-sink v0.3.34
+   Compiling zerovec v0.11.9
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-session-protocol-0.1.0)
+   Compiling displaydoc v0.2.7
+   Compiling percent-encoding v2.3.2
+   Compiling find-msvc-tools v0.1.15
+   Compiling futures-task v0.3.34
+   Compiling shlex v2.0.1
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.34
+   Compiling cc v1.10.0
+   Compiling futures-util v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling syn v2.0.119
+   Compiling ring v0.17.14
+   Compiling tinystr v0.8.5
+   Compiling base64 v0.22.1
+   Compiling utf_types v1.0.0
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling bitflags v2.13.2
+   Compiling icu_locale_core v2.4.0
+   Compiling utf8_iter v1.1.0
+   Compiling tracing-attributes v0.1.31
+   Compiling tracing v0.1.44
+   Compiling zerotrie v0.2.5
+   Compiling potential_utf v0.1.6
+   Compiling hybrid-array v0.4.15
+   Compiling icu_properties_data v2.4.0
+   Compiling icu_normalizer_data v2.4.0
+   Compiling icu_provider v2.4.0
+   Compiling icu_collections v2.4.0
+   Compiling futures-channel v0.3.34
+   Compiling rustls-pki-types v1.15.1
+   Compiling untrusted v0.9.0
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.7
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling http v1.5.0
+   Compiling const-oid v0.10.2
+   Compiling tinyvec v1.13.3
+   Compiling equivalent v1.0.3
+   Compiling unicode-normalization v0.1.26
+   Compiling http-body v1.1.0
+   Compiling digest v0.11.3
+   Compiling icu_normalizer v2.4.0
+   Compiling icu_properties v2.4.0
+   Compiling form_urlencoded v1.2.2
+   Compiling cpufeatures v0.3.1
+   Compiling unicode-bidi v0.3.18
+   Compiling rustls v0.23.46
+   Compiling zerocopy v0.8.63
+   Compiling unicode-properties v0.1.4
+   Compiling iana-time-zone v0.1.65
+   Compiling stringprep v0.1.5
+   Compiling chrono v0.4.45
+   Compiling idna_adapter v1.2.2
+   Compiling rustls-webpki v0.103.16
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling hashbrown v0.17.1
+   Compiling byteorder v1.5.0
+   Compiling tower-service v0.3.3
+   Compiling httparse v1.10.1
+   Compiling indexmap v2.14.2
+   Compiling idna v1.1.0
+   Compiling chacha20 v0.10.2
+   Compiling webpki-roots v1.0.11
+   Compiling try-lock v0.2.5
+   Compiling want v0.3.2
+   Compiling rand v0.10.3
+   Compiling url v2.5.8
+   Compiling ppv-lite86 v0.2.21
+   Compiling sha2 v0.11.1
+   Compiling md-5 v0.11.0
+   Compiling hmac v0.13.0
+   Compiling num-integer v0.1.47
+   Compiling sync_wrapper v1.0.2
+   Compiling utf8parse v0.2.2
+   Compiling atomic-waker v1.1.2
+   Compiling siphasher v1.0.4
+   Compiling crossbeam-utils v0.8.23
+   Compiling fallible-iterator v0.2.0
+   Compiling httpdate v1.0.3
+   Compiling simd-adler32 v0.3.10
+   Compiling cfg_aliases v0.2.2
+   Compiling tower-layer v0.3.3
+   Compiling nix v0.29.0
+   Compiling postgres-protocol v0.6.12
+   Compiling hyper v1.12.0
+   Compiling phf_shared v0.13.1
+   Compiling anstyle-parse v1.0.0
+   Compiling rand_chacha v0.3.1
+   Compiling inout v0.1.4
+   Compiling aho-corasick v1.1.5
+   Compiling adler2 v2.0.1
+   Compiling regex-syntax v0.8.11
+   Compiling colorchoice v1.0.5
+   Compiling ipnet v2.12.2
+   Compiling allocator-api2 v0.2.21
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling crc32fast v1.5.3
+   Compiling foldhash v0.1.5
+   Compiling base64 v0.23.1
+   Compiling spin v0.9.9
+   Compiling lazy_static v1.5.1
+   Compiling hashbrown v0.15.5
+   Compiling hyper-util v0.1.21
+   Compiling anstream v1.0.0
+   Compiling regex-automata v0.4.18
+   Compiling cipher v0.4.4
+   Compiling rand v0.8.8
+   Compiling phf v0.13.1
+   Compiling postgres-types v0.2.14
+   Compiling tower v0.5.3
+   Compiling http-body-util v0.1.5
+   Compiling tokio-util v0.7.20
+   Compiling aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling universal-hash v0.5.1
+   Compiling async-trait v0.1.92
+   Compiling whoami v2.1.3
+   Compiling time-core v0.1.9
+   Compiling clap_lex v1.1.1
+   Compiling crc-catalog v2.5.0
+   Compiling winnow v0.7.15
+   Compiling strsim v0.11.1
+   Compiling ryu v1.0.23
+   Compiling heck v0.5.0
+   Compiling num-conv v0.2.2
+   Compiling toml_write v0.1.2
+   Compiling hex v0.4.3
+   Compiling opaque-debug v0.3.1
+   Compiling base64ct v1.8.3
+   Compiling parking v2.2.1
+   Compiling event-listener v5.4.2
+   Compiling pem-rfc7468 v0.7.0
+   Compiling poly1305 v0.8.0
+   Compiling toml_edit v0.22.27
+   Compiling time-macros v0.2.32
+   Compiling clap_derive v4.6.7
+   Compiling serde_urlencoded v0.7.1
+   Compiling clap_builder v4.6.7
+   Compiling crc v3.4.0
+   Compiling tokio-postgres v0.7.18
+   Compiling crossbeam-queue v0.3.14
+   Compiling chacha20 v0.9.1
+   Compiling hashlink v0.10.0
+   Compiling miniz_oxide v0.9.1
+   Compiling webpki-roots v0.26.11
+   Compiling tokio-rustls v0.26.6
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-session-api)
+   Compiling tokio-stream v0.1.19
+   Compiling futures-intrusive v0.5.0
+   Compiling hmac v0.12.1
+   Compiling either v1.19.0
+   Compiling aead v0.5.2
+   Compiling powerfmt v0.2.1
+   Compiling deranged v0.5.9
+   Compiling chacha20poly1305 v0.10.1
+   Compiling sqlx-core v0.8.6
+   Compiling time v0.3.55
+   Compiling hkdf v0.12.4
+   Compiling hyper-rustls v0.27.10
+   Compiling flate2 v1.1.10
+   Compiling postgres v0.19.14
+   Compiling clap v4.6.7
+   Compiling toml v0.8.23
+   Compiling der v0.7.10
+   Compiling aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling tower-http v0.6.11
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling num-bigint v0.4.8
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-lifecycle-api)
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-agent-api)
+   Compiling atoi v2.0.0
+   Compiling md-5 v0.10.6
+   Compiling dotenvy v0.15.7
+   Compiling anyhow v1.0.104
+   Compiling whoami v1.6.1
+   Compiling mime v0.3.17
+   Compiling home v0.5.12
+   Compiling sqlx-postgres v0.8.6
+   Compiling axum-core v0.5.6
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling simple_asn1 v0.6.4
+   Compiling png v0.18.1 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/png-0.18.1-aq1)
+   Compiling reqwest v0.12.28
+   Compiling spki v0.7.3
+   Compiling regex v1.13.1
+   Compiling matchers v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-admission)
+   Compiling pem v3.0.6
+   Compiling tracing-log v0.2.0
+   Compiling aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-terminal-relay-protocol)
+   Compiling serde_path_to_error v0.1.20
+   Compiling semver v1.0.28
+   Compiling thread_local v1.1.10
+   Compiling rustix v1.1.6
+   Compiling matchit v0.8.4
+   Compiling nu-ansi-term v0.50.3
+   Compiling num-bigint-dig v0.8.6
+   Compiling tracing-subscriber v0.3.23
+   Compiling axum v0.8.9
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-phase-terminal-protocol)
+   Compiling aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-release)
+   Compiling aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-terminal-relay)
+   Compiling jsonwebtoken v9.3.1
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-notifications)
+   Compiling pkcs8 v0.10.2
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-result-media)
+   Compiling aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-playbook-host)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-selection)
+   Compiling sqlx v0.8.6
+   Compiling aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-observation-api)
+   Compiling num-iter v0.1.46
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-observation-admission)
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-admission-0.2.0)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-accounting)
+   Compiling aq-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-protocol-0.1.0)
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-central-authority)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-review-protocol)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-worker-protocol-0.2.0)
+   Compiling linux-raw-sys v0.12.1
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server)
+   Compiling pkcs1 v0.7.5
+   Compiling signature v2.2.0
+   Compiling fastrand v2.5.0
+   Compiling tempfile v3.27.0
+   Compiling rsa v0.9.10
+   Compiling aq-playbooks-compiler v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14m 32s
+  Executable unittests src/lib.rs (target/debug/deps/aq_server-c71b3cbb1ebfd8a2)
+  Executable unittests src/main.rs (target/debug/deps/aq_server-f5127feae98f2747)
+  Executable tests/actual_codex_task.rs (target/debug/deps/actual_codex_task-f1d254ba96e84d02)
+  Executable tests/actual_owner_setup.rs (target/debug/deps/actual_owner_setup-9b5fef5131808bf7)
+  Executable tests/agent_access.rs (target/debug/deps/agent_access-477fb4f573d10f11)
+  Executable tests/authz.rs (target/debug/deps/authz-ea7866b8ef6efaf6)
+  Executable tests/cli.rs (target/debug/deps/cli-e6e2c40e61092e64)
+  Executable tests/codex_finite_provider.rs (target/debug/deps/codex_finite_provider-8c8564f248e251cc)
+  Executable tests/codex_runtime_recipe.rs (target/debug/deps/codex_runtime_recipe-cdb4f8b254fdbda5)
+  Executable tests/config.rs (target/debug/deps/config-7964846e528e409e)
+  Executable tests/dashboard_actions.rs (target/debug/deps/dashboard_actions-b4c0af21a2ca2050)
+  Executable tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-732408e5b124a987)
+  Executable tests/dashboard_assets.rs (target/debug/deps/dashboard_assets-baf6a476eca58bd5)
+  Executable tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-52613af7377deb36)
+  Executable tests/dashboard_notifications.rs (target/debug/deps/dashboard_notifications-cc1736bdb3871bf1)
+  Executable tests/dashboard_read.rs (target/debug/deps/dashboard_read-30edd9c75827983a)
+  Executable tests/dashboard_search.rs (target/debug/deps/dashboard_search-e758e4b8a2dad33f)
+  Executable tests/dashboard_usage.rs (target/debug/deps/dashboard_usage-5e390630dc6d5ccf)
+  Executable tests/enrollment.rs (target/debug/deps/enrollment-28740a00fa8855aa)
+  Executable tests/execution.rs (target/debug/deps/execution-fbd0dd0fcaab1937)
+  Executable tests/granted_closure.rs (target/debug/deps/granted_closure-1a7d5502b72d01ab)
+  Executable tests/graph_mutations.rs (target/debug/deps/graph_mutations-326ec1d032562ff0)
+  Executable tests/health.rs (target/debug/deps/health-83b9c648fd4640c7)
+  Executable tests/human_graph.rs (target/debug/deps/human_graph-a441d7076aec6b25)
+  Executable tests/human_task_create.rs (target/debug/deps/human_task_create-d4a1cfd90d51ef1d)
+  Executable tests/identity.rs (target/debug/deps/identity-0369f1e85188debc)
+  Executable tests/intelligence.rs (target/debug/deps/intelligence-82beeeafed8ed35a)
+  Executable tests/messaging.rs (target/debug/deps/messaging-804a1f7aaa37992e)
+  Executable tests/native_accepted_preparation.rs (target/debug/deps/native_accepted_preparation-b35185961713ce79)
+  Executable tests/native_cancellation.rs (target/debug/deps/native_cancellation-bafe85c03ae4ab98)
+  Executable tests/native_definitions.rs (target/debug/deps/native_definitions-4e79503d37264d46)
+  Executable tests/native_expiry.rs (target/debug/deps/native_expiry-6e0c0a6af9f196d9)
+  Executable tests/native_initial_grant.rs (target/debug/deps/native_initial_grant-7c2dbdca15624fbc)
+  Executable tests/native_inventory.rs (target/debug/deps/native_inventory-98b5d582660f95f4)
+  Executable tests/native_material_issuance.rs (target/debug/deps/native_material_issuance-f78fb1f29074c968)
+  Executable tests/native_offers.rs (target/debug/deps/native_offers-293db96eb95ea6a1)
+  Executable tests/native_preparation.rs (target/debug/deps/native_preparation-633a66ac99b2fb47)
+  Executable tests/native_proposal_scope.rs (target/debug/deps/native_proposal_scope-84a89490970ea517)
+  Executable tests/native_reconciliation.rs (target/debug/deps/native_reconciliation-55a12f6465347e64)
+  Executable tests/native_registration.rs (target/debug/deps/native_registration-cea3982b78134f13)
+  Executable tests/native_result_startup.rs (target/debug/deps/native_result_startup-b6a1bba8d47da6c6)
+  Executable tests/native_runner_transport.rs (target/debug/deps/native_runner_transport-a6c50668b9e388d2)
+  Executable tests/native_source.rs (target/debug/deps/native_source-c773d9ac713b102a)
+  Executable tests/never_granted.rs (target/debug/deps/never_granted-5444048a134f20e1)
+  Executable tests/notification_discord_live.rs (target/debug/deps/notification_discord_live-001726dbcd0f2580)
+  Executable tests/notification_store.rs (target/debug/deps/notification_store-5b50e66960e7c306)
+  Executable tests/observation_owner_peer.rs (target/debug/deps/observation_owner_peer-72019073dca3c99c)
+  Executable tests/observation_transport.rs (target/debug/deps/observation_transport-aa8fedd710430f61)
+  Executable tests/observations.rs (target/debug/deps/observations-2147d0f770bcc116)
+  Executable tests/permit_fixture_conformance.rs (target/debug/deps/permit_fixture_conformance-a7b9103be6e80c0a)
+  Executable tests/phase_execution.rs (target/debug/deps/phase_execution-53c0b049ea00febd)
+  Executable tests/phase_execution_transport.rs (target/debug/deps/phase_execution_transport-6c1008a2d6e259b2)
+  Executable tests/phase_initial_lease.rs (target/debug/deps/phase_initial_lease-29da1b530ec0d2ce)
+  Executable tests/phase_never_granted.rs (target/debug/deps/phase_never_granted-113df15a9c6064fa)
+  Executable tests/phase_refresh_execution.rs (target/debug/deps/phase_refresh_execution-d43107e030feaf10)
+  Executable tests/phase_refresh_terminal.rs (target/debug/deps/phase_refresh_terminal-09ce75b9a8be9228)
+  Executable tests/phase_results.rs (target/debug/deps/phase_results-25eb1e512c483509)
+  Executable tests/phase_source_retention.rs (target/debug/deps/phase_source_retention-2f3eb405039f54ea)
+  Executable tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-64bf2328e7b48168)
+  Executable tests/phase_terminal_fixture.rs (target/debug/deps/phase_terminal_fixture-96d44d0bff55a7e5)
+  Executable tests/phase_terminal_history.rs (target/debug/deps/phase_terminal_history-575ca1c4b1be82c6)
+  Executable tests/phase_terminal_started.rs (target/debug/deps/phase_terminal_started-85b23c124a9fb55b)
+  Executable tests/phase_terminal_stopped.rs (target/debug/deps/phase_terminal_stopped-36f07f9f51a18374)
+  Executable tests/phase_terminal_transport.rs (target/debug/deps/phase_terminal_transport-83ff9b360453b232)
+  Executable tests/playbook_activation.rs (target/debug/deps/playbook_activation-9f2e105082ce932c)
+  Executable tests/playbook_bridge.rs (target/debug/deps/playbook_bridge-e2d35f6782d82bd0)
+  Executable tests/playbook_contract.rs (target/debug/deps/playbook_contract-5b68280f798536ea)
+  Executable tests/playbook_integration_startup.rs (target/debug/deps/playbook_integration_startup-3a995453dcede04f)
+  Executable tests/playbook_isolation.rs (target/debug/deps/playbook_isolation-27770be05d360e7c)
+  Executable tests/playbook_review_contract.rs (target/debug/deps/playbook_review_contract-7d154260b59a73cd)
+  Executable tests/profile_catalog.rs (target/debug/deps/profile_catalog-abe41ba7603adcd1)
+  Executable tests/profile_inspection.rs (target/debug/deps/profile_inspection-7de5136269b86798)
+  Executable tests/profiled_artifact_phases.rs (target/debug/deps/profiled_artifact_phases-94d9d5f25d02a3ea)
+  Executable tests/profiled_artifacts.rs (target/debug/deps/profiled_artifacts-3787296e4ba70a1f)
+  Executable tests/profiled_authority.rs (target/debug/deps/profiled_authority-901530d958a893da)
+  Executable tests/profiled_config.rs (target/debug/deps/profiled_config-91242064f3bb0792)
+  Executable tests/profiled_context.rs (target/debug/deps/profiled_context-ecf0c79f36064726)
+  Executable tests/profiled_hot.rs (target/debug/deps/profiled_hot-8f00501d2c6d009c)
+  Executable tests/profiled_material.rs (target/debug/deps/profiled_material-fc9e88953b9f1f07)
+  Executable tests/profiled_results.rs (target/debug/deps/profiled_results-b0975aa2d32671bf)
+  Executable tests/profiled_source.rs (target/debug/deps/profiled_source-4f92caad0674fd14)
+  Executable tests/profiled_source_exports.rs (target/debug/deps/profiled_source_exports-40107b9a9206ac91)
+  Executable tests/profiled_started.rs (target/debug/deps/profiled_started-39734780fe24a257)
+  Executable tests/profiled_stopped.rs (target/debug/deps/profiled_stopped-97358200e4da4e8d)
+  Executable tests/project_bindings.rs (target/debug/deps/project_bindings-ec0b73e914714511)
+  Executable tests/readiness.rs (target/debug/deps/readiness-4c9d21ccc8ec48d8)
+  Executable tests/real_graph_fixture.rs (target/debug/deps/real_graph_fixture-fc1b0857bd004958)
+  Executable tests/result_origin_migration.rs (target/debug/deps/result_origin_migration-c5e07b11605c1884)
+  Executable tests/scheduling_reads.rs (target/debug/deps/scheduling_reads-e792d11897877f0f)
+  Executable tests/schema26_27.rs (target/debug/deps/schema26_27-add54c26c22edaea)
+  Executable tests/schema28_closure.rs (target/debug/deps/schema28_closure-cac75e126a9d4d85)
+  Executable tests/schema29_presence.rs (target/debug/deps/schema29_presence-d95965485863159c)
+  Executable tests/schema30_preparation.rs (target/debug/deps/schema30_preparation-1e269be8b3fa0389)
+  Executable tests/schema31_presence_barrier.rs (target/debug/deps/schema31_presence_barrier-414c0a9ed9f29ba1)
+  Executable tests/schema32_phase_execution.rs (target/debug/deps/schema32_phase_execution-50b1288daedebef0)
+  Executable tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-ba8ca7813a16b586)
+  Executable tests/schema41_compute.rs (target/debug/deps/schema41_compute-5ef8f5c8bee90c44)
+  Executable tests/schema43_cancellation.rs (target/debug/deps/schema43_cancellation-26789286c6ffad95)
+  Executable tests/scoped_presence_inventory.rs (target/debug/deps/scoped_presence_inventory-8fe53e20f4a9d7ec)
+  Executable tests/session_inspection.rs (target/debug/deps/session_inspection-64f4c002b58d8c25)
+  Executable tests/settlement_migration.rs (target/debug/deps/settlement_migration-725fa9d1ec351549)
+  Executable tests/source_retention.rs (target/debug/deps/source_retention-317d8cc137b29328)
+  Executable tests/store.rs (target/debug/deps/store-8b7727de387fa299)
+  Executable tests/supervisor_conversation.rs (target/debug/deps/supervisor_conversation-ed2d04d1c966dde8)
+  Executable tests/terminal_output_poll.rs (target/debug/deps/terminal_output_poll-0965095799e6aaa7)
+  Executable tests/terminal_store.rs (target/debug/deps/terminal_store-33128d1247181360)
+  Executable tests/terminal_tail.rs (target/debug/deps/terminal_tail-f1fec2bc13eb66c9)
+  Executable tests/updates.rs (target/debug/deps/updates-6cd510abf1bc29ea)
+  Executable tests/worker_api.rs (target/debug/deps/worker_api-61a7276e380cfb9f)
+  Executable tests/worker_auth_context.rs (target/debug/deps/worker_auth_context-7763ba8f0b9ad56e)
+	Command being timed: "env CARGO_BUILD_JOBS=2 cargo test -p aq-server --all-features --no-run"
+	User time (seconds): 1351.67
+	System time (seconds): 341.25
+	Percent of CPU this job got: 191%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 14:44.63
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2988844
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 15537
+	Minor (reclaiming a frame) page faults: 32062036
+	Voluntary context switches: 898548
+	Involuntary context switches: 415780
+	Swaps: 0
+	File system inputs: 3014800
+	File system outputs: 33408624
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -1,0 +1,125 @@
+{
+  "receipts": {
+    "finished": {
+      "attempt": {
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "launch_id": "6e6abfff-9c48-4146-b647-44f216ffb921",
+        "manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6"
+      },
+      "receipt_id": "91965f3f-95ac-45b9-9abe-de02488497ca"
+    },
+    "result": {
+      "artifact_digest": "79f5df652db4e25770763ddc22e615d66b5f0ec13e1f3f446333165097b6939c",
+      "attempt": {
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "launch_id": "6e6abfff-9c48-4146-b647-44f216ffb921",
+        "manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6"
+      },
+      "receipt_id": "91965f3f-95ac-45b9-9abe-de02488497ca"
+    },
+    "schema_version": 1,
+    "source": null
+  },
+  "request": {
+    "binding": {
+      "assignment_generation": 1,
+      "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+      "execution_spec_digest": "6858dc5eeab74b7660cb8dc49c225b5cbadca8dd5c8a83d0173a551dceb43984",
+      "graph_access_profile_digest": "3be30ef6675723d55964ba118ff8f1ee849086ec119857e54b922675455f4cc1",
+      "launch_manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6",
+      "offer_id": "ca2ec1b5-c11b-5716-b7e4-f2520b1c8a6e",
+      "schema_version": 1,
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "boot_id": "9ad50490-40e6-4dab-bc7a-26849352320c",
+        "kind": "remote",
+        "node_id": "66db28e5-41c2-433e-b4e9-61a701ca72e4",
+        "session_id": "01804aeb-68fb-5fc7-92f5-4e73088d6e29"
+      }
+    },
+    "conclusion": "Actual Git checkpoint retained; synthetic host claim; no settlement",
+    "identity": {
+      "boot_id": "9ad50490-40e6-4dab-bc7a-26849352320c",
+      "node_id": "66db28e5-41c2-433e-b4e9-61a701ca72e4"
+    },
+    "operation_id": "9cf31821-44fc-4757-b47b-ff07b73ec5d2",
+    "outcome": "success",
+    "pending_effect_ids": [],
+    "report_id": "91965f3f-95ac-45b9-9abe-de02488497ca",
+    "schema_version": 1,
+    "source_receipt_ids": [
+      "ce9a667f-3560-4187-a046-6a2edde490f2"
+    ],
+    "stop": {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "execution_spec_digest": "6858dc5eeab74b7660cb8dc49c225b5cbadca8dd5c8a83d0173a551dceb43984",
+        "graph_access_profile_digest": "3be30ef6675723d55964ba118ff8f1ee849086ec119857e54b922675455f4cc1",
+        "launch_manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6",
+        "offer_id": "ca2ec1b5-c11b-5716-b7e4-f2520b1c8a6e",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+          "boot_id": "9ad50490-40e6-4dab-bc7a-26849352320c",
+          "kind": "remote",
+          "node_id": "66db28e5-41c2-433e-b4e9-61a701ca72e4",
+          "session_id": "01804aeb-68fb-5fc7-92f5-4e73088d6e29"
+        }
+      },
+      "disposition": {
+        "grant_id": "0d6f2a3c-bf53-4ac5-ac3f-988647c7c0bf",
+        "kind": "stopped",
+        "stop_receipt_digest": "2d5d9874a0ad1445b377fa37b46ed38f2c244586c90b035e8dfa77f6fae0e6c1"
+      },
+      "guardian_id": "bca6d9a5-8f69-4cf9-a520-3ea6ecb5d7c3",
+      "journal": {
+        "digest": "88884009b2a153df25f5e15216efbdf8e0116abe329b93f7a928b9de6ac47db6",
+        "kind": "recorded",
+        "revision": 4
+      },
+      "launch_id": "6e6abfff-9c48-4146-b647-44f216ffb921",
+      "reason": "execution_expiry",
+      "schema_version": 1,
+      "stop_operation_id": "d9ab15ee-3574-4314-bbb4-4f88b4664cae"
+    },
+    "supersedes": null
+  },
+  "response": {
+    "binding": {
+      "assignment_generation": 1,
+      "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+      "execution_spec_digest": "6858dc5eeab74b7660cb8dc49c225b5cbadca8dd5c8a83d0173a551dceb43984",
+      "graph_access_profile_digest": "3be30ef6675723d55964ba118ff8f1ee849086ec119857e54b922675455f4cc1",
+      "launch_manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6",
+      "offer_id": "ca2ec1b5-c11b-5716-b7e4-f2520b1c8a6e",
+      "schema_version": 1,
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "boot_id": "9ad50490-40e6-4dab-bc7a-26849352320c",
+        "kind": "remote",
+        "node_id": "66db28e5-41c2-433e-b4e9-61a701ca72e4",
+        "session_id": "01804aeb-68fb-5fc7-92f5-4e73088d6e29"
+      }
+    },
+    "disposition": "recorded",
+    "expected_outcome": {
+      "digest": "b0a6a4b71dad3a9ec6b99511760f98d90ceea8edb0fda517013b8b62e968d6ef",
+      "id": "aq.expected-outcome",
+      "version": "1"
+    },
+    "operation_id": "9cf31821-44fc-4757-b47b-ff07b73ec5d2",
+    "recorded_at_ms": 1793696624865,
+    "report_digest": "79f5df652db4e25770763ddc22e615d66b5f0ec13e1f3f446333165097b6939c",
+    "report_id": "91965f3f-95ac-45b9-9abe-de02488497ca",
+    "schema_version": 1,
+    "stopped_receipt": {
+      "digest": "67842a62dd8b0da8b50e6a9392231cbcbaae8074b8de56a22fa6c11f7a9adadd",
+      "id": "aq.native-stopped/f78b24f3-05aa-5d07-9730-54f74aa72299",
+      "version": "1"
+    }
+  }
+}

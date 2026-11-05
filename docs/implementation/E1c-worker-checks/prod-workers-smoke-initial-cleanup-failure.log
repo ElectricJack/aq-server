@@ -1,0 +1,19 @@
+Building production smoke image
+Traceback (most recent call last):
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-smoke.py", line 238, in <module>
+    runpy.run_path(str(Path(__file__).with_name(scripted[sys.argv[1]])), run_name="__main__")
+  File "<frozen runpy>", line 286, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-workers-smoke.py", line 390, in <module>
+    print("PASS compose_worker_starts_with_docker_local")
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-workers-smoke.py", line 299, in sandbox_load_does_not_starve_server_health
+    units = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "systemd/user")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-prod-smoke.py", line 152, in production_stack
+    assert not cleanup_errors, cleanup_errors
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: ['owned containers survived cleanup', 'owned volumes survived cleanup']

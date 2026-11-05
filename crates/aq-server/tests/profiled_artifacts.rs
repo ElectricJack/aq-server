@@ -6,6 +6,63 @@ use common::profiled::{NOW, artifact, fixture, insert};
 use serde_json::json;
 use uuid::Uuid;
 #[tokio::test]
+async fn immutable_definition_identity_conflict_is_named_and_preserves_retained_bytes() {
+    let f = fixture().await;
+    let project = f.selection.lineage.project_id;
+    let original = artifact("immutable-definition", b"original definition");
+    let retained = artifacts::retain(
+        &f.state,
+        Retain {
+            artifact_id: Uuid::new_v4(),
+            project_id: project,
+            owner: OwnerKind::Catalog,
+            artifact: original.clone(),
+            kind: ArtifactKind::Definition,
+            bytes: b"original definition",
+            retain_until_ms: NOW + 60_000,
+        },
+    )
+    .await
+    .unwrap();
+    let mut changed = original.clone();
+    changed.digest = Digest::of(b"changed definition");
+    let error = artifacts::retain(
+        &f.state,
+        Retain {
+            artifact_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            owner: OwnerKind::Startup,
+            artifact: changed,
+            kind: ArtifactKind::Definition,
+            bytes: b"changed definition",
+            retain_until_ms: NOW + 60_000,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        error.to_api_error().error,
+        "admission_definition_identity_conflict"
+    );
+    // Identical bytes under a new retention operation still work.
+    let replay = artifacts::retain(
+        &f.state,
+        Retain {
+            artifact_id: Uuid::new_v4(),
+            project_id: project,
+            owner: OwnerKind::Catalog,
+            artifact: original,
+            kind: ArtifactKind::Definition,
+            bytes: b"original definition",
+            retain_until_ms: NOW + 60_000,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(retained.artifact, replay.artifact);
+}
+#[tokio::test]
 async fn retained_bytes_have_real_replayable_immutable_receipt_and_exact_project_links() {
     let f = fixture().await;
     let attempt = insert(&f).await;

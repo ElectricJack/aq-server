@@ -384,5 +384,71 @@
         }
       ]
     }
+  },
+  {
+    "name": "agent-to-supervisor-send",
+    "type": "MessageSend",
+    "value": {
+      "operation_id": "00000000-0000-0000-0000-0000000001f5",
+      "message_id": "00000000-0000-0000-0000-0000000001f6",
+      "thread_id": "00000000-0000-0000-0000-0000000001fb",
+      "recipient": {
+        "kind": "global_supervisor",
+        "conversation_id": "00000000-0000-0000-0000-0000000001fb"
+      },
+      "body": "Review é界🙂 safely."
+    },
+    "valid": true
+  },
+  {
+    "name": "agent-to-supervisor-receipt",
+    "type": "MessageSendReceipt",
+    "value": {
+      "api_version": 1,
+      "operation_id": "00000000-0000-0000-0000-0000000001f5",
+      "message_id": "00000000-0000-0000-0000-0000000001f6",
+      "thread_id": "00000000-0000-0000-0000-0000000001fb",
+      "recipient": {
+        "kind": "global_supervisor",
+        "conversation_id": "00000000-0000-0000-0000-0000000001fb"
+      },
+      "cursor": "1",
+      "disposition": "queued",
+      "node_delivery": "not_attempted",
+      "harness_delivery": "not_attempted",
+      "notification_delivery": "not_attempted"
+    },
+    "valid": true
+  },
+  {
+    "name": "supervisor-sent-session-message",
+    "type": "MailboxMessage",
+    "value": {
+      "message_id": "00000000-0000-0000-0000-0000000001f6",
+      "thread_id": "00000000-0000-0000-0000-0000000001f7",
+      "recipient": {
+        "kind": "session",
+        "workspace_id": "00000000-0000-0000-0000-000000000069",
+        "project_id": "00000000-0000-0000-0000-000000000068",
+        "task_id": "00000000-0000-0000-0000-000000000001",
+        "session_id": "00000000-0000-0000-0000-000000000067",
+        "attempt_id": "00000000-0000-0000-0000-000000000066",
+        "generation": 1
+      },
+      "body": "Review é界🙂 safely.",
+      "cursor": "1",
+      "sender": {
+        "kind": "central_supervisor",
+        "actor_id": "00000000-0000-0000-0000-0000000001fc",
+        "generation": 1,
+        "session_id": "00000000-0000-0000-0000-0000000001fd",
+        "conversation_id": "00000000-0000-0000-0000-0000000001fb"
+      },
+      "payload_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at_ms": 1000000,
+      "disposition": "queued",
+      "delivery": null
+    },
+    "valid": true
   }
 ]

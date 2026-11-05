@@ -3,7 +3,7 @@
 use super::{Result, corrupt, function_body};
 use sqlx::{Postgres, Transaction};
 
-pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     let valid: bool = sqlx::query_scalar(r#"SELECT
       (SELECT count(*)=1 AND bool_and(singleton AND revision=1 AND conversation_id<>'00000000-0000-0000-0000-000000000000'::uuid) FROM global_supervisor_conversation)
       AND NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE (m.mailbox_key=central_global_mailbox_key() OR m.recipient->>'kind'='global_supervisor') AND NOT central_global_mail_source_valid(m.message_id))
@@ -30,15 +30,15 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     // retained actors/reservations. This is not CREATE FUNCTION, a trigger fire,
     // or a schema repair. The same bounded member/source/operation joins are used
     // for post-disable corruption and deferred transition validation.
-    sqlx::raw_sql(&retained_check_sql()?)
+    sqlx::raw_sql(&retained_check_sql(version)?)
         .execute(&mut **tx)
         .await
         .map_err(|_| corrupt())?;
     Ok(())
 }
 
-fn retained_check_sql() -> Result<String> {
-    let source = function_body("check_central_reservation_consistency")?;
+fn retained_check_sql(version: u32) -> Result<String> {
+    let source = function_body("check_central_reservation_consistency", version)?;
     let (declarations, body) = source.split_once("BEGIN\n").ok_or_else(corrupt)?;
     let body = body.strip_suffix("END ").ok_or_else(corrupt)?;
     if body.matches("RETURN NULL;").count() != 2 {
@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     #[test]
     fn retained_checker_reuses_frozen_predicates_without_writing_or_returning() {
-        let sql = retained_check_sql().unwrap();
+        let sql = retained_check_sql(37).unwrap();
         assert!(sql.contains("central original reserve operation proof is inconsistent"));
         assert!(sql.contains("central original cancel operation proof is inconsistent"));
         assert!(!sql.contains("RETURN NULL;"));

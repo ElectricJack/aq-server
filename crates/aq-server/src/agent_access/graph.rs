@@ -496,6 +496,24 @@ pub(super) async fn read(state: &AppState, p: &Principal, q: &Value) -> Result<V
     }
 }
 
+#[async_trait::async_trait]
+impl crate::row_retention::TaskState for Runtime {
+    async fn completed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool> {
+        let raw = self
+            .get(&format!("/v1/workspaces/{workspace}/nodes/{task}"), &[])
+            .await
+            .map_err(|_| anyhow::anyhow!("retention Graph observation unavailable"))?;
+        anyhow::ensure!(
+            contract::upstream_valid("Node", &raw)
+                && raw["workspace_id"] == json!(workspace)
+                && raw["id"] == json!(task)
+                && raw["kind"] == "task",
+            "invalid retention Graph observation"
+        );
+        Ok(raw["task_state"] == "completed" && raw["deleted"] == false && raw["retired"] == false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

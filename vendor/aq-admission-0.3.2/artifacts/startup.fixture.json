@@ -1,0 +1,431 @@
+{
+  "native_offer": {
+    "offered": {
+      "artifacts": [
+        {
+          "artifact": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "bytes": 7,
+          "kind": "definition",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "id": "source",
+            "version": "1"
+          },
+          "bytes": 6,
+          "kind": "source",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "25a63e52a98f6fdaa6187da559a0a3a55d845d0322ca183ad6ad5e006c4ed646",
+            "id": "outcome",
+            "version": "1"
+          },
+          "bytes": 7,
+          "kind": "outcome",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+            "id": "selection",
+            "version": "1"
+          },
+          "bytes": 9,
+          "kind": "selection",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "238fa28a94976c7da14563bc873c2729bd5cd325389085bb4c6dd0de28923590",
+            "id": "instructions",
+            "version": "1"
+          },
+          "bytes": 12,
+          "kind": "context",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "e9da65cf9299b9ab67fb58536af00693cc83d079bc700e4ae3aeb97257b6004e",
+            "id": "task-context",
+            "version": "1"
+          },
+          "bytes": 12,
+          "kind": "context",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "ea6e4282b6cd603ae302a1a2ade03005557cdf3ae7f3b64a89206cf96b7d0f09",
+            "id": "synthetic-renderer-qualification",
+            "version": "1"
+          },
+          "bytes": 32,
+          "kind": "definition",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "70c9c88d7a865190f65b658fbd808da9c727a2e62feb34f362b58088c509397a",
+            "id": "rendered-startup",
+            "version": "1"
+          },
+          "bytes": 26,
+          "kind": "context",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        },
+        {
+          "artifact": {
+            "digest": "31caf7330b8f592e5eef8b11e0a0c354903d8666d43a1a850cfa018be0573859",
+            "id": "aq.startup-delivery/31caf7330b8f592e5eef8b11e0a0c354903d8666d43a1a850cfa018be0573859",
+            "version": "1"
+          },
+          "bytes": 701,
+          "kind": "definition",
+          "retain_until_ms": 2000,
+          "retained_at_ms": 1000,
+          "retention_receipt": {
+            "digest": "f125655cc0bcbaa336be8e6c4b22fd3d68f46e6978cfa1c88296de365c9bcfbc",
+            "id": "synthetic-only-receipt",
+            "version": "1"
+          }
+        }
+      ],
+      "clock": {
+        "expires_at_ms": 2000,
+        "server_time_ms": 1500,
+        "valid_for_ms": 500
+      },
+      "lifecycle_binding": {
+        "attempt_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "lineage_id": "56933598-ab39-5752-980c-cad9731d636f",
+        "project_id": "00000000-0000-0000-0000-000000000001",
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        },
+        "task_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "offer": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "manifest": {
+          "agent_profile": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "bindings": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "graph_access_profile": {
+              "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "id": "fixture",
+              "version": "1"
+            },
+            "graph_id": "00000000-0000-0000-0000-000000000001",
+            "outcome": {
+              "digest": "25a63e52a98f6fdaa6187da559a0a3a55d845d0322ca183ad6ad5e006c4ed646",
+              "id": "outcome",
+              "version": "1"
+            },
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "project_revision": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "source": {
+              "digest": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+              "id": "source",
+              "version": "1"
+            },
+            "task_id": "00000000-0000-0000-0000-000000000001",
+            "task_revision": 1
+          },
+          "catalog": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "context": {
+            "context_window_tokens": 8192,
+            "references": [
+              {
+                "artifact": {
+                  "digest": "238fa28a94976c7da14563bc873c2729bd5cd325389085bb4c6dd0de28923590",
+                  "id": "instructions",
+                  "version": "1"
+                },
+                "bytes": 12,
+                "delivery": "startup",
+                "provenance": "profile",
+                "required": true,
+                "tokens": 12
+              },
+              {
+                "artifact": {
+                  "digest": "e9da65cf9299b9ab67fb58536af00693cc83d079bc700e4ae3aeb97257b6004e",
+                  "id": "task-context",
+                  "version": "1"
+                },
+                "bytes": 12,
+                "delivery": "startup",
+                "provenance": "authorized snapshot",
+                "required": true,
+                "tokens": 12
+              }
+            ],
+            "reserved_output_tokens": 4096,
+            "startup_byte_budget": 4096,
+            "startup_token_budget": 4096
+          },
+          "credentials": [
+            {
+              "credential_profile": {
+                "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+                "id": "fixture",
+                "version": "1"
+              },
+              "purpose": "provider"
+            }
+          ],
+          "execution_profile": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "harness": {
+            "adapter": {
+              "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "id": "fixture",
+              "version": "1"
+            },
+            "cli_version": "1",
+            "environment": {
+              "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "id": "fixture",
+              "version": "1"
+            },
+            "harness": "synthetic",
+            "required_capabilities": [
+              {
+                "id": "aq.harness.startup-context",
+                "version": 1
+              },
+              {
+                "id": "aq.harness.confined-worktree",
+                "version": 1
+              },
+              {
+                "id": "aq.harness.stop",
+                "version": 1
+              }
+            ]
+          },
+          "intelligence_profile": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "model": {
+            "max_output_tokens": 4096,
+            "model": "synthetic",
+            "provider": "fixture",
+            "reasoning": "standard",
+            "spending_budget": {
+              "basis": "task_cumulative_estimated_cost",
+              "currency": "USD",
+              "limit_microunits": 1000
+            }
+          },
+          "modules": [
+            {
+              "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "id": "fixture",
+              "version": "1"
+            },
+            {
+              "digest": "31caf7330b8f592e5eef8b11e0a0c354903d8666d43a1a850cfa018be0573859",
+              "id": "aq.startup-delivery/31caf7330b8f592e5eef8b11e0a0c354903d8666d43a1a850cfa018be0573859",
+              "version": "1"
+            }
+          ],
+          "permissions": {
+            "effective": [],
+            "omissions": [],
+            "requested": [],
+            "required": []
+          },
+          "resources": {
+            "cpu_millis": 1000,
+            "memory_bytes": 1048576,
+            "process_limit": 4,
+            "stop_grace_ms": 1000,
+            "wall_time_ms": 20000
+          },
+          "schema_version": 1,
+          "selection_explanation": {
+            "digest": "65045134064dd4d905665eceaf4153fea4f9d69d2ae22255a0b7cef4701f4886",
+            "id": "selection",
+            "version": "1"
+          },
+          "terminal": {
+            "host": "tmux",
+            "input_enabled": true,
+            "max_frame_bytes": 65536,
+            "max_input_bytes": 4096,
+            "max_pending_input_bytes": 32768,
+            "replay_bytes": 1048576
+          }
+        },
+        "required_capabilities": [
+          {
+            "id": "aq.profiled-launch",
+            "version": 1
+          },
+          {
+            "id": "aq.terminal",
+            "version": 1
+          },
+          {
+            "id": "aq.harness.startup-context",
+            "version": 1
+          },
+          {
+            "id": "aq.harness.confined-worktree",
+            "version": 1
+          },
+          {
+            "id": "aq.harness.stop",
+            "version": 1
+          }
+        ]
+      },
+      "required_features": [
+        "artifact_transfer_v1",
+        "server_material_v1",
+        "durable_host_journal_v1"
+      ],
+      "reservation_ttl_ms": 500
+    },
+    "schema_version": 1,
+    "startup": {
+      "implicit_tokens_upper_bound": 20,
+      "payload": {
+        "digest": "70c9c88d7a865190f65b658fbd808da9c727a2e62feb34f362b58088c509397a",
+        "id": "rendered-startup",
+        "version": "1"
+      },
+      "payload_bytes": 26,
+      "payload_tokens_upper_bound": 30,
+      "renderer_qualification": {
+        "digest": "ea6e4282b6cd603ae302a1a2ade03005557cdf3ae7f3b64a89206cf96b7d0f09",
+        "id": "synthetic-renderer-qualification",
+        "version": "1"
+      },
+      "schema_version": 1,
+      "startup_inputs": [
+        {
+          "artifact": {
+            "digest": "238fa28a94976c7da14563bc873c2729bd5cd325389085bb4c6dd0de28923590",
+            "id": "instructions",
+            "version": "1"
+          },
+          "bytes": 12,
+          "offset": 0
+        },
+        {
+          "artifact": {
+            "digest": "e9da65cf9299b9ab67fb58536af00693cc83d079bc700e4ae3aeb97257b6004e",
+            "id": "task-context",
+            "version": "1"
+          },
+          "bytes": 12,
+          "offset": 14
+        }
+      ]
+    }
+  },
+  "payload_utf8": "instructions\n\ntask-context"
+}

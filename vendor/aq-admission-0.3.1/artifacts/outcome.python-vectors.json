@@ -1,0 +1,5 @@
+{
+  "producer": "Python json sort_keys compact UTF8 + hashlib.sha256",
+  "canonical_sha256": "84a714741b53e360f9c16c60936e5996bb5a578cc33b0f75936cb93eb21dbfd2",
+  "canonical_bytes": 1421
+}

@@ -1,0 +1,34 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.06s
+     Running tests/phase_source_retention.rs (target/debug/deps/phase_source_retention-65b89a51e65fe510)
+
+running 2 tests
+test frozen::delegated_central_receipts ... SOURCE_RETENTION_OWNER group=3319682 start=5758026 session=3319344 root=/tmp/.tmpKIFbUM/rc
+SOURCE_RETENTION_OWNER group=3319833 start=5758152 session=3319344 root=/tmp/.tmpKIFbUM/rw
+
+thread 'frozen::delegated_central_receipts' (3319624) panicked at crates/aq-server/tests/support/actual_git_owner.rs:278:14:
+drain every owned Git descendant before root teardown: "Git descendant escaped the owned foreground session"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+SOURCE_RETENTION_OWNER_CLEANUP_FAILED group=3319682 root=/tmp/.tmpKIFbUM/rc error=Git descendant escaped the owned foreground session
+SOURCE_RETENTION_OWNER_CLEANUP_FAILED group=3319833 root=/tmp/.tmpKIFbUM/rw error=Git descendant escaped the owned foreground session
+FAILED
+test refresh::delegated_central_receipts ... SOURCE_RETENTION_OWNER group=3320174 start=5758794 session=3319344 root=/tmp/.tmpT3qg94/rc
+SOURCE_RETENTION_OWNER group=3320347 start=5758967 session=3319344 root=/tmp/.tmpT3qg94/rw
+
+thread 'refresh::delegated_central_receipts' (3320140) panicked at crates/aq-server/tests/support/actual_git_owner.rs:278:14:
+drain every owned Git descendant before root teardown: "Git descendant escaped the owned foreground session"
+SOURCE_RETENTION_OWNER_CLEANUP_FAILED group=3320174 root=/tmp/.tmpT3qg94/rc error=Git descendant escaped the owned foreground session
+SOURCE_RETENTION_OWNER_CLEANUP_FAILED group=3320347 root=/tmp/.tmpT3qg94/rw error=Git descendant escaped the owned foreground session
+FAILED
+
+failures:
+
+failures:
+    frozen::delegated_central_receipts
+    refresh::delegated_central_receipts
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 16.22s
+
+error: test failed, to rerun pass `-p aq-server --test phase_source_retention`
+
+Owned test session 3319344; remaining processes: [3319682, 3319683, 3319833, 3319835, 3320174, 3320182, 3320347, 3320352]

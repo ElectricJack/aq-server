@@ -1,0 +1,13 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-f468392aaff3d0b7)
+
+running 5 tests
+test delegated_runner_scope_is_rechecked_after_authentication ... ok
+
+thread 'accept_issues_and_grant_atomically_upgrades_same_permit' (3245218) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+error: test failed, to rerun pass `-p aq-server --test delegated_permit_runtime`
+
+Caused by:
+  process didn't exit successfully: `/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/target/debug/deps/delegated_permit_runtime-f468392aaff3d0b7` (signal: 6, SIGABRT: process abort signal)

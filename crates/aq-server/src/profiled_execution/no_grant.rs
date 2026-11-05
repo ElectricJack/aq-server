@@ -74,26 +74,40 @@ pub async fn close_expired(
         .await
         .map_err(|_| AppError::Internal)?
         .ok_or_else(|| AppError::NotFound("node not found".into()))?;
+    let result = close_locked(state, &mut tx, node, attempt, None).await?;
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    Ok(result)
+}
+
+/// Reuse the actual absence owner while the caller holds node ownership.
+/// Cancellation must already be durably recorded in this same transaction.
+pub(crate) async fn close_locked(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: Uuid,
+    attempt: Uuid,
+    cancellation: Option<Uuid>,
+) -> Result<Option<Closure>, AppError> {
     // Same node -> exact attempt/hot order as grant issuance. History loading
     // below performs no external IO and cannot mint a live worker principal.
     let current = sqlx::query("SELECT l.launch_binding,h.state AS hot FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) JOIN profiled_launches l USING(attempt_id) WHERE a.attempt_id=$1 AND a.node_id=$2 FOR UPDATE OF a,h")
-        .bind(attempt).bind(node).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
+        .bind(attempt).bind(node).fetch_one(&mut **tx).await.map_err(|_|AppError::Internal)?;
     let binding: LaunchBinding =
         serde_json::from_value(current.get("launch_binding")).map_err(|_| AppError::Internal)?;
     let hot: crate::execution::authority::hot::HotState =
         serde_json::from_value(current.get("hot")).map_err(|_| AppError::Internal)?;
     hot.validate_against(&binding)
         .map_err(|_| AppError::Internal)?;
-    let phase = super::phase_profile::for_attempt_locked(&mut tx, attempt).await?;
+    let phase = super::phase_profile::for_attempt_locked(tx, attempt).await?;
     if hot.status == crate::execution::profiled::Status::Preparing
-        && let Some(phase) = phase
+        && let Some(phase_profile) = phase
     {
         // Historical validators retain the exact Frozen/Refresh nominal types;
         // neither lease is reinterpreted as a legacy PreparationPlan.
         macro_rules! validate_phase {
             ($owner:path) => {{
                 use $owner as owner;
-                let history = owner::load_accepted_history_locked(&mut tx, &binding).await?;
+                let history = owner::load_accepted_history_locked(tx, &binding).await?;
                 let lease = &history.receipt.lease;
                 let owner = hot
                     .owner
@@ -111,20 +125,20 @@ pub async fn close_expired(
                 }
             }};
         }
-        match phase {
+        match phase_profile {
             super::phase_profile::Profile::Frozen => validate_phase!(super::accepted_preparation),
             super::phase_profile::Profile::Refresh => validate_phase!(super::accepted_refresh),
         }
         sqlx::query(
             "SELECT set_config('aq.phase_no_grant_owner','aq.phase-no-grant-owner.1',true)",
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|_| AppError::Internal)?;
     }
     let preparation:Option<serde_json::Value>=sqlx::query_scalar("SELECT r.response FROM profiled_authority_hot h LEFT JOIN profiled_execution_receipts r ON r.node_id=$2 AND r.operation_id=(h.state->>'preparation_operation_id')::UUID WHERE h.attempt_id=$1 AND h.state->>'status'='preparing'")
-        .bind(attempt).bind(node).fetch_optional(&mut *tx).await.map_err(|_|AppError::Internal)?.flatten();
-    let preparing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_authority_hot WHERE attempt_id=$1 AND state->>'status'='preparing')").bind(attempt).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
+        .bind(attempt).bind(node).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.flatten();
+    let preparing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_authority_hot WHERE attempt_id=$1 AND state->>'status'='preparing')").bind(attempt).fetch_one(&mut **tx).await.map_err(|_|AppError::Internal)?;
     if preparing && phase.is_none() {
         let document: aq_admission::transport::TransportDocument =
             serde_json::from_value(preparation.ok_or_else(|| {
@@ -142,13 +156,28 @@ pub async fn close_expired(
         }
     }
     let now = (state.clock)().timestamp_millis();
-    let row = sqlx::query("SELECT * FROM profiled_close_expired_ungranted($1,$2,$3,$4,$5)")
+    let sql = "SELECT * FROM profiled_close_ungranted($1,$2,$3,$4,$5,$6)";
+    // Historical fixtures exercise the genuine pre-cancellation expiry owner.
+    // Keep a sixth bind without changing the old SQL function's signature.
+    #[cfg(feature = "test-support")]
+    let sql = if state
+        .store
+        .fixture_profile
+        .is_some_and(|version| version < 43)
+        && cancellation.is_none()
+    {
+        "SELECT * FROM profiled_close_expired_ungranted($1,$2,$3,$4,$5) WHERE NOT $6"
+    } else {
+        sql
+    };
+    let row = sqlx::query(sql)
         .bind(node)
         .bind(attempt)
         .bind(now)
         .bind(Uuid::new_v4())
-        .bind(Uuid::new_v4())
-        .fetch_optional(&mut *tx)
+        .bind(cancellation.unwrap_or_else(Uuid::new_v4))
+        .bind(cancellation.is_some())
+        .fetch_optional(&mut **tx)
         .await
         .map_err(|error| {
             #[cfg(feature = "test-support")]
@@ -195,7 +224,8 @@ pub async fn close_expired(
                 || proof.observed_record_revision == 0
                 || proof.applicable_deadline_ms == 0
                 || proof.closed_at_ms < proof.applicable_deadline_ms
-                || !["offer_expired", "preparation_expired"].contains(&proof.reason.as_str())
+                || !["offer_expired", "preparation_expired", "cancelled"]
+                    .contains(&proof.reason.as_str())
                 || proof.material_leases_revoked.len() > 64
                 || proof.material_leases_revoked.iter().any(Uuid::is_nil)
                 || proof.pending_deliveries_staled.len() > 256
@@ -230,7 +260,6 @@ pub async fn close_expired(
             })
         })
         .transpose()?;
-    tx.commit().await.map_err(|_| AppError::Internal)?;
     Ok(result)
 }
 

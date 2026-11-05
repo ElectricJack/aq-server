@@ -46,11 +46,7 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
     let clock = Arc::new(AtomicI64::new(plan.clock.server_time_ms as i64 + 1));
     let at = clock.clone();
     case.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(
-            at.load(Ordering::SeqCst)
-                .max(chrono::Utc::now().timestamp_millis()),
-        )
-        .unwrap()
+        chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
     });
     let mut artifacts = offer
         .offered

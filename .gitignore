@@ -22,3 +22,7 @@ __pycache__/
 # Retained implementation test evidence (not runtime logs).
 !docs/implementation/execution-validation-*.log
 !docs/implementation/recovery-validation-*.log
+!docs/implementation/E1c-worker-checks/*.log
+
+# Regenerable graft index cache
+/graft/

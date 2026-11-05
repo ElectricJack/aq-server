@@ -1,0 +1,23 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000207",
+  "kind": "knowledge.author",
+  "subject": {
+    "type": "project",
+    "id": "00000000-0000-4000-8000-000000000010",
+    "revision": "1"
+  },
+  "expected_versions": {
+    "project": "1"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000207",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_project_revision": "1",
+    "title": "Deploy runbook",
+    "body": "Run the migration first.",
+    "labels": [
+      "ops"
+    ],
+    "content_type": "procedure"
+  }
+}

@@ -10,9 +10,13 @@ per-attempt report owner, consume those facts in renewal, or qualify physical
 worker/provider execution. The [checkpoint scope](AQ-08-presence-029-checkpoint.md)
 and [machine record](AQ-08-presence-029.qualification.json) retain those limits.
 
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
+
 ```sh
-env DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=3 CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo test -p aq-server --test scoped_presence_inventory --test schema29_presence --test schema28_closure --test native_inventory --all-features --locked --offline
-env CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
+env DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=3 CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p aq-server --test scoped_presence_inventory --test schema29_presence --test schema28_closure --test native_inventory --all-features --locked --offline
+env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
 cargo fmt --package aq-server --check
 ```
 

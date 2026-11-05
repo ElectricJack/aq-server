@@ -1,0 +1,9 @@
+{
+  "source_revision": "c802fed50bd579009b13a4cc11f77af52fe88d22",
+  "source_archive_sha256": "1b767c53a4c5567360561854120326967dd333139e9310c31c709963edf7aad1",
+  "source_path": "/home/jkern/.local/state/aq-platform-e0-final/source-refresh-c802fed50bd5",
+  "dockerfile": "/home/jkern/.local/state/aq-platform-e0-final/Dockerfile-refresh-c802fed50bd5",
+  "dockerfile_sha256": "edabdad002a579a14355c4f2e9000dfd0c0a3ca671f809da95f01a5432e5c81e",
+  "build_jobs": 2,
+  "tag": "aq-e0-refresh:c802fed50bd5"
+}

@@ -2,6 +2,10 @@
 //! binding, Git inspection and Graph peers. Not provider/physical/real-Git or
 //! GATE04 qualification. Every positive owner fact is obtained through its port.
 use super::*;
+#[path = "settlement_owner39/completion_outbox.rs"]
+mod completion_outbox;
+#[path = "settlement_owner39/source_retention_gc.rs"]
+mod source_retention_gc;
 use aq_server::{
     profiled_execution::settlement::{self, EvaluationDisposition},
     reviews::combined::*,
@@ -14,6 +18,8 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 const POLICY: &str =
     r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
+const USER_AUTHORIZATION_LOCK: &str = "SELECT role,email,issuer,subject,xmin::text AS authorization_revision FROM users WHERE id=$1 FOR SHARE";
+const CANCELLATION_NODE_LOCK: &str = "SELECT id FROM nodes WHERE id=$1 FOR UPDATE";
 pub(super) fn policy() -> aq_server::profiled_execution::definitions::Definition {
     aq_server::profiled_execution::definitions::Definition::new(
         artifact("pilot-settlement-policy", POLICY.as_bytes()),
@@ -281,6 +287,125 @@ fn profile_digest(v: &Value) -> String {
     aq_agent_api::digest(v).unwrap()
 }
 #[tokio::test]
+async fn native_cancellation_before_evaluation_refuses_success() {
+    let c = Box::pin(setup()).await;
+    let (status, receipt) = common::native_cancellation::cancel(
+        &c.env.f.state,
+        c.env.report.binding.attempt_id,
+        Uuid::new_v4(),
+        "cancel before acceptance",
+    )
+    .await;
+    assert_eq!(status, 200, "{receipt}");
+    let evaluation = Box::pin(c.service.evaluate(&c.actor, &c.request))
+        .await
+        .unwrap();
+    assert_eq!(evaluation.disposition, EvaluationDisposition::Rejected);
+    assert_eq!(
+        evaluation.reason,
+        Some(settlement::eligibility::Reason::Cancelled)
+    );
+    assert!(evaluation.completion_operation_id.is_none());
+    assert_eq!(c.writes.load(Ordering::SeqCst), 0);
+    c.env.peer.abort();
+    c._graph.abort();
+}
+
+#[tokio::test]
+async fn native_cancellation_after_accepted_evaluation_preserves_completion() {
+    let c = Box::pin(setup()).await;
+    let accepted = Box::pin(c.service.evaluate(&c.actor, &c.request))
+        .await
+        .unwrap();
+    assert_eq!(accepted.disposition, EvaluationDisposition::Accepted);
+    let op = Uuid::new_v4();
+    let (status, receipt) = common::native_cancellation::cancel(
+        &c.env.f.state,
+        c.env.report.binding.attempt_id,
+        op,
+        "too late",
+    )
+    .await;
+    assert_eq!(status, 200, "{receipt}");
+    assert_eq!(receipt["disposition"], "already_accepted");
+    assert!(receipt["cancellation_id"].is_null());
+    let done = Box::pin(
+        c.service
+            .complete(&c.actor, accepted.completion_operation_id.unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done.state, "confirmed");
+    assert_eq!(c.writes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        json!(
+            Box::pin(c.service.evaluate(&c.actor, &c.request))
+                .await
+                .unwrap()
+        ),
+        json!(accepted)
+    );
+    c.env.peer.abort();
+    c._graph.abort();
+}
+#[tokio::test]
+async fn native_cancellation_waits_for_acceptance_owner_and_preserves_accepted_result() {
+    let c = Box::pin(setup()).await;
+    let pool = c.env.f.db.pool().await;
+    let mut user_lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+        .bind(c.actor.id)
+        .execute(&mut *user_lock)
+        .await
+        .unwrap();
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *user_lock)
+        .await
+        .unwrap();
+    let service = c.service.clone();
+    let actor = c.actor.clone();
+    let request = c.request.clone();
+    let mut evaluating =
+        tokio::spawn(async move { Box::pin(service.evaluate(&actor, &request)).await });
+    let acceptance_owner =
+        wait_for_lock(&pool, blocker, USER_AUTHORIZATION_LOCK, &mut evaluating).await;
+    let state = c.env.f.state.clone();
+    let attempt = c.env.report.binding.attempt_id;
+    let mut cancelling = tokio::spawn(async move {
+        aq_server::profiled_execution::cancellation::cancel(
+            &state,
+            attempt,
+            Uuid::new_v4(),
+            "concurrent cancellation",
+        )
+        .await
+    });
+    wait_for_lock(
+        &pool,
+        acceptance_owner,
+        CANCELLATION_NODE_LOCK,
+        &mut cancelling,
+    )
+    .await;
+    user_lock.commit().await.unwrap();
+    let accepted = evaluating.await.unwrap().unwrap();
+    assert_eq!(accepted.disposition, EvaluationDisposition::Accepted);
+    let cancelled = cancelling.await.unwrap().unwrap();
+    assert_eq!(json!(cancelled.disposition), "already_accepted");
+    assert!(cancelled.cancellation_id.is_none());
+    let completion = Box::pin(
+        c.service
+            .complete(&c.actor, accepted.completion_operation_id.unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(completion.state, "confirmed");
+    assert_eq!(c.writes.load(Ordering::SeqCst), 1);
+    c.env.peer.abort();
+    c._graph.abort();
+}
+
+#[tokio::test]
 async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exact_graph_receipt() {
     let c = Box::pin(setup()).await;
     let receipt = Box::pin(c.service.evaluate(&c.actor, &c.request))
@@ -289,6 +414,17 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
     assert_eq!(receipt.disposition, EvaluationDisposition::Accepted);
     let op = receipt.completion_operation_id.unwrap();
     let pool = c.env.f.db.pool().await;
+    let original: (Value, i64) =
+        sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
+            .bind(receipt.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(original.0["status"], "offered");
+    assert_eq!(original.0["retention"]["kind"], "pending");
+    // An accepted evaluation alone cannot refresh or release the snapshot.
+    assert!(sqlx::query("UPDATE execution_attempts a SET state=a.state || (h.state-ARRAY['owner','preparation_operation_id']),holds_task=false,execution_deadline_ms=(h.state->>'execution_deadline_ms')::bigint FROM profiled_authority_hot h WHERE a.attempt_id=$1 AND h.attempt_id=a.attempt_id")
+        .bind(receipt.attempt_id).execute(&pool).await.is_err());
     assert!(
         sqlx::query_scalar::<_, bool>(
             "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1"
@@ -315,6 +451,16 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
     let unknown = Box::pin(c.service.complete(&c.actor, op)).await.unwrap();
     assert_eq!(unknown.state, "possible");
     assert!(unknown.receipt.is_none());
+    let possible: (Value, i64) =
+        sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
+            .bind(receipt.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        original, possible,
+        "an uncertain Graph result preserves the snapshot"
+    );
     assert!(
         sqlx::query_scalar::<_, bool>(
             "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1"
@@ -326,6 +472,42 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
     );
     let done = Box::pin(c.service.complete(&c.actor, op)).await.unwrap();
     assert_eq!(done.state, "confirmed");
+    let settled: (Value, i64) =
+        sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
+            .bind(receipt.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(settled.0["status"], "finished");
+    assert_eq!(settled.0["retention"]["kind"], "retained");
+    assert_eq!(settled.0["effects"]["kind"], "quiescent");
+    assert_eq!(settled.0["stop"]["kind"], "stopped");
+    for field in ["offer", "source", "graph"] {
+        assert_eq!(settled.0[field], original.0[field]);
+    }
+    assert_eq!(settled.1, original.1 + 1);
+    let compatibility: aq_server::execution::profiled::ProfiledState =
+        serde_json::from_value(settled.0.clone()).unwrap();
+    compatibility.validate().unwrap();
+    // Restart with an empty immutable-facts cache: the compatibility snapshot
+    // must still validate, including the persisted deadline column.
+    let mut restarted = c.env.f.state.clone();
+    restarted.store = c.env.f.db.store().await;
+    let mut cold_tx = pool.begin().await.unwrap();
+    let cold = aq_server::execution::authority::load_locked(
+        &restarted,
+        &mut cold_tx,
+        &compatibility.offer.binding.session,
+        aq_server::execution::authority::Policy::IdentityOnly,
+    )
+    .await
+    .unwrap();
+    assert!(cold.release_ready);
+    assert!(!cold.holds_task);
+    cold_tx.commit().await.unwrap();
+    assert!(sqlx::query("UPDATE execution_attempts SET state=jsonb_set(state,'{retention}', '{\"kind\":\"pending\"}') WHERE attempt_id=$1")
+        .bind(receipt.attempt_id).execute(&pool).await.is_err(),
+        "confirmation only permits the exact verified terminal projection");
     assert_eq!(c.writes.load(Ordering::SeqCst), 1);
     assert!(
         !sqlx::query_scalar::<_, bool>(
@@ -349,14 +531,52 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
         json!(done),
         json!(Box::pin(c.service.complete(&c.actor, op)).await.unwrap())
     );
+    let replayed: (Value, i64) =
+        sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
+            .bind(receipt.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        settled, replayed,
+        "confirmed replay does not advance the revision"
+    );
     c.env.peer.abort();
     c._graph.abort();
 }
 
-async fn wait_user_lock(pool: &sqlx::PgPool) {
-    tokio::time::timeout(std::time::Duration::from_millis(400),async{
-        loop{let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%authorization_revision%FOR SHARE')").fetch_one(pool).await.unwrap();if waiting{break}tokio::time::sleep(std::time::Duration::from_millis(2)).await;}
-    }).await.expect("actual final user lock wait must be observed");
+async fn wait_for_lock<T: std::fmt::Debug>(
+    pool: &sqlx::PgPool,
+    blocker: i32,
+    query: &str,
+    pending: &mut tokio::task::JoinHandle<T>,
+) -> i32 {
+    // Preliminary owner/Graph/Git reads do not have a 400 ms startup contract.
+    // Observe the actual blocking edge, while the operation's own SQL/I/O
+    // deadlines bound the wait. Early completion (including a lock timeout)
+    // must fail the barrier, never masquerade as an observed authorization wait.
+    tokio::select! {
+        biased;
+        result = pending => panic!(
+            "operation completed before its lock wait was observed: blocker={blocker}, query={query}, result={result:?}"
+        ),
+        pid = async {
+            loop {
+                let pid: Option<i32> = sqlx::query_scalar(
+                    "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query=$2 AND $1=ANY(pg_blocking_pids(pid))",
+                )
+                .bind(blocker)
+                .bind(query)
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+                if let Some(pid) = pid {
+                    break pid;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        } => pid,
+    }
 }
 #[tokio::test]
 async fn settlement39_expiry_after_final_requester_wait_rolls_back_acceptance() {
@@ -369,12 +589,16 @@ async fn settlement39_expiry_after_final_requester_wait_rolls_back_acceptance() 
             .execute(&mut *lock)
             .await
             .unwrap();
+        let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
         let service = c.service.clone();
         let actor = c.actor.clone();
         let request = c.request.clone();
-        let pending =
+        let mut pending =
             tokio::spawn(async move { Box::pin(service.evaluate(&actor, &request)).await });
-        wait_user_lock(&pool).await;
+        wait_for_lock(&pool, blocker, USER_AUTHORIZATION_LOCK, &mut pending).await;
         c.env.f.time.store(after, Ordering::SeqCst);
         lock.commit().await.unwrap();
         assert!(pending.await.unwrap().is_err());
@@ -404,10 +628,14 @@ async fn settlement39_expiry_after_final_approver_wait_rolls_back_first_dispatch
         .execute(&mut *lock)
         .await
         .unwrap();
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
     let service = c.service.clone();
     let actor = c.actor.clone();
-    let pending = tokio::spawn(async move { Box::pin(service.complete(&actor, op)).await });
-    wait_user_lock(&pool).await;
+    let mut pending = tokio::spawn(async move { Box::pin(service.complete(&actor, op)).await });
+    wait_for_lock(&pool, blocker, USER_AUTHORIZATION_LOCK, &mut pending).await;
     c.env.f.time.store((NOW + 30000) as i64, Ordering::SeqCst);
     lock.commit().await.unwrap();
     assert!(pending.await.unwrap().is_err());
@@ -548,6 +776,8 @@ async fn settlement39_prepare_held_git_reply_fences_revoked_preparer_before_priv
     c.env.f.state.source_retention = Some(Arc::new(
         aq_server::source_retention::Runtime::new(
             aq_server::source_retention::SourceRetentionConfig {
+                keep_per_task: 2,
+                max_age: 30 * 86400,
                 staging_root: c.env._directory.path().join("held-stage"),
                 git_root: c.env._directory.path().join("held-git"),
                 git_socket: path,
@@ -645,3 +875,55 @@ async fn settlement39_valid_pending_combined_review_is_unavailable_without_settl
 
 #[path = "settlement_http.rs"]
 mod settlement_http;
+
+#[tokio::test]
+async fn overview_settlement_acceptance_does_not_claim_graph_completion() {
+    let c = Box::pin(setup()).await;
+    let receipt = Box::pin(c.service.evaluate(&c.actor, &c.request))
+        .await
+        .unwrap();
+    assert_eq!(receipt.disposition, EvaluationDisposition::Accepted);
+    let app = aq_server::build_admin_router_with_policy_owners(
+        c.env.f.state.clone(),
+        None,
+        Some(Arc::new(c.env.service.clone())),
+    );
+    let other = super::review_inbox::overview_as(&app, "/api/v1/overview", "owner@localhost").await;
+    assert!(
+        !other["data"]["recent_outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["outcome"] == "settlement_accepted")
+    );
+    let body = super::review_inbox::overview_as(
+        &app,
+        "/api/v1/overview",
+        "settlement-requester@localhost",
+    )
+    .await;
+    let outcomes = body["data"]["recent_outcomes"].as_array().unwrap();
+    let outcome = outcomes
+        .iter()
+        .find(|v| v["outcome"] == "settlement_accepted")
+        .unwrap_or_else(|| panic!("accepted evaluation is observed: {body}"));
+    assert_eq!(outcome["subject"]["type"], "settlement_evaluation");
+    assert_eq!(outcome["subject"]["id"], json!(receipt.operation_id));
+    let digest: String = sqlx::query_scalar(
+        "SELECT receipt_digest FROM profiled_settlement_evaluations WHERE operation_id=$1",
+    )
+    .bind(receipt.operation_id)
+    .fetch_one(&c.env.f.db.pool().await)
+    .await
+    .unwrap();
+    assert_eq!(outcome["subject"]["revision"], format!("sha256:{digest}"));
+    assert_eq!(outcome["at"], "1970-01-01T00:16:40.000Z");
+    assert!(!outcomes.iter().any(|v| v["outcome"] == "completed"));
+    assert_eq!(
+        c.writes.load(Ordering::SeqCst),
+        0,
+        "overview must not dispatch Graph completion"
+    );
+    c.env.peer.abort();
+    c._graph.abort();
+}

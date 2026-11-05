@@ -120,6 +120,7 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
                 },
             },
             retention_handle,
+            placement: None,
         }],
     }));
     env.env.state.config = Arc::new(config);
@@ -164,6 +165,7 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
             lineage: env.lineage.clone(),
             project: env.frozen.clone(),
             compositions: env.input.compositions.clone(),
+            replacement: None,
         },
     )
     .await
@@ -245,6 +247,8 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
     let socket = env.env._dir.path().join("preparation-source.sock");
     f.state.source_retention = Some(Arc::new(
         Runtime::new(SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             git_socket: socket.clone(),
             git_root: env.env._dir.path().join("preparation-git"),
             staging_root: env.env._dir.path().join("preparation-stage"),

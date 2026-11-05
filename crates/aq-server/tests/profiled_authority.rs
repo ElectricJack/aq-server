@@ -297,6 +297,8 @@ async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuse
     let dir = tempfile::tempdir().unwrap();
     f.state.source_retention = Some(Arc::new(
         Runtime::new(SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             staging_root: dir.path().join("staging"),
             git_root: dir.path().join("git"),
             git_socket: dir.path().join("git.sock"),

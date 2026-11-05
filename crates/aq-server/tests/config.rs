@@ -25,6 +25,72 @@ enabled = false
 "#;
 
 #[test]
+fn standalone_reviews_require_retained_private_keys_without_playbooks() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = vault_with(VALID);
+    let key = dir.path().join("review-key");
+    std::fs::write(&key, [32u8; 32]).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let text = format!(
+        "{VALID}\n[reviews.protection]\nactive_key_id = \"fixture\"\n[[reviews.protection.keys]]\nid = \"fixture\"\nfile = {key:?}\n"
+    );
+    std::fs::write(dir.path().join("config.toml"), &text).unwrap();
+    let config = load(dir.path()).unwrap();
+    assert!(config.reviews.is_some());
+    assert!(config.playbooks.is_none());
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(load(dir.path()).is_err());
+    std::fs::remove_file(key).unwrap();
+    assert!(load(dir.path()).is_err());
+}
+
+#[test]
+fn enabled_profiled_execution_requires_terminal_keys_at_startup() {
+    let policy = r#"
+[profiled_execution]
+revision = 1
+qualified_runtimes = []
+[[profiled_execution.projects]]
+project_id = "00000000-0000-0000-0000-000000000001"
+enabled = true
+priority = 0
+retention_handle = "00000000-0000-0000-0000-000000000002"
+source = { kind = "named_ref", reference = "refs/heads/main" }
+"#;
+    let dir = vault_with(&format!("{VALID}\n{policy}"));
+    let error = load(dir.path()).unwrap_err().to_string();
+    assert!(
+        error.contains("terminals") && error.contains("enabled projects"),
+        "{error}"
+    );
+    // Disabled admission and a server without profiled execution remain valid.
+    assert!(
+        load(
+            vault_with(&format!(
+                "{VALID}\n{}",
+                policy.replace("enabled = true", "enabled = false")
+            ))
+            .path()
+        )
+        .is_ok()
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let key = dir.path().join("terminal-key");
+    std::fs::write(&key, [21u8; 32]).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let terminals = format!(
+        "\n[terminals.protection]\nactive_key_id = \"fixture\"\n[[terminals.protection.keys]]\nid = \"fixture\"\nfile = {:?}\n",
+        key
+    );
+    std::fs::write(
+        dir.path().join("config.toml"),
+        format!("{VALID}\n{policy}\n{terminals}"),
+    )
+    .unwrap();
+    assert!(load(dir.path()).unwrap().terminals.is_some());
+}
+
+#[test]
 fn loads_example_vault() {
     let cfg = load(Path::new("../../vault.example")).unwrap();
     assert_eq!(cfg.environment, Environment::Development);

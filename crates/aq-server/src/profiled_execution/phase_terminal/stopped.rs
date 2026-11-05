@@ -1,5 +1,6 @@
 //! Paired actual phase Started→Stopped owner. No renewal or release is implied.
 use super::common::{self, canonical, conflict, database, now};
+use super::wire;
 use crate::{
     AppState,
     error::AppError,
@@ -8,7 +9,6 @@ use crate::{
     worker_api::AuthenticatedNode,
 };
 use aq_admission::Digest;
-use super::wire;
 use sqlx::Row;
 
 pub async fn record(
@@ -114,6 +114,21 @@ async fn record_inner(
         {
             return Err(conflict());
         }
+        if let Some(delegate) = node.delegated() {
+            let current = &delegate.current;
+            let context = crate::delegated_permits::runtime::context(&mut tx, current).await?;
+            let retained = serde_json::from_slice(&r.get::<Vec<u8>, _>("request_bytes"))
+                .map_err(|_| conflict())?;
+            let incoming =
+                serde_json::from_value(serde_json::to_value(request).map_err(|_| conflict())?)
+                    .map_err(|_| conflict())?;
+            current
+                .record
+                .delivery(crate::delegated_permits::runtime::key(state)?)
+                .map_err(|_| conflict())?
+                .validate_stopped_replay(&context, &retained, &incoming, now(state)?)
+                .map_err(|_| conflict())?;
+        }
         tx.commit().await.map_err(database)?;
         return Ok(receipt);
     }
@@ -185,6 +200,12 @@ async fn record_inner(
     {
         return Err(conflict());
     }
+    crate::profiled_execution::cancellation::settle_stopped_locked(
+        &mut tx,
+        binding.attempt_id,
+        recorded,
+    )
+    .await?;
     tx.commit().await.map_err(database)?;
     Ok(ack)
 }

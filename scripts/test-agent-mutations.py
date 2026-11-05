@@ -13,7 +13,7 @@ original = "            (ROOT / 'fixtures/qualified-graph.json').write_text(json
 replacement = '''            writer_file = Path(temp) / 'ordinary-writer-token'
             writer_file.write_text(writer)
             writer_file.chmod(0o600)
-            env = dict(os.environ, AQ_MUTATION_GRAPH_URL=base,
+            env = dict(os.environ, CARGO_INCREMENTAL='0', AQ_MUTATION_GRAPH_URL=base,
                        AQ_MUTATION_GRAPH_TOKEN_FILE=str(writer_file))
             subprocess.run(['cargo', 'test', '--locked', '--offline', '-p', 'aq-server', '--test', 'graph_mutations',
                             'actual_qualified_graph_delivery_recovers_lost_receipt_without_duplicate_history',

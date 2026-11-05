@@ -1,0 +1,50 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "state": "partial",
+    "reason": "Some account quota observations are unavailable or stale"
+  },
+  "data": [
+    {
+      "provider_id": "openai",
+      "account_ref": "example-account",
+      "account_label": "example-account",
+      "scope": "provider_account",
+      "windows": [
+        {
+          "id": "primary_window",
+          "label": "Primary",
+          "starts_at": null,
+          "resets_at": null,
+          "used_percent": 25.0,
+          "used": null,
+          "limit": null,
+          "unit": "percent",
+          "state": "known",
+          "observation": {
+            "coverage": "complete",
+            "fresh_until": "2020-01-01T00:00:00.000Z",
+            "observed_at": "2019-12-31T23:59:30.000Z",
+            "quality": "reported",
+            "source": "codex_chatgpt_usage"
+          }
+        }
+      ],
+      "preferred_window_id": "primary_window",
+      "availability_ref": null
+    }
+  ],
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "2026-11-02T00:00:05.000Z",
+    "observed_at": "2026-11-02T00:00:00.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "8e9bce10-b2f0-47b5-b28a-7db62fd9f8c6",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "2026-11-02T00:00:00.000Z"
+}

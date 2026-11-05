@@ -46,6 +46,7 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
                 },
             },
             retention_handle: handle,
+            placement: None,
         }],
     };
     let policy = config.project_policy_record(project).unwrap();
@@ -55,6 +56,8 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
     let max_bundle = 65536;
     f.state.source_retention = Some(Arc::new(
         Runtime::new(SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             git_socket: dir.path().join("absent.sock"),
             git_root: dir.path().join("git"),
             staging_root: dir.path().join("stage"),

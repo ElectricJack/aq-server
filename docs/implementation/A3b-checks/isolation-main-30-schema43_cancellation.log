@@ -1,0 +1,20 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-a3b-main-isolation-20261103/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running tests/schema43_cancellation.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/schema43_cancellation-9cc7e346aa2c6223)
+
+running 1 test
+test cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses ... 
+thread 'cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses' (2159938) panicked at crates/aq-server/tests/schema43_cancellation.rs:63:5:
+assertion failed: matches!(test_support::migrate_profile(&pool, 42).await,
+    Err(StoreError::IncompatibleState { found: 43, supported: 42 }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.19s
+
+error: test failed, to rerun pass `-p aq-server --test schema43_cancellation`

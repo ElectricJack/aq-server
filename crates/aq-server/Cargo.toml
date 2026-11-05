@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+hmac = "=0.12.1"
+subtle = "=2.6.1"
 http-body = "=1.1.0"
 aq-central-authority = { path = "../aq-central-authority", version = "=0.1.0" }
 aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
@@ -21,7 +23,11 @@ zeroize = "1"
 aq-accounting = { path = "../aq-accounting", version = "=0.1.0" }
 aq-notifications = { path = "../aq-notifications", version = "=0.1.0" }
 aq-lifecycle-api = { path = "../aq-lifecycle-api", version = "=0.1.0" }
+aq-session-host.workspace = true
+aq-wait-engine = { path = "../aq-wait-engine", version = "=0.1.0" }
+# Frozen installed endpoints retain 0.1.11; B2 can use the delegated contract.
 aq-admission = { path = "../aq-admission", version = "=0.1.11" }
+aq-admission-sandbox = { package = "aq-admission", path = "../../vendor/aq-admission-0.3.3", version = "=0.3.3" }
 aq-phase-terminal-protocol = { path = "../aq-phase-terminal-protocol", version = "=0.1.2" }
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
@@ -53,6 +59,7 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+unicode-normalization = "=0.1.26"
 
 [features]
 test-support = ["aq-notifications/test-support"]
@@ -60,6 +67,7 @@ test-support = ["aq-notifications/test-support"]
 recovery-test-support = ["test-support"]
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
 aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }
 aq-server = { path = ".", features = ["test-support"] }

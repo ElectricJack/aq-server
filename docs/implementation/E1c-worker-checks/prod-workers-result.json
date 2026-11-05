@@ -1,0 +1,166 @@
+{
+  "cleanup": "owned Compose containers and volumes removed",
+  "images": {
+    "aq-git": "127.0.0.1:40363/aq-server@sha256:30195b355cb655cfea75a56f97dc982dab38be3a27ce72d2ea843cd6351c8e14",
+    "aq-graph": "ghcr.io/electricjack/aq-graph@sha256:9978ccdd8aa6ccd00d80521a1bb791fbf73f1eaae1ddd9b0ae8ee869be071707",
+    "graph-db-init": "postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5",
+    "postgres": "postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5",
+    "prod-state-init": "127.0.0.1:40363/aq-server@sha256:30195b355cb655cfea75a56f97dc982dab38be3a27ce72d2ea843cd6351c8e14",
+    "server": "127.0.0.1:40363/aq-server@sha256:30195b355cb655cfea75a56f97dc982dab38be3a27ce72d2ea843cd6351c8e14",
+    "server-db-init": "postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5"
+  },
+  "load": {
+    "cpu_sandboxes": 4,
+    "health": "postgres, server, aq-graph, aq-git healthy with zero failing streak throughout",
+    "host_cpus": 24,
+    "memory_hogs": [
+      {
+        "exit_code": 137,
+        "oom_killed": true
+      },
+      {
+        "exit_code": 137,
+        "oom_killed": false
+      }
+    ],
+    "readiness_deadline_seconds": 5.0,
+    "readiness_max_seconds": 0.27,
+    "readiness_samples": 30,
+    "sandbox_slice_cpus_used": 4.0,
+    "seconds": 30.0,
+    "slice_cpu_quota": 4.0,
+    "spinners_each": 4
+  },
+  "production_config": {
+    "budget": {
+      "cpus": 8.0,
+      "memory_bytes": 14361296896,
+      "vps": {
+        "cpus": 8.0,
+        "memory": 17179869184
+      }
+    },
+    "sandbox_slice": {
+      "CPUQuota": "400%",
+      "CPUWeight": "50",
+      "MemoryMax": "8G",
+      "MemorySwapMax": "0",
+      "TasksMax": "4096"
+    },
+    "service_limits": {
+      "aq-git": {
+        "cpus": 0.5,
+        "memory": 536870912,
+        "pids": 512
+      },
+      "aq-graph": {
+        "cpus": 0.5,
+        "memory": 536870912,
+        "pids": 256
+      },
+      "aq-supervisor-host": {
+        "cpus": 0.5,
+        "memory": 2147483648,
+        "pids": 512
+      },
+      "aq-worker-cloud": {
+        "cpus": 0.25,
+        "memory": 268435456,
+        "pids": 256
+      },
+      "aq-worker-state-init": {
+        "cpus": 0.25,
+        "memory": 134217728,
+        "pids": 64
+      },
+      "cloudflared": {
+        "cpus": 0.25,
+        "memory": 134217728,
+        "pids": 128
+      },
+      "graph-db-init": {
+        "cpus": 0.25,
+        "memory": 134217728,
+        "pids": 64
+      },
+      "postgres": {
+        "cpus": 1.0,
+        "memory": 1073741824,
+        "pids": 256
+      },
+      "prod-state-init": {
+        "cpus": 0.25,
+        "memory": 134217728,
+        "pids": 64
+      },
+      "server": {
+        "cpus": 1.0,
+        "memory": 1073741824,
+        "pids": 512
+      },
+      "server-db-init": {
+        "cpus": 0.25,
+        "memory": 134217728,
+        "pids": 64
+      }
+    }
+  },
+  "project": "aq-e1c-4af120aa27b0",
+  "running_limits": {
+    "aq-git": {
+      "Memory": 536870912,
+      "MemorySwap": 536870912,
+      "NanoCpus": 500000000,
+      "PidsLimit": 512
+    },
+    "aq-graph": {
+      "Memory": 536870912,
+      "MemorySwap": 536870912,
+      "NanoCpus": 500000000,
+      "PidsLimit": 256
+    },
+    "aq-worker-cloud": {
+      "Memory": 268435456,
+      "MemorySwap": 268435456,
+      "NanoCpus": 250000000,
+      "PidsLimit": 256
+    },
+    "postgres": {
+      "Memory": 1073741824,
+      "MemorySwap": 1073741824,
+      "NanoCpus": 1000000000,
+      "PidsLimit": 256
+    },
+    "server": {
+      "Memory": 1073741824,
+      "MemorySwap": 1073741824,
+      "NanoCpus": 1000000000,
+      "PidsLimit": 512
+    }
+  },
+  "sandbox_cleanup": "sandbox containers and transient slice removed",
+  "sandbox_daemon": {
+    "cgroup_driver": "systemd",
+    "security_options": [
+      "name=seccomp,profile=default",
+      "name=rootless"
+    ],
+    "server_version": "5.8.8",
+    "socket": "/run/user/1000/aq-sandbox/podman.sock"
+  },
+  "source_revision": "fad8115ec23647a9712d66e7f1746876608a9d8b",
+  "test": "sandbox_load_does_not_starve_server_health",
+  "worker": {
+    "controller": "docker-local connected; journal persisted; admission fenced",
+    "heartbeat": "recorded by actual server",
+    "image": "ghcr.io/electricjack/agent-q-worker@sha256:e20122bab7789d0ea6d267e2de4aa5032fe4eb08df2231c9a341e0d62fdfdbbb",
+    "node_id": "6b4794e8-8d73-4ea6-a45c-d68f08c81741",
+    "restart_count": 0,
+    "source_revision": "44fe1a5e2edc10e8bfa7e6819c94c12dc81ecd12",
+    "version": "aq-worker 0.5.1",
+    "volume_ownership": [
+      "1000:1000:700",
+      "1000:1000:700"
+    ]
+  }
+}

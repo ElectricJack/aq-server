@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-411de9a6598852f4)
+
+running 25 tests
+test store::central37::data::tests::retained_checker_reuses_frozen_predicates_without_writing_or_returning ... ok
+test store::central37_tests::fresh37_actual36_upgrade_preserves_global_mail_media_and_refuses_old36_reader ... ok
+test store::central37_tests::corrupt_pre37_global_body_or_orphan_original_proof_refuses_atomic_upgrade ... ok
+test store::central37_tests::post37_source_mutation_or_head_rewind_is_refused_without_repair ... ok
+test store::central37_tests::retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_reenabled ... ok
+test store::central37_tests::missing_disabled_wrong_or_non_deferred37_guards_refuse_without_repair ... ok
+test store::human_graph34_tests::actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34 ... ok
+test store::human_graph34_tests::each_disabled_history_guard_is_corrupt_without_repair ... ok
+test store::human_graph34_tests::each_missing_history_guard_is_corrupt_without_repair ... ok
+test store::human_graph34_tests::fresh34_is_complete_and_idempotent ... ok
+test store::human_graph34_tests::intent_identity_is_immutable_and_dispatch_count_cannot_decrease ... ok
+test store::human_graph34_tests::missing_table_index_or_function_is_corrupt_without_repair ... ok
+test store::human_graph34_tests::status_shape_terminal_rows_and_destructive_history_guards ... ok
+test store::media36_tests::budget_storage_identity_and_history_cannot_be_erased_or_reset ... ok
+test store::media36_tests::fresh36_and_actual35_upgrade_preserve_conversation_and_refuse_old_reader ... ok
+test store::central37_tests::same_named37_checks_keys_indexes_fks_and_nullability_cannot_bypass_startup ... ok
+test store::result38_tests::result38_fresh_upgrade_preserves_prior_rows_and_old37_refuses ... ok
+test store::result38_tests::reviewed_result38_catalog_export ... ok
+test store::settlement39_tests::reviewed_settlement39_catalog_export ... ok
+test store::settlement39_tests::settlement39_registered_upgrade_old_reader_and_critical_drift ... ok
+test store::supervisor35_tests::fresh35_and_actual34_upgrade_preserve_mail_and_refuse_old_reader ... ok
+test store::supervisor35_tests::identity_and_retention_are_durable_and_cannot_be_reset ... ok
+test store::supervisor35_tests::missing_or_disabled_guards_and_missing_singleton_are_not_silently_repaired ... ok
+test store::tests::state_format_is_the_latest_migration ... ok
+test store::media36_tests::missing_disabled_or_wrong_owner_guards_are_refused_without_repair ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 154 filtered out; finished in 79.63s
+

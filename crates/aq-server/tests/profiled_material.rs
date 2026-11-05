@@ -68,8 +68,12 @@ async fn setup() -> Case {
     let mut cfg = (*f.state.config).clone();
     cfg.intelligence = Some(Arc::new(
         IntelligenceConfig {
+            accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
+                kind: Default::default(),
+                allowed_backends: aq_selection::default_allowed_backends(),
                 credential: AuthorizedCredential {
                     profile: choice.credential_profile.clone(),
                     provider: choice.provider.clone(),
@@ -79,6 +83,7 @@ async fn setup() -> Case {
                     enabled: true,
                     provisionable: false,
                     material_owner: None,
+                    allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![f.node.node_id],
                 secret_file: Some(path.clone()),
@@ -144,7 +149,17 @@ async fn setup() -> Case {
     )
     .await;
     assert_eq!(installed.status(), StatusCode::OK);
-    let attempt = insert(&f).await;
+    let request = prepare(&f).await;
+    Case {
+        f,
+        request,
+        path,
+        _dir: dir,
+    }
+}
+async fn prepare(f: &Fixture) -> MaterialFetch {
+    let pool = f.db.pool().await;
+    let attempt = insert(f).await;
     let lease = MaterialLease {
         schema_version: 1,
         lease_id: Uuid::new_v4(),
@@ -210,7 +225,7 @@ async fn setup() -> Case {
         lease.credential_profile.id.as_str(),
         lease.credential_profile.version.as_str()
     );
-    sqlx::query("INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,'admitted',$13,$14)").bind(lease.lease_id).bind(Uuid::new_v4()).bind(Digest::of(b"synthetic-material-issuance").as_str()).bind(f.node.node_id).bind(f.node.boot_id).bind(attempt).bind(lease.binding.offer_id).bind(identity).bind(lease.credential_revision as i64).bind(lease.purpose.as_str()).bind(json!(lease)).bind(Digest::of(b"private-verifier-not-a-response").as_str()).bind(NOW as i64).bind((NOW+1000)as i64).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,'admitted',$13,$14)").bind(lease.lease_id).bind(Uuid::new_v4()).bind(Digest::of(b"synthetic-material-issuance").as_str()).bind(f.node.node_id).bind(f.node.boot_id).bind(attempt).bind(lease.binding.offer_id).bind(identity).bind(lease.credential_revision as i64).bind(lease.purpose.as_str()).bind(json!(lease)).bind(Digest::of(lease.lease_id.as_bytes()).as_str()).bind(NOW as i64).bind((NOW+1000)as i64).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO profiled_launch_materials(attempt_id,lease_id) VALUES($1,$2)")
         .bind(attempt)
         .bind(lease.lease_id)
@@ -218,7 +233,7 @@ async fn setup() -> Case {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let request = MaterialFetch {
+    MaterialFetch {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
         identity: WorkerIdentity {
@@ -227,12 +242,6 @@ async fn setup() -> Case {
         },
         binding: lease.binding,
         lease_id: lease.lease_id,
-    };
-    Case {
-        f,
-        request,
-        path,
-        _dir: dir,
     }
 }
 async fn fetch(c: &Case) -> axum::response::Response {
@@ -495,4 +504,199 @@ async fn revoked_preparation_and_missing_plan_refuse_even_when_lease_remains_adm
     let pool = c.f.db.pool().await;
     sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{preparation_operation_id}','null') WHERE attempt_id=$1").bind(c.request.binding.attempt_id).execute(&pool).await.unwrap();
     assert_eq!(fetch(&c).await.status(), StatusCode::CONFLICT);
+}
+/// Installs a current Preparation-scope permit for `binding` without the accept
+/// route, so the lease fences are exercised against chosen sandbox/generation.
+async fn permit(
+    f: &Fixture,
+    binding: &aq_session_protocol::LaunchBinding,
+    generation: u64,
+    sandbox: Uuid,
+) -> aq_admission_sandbox::sandbox::DelegatedPermit {
+    use aq_admission_sandbox::sandbox::*;
+    use aq_server::delegated_permits::{CredentialKey, runtime, storage};
+    let mut origin = binding.clone();
+    origin.assignment_generation = generation;
+    let authority = PreparationAuthority {
+        profile: PhaseProfile::PhaseV2,
+        accepted_receipt_digest: aq_admission_sandbox::Digest::of(b"synthetic-accept"),
+        binding: origin,
+        issued_at_ms: NOW,
+        preparation_deadline_ms: NOW + 1000,
+    };
+    let id = Uuid::new_v4();
+    let p = DelegatedPermit {
+        schema_version: 1,
+        permit_id: id,
+        credential: CredentialKey::new([7; 32]).credential(id).unwrap(),
+        binding: PermitBinding {
+            attempt_id: binding.attempt_id,
+            grant_generation: generation,
+            sandbox_id: sandbox,
+            channel_id: Uuid::new_v4(),
+            node: aq_admission_sandbox::transport::WorkerIdentity {
+                node_id: f.node.node_id,
+                boot_id: f.node.boot_id,
+            },
+        },
+        scope: PermitScope::Preparation,
+        issued_at_ms: NOW,
+        expires_at_ms: NOW + 1000,
+        hard_deadline_ms: NOW + 1000,
+    };
+    let pool = f.db.pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    let record = storage::insert_locked(&mut tx, Uuid::new_v4(), [9; 32], &p)
+        .await
+        .unwrap();
+    let current = runtime::Current {
+        record,
+        preparation: Some(authority),
+        authority: None,
+        revision: 1,
+        registration: None,
+    };
+    sqlx::query("INSERT INTO delegated_permit_current(permit_id,state) VALUES($1,$2)")
+        .bind(id)
+        .bind(json!(current))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    p
+}
+async fn fetch_with(
+    f: &Fixture,
+    request: &MaterialFetch,
+    p: &aq_admission_sandbox::sandbox::DelegatedPermit,
+) -> axum::response::Response {
+    aq_server::build_worker_router(f.state.clone())
+        .oneshot(
+            Request::post("/v1/worker/profiled/material")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", p.credential.expose()))
+                .header(
+                    "aq-runner-channel",
+                    serde_json::to_string(&p.binding).unwrap(),
+                )
+                .body(Body::from(serde_json::to_vec(request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+/// Moves the fixture to a fresh attempt on the same node and boot, as
+/// `dashboard_search` does, and prepares its own admitted lease.
+async fn second_attempt(f: &mut Fixture) -> MaterialFetch {
+    let task = Uuid::new_v4();
+    let attempt = Uuid::new_v4();
+    let session = aq_session_protocol::SessionIdentity::Remote {
+        node_id: f.node.node_id,
+        boot_id: f.node.boot_id,
+        attempt_id: attempt,
+        assignment_generation: 1,
+        session_id: Uuid::new_v4(),
+    };
+    f.selection.lineage.task_id = task;
+    f.decision = Uuid::new_v4();
+    f.profiled.offer.binding.attempt_id = attempt;
+    f.profiled.offer.binding.offer_id = Uuid::new_v4();
+    f.profiled.offer.binding.session = session.clone();
+    f.profiled.offer.manifest.bindings.session = session;
+    f.profiled.offer.manifest.bindings.attempt_id = attempt;
+    f.profiled.offer.manifest.bindings.task_id = task;
+    f.profiled.offer.manifest.selection_explanation.digest =
+        aq_selection::digest(&f.selection).unwrap();
+    f.profiled.offer.binding.execution_spec_digest = aq_selection::digest(
+        &json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":task}),
+    )
+    .unwrap();
+    f.profiled.offer.binding.launch_manifest_digest =
+        aq_session_protocol::canonical_digest(&f.profiled.offer.manifest).unwrap();
+    prepare(f).await
+}
+#[tokio::test]
+async fn lease_bound_to_permit_refuses_other_attempt() {
+    let mut c = setup().await;
+    let a = c.request.clone();
+    let generation = a.binding.assignment_generation;
+    let owner = permit(&c.f, &a.binding, generation, Uuid::new_v4()).await;
+    // Same attempt, another sandbox and grant generation: still not the permit
+    // the lease was issued for.
+    let other_sandbox = permit(&c.f, &a.binding, generation + 1, Uuid::new_v4()).await;
+    let pool = c.f.db.pool().await;
+    // Exactly what accept-time issuance records for the attempt's lease.
+    sqlx::query("UPDATE admission_material_leases SET permit_id=$1 WHERE lease_id=$2")
+        .bind(owner.permit_id)
+        .bind(a.lease_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE admission_material_leases SET permit_id=$1 WHERE lease_id=$2")
+            .bind(other_sandbox.permit_id)
+            .bind(a.lease_id)
+            .execute(&pool)
+            .await
+            .is_err(),
+        "a lease binding is set once"
+    );
+    let b = second_attempt(&mut c.f).await;
+    let other_attempt = permit(
+        &c.f,
+        &b.binding,
+        b.binding.assignment_generation,
+        Uuid::new_v4(),
+    )
+    .await;
+    assert!(
+        sqlx::query("UPDATE admission_material_leases SET permit_id=$1 WHERE lease_id=$2")
+            .bind(owner.permit_id)
+            .bind(b.lease_id)
+            .execute(&pool)
+            .await
+            .is_err(),
+        "a lease cannot be bound to another attempt's permit"
+    );
+    assert_eq!(
+        fetch_with(&c.f, &a, &other_sandbox).await.status(),
+        StatusCode::CONFLICT
+    );
+    // Same node and boot, another attempt: its own binding naming our lease,
+    // and our binding under its permit, are both refused.
+    let mut cross = b.clone();
+    cross.lease_id = a.lease_id;
+    assert_eq!(
+        fetch_with(&c.f, &cross, &other_attempt).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        fetch_with(&c.f, &a, &other_attempt).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    // An unbound lease is never permit-deliverable; the node path still is.
+    assert_eq!(
+        fetch_with(&c.f, &b, &other_attempt).await.status(),
+        StatusCode::CONFLICT
+    );
+    let node = post(
+        aq_server::build_worker_router(c.f.state.clone()),
+        "/v1/worker/profiled/material",
+        json!(b),
+        Some(&c.f.credential),
+    )
+    .await;
+    assert_eq!(node.status(), StatusCode::OK);
+    let response = fetch_with(&c.f, &a, &owner).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], SECRET);
+    c.request = a.clone();
+    assert_eq!(fetch(&c).await.status(), StatusCode::OK);
+    sqlx::query("UPDATE delegated_permits SET revoked=TRUE WHERE permit_id=$1")
+        .bind(owner.permit_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_ne!(fetch_with(&c.f, &a, &owner).await.status(), StatusCode::OK);
 }

@@ -1,6 +1,13 @@
 //! Bounded authenticated dashboard reads. No action proxy, no browser authority.
+pub mod actions;
+mod aggregation;
+mod capacity;
 pub mod contract;
+pub mod cursor;
+pub mod errors;
+pub mod quota;
 mod runtime;
+mod search;
 mod service;
 use crate::{AppState, authz::CurrentUser, error::AppError};
 use axum::{
@@ -28,6 +35,12 @@ pub(crate) struct MountedOwners {
     pub(crate) notifications: bool,
     pub(crate) supervisor_conversation: bool,
     pub(crate) reviews: bool,
+    /// H4 owner waits inspection (`/api/waits`).
+    pub(crate) waits: bool,
+    /// G10 owner operations read (`/api/v1/sessions/{id}/operations`).
+    pub(crate) session_operations: bool,
+    /// F5 owner question inbox (`/api/questions/decisions`).
+    pub(crate) questions: bool,
     pub(crate) playbook_owner: Option<Uuid>,
     pub(crate) playbook_loaded_definitions: bool,
     pub(crate) playbook_catalog: Option<aq_playbook_host::CatalogSupport>,
@@ -53,57 +66,23 @@ impl From<AppError> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, code, message, retryable) = match self {
-            Self::Invalid => (
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "Invalid dashboard request",
-                false,
-            ),
-            Self::Restart => (
-                StatusCode::CONFLICT,
+        use errors::ApiError;
+        match self {
+            Self::Invalid => ApiError::invalid(),
+            Self::Restart => ApiError::new(
+                StatusCode::GONE,
                 "cursor_restart_required",
-                "This page expired; refresh the list",
-                false,
+                "Restart this list; preserve your reading anchor",
             ),
-            Self::AuthorizationChanged => (
+            Self::AuthorizationChanged => ApiError::new(
                 StatusCode::FORBIDDEN,
                 "authorization_changed",
                 "Your access changed; reconnect to AQ",
-                false,
             ),
-            Self::Api(AppError::Unauthenticated(_)) => (
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "Sign in to AQ",
-                false,
-            ),
-            Self::Api(AppError::Forbidden(_)) => (
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "This read is not available to your account",
-                false,
-            ),
-            Self::Api(AppError::NotFound(_)) => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "Session not found",
-                false,
-            ),
-            Self::Api(AppError::BadRequest(_)) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "Invalid dashboard request",
-                false,
-            ),
-            _ => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "read_unavailable",
-                "This read is temporarily unavailable",
-                true,
-            ),
-        };
-        (status,Json(serde_json::json!({"request_id":Uuid::new_v4(),"code":code,"message":message,"retryable":retryable}))).into_response()
+            Self::Api(error) => ApiError::from(error),
+            Self::Unavailable => ApiError::unavailable(),
+        }
+        .into_response()
     }
 }
 struct DashboardUser(crate::store::User);
@@ -178,12 +157,28 @@ impl ReadQuery {
 /// Runtime is created once per human router and shared by its clones. A
 /// dedicated two-connection pool cannot exhaust execution-control connections.
 pub fn routes(state: AppState) -> Router<AppState> {
-    let runtime = Arc::new(Runtime::new(&state));
+    routes_with_reviews(state, None, None)
+}
+pub(crate) fn routes_with_reviews(
+    state: AppState,
+    reviews: Option<Arc<crate::reviews::Service>>,
+    playbooks: Option<Arc<crate::playbooks::driver::Driver>>,
+) -> Router<AppState> {
+    let mut runtime = Runtime::new(&state);
+    runtime.reviews = reviews.clone();
+    let runtime = Arc::new(runtime);
     Router::new()
+        .merge(actions::routes(Arc::new(actions::existing::registry(
+            &state, reviews, playbooks,
+        ))))
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/overview", get(overview))
+        .route("/api/v1/search", get(search::read))
+        .route("/api/v1/provider-usage", get(provider_usage))
+        .route("/api/v1/capacity", get(capacity))
         .route("/api/v1/sessions", get(sessions))
         .route("/api/v1/sessions/{id}", get(detail))
+        .route("/api/v1/sessions/{id}/operations", get(operations))
         .route("/api/v1/projects", get(projects))
         .layer(Extension(runtime))
 }
@@ -219,6 +214,7 @@ async fn bootstrap(
     )
 }
 async fn overview(
+    owners: Option<Extension<MountedOwners>>,
     State(state): State<AppState>,
     DashboardUser(user): DashboardUser,
     Extension(runtime): Extension<Arc<Runtime>>,
@@ -229,7 +225,53 @@ async fn overview(
     bounded(
         tokio::time::timeout(
             Duration::from_secs(2),
-            service::overview(&state, &runtime, &user, scope),
+            aggregation::overview(
+                &state,
+                &runtime,
+                &user,
+                scope,
+                owners.map(|Extension(v)| v).unwrap_or_default(),
+            ),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??,
+    )
+}
+async fn provider_usage(
+    State(state): State<AppState>,
+    DashboardUser(user): DashboardUser,
+    Extension(runtime): Extension<Arc<Runtime>>,
+    DashboardQuery(query): DashboardQuery,
+) -> Result<Json<Envelope<Vec<ProviderUsage>>>> {
+    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
+    let scope = query.scope()?;
+    if query.limit.is_some() || query.cursor.is_some() {
+        return Err(Error::Invalid);
+    }
+    bounded(
+        tokio::time::timeout(
+            Duration::from_secs(4),
+            service::provider_usage(&state, &runtime, &user, scope),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??,
+    )
+}
+async fn capacity(
+    State(state): State<AppState>,
+    DashboardUser(user): DashboardUser,
+    Extension(runtime): Extension<Arc<Runtime>>,
+    DashboardQuery(query): DashboardQuery,
+) -> Result<Json<Envelope<Capacity>>> {
+    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
+    let scope = query.scope()?;
+    if query.limit.is_some() || query.cursor.is_some() {
+        return Err(Error::Invalid);
+    }
+    bounded(
+        tokio::time::timeout(
+            Duration::from_secs(4),
+            capacity::capacity(&state, &runtime, &user, scope),
         )
         .await
         .map_err(|_| Error::Unavailable)??,
@@ -246,6 +288,23 @@ async fn sessions(
         tokio::time::timeout(
             Duration::from_secs(3),
             service::sessions(&state, &runtime, &user, query),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??,
+    )
+}
+async fn operations(
+    State(state): State<AppState>,
+    DashboardUser(user): DashboardUser,
+    Extension(runtime): Extension<Arc<Runtime>>,
+    SessionPath(id): SessionPath,
+    DashboardQuery(query): DashboardQuery,
+) -> Result<Json<Envelope<SessionOperations>>> {
+    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
+    bounded(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            service::operations(&state, &runtime, &user, id, query.scope()?),
         )
         .await
         .map_err(|_| Error::Unavailable)??,

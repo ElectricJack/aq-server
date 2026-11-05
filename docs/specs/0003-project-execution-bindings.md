@@ -86,6 +86,26 @@ The legacy fixture execution protocol has no fabricated profiled admission path.
 AQ-08/AQ-20 runtime consumers remain separate tasks; an eligible inspection is
 neither a provider selection nor execution authority.
 
+A project's source policy is either `Immutable` (an exact object ID) or
+`NamedRef` (a validated `refs/heads/…` or `refs/tags/…` name). The native offer
+producer admits both (`profiled_execution/producer/workflow.rs`). For a first
+attempt, the producer observes the source once through aq-git, before deriving
+the export operation:
+
+- **Immutable** keeps its historical export operation key: project, task
+  revision, project revision, generation and policy reference.
+- **NamedRef** resolves the ref once at offer time and appends the resolved
+  commit to that key. The commit is frozen into the export. A moved ref is a
+  different export operation, never the old operation following the ref.
+
+The producer observes the source again before it assembles and commits the
+offer. A ref that moved between the two observations refuses that offer, and no
+offer is committed. The next poll resolves the ref again and freezes the new
+commit under a new export operation. Once an offer exists, it and its
+preparation use only the frozen exported commit. A replacement attempt reuses
+its predecessor's verified export and retained commit, and it never resolves the
+configured ref again.
+
 Admin requests are capped at 128 KiB. Four project verification exchanges may run concurrently (each pairs one
 bounded Git read and one graph read); excess returns explicit unavailable observations instead of waiting
 in an unbounded queue. Registry retention caps are 256 current projects and

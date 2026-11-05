@@ -1,0 +1,72 @@
+    Blocking waiting for file lock on build directory
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)` has the same output filename as the example target `export` in package `aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-admission)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)` has the same output filename as the example target `export` in package `aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-admission)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-lifecycle-api)` has the same output filename as the example target `export` in package `aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-lifecycle-api)` has the same output filename as the example target `export` in package `aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)` has the same output filename as the example target `export` in package `aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-lifecycle-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)` has the same output filename as the example target `export` in package `aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-lifecycle-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-api)` has the same output filename as the example target `export` in package `aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-api)` has the same output filename as the example target `export` in package `aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-profiles)` has the same output filename as the example target `export` in package `aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-profiles)` has the same output filename as the example target `export` in package `aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export
+  |
+  = note: the example target `export` in package `aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-review-protocol)` has the same output filename as the example target `export` in package `aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-profiles)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/export.dwp
+  |
+  = note: the example target `export` in package `aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-review-protocol)` has the same output filename as the example target `export` in package `aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-profiles)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/publish
+  |
+  = note: the example target `publish` in package `aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-terminal-relay)` has the same output filename as the example target `publish` in package `aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-session-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+warning: output filename collision at /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/examples/publish.dwp
+  |
+  = note: the example target `publish` in package `aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-terminal-relay)` has the same output filename as the example target `publish` in package `aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-session-api)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)

@@ -1,0 +1,8 @@
+Command: cargo test --locked --offline -p aq-server --lib store::tests::state_format_is_the_latest_migration -- --test-threads=2
+    Finished `test` profile [unoptimized] target(s) in 0.71s
+     Running unittests src/lib.rs (/tmp/aq-b3-slot2-target/debug/deps/aq_server-1c0a564da6f99e10)
+
+running 1 test
+test store::tests::state_format_is_the_latest_migration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 181 filtered out; finished in 0.01s

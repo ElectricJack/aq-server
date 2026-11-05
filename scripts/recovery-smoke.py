@@ -21,6 +21,8 @@ import tomllib
 import traceback
 import uuid
 
+from migration_catalog import state_format as migration_state_format
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("product_smoke", ROOT / "scripts/product-smoke.py")
 product = importlib.util.module_from_spec(spec)
@@ -44,7 +46,7 @@ class RecoveryFixture(product.Fixture):
         self.record["invocation"] = sys.argv
         harness = self.logs / "harness"
         harness.mkdir()
-        for name in ["recovery-smoke.py", "recovery-smoke-proxy.py", "recovery-smoke-server.Dockerfile", "product-smoke.py", "check-worker-candidate.py"]:
+        for name in ["recovery-smoke.py", "recovery-smoke-proxy.py", "recovery-smoke-server.Dockerfile", "product-smoke.py", "check-worker-candidate.py", "migration_catalog.py"]:
             shutil.copy2(ROOT / "scripts" / name, harness / name)
         self.record["harness_sha256"] = {p.name: product.sha(p.read_bytes()) for p in harness.iterdir()}
 
@@ -62,6 +64,9 @@ class RecoveryFixture(product.Fixture):
             shutil.copy2(ROOT / name, source / name)
         for name in ["crates", "vendor", "protocol"]:
             shutil.copytree(ROOT / name, source / name)
+        # Dockerfile.worker installs the worker volume initializer from scripts/.
+        (source / "scripts").mkdir()
+        shutil.copy2(ROOT / "scripts/worker-init-volumes.sh", source / "scripts/worker-init-volumes.sh")
         if self.prototype_revision:
             raw = subprocess.check_output(["git", "archive", "--format=tar", self.prototype_revision], cwd=self.prototype_repository)
             compressed = gzip.compress(raw, mtime=0)
@@ -83,7 +88,7 @@ class RecoveryFixture(product.Fixture):
         original_checker_root = product.checker.ROOT
         product.checker.ROOT = source
         candidate = product.checker.candidate()
-        state_format = re.search(r"pub const STATE_FORMAT_VERSION: u32 = (\d+);", (source / "crates/aq-server/src/lib.rs").read_text()).group(1)
+        state_format = str(migration_state_format(source))
         server, worker = self.project + "-server:fixture", self.project + "-worker:fixture"
         self.images = [server, worker]
         self.record["recovery_build"] = {"source_inventory": inventory, "source_tree_sha256": tree,
@@ -91,14 +96,15 @@ class RecoveryFixture(product.Fixture):
         self.run(["docker", "build", "--target", "server", "-f", str(source / "Dockerfile.recovery"),
                   "--build-arg", "AQ_SOURCE_REVISION=recovery-" + tree[:24], "-t", server, str(source)],
                  name="build-fixture-server", timeout=1800)
-        self.run(["docker", "build", "--target", "worker", "-f", str(source / "Dockerfile.worker"),
+        # Recovery drives run-execution, which only the CI-only synthetic-runtime target ships.
+        self.run(["docker", "build", "--target", "synthetic-runtime", "-f", str(source / "Dockerfile.worker"),
                   "--build-arg", "AQ_SOURCE_REVISION=" + candidate["source_revision"],
                   "--build-arg", "AQ_WORKER_ARCHIVE_SHA256=" + candidate["archive_sha256"],
                   "--build-arg", "AQ_STATE_FORMAT=" + state_format,
                   "--build-arg", "AQ_VERSION=" + candidate["version"], "-t", worker, str(source)],
                  name="build-fixture-worker", timeout=1800)
-        saved = {key: os.environ.get(key) for key in ["AQ_SMOKE_SERVER_IMAGE", "AQ_SMOKE_WORKER_IMAGE"]}
-        os.environ.update(AQ_SMOKE_SERVER_IMAGE=server, AQ_SMOKE_WORKER_IMAGE=worker)
+        saved = {key: os.environ.get(key) for key in ["AQ_SMOKE_SERVER_IMAGE", "AQ_SMOKE_WORKER_IMAGE", "AQ_SMOKE_FIXTURE_IMAGE"]}
+        os.environ.update(AQ_SMOKE_SERVER_IMAGE=server, AQ_SMOKE_WORKER_IMAGE=worker, AQ_SMOKE_FIXTURE_IMAGE=worker)
         try:
             super().setup()
         finally:

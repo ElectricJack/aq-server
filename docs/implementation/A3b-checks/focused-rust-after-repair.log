@@ -1,0 +1,40 @@
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-admission)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-phase-terminal-protocol)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 24s
+     Running tests/project_bindings.rs (target/debug/deps/project_bindings-8f4564835a7ff9c6)
+
+running 13 tests
+test absent_stale_forbidden_and_offline_components_refuse_and_disable_stays_available ... ok
+test catalog_activation_blocks_future_eligibility_and_keeps_frozen_project_revision ... ok
+test committed_binding_installs_pending_policy_and_historical_ack_survives_retirement ... ok
+test empty_policy_configuration_still_retains_global_revision_owner ... ok
+test exact_replay_survives_group_configuration_changes_but_new_mutations_do_not ... ok
+test final_local_fence_rechecks_node_revocation_after_lock_wait ... ok
+test intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_facts ... ok
+test observation_expiring_during_mutation_lock_wait_never_commits_fresh_validation ... ok
+test owner_scope_node_restrictions_and_mutation_unknown_fields_are_enforced ... ok
+test policy_install_is_atomic_retains_tombstones_and_refuses_configuration_rollback ... ok
+test project_policy_decisions_have_no_human_actor_and_recheck_installed_policy ... ok
+test revisioned_binding_replay_history_and_retained_snapshot_survive_updates ... ok
+test selected_real_public_repository_and_graph_workspace_bind ... ignored, requires immutable selected aq-git and aq-graph components via scripts/test-project-bindings.py
+
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 47.59s
+
+     Running tests/source_retention.rs (target/debug/deps/source_retention-ac041488706a5d20)
+
+running 11 tests
+test credential_rotation_after_observed_node_wait_cannot_create_transfer_and_new_key_replays ... ok
+test credential_rotation_during_import_keeps_uncertain_intent_and_current_key_recovers_same_op ... ok
+test exact_replay_offsets_scope_and_upload_is_not_retention ... ok
+test invalid_pre_dispatch_manifest_is_rejected_without_leaking_quota ... ok
+test late_attempt_retains_only_verified_receipt_and_releases_transport_budget ... ok
+test pending_import_retries_same_operation_and_rejects_incompatible_receipt ... ok
+test released_attempt_refuses_new_intents_but_preserves_owned_transfer_recovery ... ok
+test runtime_rejects_symlink_before_changing_target_permissions ... ok
+test selected_real_aq_git_import_survives_worker_volume_loss_and_base_download_is_scoped ... ignored, qualification requires immutable aq-git and bookworm Git2.56.0 binaries
+test slow_import_does_not_hold_attempt_or_node_locks_and_control_status_progresses ... ok
+test stale_upload_cleanup_and_limits_preserve_unknown_imports ... ok
+
+test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 18.64s
+

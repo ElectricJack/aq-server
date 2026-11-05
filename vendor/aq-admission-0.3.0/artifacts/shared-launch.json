@@ -1,0 +1,198 @@
+{
+  "binding": {
+    "assignment_generation": 1,
+    "attempt_id": "00000000-0000-0000-0000-000000000001",
+    "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+    "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+    "launch_manifest_digest": "5e566fe02f2af02b4090c2e0aa900d0361aa5f17a0f9e5392ef9f1a98d90fe4a",
+    "offer_id": "00000000-0000-0000-0000-000000000001",
+    "schema_version": 1,
+    "session": {
+      "assignment_generation": 1,
+      "attempt_id": "00000000-0000-0000-0000-000000000001",
+      "boot_id": "00000000-0000-0000-0000-000000000001",
+      "kind": "remote",
+      "node_id": "00000000-0000-0000-0000-000000000001",
+      "session_id": "00000000-0000-0000-0000-000000000001"
+    }
+  },
+  "manifest": {
+    "agent_profile": {
+      "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "id": "fixture",
+      "version": "1"
+    },
+    "bindings": {
+      "assignment_generation": 1,
+      "attempt_id": "00000000-0000-0000-0000-000000000001",
+      "graph_access_profile": {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      },
+      "graph_id": "00000000-0000-0000-0000-000000000001",
+      "outcome": {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      },
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "project_revision": 1,
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "boot_id": "00000000-0000-0000-0000-000000000001",
+        "kind": "remote",
+        "node_id": "00000000-0000-0000-0000-000000000001",
+        "session_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "source": {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      },
+      "task_id": "00000000-0000-0000-0000-000000000001",
+      "task_revision": 1
+    },
+    "catalog": {
+      "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "id": "fixture",
+      "version": "1"
+    },
+    "context": {
+      "context_window_tokens": 1000,
+      "references": [
+        {
+          "artifact": {
+            "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "id": "fixture",
+            "version": "1"
+          },
+          "bytes": 7,
+          "delivery": "startup",
+          "provenance": "catalog",
+          "required": true,
+          "tokens": 2
+        }
+      ],
+      "reserved_output_tokens": 100,
+      "startup_byte_budget": 1024,
+      "startup_token_budget": 100
+    },
+    "credentials": [
+      {
+        "credential_profile": {
+          "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "id": "fixture",
+          "version": "1"
+        },
+        "purpose": "provider"
+      }
+    ],
+    "execution_profile": {
+      "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "id": "fixture",
+      "version": "1"
+    },
+    "harness": {
+      "adapter": {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      },
+      "cli_version": "1",
+      "environment": {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      },
+      "harness": "synthetic",
+      "required_capabilities": [
+        {
+          "id": "aq.harness.startup-context",
+          "version": 1
+        },
+        {
+          "id": "aq.harness.confined-worktree",
+          "version": 1
+        },
+        {
+          "id": "aq.harness.stop",
+          "version": 1
+        }
+      ]
+    },
+    "intelligence_profile": {
+      "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "id": "fixture",
+      "version": "1"
+    },
+    "model": {
+      "max_output_tokens": 100,
+      "model": "synthetic",
+      "provider": "fixture",
+      "reasoning": "standard",
+      "spending_budget": {
+        "basis": "task_cumulative_estimated_cost",
+        "currency": "USD",
+        "limit_microunits": 1000
+      }
+    },
+    "modules": [
+      {
+        "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "id": "fixture",
+        "version": "1"
+      }
+    ],
+    "permissions": {
+      "effective": [],
+      "omissions": [],
+      "requested": [],
+      "required": []
+    },
+    "resources": {
+      "cpu_millis": 1000,
+      "memory_bytes": 1048576,
+      "process_limit": 4,
+      "stop_grace_ms": 1000,
+      "wall_time_ms": 20000
+    },
+    "schema_version": 1,
+    "selection_explanation": {
+      "digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "id": "fixture",
+      "version": "1"
+    },
+    "terminal": {
+      "host": "tmux",
+      "input_enabled": true,
+      "max_frame_bytes": 65536,
+      "max_input_bytes": 4096,
+      "max_pending_input_bytes": 32768,
+      "replay_bytes": 1048576
+    }
+  },
+  "required_capabilities": [
+    {
+      "id": "aq.profiled-launch",
+      "version": 1
+    },
+    {
+      "id": "aq.terminal",
+      "version": 1
+    },
+    {
+      "id": "aq.harness.startup-context",
+      "version": 1
+    },
+    {
+      "id": "aq.harness.confined-worktree",
+      "version": 1
+    },
+    {
+      "id": "aq.harness.stop",
+      "version": 1
+    }
+  ]
+}

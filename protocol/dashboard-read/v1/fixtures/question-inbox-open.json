@@ -1,0 +1,39 @@
+{
+  "api_version": "question-inbox-1",
+  "items": [
+    {
+      "answer": null,
+      "answered_at_ms": null,
+      "asked_at_ms": 1000000,
+      "decision_id": "2eb7a521-bf24-4b6e-9408-f818f8760ca9",
+      "decision_revision": "1",
+      "delivery": null,
+      "expires_at_ms": 2593000000,
+      "kind": "question",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "question": "Which database should the migration target?",
+      "state": "pending",
+      "task_id": "00000000-0000-0000-0000-000000000003",
+      "task_title": null,
+      "workspace_id": "00000000-0000-0000-0000-000000000002"
+    },
+    {
+      "answer": null,
+      "answered_at_ms": null,
+      "asked_at_ms": 1001000,
+      "decision_id": "4451b11f-15c0-484b-8641-6f5e1e8f6cf6",
+      "decision_revision": "1",
+      "delivery": null,
+      "expires_at_ms": 2593000000,
+      "kind": "question",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "question": "Keep the legacy lease format?",
+      "state": "pending",
+      "task_id": "00000000-0000-0000-0000-000000000003",
+      "task_title": null,
+      "workspace_id": "00000000-0000-0000-0000-000000000002"
+    }
+  ],
+  "next_cursor": "BdmhfcsWioVG63ppNl1qYs94WAFE2krOnD2kTwuZNNgBDO-fByOw5ZtcLVUJ9OjqJsG5UocldnGPABstKZdrThNFpkjNQoLTrbcQsjOUqQTgbiUExYll_vhilrvy1lEU9BC91bmTlKP0iL37Uws2suUTQf7jSqa0bjsnn4E0T2FGHuk8ueuXqoePwkuB-1qA2ee03-HT0seijQ6R8m9O4BPXxdke4ER3MhwJt48g7KouHWaisqwzq6BPZC29B_H7yopz0WFoZjX0gfXxcYbWphxM6XKkQhcWH7wFWF21nh5xOtaj9i6es5JjKxPybulnJj_JHarwjgsywlNGHj1oi7kQZhfC2vdX7-6A1bAsZLAMngASyXzMikcNYokeh2GxwEUZmJ2TkEoY0QKFZhJ-fzh1j2j4CAf_ddGfG84f3qsiQuS73uxke1oBNKP2GrdgB1QZ_MT3oWza55ApaGax4z3nVm7nZivyJ3Somw6UjcBvyijSuv44OjHZPRClv_dgjbgkxo4Lvl7QzMYHg-8-S3dLz4hZUjaBXca_if_rYmQ",
+  "server_time_ms": 1000000
+}

@@ -70,3 +70,8 @@ Retained negative development results are not passing evidence:
 
 Raw logs, qualification metadata and source inventory are retained at
 [evidence/closure-owner-7eb9696](evidence/closure-owner-7eb9696).
+
+For reruns, use the leased slot target and current dev/test profile from
+[Cargo worker build guidance](../guides/cargo-worker-builds.md), with
+`CARGO_INCREMENTAL=0`. The paths and debug overrides above record historical
+runs; the original evidence is retained.

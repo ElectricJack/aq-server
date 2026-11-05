@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-smoke.py", line 237, in <module>
+    runpy.run_path(str(Path(__file__).with_name("compose-prod-smoke.py")), run_name="__main__")
+  File "<frozen runpy>", line 286, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-prod-smoke.py", line 156, in <module>
+    compose_prod_reaches_ready_with_graph_and_git()
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-prod-smoke.py", line 97, in compose_prod_reaches_ready_with_graph_and_git
+    validate(config)
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/scripts/compose-prod-smoke.py", line 22, in validate
+    assert DIGEST.fullmatch(service["image"]), "unpinned image: " + name
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: unpinned image: postgres

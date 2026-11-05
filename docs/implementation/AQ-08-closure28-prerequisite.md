@@ -42,3 +42,8 @@ No expiry, task claim, source retention or effect settlement is released here.
 
 Exact source hashes and raw logs are retained in
 [evidence/closure28-prerequisite-75015d0](evidence/closure28-prerequisite-75015d0).
+
+For reruns, use the leased slot target and current dev/test profile from
+[Cargo worker build guidance](../guides/cargo-worker-builds.md), with
+`CARGO_INCREMENTAL=0`. The paths and debug overrides above record historical
+runs; the original evidence is retained.

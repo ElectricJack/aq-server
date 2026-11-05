@@ -1,5 +1,5 @@
-//! Explicit optional configuration. Absence mounts no media interface; upload
-//! mutations remain disabled unless separately enabled.
+//! Explicit optional configuration. Absent/disabled uploads have typed refusal
+//! routes; byte storage remains private and opt-in.
 use serde::Deserialize;
 use std::{
     fmt,

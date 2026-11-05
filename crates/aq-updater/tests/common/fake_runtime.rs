@@ -47,6 +47,10 @@ struct Inner {
     labels: HashMap<String, HashMap<String, String>>,
     reports: HashMap<String, ReadinessReport>,
     free: u64,
+    /// Values for successive `free_bytes` calls; then `free`.
+    free_seq: std::collections::VecDeque<u64>,
+    /// Local images (digest refs); `pull` adds, `remove_image` removes.
+    images: Vec<String>,
     backup_size: usize,
     running: Option<String>,
     selected: Option<String>,
@@ -75,6 +79,8 @@ impl Default for FakeRuntime {
             labels: HashMap::new(),
             reports: HashMap::new(),
             free: 100 * 1024 * 1024 * 1024,
+            free_seq: Default::default(),
+            images: Vec::new(),
             backup_size: 100,
             running: None,
             selected: None,
@@ -181,6 +187,22 @@ impl FakeRuntime {
     pub fn set_free(&self, bytes: u64) {
         self.inner().free = bytes;
     }
+    /// `free_bytes` returns these values in order, then the `set_free` value.
+    pub fn set_free_seq(&self, seq: &[u64]) {
+        self.inner().free_seq = seq.iter().copied().collect();
+    }
+    /// Add local images (digest refs), as if pulled earlier.
+    pub fn add_images(&self, images: &[&str]) {
+        let mut i = self.inner();
+        for im in images {
+            if !i.images.iter().any(|x| x == im) {
+                i.images.push(im.to_string());
+            }
+        }
+    }
+    pub fn images(&self) -> Vec<String> {
+        self.inner().images.clone()
+    }
     pub fn set_backup_size(&self, bytes: usize) {
         self.inner().backup_size = bytes;
     }
@@ -256,7 +278,31 @@ impl FakeRuntime {
     }
 
     async fn pull_impl(&self, image: &str) -> Result<(), RuntimeError> {
-        self.call("pull", image)
+        self.call("pull", image)?;
+        self.add_images(&[image]);
+        Ok(())
+    }
+
+    async fn list_images_impl(&self, repository: &str) -> Result<Vec<String>, RuntimeError> {
+        self.call("list_images", repository)?;
+        let prefix = format!("{repository}@");
+        Ok(self
+            .inner()
+            .images
+            .iter()
+            .filter(|i| i.starts_with(&prefix))
+            .cloned()
+            .collect())
+    }
+
+    async fn remove_image_impl(&self, image: &str) -> Result<(), RuntimeError> {
+        self.call("remove_image", image)?;
+        let mut i = self.inner();
+        if i.running.as_deref() == Some(image) {
+            return Err(RuntimeError::Failed(format!("{image} is in use")));
+        }
+        i.images.retain(|x| x != image);
+        Ok(())
     }
 
     async fn image_labels_impl(
@@ -269,7 +315,8 @@ impl FakeRuntime {
 
     async fn free_bytes_impl(&self, path: &Path) -> Result<u64, RuntimeError> {
         self.call("free_bytes", &path.display().to_string())?;
-        Ok(self.inner().free)
+        let mut i = self.inner();
+        Ok(i.free_seq.pop_front().unwrap_or(i.free))
     }
 
     async fn backup_impl(&self, dest: &Path) -> Result<u64, RuntimeError> {
@@ -433,6 +480,14 @@ impl Runtime for FakeRuntime {
     }
     async fn server_state_format(&self) -> Result<Option<u32>, RuntimeError> {
         let r = self.server_state_format_impl().await;
+        self.finish(r)
+    }
+    async fn list_images(&self, repository: &str) -> Result<Vec<String>, RuntimeError> {
+        let r = self.list_images_impl(repository).await;
+        self.finish(r)
+    }
+    async fn remove_image(&self, image: &str) -> Result<(), RuntimeError> {
+        let r = self.remove_image_impl(image).await;
         self.finish(r)
     }
 }

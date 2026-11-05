@@ -276,9 +276,17 @@ fn closed_decode_rejects_unknown_and_duplicate_fields_without_a_dynamic_map() {
 fn actual_schema_and_normative_vectors_are_frozen() {
     let (c, i) = fixture();
     let outcome = select_central(&c, &i).unwrap();
+    let mut restricted = i.clone();
+    for credential in &mut restricted.registry.value.credentials {
+        credential.allowed_backends = vec![BackendKind::DockerLocal];
+    }
+    repin(&mut restricted);
+    let denied = select_central(&c, &restricted).unwrap();
     let documents = json!([
         serde_json::to_value(Document::Inputs(Box::new(i))).unwrap(),
-        serde_json::to_value(Document::Outcome(Box::new(outcome))).unwrap()
+        serde_json::to_value(Document::Outcome(Box::new(outcome))).unwrap(),
+        serde_json::to_value(Document::Inputs(Box::new(restricted))).unwrap(),
+        serde_json::to_value(Document::Outcome(Box::new(denied))).unwrap()
     ]);
     let schema = schema();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -380,4 +388,25 @@ fn actual_required_native_capability_is_not_inferred_from_model_or_qualification
         });
     repin(&mut i);
     assert!(select_central(&c, &i).unwrap().resolved.is_some());
+}
+
+#[test]
+fn central_selection_cannot_bypass_restricted_unknown_backend() {
+    let (catalog, mut input) = fixture();
+    for credential in &mut input.registry.value.credentials {
+        credential.allowed_backends = vec![BackendKind::DockerLocal];
+    }
+    repin(&mut input);
+    let out = select_central(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none());
+    assert!(
+        out.traces
+            .iter()
+            .all(|t| t.state == CandidateState::PolicyDenied)
+    );
+    assert!(
+        out.traces[0]
+            .reason_codes
+            .contains(&"credential_backend_unknown".into())
+    );
 }

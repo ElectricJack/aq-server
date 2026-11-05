@@ -44,7 +44,14 @@ async fn fetch(
     TransportDocument::ArtifactFetch(request.clone())
         .validate()
         .map_err(|_| AppError::BadRequest("invalid artifact fetch".into()))?;
-    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::UploadArtifact,
+        None,
+    )
+    .await?;
+    crate::delegated_permits::runtime::require_binding(&auth, &request.binding)?;
     if auth.id() != request.identity.node_id {
         return Err(AppError::Forbidden("artifact node mismatch".into()));
     }

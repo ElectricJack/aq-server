@@ -1,0 +1,53 @@
+   Compiling aq-admission v0.3.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-admission-0.3.0)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+error[E0616]: field `pool` of struct `Store` is private
+  --> crates/aq-server/tests/delegated_permit_runtime.rs:34:32
+   |
+34 |     let mut tx = f.state.store.pool.begin().await.unwrap();
+   |                                ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+  --> crates/aq-server/tests/delegated_permit_runtime.rs:53:30
+   |
+53 |     let mut tx=f.state.store.pool.begin().await.unwrap();
+   |                              ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:119:103
+    |
+119 |     let count:i64=sqlx::query_scalar("SELECT count(*) FROM delegated_permits").fetch_one(&state.store.pool).await.unwrap();
+    |                                                                                                       ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:121:117
+    |
+121 | ...FROM delegated_permit_current").fetch_one(&state.store.pool).await.unwrap();
+    |                                                           ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:133:83
+    |
+133 |         .bind(p.binding.node.node_id).bind(Uuid::new_v4()).execute(&f.state.store.pool).await.unwrap();
+    |                                                                                   ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:136:91
+    |
+136 |         .bind(p.binding.node.node_id).bind(p.binding.node.boot_id).execute(&f.state.store.pool).await.unwrap();
+    |                                                                                           ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:138:118
+    |
+138 | ...").bind(p.binding.node.node_id).execute(&f.state.store.pool).await.unwrap();
+    |                                                           ^^^^ private field
+
+error[E0616]: field `pool` of struct `Store` is private
+   --> crates/aq-server/tests/delegated_permit_runtime.rs:139:32
+    |
+139 |     let mut tx=restarted.store.pool.begin().await.unwrap();
+    |                                ^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `aq-server` (test "delegated_permit_runtime") due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...

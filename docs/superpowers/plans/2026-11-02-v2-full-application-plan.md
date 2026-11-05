@@ -170,7 +170,7 @@ A small importer, `aq-server/scripts/import-v1-plan.py`, is written as the first
 
 1. **Validate first.** `--dry-run` checks: every `needs` key exists, the graph is acyclic, no active task depends on a deferred one, every repository maps to a kind, and every deliverable is well-formed. The importer is written and its dry-run shown to the owner **before** any task is created.
 2. **Create the epic containers.** One per workstream: `aq task create --container`.
-3. **Create each non-deferred task** with `aq task create --project aq-platform --parent <epic> --requires-kind <repo>-repo --type <type> --intelligence-class <class> [--integration-mode pull_request] --deliverable <json>…`. Gate tasks use `aq task edit --verification-type human`. The description is assembled from `description`, `acceptance`, `spec` and `continues`, plus the standard footer (section 4.4).
+3. **Create each non-deferred task** with `aq task create --project "$AQ_PROJECT_ID" --parent <epic> --requires-kind <repo>-repo --type <type> --intelligence-class <class> [--integration-mode pull_request] --deliverable <json>…`. Gate tasks use `aq task edit --verification-type human`. The description is assembled from `description`, `acceptance`, `spec` and `continues`, plus the standard footer (section 4.4).
 4. **Add the standard subtasks.** `aq task subtask-add <id> --title …` for each row in section 4.4.
 5. **Add the edges.** `aq task add-dependency --task-id <id> --depends-on <upstream> --dep-type blocks` for every `needs` edge.
 6. **Record the mapping and make it rerunnable.** The importer writes `aq-server/docs/superpowers/plans/2026-11-02-v2-full-application-v1-ids.json`, mapping task key → v1 id. A rerun skips keys already in the mapping, so the import is idempotent. Edges are added only after every node exists.
@@ -190,7 +190,7 @@ Description footer, appended verbatim:
 >
 > Each named-test deliverable must exist and pass. A filter that matches zero tests is not met.
 >
-> If a decision only the owner can make blocks you, report it with `aq message send --to user:dashboard --project aq-platform --body "Blocked on <KEY> (<task id>): <the decision needed>"`, record it as a task comment, and wait for the reply. Don't guess.
+> If a decision only the owner can make blocks you, report it with `aq message send --to user:dashboard --project "$AQ_PROJECT_ID" --body "Blocked on <KEY> (<task id>): <the decision needed>"`, record it as a task comment, and wait for the reply. Don't guess.
 >
 > Close `pass` only when every acceptance item is met with evidence in `docs/implementation/<TASK-KEY>.md`. Otherwise close `fail` with what remains.
 
@@ -243,7 +243,7 @@ This is the order in which tasks bring the topology up. Requirements are in 0005
    - **Account:** create a dedicated boat organization for attempt sandboxes, plus a separate scope for template builds.
    - **Scoped key:** issue a key with lifecycle, command and file permissions.
    - **Templates:** materialize the template snapshots in boat.
-   - **Worker:** add the boat backend configuration to the cloud worker, with spend and concurrency ceilings.
+   - **Worker:** enroll a second VPS worker node, `aq-worker-boat`, with the boat backend and spend and concurrency ceilings. `aq-worker-cloud` stays on docker-local.
 
 ## 6. Task index
 

@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 11s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-f456347a0886e933)
+
+running 2 tests
+test terminal::runtime::delegated_poll_tests::delegated_polls_are_exclusive_per_attempt_and_share_node_wakeup ... ok
+test delegated_permits::config::tests::delegated_key_file_reload_preserves_credentials_and_refuses_public_key_file ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 193 filtered out; finished in 0.00s
+

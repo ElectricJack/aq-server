@@ -1,0 +1,144 @@
+{
+  "api_version": "dashboard-read-1",
+  "request_id": "5dd9cb49-7503-473e-ae84-4d8d3d049b1c",
+  "server_time": "2026-11-03T05:21:50.551Z",
+  "scope": {
+    "kind": "project",
+    "project_id": "e0000000-0000-4000-8000-000000000002"
+  },
+  "data": {
+    "groups": [
+      {
+        "type": "task",
+        "hits": [],
+        "has_more": false,
+        "next_cursor": null
+      },
+      {
+        "type": "session",
+        "hits": [],
+        "has_more": false,
+        "next_cursor": null
+      },
+      {
+        "type": "result",
+        "hits": [],
+        "has_more": false,
+        "next_cursor": null
+      },
+      {
+        "type": "playbook",
+        "hits": [],
+        "has_more": false,
+        "next_cursor": null
+      },
+      {
+        "type": "knowledge",
+        "hits": [],
+        "has_more": false,
+        "next_cursor": null
+      }
+    ],
+    "sources": [
+      {
+        "source": "task",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.447Z",
+          "fresh_until": "2026-11-03T05:22:20.447Z",
+          "source": "task",
+          "quality": "reported",
+          "coverage": "complete"
+        },
+        "coverage": {
+          "state": "complete"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "session",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.447Z",
+          "fresh_until": "2026-11-03T05:22:20.447Z",
+          "source": "session",
+          "quality": "reported",
+          "coverage": "complete"
+        },
+        "coverage": {
+          "state": "complete"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "result",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.447Z",
+          "fresh_until": "2026-11-03T05:22:20.447Z",
+          "source": "result",
+          "quality": "reported",
+          "coverage": "partial"
+        },
+        "coverage": {
+          "state": "partial",
+          "reason": "retained_native_and_legacy_metadata_only"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "playbook",
+        "project": null,
+        "observation": null,
+        "coverage": {
+          "state": "partial",
+          "reason": "owner_unavailable_or_not_visible"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "knowledge",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.447Z",
+          "fresh_until": "2026-11-03T05:22:20.447Z",
+          "source": "knowledge",
+          "quality": "reported",
+          "coverage": "complete"
+        },
+        "coverage": {
+          "state": "complete"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      }
+    ],
+    "snapshot_id": "621598ea-25a8-4bd1-9944-ca3ab2119e64"
+  },
+  "observation": {
+    "observed_at": "2026-11-03T05:21:50.551Z",
+    "fresh_until": "2026-11-03T05:21:55.551Z",
+    "source": "aq_dashboard_read",
+    "quality": "reported",
+    "coverage": "partial"
+  },
+  "pending_operations": [],
+  "coverage": {
+    "state": "partial",
+    "reason": "See per-source search coverage"
+  }
+}

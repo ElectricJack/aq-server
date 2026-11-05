@@ -1,0 +1,2 @@
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `dev` profile [unoptimized] target(s) in 1m 16s

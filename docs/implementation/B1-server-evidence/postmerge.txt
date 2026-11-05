@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized] target(s) in 1.31s
+     Running tests/permit_fixture_conformance.rs (target/debug/deps/permit_fixture_conformance-fbb4fbb20f7fe417)
+
+running 3 tests
+test permit_fixture_conformance_frozen_transport ... ok
+test permit_fixture_conformance ... ok
+test permit_fixture_conformance_source_pin ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s

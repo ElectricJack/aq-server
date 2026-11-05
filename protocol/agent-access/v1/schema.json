@@ -148,6 +148,27 @@
         "generation"
       ]
     },
+    "SupervisorMailbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "global_supervisor"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "conversation_id"
+      ]
+    },
     "MailboxRecipient": {
       "oneOf": [
         {
@@ -155,6 +176,9 @@
         },
         {
           "$ref": "#/$defs/SessionMailbox"
+        },
+        {
+          "$ref": "#/$defs/SupervisorMailbox"
         }
       ]
     },
@@ -445,6 +469,51 @@
         "binding"
       ]
     },
+    "SupervisorMessageSender": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "central_supervisor"
+        },
+        "actor_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "actor_id",
+        "generation",
+        "session_id",
+        "conversation_id"
+      ]
+    },
     "MessageSender": {
       "oneOf": [
         {
@@ -452,6 +521,9 @@
         },
         {
           "$ref": "#/$defs/SessionMessageSender"
+        },
+        {
+          "$ref": "#/$defs/SupervisorMessageSender"
         }
       ]
     },

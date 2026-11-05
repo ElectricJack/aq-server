@@ -42,7 +42,7 @@ def main():
     environment = os.environ.copy()
     environment.setdefault("CARGO_BUILD_JOBS", "2")
     environment.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
-    environment.setdefault("CARGO_INCREMENTAL", "0")
+    environment["CARGO_INCREMENTAL"] = "0"
     for name in ["aq-profiles", "aq-selection"]:
         manifest = packages[name][1] / "Cargo.toml"
         for command in [

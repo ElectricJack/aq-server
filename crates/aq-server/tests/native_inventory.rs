@@ -59,8 +59,12 @@ async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner
     let mut config = (*f.state.config).clone();
     config.intelligence = Some(Arc::new(
         IntelligenceConfig {
+            accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
+                kind: Default::default(),
+                allowed_backends: aq_selection::default_allowed_backends(),
                 credential: AuthorizedCredential {
                     profile: choice.credential_profile.clone(),
                     provider: choice.provider.clone(),
@@ -70,6 +74,7 @@ async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner
                     enabled: true,
                     provisionable: false,
                     material_owner: None,
+                    allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![f.node.node_id],
                 secret_file: Some(path.clone()),

@@ -1,0 +1,40 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000001",
+  "kind": "task.graph.create",
+  "subject": {
+    "type": "project",
+    "id": "00000000-0000-4000-8000-000000000010",
+    "revision": "1"
+  },
+  "expected_versions": {
+    "project": "1"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "1",
+    "tasks": [
+      {
+        "id": "00000000-0000-4000-8000-000000000031",
+        "title": "Implement",
+        "priority": 300,
+        "profile_hint": "coding",
+        "intelligence_hint": "standard-high",
+        "task_type": "feature"
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000032",
+        "title": "Verify",
+        "task_state": "draft",
+        "parent_id": "00000000-0000-4000-8000-000000000031"
+      }
+    ],
+    "edges": [
+      {
+        "id": "00000000-0000-4000-8000-000000000033",
+        "source": "00000000-0000-4000-8000-000000000031",
+        "target": "00000000-0000-4000-8000-000000000032"
+      }
+    ]
+  }
+}

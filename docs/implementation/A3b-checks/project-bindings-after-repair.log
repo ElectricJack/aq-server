@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/project_bindings.rs (target/debug/deps/project_bindings-8f4564835a7ff9c6)
+
+running 1 test
+test selected_real_public_repository_and_graph_workspace_bind ... qualified public repo.show expected-generation binding + graph API1 workspace read, CAS stale refusal; no task lifecycle or Git-private-state writes
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.89s
+
+{"qualification": "AQ-19", "aq_git_image_id": "sha256:4e405e60f637f766582fcb182d1e3bd963ba8e78c94d2cc57203d28f0f358642", "aq_graph_image_id": "sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be", "repository_binding_generation": 1, "method": "Public repo.register/repo.show and workspace-scoped graph API1; synthetic resources only."}
+{
+  "result": "passed",
+  "source_revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+  "image_id": "sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be",
+  "guard_results": {
+    "valid_same_transaction": 200,
+    "identical_replay": true,
+    "guard_noop_does_not_advance_version": true,
+    "stale_guard_atomic_refusal": 409,
+    "foreign_author_refused": 403,
+    "retired_source_refused": 403,
+    "failed_edges_absent": true
+  }
+}

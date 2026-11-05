@@ -17,6 +17,11 @@ pub enum MaterialDeliveryMode {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialConfig {
+    #[serde(default)]
+    pub kind: aq_selection::CredentialKind,
+    #[serde(default = "aq_selection::default_allowed_backends")]
+    pub allowed_backends: Vec<aq_selection::BackendKind>,
+    /// Material state and the nested backend policy are derived by `load`.
     pub credential: AuthorizedCredential,
     pub allowed_node_ids: Vec<uuid::Uuid>,
     pub secret_file: Option<PathBuf>,
@@ -27,6 +32,8 @@ impl std::fmt::Debug for CredentialConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CredentialConfig")
             .field("credential", &self.credential)
+            .field("kind", &self.kind)
+            .field("allowed_backends", &self.allowed_backends)
             .field("allowed_node_ids", &self.allowed_node_ids)
             .field("delivery_mode", &self.delivery_mode)
             .field(
@@ -44,6 +51,71 @@ pub struct IntelligenceConfig {
     pub credentials: Vec<CredentialConfig>,
     #[serde(default)]
     pub qualified_harnesses: Vec<InstalledHarness>,
+    /// Trusted accounting catalog (H2). Owner data only: workers never supply
+    /// source policy, namespace or parser priority. Excluded from the
+    /// selection registry digest, which covers credentials and harnesses.
+    #[serde(default)]
+    pub accounting: AccountingCatalog,
+    /// C5b runtime-writable store for stored subscription-login versions: an
+    /// absolute, owner-only (0700) directory. Without it, write-back and
+    /// operator import are refused. Excluded
+    /// from the registry digest (a local path, not selection policy).
+    #[serde(default)]
+    pub material_store: Option<PathBuf>,
+}
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountingCatalog {
+    #[serde(default)]
+    pub sources: Vec<SourcePolicy>,
+    #[serde(default)]
+    pub rate_cards: Vec<aq_accounting::pricing::RateCardRevision>,
+}
+/// Observation source policy for one (provider, harness) pair.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourcePolicy {
+    pub provider: String,
+    pub harness: String,
+    pub reference: aq_accounting::wire::ArtifactRef,
+    pub layout: aq_accounting::Layout,
+    pub parsers: Vec<aq_accounting::reconcile::ParserAuthority>,
+}
+impl AccountingCatalog {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.sources.len() > 32 {
+            return Err("too many accounting sources".into());
+        }
+        let mut keys = BTreeSet::new();
+        for s in &self.sources {
+            let policy = aq_accounting::reconcile::Policy {
+                reference: s.reference.clone(),
+                account_scope: aq_accounting::wire::Digest::of(b"validate"),
+                call_namespace: aq_accounting::wire::Digest::of(b"validate"),
+                provider: aq_accounting::wire::Text::new(&s.provider)
+                    .map_err(|_| "invalid accounting source provider")?,
+                layout: s.layout.clone(),
+                parsers: s.parsers.clone(),
+            };
+            if policy.validate().is_err()
+                || s.harness.is_empty()
+                || s.harness.len() > 512
+                || !keys.insert((s.provider.clone(), s.harness.clone()))
+            {
+                return Err("invalid or duplicate accounting source policy".into());
+            }
+        }
+        self.book().map(|_| ())
+    }
+    pub fn book(&self) -> Result<aq_accounting::pricing::RateCardBook, String> {
+        aq_accounting::pricing::RateCardBook::new(self.rate_cards.clone())
+            .map_err(|_| "invalid rate-card revisions".into())
+    }
+    pub fn source(&self, provider: &str, harness: &str) -> Option<&SourcePolicy> {
+        self.sources
+            .iter()
+            .find(|s| s.provider == provider && s.harness == harness)
+    }
 }
 impl IntelligenceConfig {
     pub fn validate(&self) -> Result<(), String> {
@@ -54,6 +126,7 @@ impl IntelligenceConfig {
         {
             return Err("invalid intelligence registry bounds/revision".into());
         }
+        self.accounting.validate()?;
         let mut keys = BTreeSet::new();
         for item in &self.credentials {
             let c = &item.credential;
@@ -67,6 +140,8 @@ impl IntelligenceConfig {
                 .map_err(|_| "invalid credential profile artifact")?;
             if c.revision == 0
                 || c.revision > i64::MAX as u64
+                || !aq_selection::valid_allowed_backends(&item.allowed_backends)
+                || !aq_selection::unrestricted_backends(&c.allowed_backends)
                 || c.provisionable
                 || c.material_owner.is_some()
                 || (item.delivery_mode.is_some() && item.secret_file.is_none())
@@ -91,6 +166,11 @@ impl IntelligenceConfig {
                 return Err("credential file must be absolute".into());
             }
         }
+        if let Some(path) = &self.material_store
+            && !path.is_absolute()
+        {
+            return Err("material_store must be absolute".into());
+        }
         Ok(())
     }
     /// Call once at daemon startup, never while selecting. Missing files are a
@@ -101,6 +181,17 @@ impl IntelligenceConfig {
         let mut fingerprints = Vec::new();
         for item in &self.credentials {
             let mut credential = item.credential.clone();
+            // Canonical order keeps policy-identical spellings digest-identical.
+            credential.allowed_backends =
+                aq_selection::canonical_allowed_backends(&item.allowed_backends);
+            if credential.allowed_backends.is_empty() {
+                // Explicit `allowed_backends = []` is a deliberate deny-all;
+                // omitting the key is unrestricted. Surface the difference.
+                tracing::warn!(
+                    profile = %credential.profile.id.as_str(),
+                    "credential allowed_backends is empty; it is never eligible"
+                );
+            }
             let fingerprint = match &item.secret_file {
                 None => None,
                 Some(path) => match OpenOptions::new()

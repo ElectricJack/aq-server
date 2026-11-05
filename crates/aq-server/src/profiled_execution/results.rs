@@ -59,7 +59,21 @@ pub(crate) async fn compute_stop_locked(
         "stopped_ack": pin.stopped_ack_bytes.ok_or_else(conflict)?,
     }))
 }
+/// Records the result, then lets the D3 default-policy actor settle it. A
+/// settlement failure never fails the durable record; it is replayed by the
+/// next (duplicate) record of the same report.
 pub async fn record(
+    state: &AppState,
+    node: &AuthenticatedNode,
+    report: &ResultReport,
+) -> Result<Receipt, AppError> {
+    let receipt = record_only(state, node, report).await?;
+    if let Err(error) = super::settlement::settle_after_record(state, report.report_id).await {
+        tracing::warn!(report_id = %report.report_id, ?error, "automatic settlement deferred");
+    }
+    Ok(receipt)
+}
+async fn record_only(
     state: &AppState,
     node: &AuthenticatedNode,
     report: &ResultReport,
@@ -227,6 +241,11 @@ pub async fn record(
             .bind(&origin_pin.stopped_ack_bytes);
     }
     insert.execute(&mut *tx).await.map_err(db)?;
+    sqlx::query("SELECT pin_result_feedback_revision($1)")
+        .bind(report.report_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
     sqlx::query(if head.is_some() {
         "UPDATE profiled_result_heads SET report_id=$2 WHERE attempt_id=$1"
     } else {
@@ -434,7 +453,16 @@ async fn report(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
     crate::admin_api::ApiJson(request): crate::admin_api::ApiJson<ResultReport>,
-) -> Result<axum::Json<Receipt>, AppError> {
-    let node = crate::worker_api::authenticate_context(&state, &headers).await?;
-    Ok(axum::Json(record(&state, &node, &request).await?))
+) -> Result<axum::response::Response, AppError> {
+    let node = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::ReportResult,
+        None,
+    )
+    .await?;
+    crate::delegated_permits::runtime::require_binding(&node, &request.binding)?;
+    crate::delegated_permits::runtime::require_binding(&node, &request.stop.binding)?;
+    let receipt = record(&state, &node, &request).await?;
+    crate::delegated_permits::receipts::result(&node, &request, receipt)
 }

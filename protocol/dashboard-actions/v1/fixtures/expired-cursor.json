@@ -1,0 +1,6 @@
+{
+  "request_id": "00000000-0000-4000-8000-000000000102",
+  "code": "cursor_restart_required",
+  "message": "Restart this list from the beginning",
+  "retryable": false
+}

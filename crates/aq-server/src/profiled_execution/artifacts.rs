@@ -214,6 +214,20 @@ pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArt
         return Ok(old.descriptor);
     }
     let time = now(state)?;
+    // The trigger is the final database fence. Check under its same quota lock
+    // first so poll callers receive a stable public reason instead of an opaque
+    // insert conflict. Identity/version is global, just as in schema27.
+    if request.kind == ArtifactKind::Definition {
+        let changed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admission_artifacts WHERE body IS NOT NULL AND descriptor->>'kind'='definition' AND descriptor#>>'{artifact,id}'=$1 AND descriptor#>>'{artifact,version}'=$2 AND (content_digest IS DISTINCT FROM $3 OR body IS DISTINCT FROM $4))")
+            .bind(request.artifact.id.as_str())
+            .bind(request.artifact.version.as_str())
+            .bind(request.artifact.digest.as_str())
+            .bind(request.bytes)
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if changed {
+            return Err(AppError::DefinitionIdentityConflict);
+        }
+    }
     if request.kind == ArtifactKind::Source {
         super::source::validate_body(request.bytes, request.project_id, time)?;
     }

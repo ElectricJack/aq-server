@@ -1,6 +1,6 @@
 //! Protected adapters only. Domain owners retain current actor, exact subject,
-//! source/receipt and original-effect identity checks. No decision is admitted
-//! here and a GET never dispatches a completion.
+//! source/receipt and original-effect identity checks. Only explicit owner POSTs
+//! admit decisions; a GET never dispatches a completion.
 use super::*;
 use crate::{admin_api::ApiJson, authz::RequireOwner, profiled_execution::settlement};
 use axum::{
@@ -40,6 +40,21 @@ struct ResolveCombined {
     expected_subject: ObjectBody<ArtifactRef>,
     answer: ObjectBody<ResolveRequest>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareCombined {
+    report_id: Uuid,
+    source_operation_id: Uuid,
+    external: ObjectBody<combined::ExternalDeclaration>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdmitCombined {
+    report_id: Uuid,
+    source_operation_id: Uuid,
+    external: ObjectBody<combined::ExternalDeclaration>,
+    decision: ObjectBody<DecisionRequest>,
+}
 /// Same existing evaluation fields; only the HTTP object shape is narrower.
 /// Every caller-supplied value passes unchanged to the actual owner.
 #[derive(Deserialize)]
@@ -68,6 +83,8 @@ impl EvaluateBody {
 /// Service extension and body limit and the daemon's human protection layers.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/api/reviews/combined/prepare", post(prepare))
+        .route("/api/reviews/combined", post(admit))
         .route("/api/reviews/combined/{id}", get(inspect))
         .route("/api/reviews/combined/{id}/resolve", post(resolve))
         .route("/api/settlement/evaluations", post(evaluate))
@@ -76,6 +93,41 @@ pub(super) fn routes() -> Router<AppState> {
             "/api/settlement/completions/{id}/reconcile",
             post(reconcile),
         )
+}
+async fn prepare(
+    RequireOwner(actor): RequireOwner,
+    Extension(service): Extension<Arc<Service>>,
+    ApiJson(ObjectBody(request)): ApiJson<ObjectBody<PrepareCombined>>,
+) -> Result<Json<combined::CombinedSubject>> {
+    let prepared = service
+        .prepare_combined_as(
+            &actor,
+            request.report_id,
+            request.source_operation_id,
+            request.external.0,
+        )
+        .await?;
+    Ok(Json(prepared.subject().clone()))
+}
+async fn admit(
+    RequireOwner(actor): RequireOwner,
+    Extension(service): Extension<Arc<Service>>,
+    ApiJson(ObjectBody(request)): ApiJson<ObjectBody<AdmitCombined>>,
+) -> Result<Json<DecisionRequest>> {
+    // Rebuild actual source/effect reads; caller-supplied subject bytes alone
+    // never constitute a PreparedCombined or a completion permit.
+    let prepared = service
+        .prepare_combined_as(
+            &actor,
+            request.report_id,
+            request.source_operation_id,
+            request.external.0,
+        )
+        .await?;
+    service
+        .admit_combined(actor.id, &prepared, &request.decision.0)
+        .await?;
+    Ok(Json(request.decision.0))
 }
 fn owner(service: &Service) -> settlement::Service {
     settlement::Service::new(service.state.clone(), service.clone())

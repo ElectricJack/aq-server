@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.51s
+     Running tests/native_accepted_preparation.rs (target/debug/deps/native_accepted_preparation-f2c667251f6edd44)
+
+running 1 test
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... 
+thread 'original_inputs_remain_scoped_after_proposal_expiry_then_expire_held' (2345058) panicked at crates/aq-server/tests/native_accepted_preparation.rs:344:10:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    original_inputs_remain_scoped_after_proposal_expiry_then_expire_held
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 6.18s
+
+error: test failed, to rerun pass `-p aq-server --test native_accepted_preparation`

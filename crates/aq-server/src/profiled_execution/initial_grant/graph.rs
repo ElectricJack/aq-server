@@ -95,12 +95,13 @@ pub(super) async fn observe(
     }
     // Same bounded profile as publication. A task no longer present in this
     // finite readiness page refuses; no unbounded scan or stale fallback.
+    // Read stamps and provenance validation share the current owner clock.
     let ready = graph
-        .scheduling_ready(input.spec.task.workspace_id, 8, None)
+        .scheduling_ready_current(input.spec.task.workspace_id, 8, None, state.clock.as_ref())
         .await
         .map_err(read_error)?;
     let context = graph
-        .scheduling_context(&input.spec.task, 1, 64, 1_048_576)
+        .scheduling_context_current(&input.spec.task, 1, 64, 1_048_576, state.clock.as_ref())
         .await
         .map_err(read_error)?;
     let permissions = binding

@@ -1,0 +1,28 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000209",
+  "kind": "knowledge.verify",
+  "subject": {
+    "type": "knowledge",
+    "id": "00000000-0000-4000-8000-000000000030",
+    "revision": "2"
+  },
+  "expected_versions": {
+    "knowledge": "2"
+  },
+  "reason": "Checked against the live runbook",
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000209",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "2",
+    "verification": "verified",
+    "evidence": [
+      {
+        "source_id": "00000000-0000-4000-8000-000000000031",
+        "kind": "url",
+        "url": "https://example.com/runbook",
+        "observed_at": "2026-11-02T16:00:00.000Z",
+        "retained": false
+      }
+    ]
+  }
+}

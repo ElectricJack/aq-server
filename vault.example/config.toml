@@ -35,3 +35,12 @@ code_ttl_secs = 600
 heartbeat_interval_secs = 15
 # A worker is shown offline after this many seconds without a heartbeat (default 60); must exceed the heartbeat interval.
 offline_after_secs = 60
+
+# Optional production PNG evidence store. Enable only after mounting a persistent
+# private volume at this absolute path (owned by the server UID, mode 0700).
+# Generate storage_id once per installation and retain it with the volume and DB;
+# replacing it on restart prevents the retained owner from reopening its store.
+# [result_media]
+# root = "/var/lib/aq/result-media"
+# storage_id = "<stable-installation-UUID>"
+# uploads_enabled = true

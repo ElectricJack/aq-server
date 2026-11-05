@@ -1,0 +1,171 @@
+# Production overlay (E1c/E1d): supervisor host, docker-local and Boat nodes.
+# Use together with compose.yaml, e.g. COMPOSE_FILE=compose.yaml:compose.workers.yaml.
+# NVMe 8 limits: docs/architecture/0005 §9.1; daemon decision: docs/implementation/E1c.md.
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '3'}
+services:
+  aq-supervisor-host:
+    <<: *hardening
+    # F1a image (Dockerfile.supervisor-host); session lifecycle belongs to F1a.
+    image: ${AQ_SUPERVISOR_HOST_IMAGE:?set AQ_SUPERVISOR_HOST_IMAGE to a digest-pinned supervisor host reference}
+    # The root host drops each native child to UID/GID 10001 (crates/aq-supervisor-host).
+    user: '0:0'
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
+    command: [run, /config/supervisor.json]
+    volumes:
+      # Root-owned 0600 CONFIG plus secret_file; mounted into no other service.
+      - type: bind
+        source: ${AQ_SUPERVISOR_CONFIG_DIR:?set AQ_SUPERVISOR_CONFIG_DIR to the root-owned supervisor config directory}
+        target: /config
+        read_only: true
+      - aq_supervisor_host:/host
+      - aq_supervisor_workspace:/workspace
+      - aq_supervisor_homes:/native-homes
+    tmpfs: [/tmp]
+    # Central identity: database and provider egress only. Not a worker node and
+    # no Docker socket; private PID namespace is Compose's default.
+    networks: [database, supervisor]
+    depends_on:
+      server: {condition: service_healthy}
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    pids_limit: 512
+  aq-worker-cloud:
+    <<: *hardening
+    # aq-worker with the docker-local backend (C2/B5b): the production `worker`
+    # target of Dockerfile.worker (vendored 0.5.1), never its CI-only
+    # synthetic-runtime target.
+    image: ${AQ_WORKER_IMAGE:?set AQ_WORKER_IMAGE to a digest-pinned aq-worker reference with docker-local}
+    # Owner of the dedicated rootless sandbox daemon socket.
+    user: ${AQ_SANDBOX_UID:?set AQ_SANDBOX_UID to the sandbox user UID}:${AQ_SANDBOX_GID:?set AQ_SANDBOX_GID to the sandbox user GID}
+    command: [run, --controller-config, /config/controller.json]
+    environment:
+      # Public machine hostname behind Cloudflare Access; never the Compose network.
+      AQ_SERVER_URL: https://${AQ_PUBLIC_HOSTNAME:?set AQ_PUBLIC_HOSTNAME to the public Access hostname}
+      DOCKER_HOST: unix:///run/aq-sandbox/podman.sock
+    volumes:
+      - type: bind
+        source: ${AQ_WORKER_CONFIG_DIR:?set AQ_WORKER_CONFIG_DIR to the worker config directory}
+        target: /config
+        read_only: true
+      # Only the dedicated rootless sandbox daemon; never the host's main Docker socket.
+      - type: bind
+        source: ${AQ_SANDBOX_SOCKET_DIR:?set AQ_SANDBOX_SOCKET_DIR to the rootless sandbox socket directory}
+        target: /run/aq-sandbox
+      - aq_worker_journal:/state
+      - aq_worker_leases:/var/lib/aq-worker/leases
+    tmpfs: [/tmp]
+    networks: [workers]
+    depends_on:
+      aq-worker-state-init: {condition: service_completed_successfully}
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    cpus: 0.125
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 256
+  aq-worker-state-init:
+    <<: *hardening
+    image: ${AQ_WORKER_IMAGE:?set AQ_WORKER_IMAGE to a digest-pinned aq-worker reference with docker-local}
+    user: '0:0'
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    entrypoint: [/usr/local/bin/worker-init-volumes]
+    environment:
+      AQ_SANDBOX_UID: ${AQ_SANDBOX_UID:?set AQ_SANDBOX_UID to the sandbox user UID}
+      AQ_SANDBOX_GID: ${AQ_SANDBOX_GID:?set AQ_SANDBOX_GID to the sandbox user GID}
+    volumes:
+      - aq_worker_journal:/state
+      - aq_worker_leases:/var/lib/aq-worker/leases
+    network_mode: none
+    restart: 'no'
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+  aq-worker-boat:
+    <<: *hardening
+    # Desktop-first rollout; opt in only after checking the host budget.
+    profiles: [boat]
+    # Set AQ_BOAT_WORKER_IMAGE to a C7 (aq-worker c009b6d) image digest before
+    # enabling; release publication follows the owner's C7 PR merge. The
+    # cloud image can run the credential-free configuration-required state.
+    image: ${AQ_BOAT_WORKER_IMAGE:-${AQ_WORKER_IMAGE:?set AQ_WORKER_IMAGE to a digest-pinned aq-worker reference}}
+    user: '10001:10001'
+    entrypoint: [/bin/sh, /boat-entrypoint.sh]
+    environment:
+      AQ_BOAT_ENABLED: ${AQ_BOAT_ENABLED:-0}
+      AQ_BOAT_WORKER_IMAGE: ${AQ_BOAT_WORKER_IMAGE:-}
+      AQ_SERVER_URL: https://${AQ_PUBLIC_HOSTNAME:?set AQ_PUBLIC_HOSTNAME to the public Access hostname}
+    volumes:
+      # Independent enrollment, including this node's Access transport token.
+      - type: bind
+        source: ${AQ_BOAT_CONFIG_DIR:-./deploy/boat.example}
+        target: /config
+        read_only: true
+      - ./scripts/boat-entrypoint.sh:/boat-entrypoint.sh:ro
+      # Controller identity and Boat sandbox mappings survive restart together.
+      - aq_worker_boat_state:/state
+      - aq_worker_boat_leases:/var/lib/aq-worker/leases
+    secrets: [boat_attempt_key]
+    tmpfs: [/tmp, '/run/aq-boat:uid=10001,gid=10001,mode=0700']
+    networks: [workers]
+    depends_on:
+      aq-worker-boat-state-init: {condition: service_completed_successfully}
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      # A healthy placeholder means configuration-required, never enrolled/ready.
+      test: [CMD-SHELL, 'test -s /run/aq-boat/status']
+      interval: 2s
+      timeout: 1s
+      retries: 3
+    cpus: 0.125
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 128
+  aq-worker-boat-state-init:
+    <<: *hardening
+    profiles: [boat]
+    image: ${AQ_BOAT_WORKER_IMAGE:-${AQ_WORKER_IMAGE:?set AQ_WORKER_IMAGE to a digest-pinned aq-worker reference}}
+    user: '0:0'
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    entrypoint: [/usr/local/bin/worker-init-volumes]
+    environment:
+      AQ_SANDBOX_UID: '10001'
+      AQ_SANDBOX_GID: '10001'
+    volumes:
+      - aq_worker_boat_state:/state
+      - aq_worker_boat_leases:/var/lib/aq-worker/leases
+    network_mode: none
+    restart: 'no'
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+networks:
+  supervisor: {}
+  workers: {}
+volumes:
+  aq_supervisor_host:
+  aq_supervisor_workspace:
+  aq_supervisor_homes:
+  aq_worker_journal:
+  aq_worker_leases:
+  aq_worker_boat_state:
+  aq_worker_boat_leases:
+secrets:
+  boat_attempt_key:
+    # Empty checked-in sentinel permits startup without credentials. A real
+    # file is node-local, owned by 10001 with mode 0600 (Compose bind secret).
+    file: ${AQ_BOAT_ATTEMPT_KEY_FILE:-./deploy/boat.example/attempt-key.empty}

@@ -1,6 +1,6 @@
 //! The only native initial-offer publisher. External reads/exports finish before
 //! this transaction. It neither accepts preparation nor issues a grant.
-use super::{build::Built, now, observation::StoredOffer, refused};
+use super::{build::Built, now, observation::StoredOffer, on_heap, refused};
 use crate::{
     AppState,
     error::AppError,
@@ -73,11 +73,26 @@ pub async fn publish(
     .bind(built.spec.task.task_id)
     .fetch_one(&mut *tx)
     .await
-    .map_err(db)?;
+    .map_err(db)?
+        || super::super::disposition::task_disposed(&mut tx, built.spec.task.task_id).await?;
     if node_busy || task_held {
         return Err(refused());
     }
     crate::intelligence::resolver::fence_for_offer(state, &mut tx, &built.decision).await?;
+    if let Some(replacement) = &built.decision.inputs.replacement {
+        let retained = super::super::replacement::retained_source_locked(
+            &mut tx,
+            built.spec.task.task_id,
+            replacement.predecessor_attempt_id,
+            &replacement.retained_source_receipt,
+        )
+        .await?;
+        if retained.token().request_digest() != export.request_digest()
+            || retained.fact().canonical_bytes()? != fact.canonical_bytes()?
+        {
+            return Err(refused());
+        }
+    }
     let expected_generation=sqlx::query_scalar::<_,Option<i64>>("SELECT max(COALESCE((state#>>'{offer,binding,assignment_generation}')::BIGINT,(state#>>'{offer,attempt,generation}')::BIGINT)) FROM execution_attempts WHERE task_id=$1").bind(built.spec.task.task_id).fetch_one(&mut *tx).await.map_err(db)?.unwrap_or(0).checked_add(1).ok_or_else(refused)?;
     let binding = &built.state.offer.binding;
     if expected_generation as u64 != binding.assignment_generation {
@@ -155,14 +170,19 @@ pub async fn publish(
     if linked_bytes != offered_bytes {
         return Err(refused());
     }
-    source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection).await?;
-    crate::agent_access::native_binding::seal_locked(
-        state,
-        &mut tx,
-        &binding.session,
-        &built.graph_profile,
-        &built.context,
-    )
+    on_heap(|| {
+        source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection)
+    })
+    .await?;
+    on_heap(|| {
+        crate::agent_access::native_binding::seal_locked(
+            state,
+            &mut tx,
+            &binding.session,
+            &built.graph_profile,
+            &built.context,
+        )
+    })
     .await?;
     // Repeat time-only fences after artifact/source rows and their quota locks.
     let end = now(state)?;

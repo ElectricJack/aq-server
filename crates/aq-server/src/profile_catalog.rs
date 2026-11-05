@@ -66,9 +66,10 @@ async fn inspect(
 ) -> Result<Json<Value>> {
     let row =
         sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&state.store.pool)
+            .fetch_optional(&state.store.pool)
             .await
-            .map_err(db)?;
+            .map_err(db)?
+            .ok_or_else(|| conflict("profile catalog registry has not been installed"))?;
     Ok(Json(
         json!({"revision":row.get::<i64,_>("revision"),"active_digest":row.get::<Option<String>,_>("active_digest")}),
     ))
@@ -125,6 +126,16 @@ async fn activate(
     if bytes.len() > MAX_ARTIFACT_BYTES {
         return Err(invalid());
     }
+    // C4: every environment pins exactly one allowlisted template digest.
+    let templates = state
+        .config
+        .templates
+        .as_deref()
+        .map(|allowlist| {
+            crate::templates::resolve(crate::templates::catalog_environments(&catalog), allowlist)
+                .map_err(conflict)
+        })
+        .transpose()?;
 
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     // Serialize activation, identity tombstones, quota and operation receipts in
@@ -182,6 +193,9 @@ async fn activate(
             .bind(catalog.digest()).bind(bytes).bind(user.id).bind((state.clock)().timestamp_millis())
             .execute(&mut *tx).await.map_err(db)?;
     }
+    if let Some(templates) = &templates {
+        crate::templates::store(&mut tx, catalog.digest(), templates).await?;
+    }
     let operations: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_operations")
         .fetch_one(&mut *tx)
         .await
@@ -199,7 +213,10 @@ async fn activate(
     .execute(&mut *tx)
     .await
     .map_err(db)?;
-    let response = json!({"operation_id":operation_id,"revision":next.revision,"active_digest":catalog.digest(),"disposition":"activated"});
+    let mut response = json!({"operation_id":operation_id,"revision":next.revision,"active_digest":catalog.digest(),"disposition":"activated"});
+    if let Some(templates) = templates {
+        response["environment_templates"] = json!(templates);
+    }
     sqlx::query("INSERT INTO profile_catalog_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)")
         .bind(user.id).bind(operation_id).bind(payload_digest).bind(&response).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;

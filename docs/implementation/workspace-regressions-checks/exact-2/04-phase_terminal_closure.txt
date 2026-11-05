@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s
+     Running tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-d615e61739dac0a0)
+
+running 1 test
+test pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started ... 
+thread 'pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started' (2231914) panicked at crates/aq-server/tests/common/phase_execution_core.rs:259:10:
+called `Result::unwrap()` on an `Err` value: Conflict("accepted preparation v2 is not currently available")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.66s
+
+error: test failed, to rerun pass `-p aq-server --test phase_terminal_closure`

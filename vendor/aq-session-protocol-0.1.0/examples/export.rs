@@ -39,5 +39,21 @@ pub fn fixtures() -> serde_json::Value {
     float["model"]["spending_budget"]["limit_microunits"] = json!(1.5);
     let mut no_tmux = manifest.clone();
     no_tmux["terminal"]["host"] = json!("shell");
-    json!({"version":1,"valid_documents":[{"kind":"launch","body":offer},{"kind":"acceptance","body":{"binding":binding,"advertised_capabilities":[{"id":"aq.profiled-launch","version":1},{"id":"aq.terminal","version":1},{"id":"aq.harness.startup-context","version":1},{"id":"aq.harness.confined-worktree","version":1},{"id":"aq.harness.stop","version":1}]}},{"kind":"grant","body":{"binding":binding,"grant_id":uid,"expires_at_ms":2000}},{"kind":"journal","body":{"binding":binding,"grant_id":uid}},{"kind":"commands","body":commands},{"kind":"output","body":output}],"manifest_digest":digest,"invalid_manifests":[extra,float,no_tmux],"input":input,"snapshot":snapshot,"frame":frame,"semantics":{"same_id_changed_bytes":"conflict","expired_input":"expired","injecting_crash":"delivery_unknown_no_replay","snapshot_covers_through_sequence":2,"first_live_sequence":3,"unknown_required_capability":"unsupported"}})
+    let named = |name: &str| json!({"id":name,"version":"1","digest":Digest::of(name.as_bytes())});
+    let mut container = manifest.clone();
+    container["harness"]["required_capabilities"][1]["id"] =
+        json!(CONTAINER_CONFINEMENT_CAPABILITY);
+    let mut both = container.clone();
+    both["harness"]["required_capabilities"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":NATIVE_CONFINEMENT_CAPABILITY,"version":1}));
+    both["selection_explanation"] = named("both_confinements");
+    let mut none = manifest.clone();
+    none["harness"]["required_capabilities"]
+        .as_array_mut()
+        .unwrap()
+        .remove(1);
+    none["selection_explanation"] = named("no_confinement");
+    json!({"version":1,"valid_documents":[{"kind":"launch","body":offer},{"kind":"acceptance","body":{"binding":binding,"advertised_capabilities":[{"id":"aq.profiled-launch","version":1},{"id":"aq.terminal","version":1},{"id":"aq.harness.startup-context","version":1},{"id":"aq.harness.confined-worktree","version":1},{"id":"aq.harness.stop","version":1}]}},{"kind":"grant","body":{"binding":binding,"grant_id":uid,"expires_at_ms":2000}},{"kind":"journal","body":{"binding":binding,"grant_id":uid}},{"kind":"commands","body":commands},{"kind":"output","body":output}],"manifest_digest":digest,"invalid_manifests":[extra,float,no_tmux,both,none],"container_manifest":container,"input":input,"snapshot":snapshot,"frame":frame,"semantics":{"same_id_changed_bytes":"conflict","expired_input":"expired","injecting_crash":"delivery_unknown_no_replay","snapshot_covers_through_sequence":2,"first_live_sequence":3,"unknown_required_capability":"unsupported"}})
 }

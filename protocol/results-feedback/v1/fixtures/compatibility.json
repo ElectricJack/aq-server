@@ -1,0 +1,422 @@
+{
+  "read": {
+    "api_version": "dashboard-read-1",
+    "coverage": {
+      "state": "complete"
+    },
+    "data": {
+      "capabilities": [
+        {
+          "enabled": true,
+          "name": "dashboard.overview",
+          "version": "1"
+        },
+        {
+          "enabled": true,
+          "name": "sessions.read",
+          "version": "1"
+        },
+        {
+          "enabled": true,
+          "name": "projects.read",
+          "version": "1"
+        },
+        {
+          "enabled": true,
+          "name": "status.read",
+          "version": "1"
+        },
+        {
+          "enabled": true,
+          "name": "workers.read",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "tasks.read",
+          "reason": "Task inspection is not connected yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "search.read",
+          "reason": "Search is not connected yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "decisions.read",
+          "reason": "Decision inspection is not connected yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "provider.quota",
+          "reason": "Provider account usage is unavailable",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "supervisor.conversation",
+          "reason": "The global supervisor is not connected yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "terminal.watch",
+          "reason": "Terminal viewing is not connected to this dashboard yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "terminal.control",
+          "reason": "Terminal control is not connected to this dashboard yet",
+          "version": "1"
+        },
+        {
+          "enabled": true,
+          "name": "dashboard.actions",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "results.read",
+          "reason": "Results are not connected yet",
+          "version": "1"
+        },
+        {
+          "enabled": false,
+          "name": "playbooks.inspect",
+          "reason": "Playbook inspection is not connected yet",
+          "version": "1"
+        }
+      ],
+      "contracts": [
+        {
+          "name": "dashboard-read",
+          "version": "dashboard-read-1",
+          "digest": "sha256:c3cbd5c140cbf5f0a29905a877070d267db55f63d96a2277e9a3ca6707c03cde"
+        },
+        {
+          "name": "dashboard-actions",
+          "version": "dashboard-actions-1",
+          "digest": "sha256:0e613001a16fe9474db5ac04d18192f3f3d6a3023f78ef025e989652910b03ad"
+        }
+      ],
+      "default_scope": {
+        "kind": "all_authorized"
+      },
+      "global_supervisor": {
+        "conversation_id": null,
+        "reason": "The global supervisor is not connected yet",
+        "status": "unconfigured"
+      },
+      "limits": {
+        "max_page_size": 100,
+        "page_size": 25,
+        "snapshot_members": 256,
+        "snapshot_ttl_ms": 30000
+      },
+      "principal": {
+        "authorization_revision": "282462697803667508442044028870264284114",
+        "display_name": "owner@localhost",
+        "id": "0d36007a-b179-452b-aa33-bc911e102c5a"
+      },
+      "product": {
+        "dashboard_digest": null,
+        "version": "0.1.0"
+      }
+    },
+    "observation": {
+      "coverage": "complete",
+      "fresh_until": "1970-01-01T00:16:45.000Z",
+      "observed_at": "1970-01-01T00:16:40.000Z",
+      "quality": "reported",
+      "source": "aq_dashboard_read"
+    },
+    "pending_operations": [],
+    "request_id": "969c3714-f0fc-4f47-8ed8-ffd06439b0b2",
+    "scope": {
+      "kind": "all_authorized"
+    },
+    "server_time": "1970-01-01T00:16:40.000Z"
+  },
+  "action": {
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "kind": "result.comment",
+    "subject": {
+      "type": "result",
+      "id": "00000000-0000-4000-8000-000000000002",
+      "revision": "1"
+    },
+    "expected_versions": {
+      "result": "1"
+    },
+    "payload": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Fix the caption",
+      "anchor": {
+        "kind": "result"
+      },
+      "follow": true,
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "additive_reads": {
+    "legacy_schema_sha256": "3a45f8ce58acb87ac955e9353088cb67a770ac86eb39df54eebda76f36ae7544",
+    "legacy_detail": {
+      "result": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "version": "1",
+        "project_id": "00000000-0000-4000-8000-000000000005",
+        "task_id": "00000000-0000-4000-8000-000000000006",
+        "current_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "revision": {
+        "report_id": "00000000-0000-4000-8000-000000000002",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt_id": "00000000-0000-4000-8000-000000000008",
+        "source": {
+          "repository_id": "00000000-0000-4000-8000-000000000009",
+          "base": {
+            "format": "sha1",
+            "hex": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        "summary": "completed",
+        "submitted_at_ms": 1000000,
+        "parent_results": [],
+        "capture_policy": {
+          "revision": "1",
+          "requirements": [
+            {
+              "id": "desktop",
+              "policy_revision": "1",
+              "kind": "image",
+              "scenario": "results",
+              "steps": [
+                "Open Results"
+              ],
+              "viewport": {
+                "width_css": 1280,
+                "height_css": 800,
+                "dpr_milli": 1000
+              },
+              "environment": "test",
+              "count": 1,
+              "required": true,
+              "applicability": "Results changed",
+              "gate_binding": "completion"
+            }
+          ]
+        },
+        "artifacts": [],
+        "check_refs": [],
+        "evidence_refs": [],
+        "addressed_feedback": []
+      },
+      "assessment": {
+        "version": "1",
+        "result_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": {
+          "satisfied": false,
+          "requirements": [
+            {
+              "requirement_id": "desktop",
+              "policy_revision": "1",
+              "required": true,
+              "state": "missing",
+              "artifact_ids": [],
+              "waiver_id": null
+            }
+          ]
+        },
+        "artifacts": [],
+        "acceptance": "unreviewed",
+        "observed_at_ms": 1000000,
+        "unresolved_review": false
+      }
+    },
+    "legacy_comments": {
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ]
+        }
+      ],
+      "next_cursor": null
+    },
+    "detail_1_1": {
+      "result": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "version": "1",
+        "project_id": "00000000-0000-4000-8000-000000000005",
+        "task_id": "00000000-0000-4000-8000-000000000006",
+        "current_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "directly_following": false
+      },
+      "revision": {
+        "report_id": "00000000-0000-4000-8000-000000000002",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt_id": "00000000-0000-4000-8000-000000000008",
+        "source": {
+          "repository_id": "00000000-0000-4000-8000-000000000009",
+          "base": {
+            "format": "sha1",
+            "hex": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        "summary": "completed",
+        "submitted_at_ms": 1000000,
+        "parent_results": [],
+        "capture_policy": {
+          "revision": "1",
+          "requirements": [
+            {
+              "id": "desktop",
+              "policy_revision": "1",
+              "kind": "image",
+              "scenario": "results",
+              "steps": [
+                "Open Results"
+              ],
+              "viewport": {
+                "width_css": 1280,
+                "height_css": 800,
+                "dpr_milli": 1000
+              },
+              "environment": "test",
+              "count": 1,
+              "required": true,
+              "applicability": "Results changed",
+              "gate_binding": "completion"
+            }
+          ]
+        },
+        "artifacts": [],
+        "check_refs": [],
+        "evidence_refs": [],
+        "addressed_feedback": [
+          "00000000-0000-4000-8000-000000000003"
+        ]
+      },
+      "assessment": {
+        "version": "1",
+        "result_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": {
+          "satisfied": false,
+          "requirements": [
+            {
+              "requirement_id": "desktop",
+              "policy_revision": "1",
+              "required": true,
+              "state": "missing",
+              "artifact_ids": [],
+              "waiver_id": null
+            }
+          ]
+        },
+        "artifacts": [],
+        "acceptance": "unreviewed",
+        "observed_at_ms": 1000000,
+        "unresolved_review": false
+      },
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      }
+    },
+    "comments_1_1": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": {
+            "resolved_by": "00000000-0000-4000-8000-000000000010",
+            "reason": "Checked exact follow-up",
+            "follow_up": {
+              "result_id": "00000000-0000-4000-8000-000000000002",
+              "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "follow_up_report_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

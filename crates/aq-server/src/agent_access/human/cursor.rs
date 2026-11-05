@@ -1,8 +1,5 @@
 use super::*;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
-use rand::RngCore;
-use zeroize::Zeroizing;
+use crate::dashboard_api::cursor::{Binding as SharedBinding, CursorCodec};
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Binding {
@@ -14,77 +11,53 @@ pub(super) struct Binding {
     pub limit: u16,
     pub q: Option<String>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Cursor {
-    binding: Binding,
-    upstream: String,
-    issued: i64,
-    expires: i64,
-}
 pub(super) struct Codec {
-    key: Zeroizing<[u8; 32]>,
+    shared: CursorCodec,
 }
 impl Codec {
     pub fn new() -> Self {
-        let mut key = [0; 32];
-        rand::thread_rng().fill_bytes(&mut key);
         Self {
-            key: Zeroizing::new(key),
+            shared: CursorCodec::default(),
+        }
+    }
+    fn binding(b: &Binding) -> SharedBinding {
+        SharedBinding {
+            principal: b.actor,
+            authorization_partition: b.revision.to_string(),
+            scope: serde_json::json!({"project": b.project, "workspace": b.workspace}),
+            filters: serde_json::json!({"q": b.q}),
+            sort: "graph_owner_order,id".into(),
+            page_size: b.limit,
+            resource: b.kind.clone(),
         }
     }
     pub fn encode(&self, b: &Binding, upstream: &str, now: i64) -> Result<String> {
         if upstream.is_empty() || upstream.len() > 256 || upstream.chars().any(char::is_control) {
             return Err(unavailable());
         }
-        let value = Cursor {
-            binding: b.clone(),
-            upstream: upstream.into(),
-            issued: now,
-            expires: now.checked_add(30000).ok_or_else(unavailable)?,
-        };
-        let mut nonce = [0; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let cipher =
-            ChaCha20Poly1305::new_from_slice(self.key.as_ref()).map_err(|_| unavailable())?;
-        let bytes = serde_json::to_vec(&value).map_err(|_| unavailable())?;
-        let encrypted = cipher
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                chacha20poly1305::aead::Payload {
-                    msg: &bytes,
-                    aad: b"aq-human-graph-cursor-1",
-                },
+        let now = u64::try_from(now).map_err(|_| unavailable())?;
+        self.shared
+            .encode(
+                &Self::binding(b),
+                "graph_owner_snapshot",
+                upstream,
+                now,
+                now.checked_add(30000).ok_or_else(unavailable)?,
             )
-            .map_err(|_| unavailable())?;
-        let mut output = nonce.to_vec();
-        output.extend(encrypted);
-        Ok(URL_SAFE_NO_PAD.encode(output))
+            .map_err(|_| unavailable())
     }
     pub fn decode(&self, token: &str, b: &Binding, now: i64) -> Result<String> {
         if token.len() > 4096 {
             return Err(invalid());
         }
-        let bytes = URL_SAFE_NO_PAD.decode(token).map_err(|_| conflict())?;
-        if bytes.len() < 28 {
-            return Err(conflict());
-        }
-        let cipher =
-            ChaCha20Poly1305::new_from_slice(self.key.as_ref()).map_err(|_| unavailable())?;
-        let value = cipher
-            .decrypt(
-                Nonce::from_slice(&bytes[..12]),
-                chacha20poly1305::aead::Payload {
-                    msg: &bytes[12..],
-                    aad: b"aq-human-graph-cursor-1",
-                },
+        self.shared
+            .decode(
+                token,
+                &Self::binding(b),
+                u64::try_from(now).map_err(|_| conflict())?,
             )
-            .map_err(|_| conflict())?;
-        let value: Cursor = serde_json::from_slice(&value).map_err(|_| conflict())?;
-        if &value.binding != b || now < value.issued || now >= value.expires {
-            return Err(conflict());
-        }
-        Ok(value.upstream)
+            .map(|v| v.position)
+            .map_err(|_| conflict())
     }
 }
 #[cfg(test)]

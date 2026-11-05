@@ -187,6 +187,15 @@ outbox event, and clear the common claim using the verified release. Reply loss
 and outbox replay cannot duplicate logical completion. Stale/unknown/conflicting
 outcomes preserve source/evidence and the task exclusion.
 
+Format 65 also projects the verified hot authority into `execution_attempts.state`
+in the confirmation transaction: `finished`, stopped, retained and quiescent,
+while preserving the immutable launch fields. An uncertain Graph result leaves
+the historical snapshot unchanged. Reconciliation of an already confirmed
+completion repairs an older stale snapshot without changing a current snapshot's
+revision. The completion outbox is delivered through playbook catalog profile 4;
+its source acknowledgment requires durable engine acceptance. See the
+[catalog and delivery contract](../architecture/0004-session-operations-waits-and-notifications.md#51-playbook-catalog-profiles-as-implemented).
+
 ## Required focused qualification
 
 Keep owner-layer tests bounded: actual stopped/B1/ledger joins and lock order;

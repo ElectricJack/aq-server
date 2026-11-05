@@ -125,6 +125,8 @@ async fn setup_actual_unpublished() -> Unpublished {
     case.env.env.state.source_retention = Some(Arc::new(
         aq_server::source_retention::Runtime::new(
             aq_server::source_retention::SourceRetentionConfig {
+                keep_per_task: 2,
+                max_age: 30 * 86400,
                 git_root: root,
                 git_socket: socket.clone(),
                 staging_root: dir.join("actual-staging"),

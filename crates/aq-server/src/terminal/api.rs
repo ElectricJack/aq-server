@@ -118,13 +118,16 @@ async fn poll(
     headers: HeaderMap,
     SafeJson(request): SafeJson<aq_terminal_relay::draft::RelayPoll>,
 ) -> Result<Json<aq_terminal_relay::draft::Envelope>> {
-    let node = super::peer::authenticate(&state, &headers).await?;
+    let node = super::peer::authenticate(&state, &headers)
+        .await
+        .map_err(|error| relay_failure(error, "terminal_poll_failed"))?;
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(22),
         super::peer::poll(&state, &node, &request),
     )
     .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal poll deadline exceeded".into()))??;
+    .map_err(|_| AppError::IdentityUnavailable("terminal poll deadline exceeded".into()))?
+    .map_err(|error| relay_failure(error, "terminal_poll_failed"))?;
     Ok(Json(value))
 }
 async fn output_poll(
@@ -132,15 +135,16 @@ async fn output_poll(
     headers: HeaderMap,
     SafeJson(request): SafeJson<aq_terminal_relay::draft::RelayPoll>,
 ) -> Result<Json<aq_terminal_relay::draft::Envelope>> {
-    let node = super::peer::authenticate(&state, &headers).await?;
+    let node = super::peer::authenticate(&state, &headers)
+        .await
+        .map_err(|error| relay_failure(error, "terminal_output_poll_failed"))?;
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         super::peer::output_poll(&state, &node, &request),
     )
     .await
-    .map_err(|_| {
-        AppError::IdentityUnavailable("terminal output poll deadline exceeded".into())
-    })??;
+    .map_err(|_| AppError::IdentityUnavailable("terminal output poll deadline exceeded".into()))?
+    .map_err(|error| relay_failure(error, "terminal_output_poll_failed"))?;
     Ok(Json(value))
 }
 
@@ -149,13 +153,16 @@ async fn upload(
     headers: HeaderMap,
     SafeJson(request): SafeJson<aq_terminal_relay::draft::PeerUpload>,
 ) -> Result<Json<aq_terminal_relay::draft::UploadAck>> {
-    let node = super::peer::authenticate(&state, &headers).await?;
+    let node = super::peer::authenticate(&state, &headers)
+        .await
+        .map_err(|error| relay_failure(error, "terminal_upload_failed"))?;
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(4),
         super::peer::upload(&state, &node, &request),
     )
     .await
-    .map_err(|_| AppError::IdentityUnavailable("terminal upload deadline exceeded".into()))??;
+    .map_err(|_| AppError::IdentityUnavailable("terminal upload deadline exceeded".into()))?
+    .map_err(|error| relay_failure(error, "terminal_upload_failed"))?;
     Ok(Json(value))
 }
 
@@ -199,15 +206,16 @@ async fn control_upload(
     headers: HeaderMap,
     SafeJson(request): SafeJson<aq_terminal_relay::draft::PeerUpload>,
 ) -> Result<Json<aq_terminal_relay::draft::UploadAck>> {
-    let node = super::peer::authenticate(&state, &headers).await?;
+    let node = super::peer::authenticate(&state, &headers)
+        .await
+        .map_err(|error| relay_failure(error, "terminal_control_upload_failed"))?;
     let value = tokio::time::timeout(
         std::time::Duration::from_secs(4),
         super::peer::control_upload(&state, &node, &request),
     )
     .await
-    .map_err(|_| {
-        AppError::IdentityUnavailable("terminal control upload deadline exceeded".into())
-    })??;
+    .map_err(|_| AppError::IdentityUnavailable("terminal control upload deadline exceeded".into()))?
+    .map_err(|error| relay_failure(error, "terminal_control_upload_failed"))?;
     Ok(Json(value))
 }
 
@@ -228,4 +236,13 @@ async fn tail(
             .map_err(|_| AppError::Internal)?,
     );
     Ok((headers, Json(reply)))
+}
+
+/// Keep authorization and domain refusals intact. Internal failures still fail
+/// closed, with a fixed endpoint code that is safe to retain in worker evidence.
+fn relay_failure(error: AppError, code: &'static str) -> AppError {
+    match error {
+        AppError::Internal => AppError::TerminalRelayFailure(code),
+        other => other,
+    }
 }

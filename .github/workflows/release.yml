@@ -23,9 +23,9 @@ env:
   SERVER_REPO: ghcr.io/electricjack/agent-q-server
   WORKER_REPO: ghcr.io/electricjack/agent-q-worker
   RELEASE_REPO: ghcr.io/electricjack/agent-q-release
-  SOURCE_URL: https://github.com/ElectricJack/agent-q
+  SOURCE_URL: https://github.com/ElectricJack/aq-server
   COSIGN_RELEASE: v3.1.3
-  COSIGN_IDENTITY_REGEXP: '^https://github\.com/ElectricJack/agent-q/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+  COSIGN_IDENTITY_REGEXP: '^https://github\.com/ElectricJack/aq-server/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
   COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
   CARGO_TERM_COLOR: always
 
@@ -55,7 +55,7 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
           # The image labels come from the same constants `aq-server manifest`
           # reports; the labels are checked against the manifest before signing.
-          state_format=$(sed -n 's/^pub const STATE_FORMAT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' crates/aq-server/src/lib.rs)
+          state_format=$(python3 scripts/migration_catalog.py)
           protocol_source=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["dependencies"]["aq-protocol"]["path"] + "/src/lib.rs")')
           protocol_max=$(sed -n 's/^pub const SUPPORTED_WORKER_PROTOCOLS: (u32, u32) = ([0-9][0-9]*, \([0-9][0-9]*\));$/\1/p' "$protocol_source")
           python3 scripts/check-git-candidate.py --official
@@ -213,6 +213,11 @@ jobs:
       # The spec's isolated test deployment: the exact pushed digests. It runs
       # before the release image exists, so a release that fails it is never
       # visible to the updater or to promote.yml.
+      # aq-worker 0.5.1 `run` binds only a dedicated rootless sandbox socket; the
+      # synthetic-runtime fixture image is built locally and never pushed.
+      - name: Start the dedicated rootless sandbox daemon
+        run: scripts/ci-sandbox-socket
+
       - name: Smoke test the pushed images
         env:
           AQ_SMOKE_OFFICIAL: '1'

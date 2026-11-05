@@ -561,6 +561,19 @@ owner_email="owner@localhost"
         clock: aq_server::system_clock(),
     };
     let app = aq_server::build_worker_router(state.clone());
+    let valid = Request::builder()
+        .method("POST")
+        .uri("/v2/worker/register")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", h.credential))
+        .body(Body::from(
+            serde_json::to_vec(&register(&h.identity)).unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(valid).await.unwrap().status(),
+        StatusCode::OK
+    );
     let mut request = register(&h.identity);
     request.identity.node_id = Uuid::new_v4();
     let req = Request::builder()

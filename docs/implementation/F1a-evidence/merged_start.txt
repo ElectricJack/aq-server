@@ -1,0 +1,62 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling digest v0.10.7
+   Compiling num-traits v0.2.19
+   Compiling sha2 v0.10.9
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-session-protocol-0.1.0)
+   Compiling chrono v0.4.45
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling hmac v0.12.1
+   Compiling sqlx-core v0.8.6
+   Compiling hkdf v0.12.4
+   Compiling atoi v2.0.0
+   Compiling md-5 v0.10.6
+   Compiling nix v0.29.0
+   Compiling sqlx-postgres v0.8.6
+   Compiling aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-terminal-relay-protocol)
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-session-api)
+   Compiling sqlx v0.8.6
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)
+   Compiling num-integer v0.1.47
+   Compiling aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling num-bigint v0.4.8
+   Compiling aq-session-host v0.1.7 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-session-host-0.1.7)
+   Compiling aq-responses-transport v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-responses-transport-0.1.0)
+   Compiling aq-codex-mapper v0.1.1 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-codex-mapper-0.1.1)
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-lifecycle-api)
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-agent-api)
+   Compiling lazy_static v1.5.1
+   Compiling sharded-slab v0.1.7
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-profiles)
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-supervisor-host)
+   Compiling aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling simple_asn1 v0.6.4
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-admission)
+   Compiling tracing-subscriber v0.3.23
+   Compiling aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-release)
+   Compiling jsonwebtoken v9.3.1
+   Compiling aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-playbook-host)
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-result-media)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-selection)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-phase-terminal-protocol)
+   Compiling aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-api)
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-notifications)
+   Compiling aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-terminal-relay)
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-admission-0.2.0)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-accounting)
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 3m 56s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-28770f5c51aa9b83)
+
+running 1 test
+test supervisor_session_starts_under_central_permit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 1.89s
+

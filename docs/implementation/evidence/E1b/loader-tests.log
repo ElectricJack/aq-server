@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 06s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-4f89422fbe2e836c)
+
+running 6 tests
+test dashboard_assets::release_tests::only_hash_named_assets_are_immutable ... ok
+test dashboard_assets::release_tests::schema_two_checks_required_contracts_capabilities_and_provenance ... ok
+test dashboard_assets::tests::corrupt_length_versions_unknown_keys_and_duplicate_entries_refuse ... ok
+test dashboard_assets::tests::manifest_and_total_quotas_and_exact_path_grammar_refuse ... ok
+test dashboard_assets::tests::member_symlink_hardlink_fifo_and_symlink_directory_refuse_without_blocking ... ok
+test dashboard_assets::tests::verified_exact_manifest_digest_and_loaded_bytes_survive_backing_changes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 187 filtered out; finished in 0.08s
+

@@ -1,0 +1,18 @@
+$ cargo test --locked -p aq-server --test source_retention delivery_
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 02s
+     Running tests/source_retention.rs (target/debug/deps/source_retention-d262788cbeae0eac)
+
+running 9 tests
+test delivery::delivery_candidate_retries_frozen_request_after_lost_reply ... ok
+test delivery::delivery_candidate_transients_replay_same_frozen_operation ... ok
+test delivery::delivery_canonical_hold_targets_and_nonempty_unique_sources ... ok
+test delivery::delivery_cross_checks_candidate_oid_and_binding_generation ... ok
+test delivery::delivery_protocol_bounds_and_conflict_results ... ok
+test delivery::delivery_rejects_unretained_sources ... ok
+test delivery::delivery_replay_conflict_and_unknown_publish_are_fenced ... ok
+test delivery::delivery_indeterminate_receipts_and_lost_replies_keep_destination_held ... ok
+test delivery::delivery_socket_exchange_releases_rows_and_pool_connection ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 8.21s
+

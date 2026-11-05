@@ -10,8 +10,8 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-GIT_IMAGE = 'aq-m4-git-candidate:bookworm'
-GIT_IMAGE_ID = 'sha256:ad68eec4eb7208bac9314a01d02694c4e422df8aebd24a7afd5c674389f15f01'
+GIT_IMAGE = 'aq-git-a3b:0.2.0'
+GIT_IMAGE_ID = 'sha256:4e405e60f637f766582fcb182d1e3bd963ba8e78c94d2cc57203d28f0f358642'
 fixture = ROOT / 'protocol/agent-access/v1/capture_graph_fixture.py'
 source = fixture.read_text()
 original = "            (ROOT / 'fixtures/qualified-graph.json').write_text(json.dumps(evidence, indent=2) + '\\n')"
@@ -56,11 +56,11 @@ replacement = '''            import socket
                           'repository_id': repository, 'operation_id': uid(208), 'expected_binding_generation': 0,
                           'params': {'binding': {'identity': 'project-qualification', 'mode': 'central',
                                                 'allowed_refs': [], 'allowed_targets': []}}, 'deadline_ms': 5000})
-                env = dict(os.environ, AQ_AGENT_GRAPH_TEST_URL=base,
+                env = dict(os.environ, CARGO_INCREMENTAL='0', AQ_AGENT_GRAPH_TEST_URL=base,
                            AQ_AGENT_GRAPH_TEST_TOKEN_FILE=str(writer_file),
                            AQ_PROJECT_GIT_SOCKET=str(git_socket), AQ_PROJECT_REPOSITORY_ID=repository,
                            AQ_PROJECT_WORKSPACE_ID=workspace)
-                subprocess.run(['cargo', 'test', '-p', 'aq-server', '--test', 'project_bindings',
+                subprocess.run(['cargo', 'test', '--locked', '-p', 'aq-server', '--test', 'project_bindings',
                                 'selected_real_public_repository_and_graph_workspace_bind', '--', '--ignored', '--nocapture'],
                                cwd=ROOT.parents[2], env=env, check=True)
                 print(json.dumps({'qualification': 'AQ-19', 'aq_git_image_id': GIT_IMAGE_ID,

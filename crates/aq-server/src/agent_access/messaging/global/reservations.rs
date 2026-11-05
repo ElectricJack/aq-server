@@ -1,5 +1,5 @@
-//! Dormant current-Owner pre-plan reservations over the actual global mailbox.
-//! No routes, driver, session, Run, profile, dispatch or host capability exists.
+//! Current-Owner reservations over the actual global mailbox. Completed turns
+//! consume their reservation while immutable dispatch history retains mail holds.
 mod reads;
 #[cfg(test)]
 mod tests;
@@ -200,7 +200,7 @@ async fn actor(tx: &mut Transaction<'_, Postgres>, id: Uuid, write: bool) -> Res
     let a = Actor::from_row(row)?;
     let history=sqlx::query("SELECT count(*) AS n,COALESCE(sum(charged_bytes),0)::bigint AS bytes,COALESCE(max(actor_revision),0) AS revision,COALESCE(bool_and(kind IN ('configure','reserve','cancel')),TRUE) AS known FROM central_supervisor_operations WHERE actor_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(db)?;
     let active:Vec<Uuid>=sqlx::query_scalar("SELECT reservation_id FROM central_supervisor_reservations WHERE actor_id=$1 AND state='awaiting_prepared_plan' LIMIT 2").bind(id).fetch_all(&mut **tx).await.map_err(db)?;
-    let unknown:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE actor_id=$1 AND state NOT IN ('awaiting_prepared_plan','cancelled_before_plan'))").bind(id).fetch_one(&mut **tx).await.map_err(db)?;
+    let unknown:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE actor_id=$1 AND state NOT IN ('awaiting_prepared_plan','cancelled_before_plan','consumed'))").bind(id).fetch_one(&mut **tx).await.map_err(db)?;
     if history.get::<i64, _>("n") != a.operations
         || history.get::<i64, _>("bytes") != a.bytes
         || history.get::<i64, _>("revision") != a.revision
@@ -225,4 +225,15 @@ async fn bound_actor(
         return Err(unavailable());
     }
     Ok(a)
+}
+/// F1b: read one reservation for the dispatch path (no Owner context; actor-scoped).
+pub(crate) async fn load(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    id: Uuid,
+) -> Result<ReservationView> {
+    let a = actor(tx, actor_id, false).await?.ok_or_else(missing)?;
+    reads::reservation(tx, &a, id, false)
+        .await?
+        .ok_or_else(missing)
 }

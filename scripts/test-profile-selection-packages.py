@@ -46,7 +46,8 @@ def main():
     )
     environment = os.environ.copy()
     environment.setdefault("CARGO_BUILD_JOBS", "2")
-    environment.setdefault("CARGO_TARGET_DIR", str(work / "target"))
+    environment.setdefault("CARGO_TARGET_DIR", str(ROOT / "target"))
+    environment["CARGO_INCREMENTAL"] = "0"
     for name in ("aq-profiles", "aq-selection"):
         manifest = work / f"{name}-{PACKAGES[name]}" / "Cargo.toml"
         commands = [

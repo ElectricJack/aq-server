@@ -67,7 +67,7 @@ fn profile(bytes: &[u8]) -> Result<wire::Profile, AppError> {
         .map_err(|_| AppError::BadRequest("invalid phase terminal request".into()))
 }
 macro_rules! endpoint {
-    ($name:ident, $lane:ident, $decode:ident, $receipt:ident, $owner:ident, $method:ident) => {
+    ($name:ident, $lane:ident, $decode:ident, $receipt:ident, $owner:ident, $method:ident, $($binding:ident).+) => {
         async fn $name(
             State(state): State<AppState>,
             request: Request,
@@ -77,7 +77,27 @@ macro_rules! endpoint {
                 .map_err(|_| AppError::Maintenance("phase terminal ingress full".into()))?;
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 check_headers(request.headers())?;
-                let node = worker_api::authenticate_context(&state, request.headers()).await?;
+                let node = match stringify!($name) {
+                    "started" => {
+                        crate::delegated_permits::runtime::authenticate_runner(
+                            &state,
+                            request.headers(),
+                            aq_admission_sandbox::sandbox::RunnerOperation::Started,
+                            None,
+                        )
+                        .await?
+                    }
+                    "stopped" => {
+                        crate::delegated_permits::runtime::authenticate_runner(
+                            &state,
+                            request.headers(),
+                            aq_admission_sandbox::sandbox::RunnerOperation::ReportResult,
+                            None,
+                        )
+                        .await?
+                    }
+                    _ => worker_api::authenticate_context(&state, request.headers()).await?,
+                };
                 let bytes = to_bytes(request.into_body(), wire::MAX_BYTES)
                     .await
                     .map_err(|_| AppError::PayloadTooLarge("phase terminal body".into()))?;
@@ -86,6 +106,7 @@ macro_rules! endpoint {
                         let q = wire::$decode(&bytes).map_err(|_| {
                             AppError::BadRequest("invalid phase terminal request".into())
                         })?;
+                        crate::delegated_permits::runtime::require_binding(&node, &q.$($binding).+)?;
                         super::$owner::$method(&state, &node, &q)
                             .await
                             .map(|r| Json(r).into_response())
@@ -94,6 +115,7 @@ macro_rules! endpoint {
                         let q = refresh_wire::$decode(&bytes).map_err(|_| {
                             AppError::BadRequest("invalid phase terminal request".into())
                         })?;
+                        crate::delegated_permits::runtime::require_binding(&node, &q.$($binding).+)?;
                         super::super::phase_refresh_terminal::$owner::$method(&state, &node, &q)
                             .await
                             .map(|r| Json(r).into_response())
@@ -113,7 +135,8 @@ endpoint!(
     decode_started_request,
     StartedReceipt,
     started,
-    record
+    record,
+    original.binding
 );
 endpoint!(
     history,
@@ -121,7 +144,8 @@ endpoint!(
     decode_history_request,
     HistoryReceipt,
     history,
-    read
+    read,
+    binding
 );
 endpoint!(
     stopped,
@@ -129,7 +153,8 @@ endpoint!(
     decode_stopped_request,
     StoppedReceipt,
     stopped,
-    record
+    record,
+    original.evidence.binding
 );
 endpoint!(
     closure,
@@ -137,7 +162,8 @@ endpoint!(
     decode_closure_request,
     ClosureReceipt,
     closure,
-    record
+    record,
+    original.binding
 );
 
 #[cfg(test)]

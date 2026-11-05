@@ -1,0 +1,112 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 4.31kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust:1.96.1-bookworm
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 136B done
+#5 DONE 0.0s
+
+#6 [build 1/7] FROM docker.io/library/rust:1.96.1-bookworm
+#6 DONE 0.0s
+
+#7 [runtime 1/2] FROM docker.io/library/debian:bookworm-slim
+#7 DONE 0.0s
+
+#8 [git-build 1/6] FROM docker.io/library/rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 86.99MB 1.6s done
+#9 DONE 1.6s
+
+#10 [build 2/7] WORKDIR /build
+#10 CACHED
+
+#11 [build 3/7] COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+#11 CACHED
+
+#12 [build 4/7] COPY crates ./crates
+#12 DONE 0.8s
+
+#13 [build 5/7] COPY vendor ./vendor
+#13 DONE 0.8s
+
+#14 [build 6/7] COPY protocol ./protocol
+#14 DONE 0.3s
+
+#15 [build 7/7] RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,sharing=locked,target=/build/target     cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol     && cargo build --locked --release --bin aq-server     && mkdir -p /out     && cp target/release/aq-server /out/
+#15 1.382      Removed 21 files, 9.2MiB total
+#15 4.688    Compiling aq-admission v0.1.11 (/build/crates/aq-admission)
+#15 4.704    Compiling aq-release v0.1.0 (/build/crates/aq-release)
+#15 4.709    Compiling aq-worker-protocol v0.2.0 (/build/vendor/aq-worker-protocol-0.2.0)
+#15 4.711    Compiling aq-protocol v0.1.0 (/build/vendor/aq-protocol-0.1.0)
+#15 15.89    Compiling aq-phase-terminal-protocol v0.1.2 (/build/crates/aq-phase-terminal-protocol)
+#15 18.06    Compiling aq-server v0.1.0 (/build/crates/aq-server)
+#15 272.4     Finished `release` profile [optimized] target(s) in 4m 17s
+#15 DONE 277.0s
+
+#16 [aq-git-build 4/6] RUN echo 'f64891f03e2d28263cf3af20b38123935ae08d6917699becb9d77e76af2fd3c6  /tmp/source.tar.gz' | sha256sum -c -
+#16 CACHED
+
+#17 [aq-git-build 5/6] COPY vendor/aq-git-v0.2.0-linux-x86_64 /src/target/release/aq-git
+#17 CACHED
+
+#18 [aq-git-build 2/6] WORKDIR /src
+#18 CACHED
+
+#19 [aq-git-build 3/6] COPY vendor/aq-git-source.tar.gz /tmp/source.tar.gz
+#19 CACHED
+
+#20 [aq-git-build 6/6] RUN echo '3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2  /src/target/release/aq-git' | sha256sum -c - && chmod 755 /src/target/release/aq-git
+#20 CACHED
+
+#21 [runtime 2/2] RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 libexpat1 libssl3 zlib1g     && rm -rf /var/lib/apt/lists/*     && groupadd --gid 10001 aq && useradd --uid 10001 --gid aq --create-home --home-dir /home/aq aq
+#21 CACHED
+
+#22 [git-build 2/6] RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev libcurl4-openssl-dev libexpat1-dev gettext zlib1g-dev && rm -rf /var/lib/apt/lists/*
+#22 CACHED
+
+#23 [git-build 3/6] COPY vendor/aq-git-0.2.0/git-2.56.0.tar.xz /tmp/git.tar.xz
+#23 CACHED
+
+#24 [git-build 4/6] RUN echo '26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3  /tmp/git.tar.xz' | sha256sum -c - && mkdir /git && tar -xf /tmp/git.tar.xz -C /git --strip-components=1
+#24 CACHED
+
+#25 [git-build 5/6] WORKDIR /git
+#25 CACHED
+
+#26 [git-build 6/6] RUN make -j4 prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease all && make prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease install
+#26 CACHED
+
+#27 [server 1/5] COPY --from=build /out/aq-server /usr/local/bin/aq-server
+#27 DONE 0.4s
+
+#28 [server 2/5] COPY --from=aq-git-build /src/target/release/aq-git /usr/local/bin/aq-git
+#28 DONE 0.3s
+
+#29 [server 3/5] COPY --from=git-build /opt/aq-git-runtime /opt/aq-git-runtime
+#29 DONE 1.4s
+
+#30 [server 4/5] RUN ln -s /opt/aq-git-runtime/bin/git /usr/bin/git
+#30 DONE 4.4s
+
+#31 [server 5/5] COPY vendor/git-candidate.json /usr/share/agent-q/git-candidate.json
+#31 DONE 2.7s
+
+#32 exporting to image
+#32 exporting layers
+#32 exporting layers 0.7s done
+#32 writing image sha256:2dc0cb33fdc8e960a08204d6dadf34162b92eade587c268d0ee9d4c3a46163f8 0.0s done
+#32 naming to docker.io/library/aq-server-a3b:0.2.0 0.0s done
+#32 DONE 0.8s

@@ -23,6 +23,9 @@ pub struct ProjectPolicy {
     pub priority: i32,
     pub source: SourceSelection,
     pub retention_handle: Uuid,
+    /// C4 placement preference/capability override; absent uses the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<super::placement::PlacementPolicy>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -138,6 +141,9 @@ impl ProfiledConfig {
                 .source
                 .validate()
                 .map_err(|_| "explicit immutable object or safe source ref required")?;
+            if let Some(placement) = &project.placement {
+                placement.validate()?;
+            }
         }
         Ok(())
     }

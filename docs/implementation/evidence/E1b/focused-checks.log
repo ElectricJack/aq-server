@@ -1,0 +1,8 @@
+RUN: cargo fmt --check
+EXIT: 0 LOG: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/docs/implementation/evidence/E1b/fmt-final.log
+RUN: cargo clippy --locked --all-targets -- -D warnings
+EXIT: 0 LOG: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/docs/implementation/evidence/E1b/clippy-after-merge.log
+RUN: cargo test --locked -p aq-server --lib dashboard_assets
+EXIT: 0 LOG: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/docs/implementation/evidence/E1b/loader-tests.log
+RUN: cargo test --locked -p aq-server --test dashboard_assets --test dashboard_read --test dashboard_actions --test dashboard_mounts --test dashboard_aggregation
+EXIT: 0 LOG: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/docs/implementation/evidence/E1b/dashboard-area.log

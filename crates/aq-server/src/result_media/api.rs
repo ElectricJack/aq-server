@@ -130,8 +130,41 @@ pub fn routes(runtime: Arc<Runtime>) -> Router<AppState> {
                 "/api/human/result-media-uploads/{operation}/finalize",
                 post(finalize),
             );
+    } else {
+        routes = routes.merge(unavailable_routes(true));
     }
     routes.layer(Extension(runtime))
+}
+/// Keep capability absence observable through the actual protected write paths.
+pub fn unavailable_routes(configured: bool) -> Router<AppState> {
+    let refused = move |RequireOwner(_): RequireOwner| async move {
+        crate::dashboard_api::errors::ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            if configured {
+                "media_upload_disabled"
+            } else {
+                "media_store_unconfigured"
+            },
+            if configured {
+                "Result media uploads are disabled"
+            } else {
+                "Result media storage is not configured"
+            },
+        )
+    };
+    Router::new()
+        .route(
+            "/api/human/results/{report}/revisions/{revision}/media-uploads",
+            post(refused),
+        )
+        .route(
+            "/api/human/result-media-uploads/{operation}/content",
+            put(refused),
+        )
+        .route(
+            "/api/human/result-media-uploads/{operation}/finalize",
+            post(refused),
+        )
 }
 async fn list(
     Extension(runtime): Extension<Arc<Runtime>>,
@@ -236,20 +269,25 @@ async fn upload(
 ) -> ApiResult<Response> {
     let _permit = slot(&runtime.uploads)?;
     no_query(&request)?;
-    if request
+    let kind = match request
         .headers()
         .get(header::CONTENT_TYPE)
-        .is_none_or(|v| v.as_bytes() != b"image/png")
+        .map(|v| v.as_bytes())
     {
-        return Err(invalid());
-    }
+        Some(b"image/png") => media::MediaKind::Image,
+        Some(b"video/mp4") => media::MediaKind::Video,
+        _ => return Err(invalid()),
+    };
     let operation = id(&operation)?;
-    let raw = bytes(request, media::MAX_INPUT_BYTES).await?;
+    let raw = bytes(request, kind.max_input_bytes() as usize).await?;
     let original = runtime
         .owner()
         .status(&actor, operation)
         .await
         .map_err(mapped)?;
+    if original.media != kind {
+        return Err(invalid());
+    }
     if raw.len() != original.input.bytes as usize
         || media::Digest::of(&raw) != original.input.digest
     {
@@ -323,9 +361,10 @@ async fn content(
     let Query(query) = Query::<VariantQuery>::try_from_uri(request.uri()).map_err(|_| invalid())?;
     // Authorization resolves before unsupported-header checks. No object data
     // is disclosed by these generic request-shape failures.
-    if request.headers().contains_key(header::RANGE) {
-        return Ok(StatusCode::RANGE_NOT_SATISFIABLE.into_response());
-    }
+    let range = request
+        .headers()
+        .get(header::RANGE)
+        .map(|value| value.to_str().map(str::to_owned).unwrap_or_default());
     if [
         header::IF_MATCH,
         header::IF_NONE_MATCH,
@@ -353,7 +392,22 @@ async fn content(
         )
         .await;
     match content {
-        Ok(content) => Ok(body::response(content, permit)),
+        Ok(content) => {
+            let total = content.bytes().len();
+            let Some(range) = range else {
+                return Ok(body::response(content, permit, None));
+            };
+            // Only a clip render is seekable; images keep the 416 contract.
+            let clip = content.descriptor.mime == media::Mime::Mp4;
+            match byte_range(&range, total).filter(|_| clip) {
+                Some(span) => Ok(body::response(content, permit, Some(span))),
+                None => Ok((
+                    StatusCode::RANGE_NOT_SATISFIABLE,
+                    [(header::CONTENT_RANGE, format!("bytes */{total}"))],
+                )
+                    .into_response()),
+            }
+        }
         Err(Error::Expired) => Ok(typed_failure(
             StatusCode::GONE,
             media::ContentError::MediaExpired,
@@ -375,5 +429,54 @@ async fn content(
             "Retained media unavailable",
         )),
         Err(error) => Err(mapped(error)),
+    }
+}
+/// One `bytes=` range (`a-b`, `a-` or `-n`) as a non-empty half-open span.
+fn byte_range(value: &str, total: usize) -> Option<std::ops::Range<usize>> {
+    let spec = value.strip_prefix("bytes=")?;
+    let (first, last) = spec.split_once('-')?;
+    let digits = |v: &str| {
+        (!v.is_empty() && v.len() <= 19 && v.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| v.parse::<u64>().ok())
+            .flatten()
+    };
+    let total64 = total as u64;
+    let (start, end) = match (first.is_empty(), last.is_empty()) {
+        (true, false) => {
+            let n = digits(last)?.min(total64);
+            (total64 - n, total64)
+        }
+        (false, true) => (digits(first)?, total64),
+        (false, false) => {
+            let (a, b) = (digits(first)?, digits(last)?);
+            if b < a {
+                return None;
+            }
+            (a, b.saturating_add(1).min(total64))
+        }
+        (true, true) => return None,
+    };
+    (start < end && start < total64).then_some(start as usize..end as usize)
+}
+#[cfg(test)]
+mod range_tests {
+    use super::byte_range;
+    #[test]
+    fn single_byte_ranges_parse_and_clamp() {
+        assert_eq!(byte_range("bytes=0-9", 100), Some(0..10));
+        assert_eq!(byte_range("bytes=90-", 100), Some(90..100));
+        assert_eq!(byte_range("bytes=-10", 100), Some(90..100));
+        assert_eq!(byte_range("bytes=50-500", 100), Some(50..100));
+        for bad in [
+            "bytes=100-",
+            "bytes=-0",
+            "bytes=5-4",
+            "bytes=0-1,3-4",
+            "items=0-1",
+            "bytes=-",
+            "bytes= 0-1",
+        ] {
+            assert_eq!(byte_range(bad, 100), None, "{bad}");
+        }
     }
 }

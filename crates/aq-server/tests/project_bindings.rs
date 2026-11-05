@@ -6,6 +6,45 @@ use std::sync::{Arc, atomic::Ordering};
 use uuid::Uuid;
 mod common;
 use common::selection::*;
+
+#[tokio::test]
+async fn missing_intelligence_registry_refuses_new_selection_and_offer_fence_explicitly() {
+    use aq_server::intelligence::resolver::{self, ResolveRequest};
+    let f = selection_fixture().await;
+    let request = || ResolveRequest {
+        operation_id: Uuid::new_v4(),
+        lineage: f.lineage.clone(),
+        project: f.frozen.clone(),
+        compositions: f.input.compositions.clone(),
+        replacement: None,
+    };
+    let decision = resolver::resolve_trusted(&f.env.state, f.actor, request())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM intelligence_registry")
+        .execute(&f.env.pool)
+        .await
+        .unwrap();
+    let error = resolver::resolve_trusted(&f.env.state, f.actor, request())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, aq_server::error::AppError::Conflict(ref reason) if reason.contains("registry has not been installed")),
+        "{error:?}"
+    );
+    let mut tx = f.env.pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let error = resolver::fence_for_offer(&f.env.state, &mut tx, &decision)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, aq_server::error::AppError::Conflict(ref reason) if reason.contains("registry has not been installed")),
+        "{error:?}"
+    );
+}
 #[tokio::test]
 async fn revisioned_binding_replay_history_and_retained_snapshot_survive_updates() {
     let env = setup(false).await;
@@ -411,6 +450,7 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
         lineage: lineage.clone(),
         project: frozen.clone(),
         compositions: input.compositions.clone(),
+        replacement: None,
     };
     let decision = resolver::resolve_trusted(&env.state, actor, req)
         .await
@@ -444,6 +484,7 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
             lineage: lineage.clone(),
             project: frozen.clone(),
             compositions: input.compositions.clone(),
+            replacement: None,
         },
     )
     .await
@@ -496,7 +537,8 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
         observed,
         "fence must be observed waiting on the retained node lock"
     );
-    env.time.store((time + 2001) as i64, Ordering::SeqCst);
+    let expires = decision.outcome.resolved.as_ref().unwrap().expires_at_ms;
+    env.time.store(expires as i64, Ordering::SeqCst);
     held.rollback().await.unwrap();
     let error = waiting.await.unwrap().unwrap_err();
     assert!(format!("{error:?}").contains("expired"));
@@ -581,6 +623,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         lineage: lineage.clone(),
         project: frozen.clone(),
         compositions: input.compositions.clone(),
+        replacement: None,
     };
     assert!(
         resolver::resolve_for_project_policy(&env.state, request())
@@ -603,6 +646,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
                 },
             },
             retention_handle: Uuid::new_v4(),
+            placement: None,
         }],
     };
     let record = policy.project_policy_record(lineage.project_id).unwrap();
@@ -712,7 +756,8 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         "policy fence must actually wait for the locked policy"
     );
     let current_time = env.time.load(Ordering::SeqCst);
-    env.time.store(current_time + 2001, Ordering::SeqCst);
+    let expires = decision.outcome.resolved.as_ref().unwrap().expires_at_ms;
+    env.time.store(expires as i64, Ordering::SeqCst);
     held.rollback().await.unwrap();
     assert!(format!("{:?}", waiting.await.unwrap().unwrap_err()).contains("expired"));
     env.time.store(current_time, Ordering::SeqCst);
@@ -795,6 +840,7 @@ async fn policy_install_is_atomic_retains_tombstones_and_refuses_configuration_r
                 priority: 0,
                 source: source.clone(),
                 retention_handle: Uuid::new_v4(),
+                placement: None,
             },
             ProjectPolicy {
                 project_id: Uuid::new_v4(),
@@ -802,6 +848,7 @@ async fn policy_install_is_atomic_retains_tombstones_and_refuses_configuration_r
                 priority: 0,
                 source,
                 retention_handle: Uuid::new_v4(),
+                placement: None,
             },
         ],
     };
@@ -924,6 +971,7 @@ async fn committed_binding_installs_pending_policy_and_historical_ack_survives_r
                 },
             },
             retention_handle: Uuid::new_v4(),
+            placement: None,
         }],
     };
     let mut cfg = (*env.state.config).clone();

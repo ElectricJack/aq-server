@@ -1,5 +1,5 @@
 //! Exact nominal phase Prepare transport. No capability or provider is enabled by default.
-use crate::{AppState, error::AppError, worker_api};
+use crate::{AppState, error::AppError};
 use aq_admission::preparation_v2 as wire;
 use axum::{
     Json, Router,
@@ -56,7 +56,15 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, A
         ));
     }
     let nonce = crate::profiled_execution::control_api::nonce(request.headers())?;
-    let auth = worker_api::authenticate_context(state, request.headers()).await?;
+    let mut auth = crate::delegated_permits::runtime::authenticate_runner(
+        state,
+        request.headers(),
+        aq_admission_sandbox::sandbox::RunnerOperation::Prepared,
+        None,
+    )
+    .await?;
+    auth.upgrade =
+        crate::delegated_permits::handoff::header(request.headers(), "aq-permit-upgrade")?;
     let bytes = to_bytes(request.into_body(), wire::MAX_BYTES)
         .await
         .map_err(|_| AppError::PayloadTooLarge("phase Prepare body".into()))?;
@@ -92,11 +100,14 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, A
                     "phase Prepare outcome unknown: response envelope unavailable".into(),
                 )
             })?;
-            Ok(Json(document).into_response())
+            let mut response = Json(document).into_response();
+            crate::delegated_permits::handoff::response_header(state, &auth, &mut response).await?;
+            Ok(response)
         }};
     }
     match q {
         super::super::phase_profile::PrepareRequest::Frozen(q) => {
+            crate::delegated_permits::runtime::require_binding(&auth, &q.original.binding)?;
             // A shared URI becoming available for refresh must not activate the
             // frozen issuer without its own paired terminal qualification.
             if !super::policy::transport_enabled(state) {
@@ -110,6 +121,7 @@ async fn prepare_inner(state: &AppState, request: Request) -> Result<Response, A
             )
         }
         super::super::phase_profile::PrepareRequest::Refresh(q) => {
+            crate::delegated_permits::runtime::require_binding(&auth, &q.original.binding)?;
             if !super::super::phase_refresh_execution::policy::transport_enabled(state) {
                 return Err(AppError::Maintenance(
                     "refresh phase terminal owner is not installed".into(),

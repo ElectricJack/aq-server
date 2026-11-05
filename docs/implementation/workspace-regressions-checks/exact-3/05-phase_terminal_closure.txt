@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-d615e61739dac0a0)
+
+running 1 test
+test suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held ... 
+thread 'suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held' (2268323) panicked at crates/aq-server/tests/phase_terminal_closure.rs:69:6:
+called `Result::unwrap()` on an `Err` value: Conflict("original native offer unavailable or inconsistent")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.64s
+
+error: test failed, to rerun pass `-p aq-server --test phase_terminal_closure`

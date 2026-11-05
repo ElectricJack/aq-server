@@ -1,0 +1,93 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 3 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest -n 6 --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' scripts/test-git-candidate.py
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 6/6 workers
+6 workers [8 items]
+
+FFF...FF                                                                 [100%]
+=================================== FAILURES ===================================
+__________ CandidateTests.test_archive_traversal_refused_before_read ___________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+ValueError: source inventory mismatch
+
+During handling of the above exception, another exception occurred:
+
+self = <test-git-candidate.CandidateTests testMethod=test_archive_traversal_refused_before_read>
+
+    def test_archive_traversal_refused_before_read(self):
+        archive = self.root / 'vendor' / self.manifest['archive']
+        with tarfile.open(archive, 'w:gz') as tar:
+            tar.addfile(tarfile.TarInfo('../escape'))
+        self.manifest['archive_sha256'] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        self.save_manifest()
+>       with self.assertRaisesRegex(ValueError, 'unsafe source archive member'):
+E       AssertionError: "unsafe source archive member" does not match "source inventory mismatch"
+
+scripts/test-git-candidate.py:95: AssertionError
+__________________ CandidateTests.test_changed_binary_refused __________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+self = <test-git-candidate.CandidateTests testMethod=test_changed_binary_refused>
+
+    def test_changed_binary_refused(self):
+        with (self.root / 'vendor' / self.manifest['binary']).open('ab') as stream:
+            stream.write(b'changed')
+>       with self.assertRaisesRegex(ValueError, 'binary digest mismatch'):
+E       AssertionError: ValueError not raised
+
+scripts/test-git-candidate.py:63: AssertionError
+_______________ CandidateTests.test_changed_build_record_refused _______________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+self = <test-git-candidate.CandidateTests testMethod=test_changed_build_record_refused>
+
+    def test_changed_build_record_refused(self):
+        record = self.root / 'vendor' / self.manifest['build_record']
+        data = json.loads(record.read_text())
+        data['source_revision'] = '0' * 40
+        record.write_text(json.dumps(data))
+>       with self.assertRaisesRegex(ValueError, 'build record'):
+E       AssertionError: ValueError not raised
+
+scripts/test-git-candidate.py:71: AssertionError
+_______________ CandidateTests.test_outside_binary_path_refused ________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+self = <test-git-candidate.CandidateTests testMethod=test_outside_binary_path_refused>
+
+    def test_outside_binary_path_refused(self):
+        self.manifest['binary'] = '../outside'
+        (self.root / 'outside').write_bytes(b'release binary')
+        self.manifest['binary_sha256'] = hashlib.sha256(b'release binary').hexdigest()
+        self.save_manifest()
+>       with self.assertRaisesRegex(ValueError, 'unsafe.*path'):
+E       AssertionError: ValueError not raised
+
+scripts/test-git-candidate.py:79: AssertionError
+_______________ CandidateTests.test_retained_release_is_accepted _______________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+self = <test-git-candidate.CandidateTests testMethod=test_retained_release_is_accepted>
+
+    def test_retained_release_is_accepted(self):
+>       self.assertEqual(CHECKER.candidate(official=True)['version'], '0.2.0')
+E       AssertionError: '0.1.0' != '0.2.0'
+E       - 0.1.0
+E       ?   ^
+E       + 0.2.0
+E       ?   ^
+
+scripts/test-git-candidate.py:58: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test-git-candidate.py::CandidateTests::test_archive_traversal_refused_before_read
+FAILED scripts/test-git-candidate.py::CandidateTests::test_changed_binary_refused
+FAILED scripts/test-git-candidate.py::CandidateTests::test_changed_build_record_refused
+FAILED scripts/test-git-candidate.py::CandidateTests::test_outside_binary_path_refused
+FAILED scripts/test-git-candidate.py::CandidateTests::test_retained_release_is_accepted
+========================= 5 failed, 3 passed in 8.50s ==========================

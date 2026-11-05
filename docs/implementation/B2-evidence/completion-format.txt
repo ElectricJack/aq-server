@@ -1,0 +1,2 @@
+cargo fmt -p aq-server --check
+exit status: 0; no formatting differences

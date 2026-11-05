@@ -1,0 +1,44 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.22s
+     Running tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-b2e7905dfd218f1b)
+
+running 5 tests
+test overview_empty_and_bounded_project_sources_are_truthful ... ok
+test overview_ready_owner_preserves_samples_failures_and_binding_fence ... ok
+test overview_uncertain_operations_are_principal_and_scope_bound ... ok
+test overview_workers_use_configured_threshold_and_project_association ... ok
+test quota_unknown_is_not_zero ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.86s
+
+     Running tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-732d812296b4937e)
+
+running 3 tests
+test configured_graph_and_injected_review_owner_are_visible_only_to_owner ... ok
+test mounted_routes_and_absent_owners_have_granular_truthful_capabilities ... ok
+test unsupported_saved_graph_adapter_is_refused_before_upstream_io ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.47s
+
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-5c8907e921dd9f29)
+
+running 7 tests
+test acl_expiry_during_database_wait_refuses_read ... ok
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test search_validates_queries_and_returns_all_groups ... ok
+test session_lifecycle_reports_are_historical_acl_scoped_and_never_live_observation ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.24s
+
+     Running tests/dashboard_search.rs (target/debug/deps/dashboard_search-2febf8ee5bf537fa)
+
+running 3 tests
+test search_session_cursor_refuses_revoked_acl_partition ... ok
+test search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound ... ok
+test search_session_visibility_uses_exact_current_acl_and_scope ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+

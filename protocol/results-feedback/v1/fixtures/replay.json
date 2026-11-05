@@ -1,0 +1,238 @@
+{
+  "original": {
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "expected_version": "1",
+    "body": "Fix the caption",
+    "anchor": {
+      "kind": "result"
+    },
+    "follow": true,
+    "result_id": "00000000-0000-4000-8000-000000000002",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "identical": {
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "result_id": "00000000-0000-4000-8000-000000000002",
+    "follow": true,
+    "anchor": {
+      "kind": "result"
+    },
+    "body": "Fix the caption",
+    "expected_version": "1",
+    "operation_id": "00000000-0000-4000-8000-000000000001"
+  },
+  "changed": {
+    "operation_id": "00000000-0000-4000-8000-000000000001",
+    "expected_version": "1",
+    "body": "Different intent",
+    "anchor": {
+      "kind": "result"
+    },
+    "follow": true,
+    "result_id": "00000000-0000-4000-8000-000000000002",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "identical_disposition": "confirmed",
+  "changed_status": 409,
+  "canonical_sha256": "c6d6e4b7a587483b67260e96483b2b6edc2ef94b03df2b4ffb92ee3a21e51948",
+  "read_reload": {
+    "before": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": {
+            "resolved_by": "00000000-0000-4000-8000-000000000010",
+            "reason": "Checked exact follow-up",
+            "follow_up": {
+              "result_id": "00000000-0000-4000-8000-000000000002",
+              "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "follow_up_report_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    },
+    "after_identical_replay": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": {
+            "resolved_by": "00000000-0000-4000-8000-000000000010",
+            "reason": "Checked exact follow-up",
+            "follow_up": {
+              "result_id": "00000000-0000-4000-8000-000000000002",
+              "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "follow_up_report_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    },
+    "after_reload": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": {
+            "resolved_by": "00000000-0000-4000-8000-000000000010",
+            "reason": "Checked exact follow-up",
+            "follow_up": {
+              "result_id": "00000000-0000-4000-8000-000000000002",
+              "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "follow_up_report_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

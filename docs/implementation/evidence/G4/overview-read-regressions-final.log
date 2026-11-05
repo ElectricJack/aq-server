@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-7f9c2e86d9485c39)
+
+running 3 tests
+test configured_graph_and_injected_review_owner_are_visible_only_to_owner ... ok
+test mounted_routes_and_absent_owners_have_granular_truthful_capabilities ... ok
+test unsupported_saved_graph_adapter_is_refused_before_upstream_io ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.79s
+
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-8e5b4124fb0bb9e7)
+
+running 6 tests
+test acl_expiry_during_database_wait_refuses_read ... ok
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+test session_lifecycle_reports_are_historical_acl_scoped_and_never_live_observation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.85s
+

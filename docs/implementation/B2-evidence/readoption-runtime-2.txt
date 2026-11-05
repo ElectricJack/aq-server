@@ -1,0 +1,38 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 53s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-f468392aaff3d0b7)
+
+running 5 tests
+test delegated_runner_scope_is_rechecked_after_authentication ... ok
+test accept_issues_and_grant_atomically_upgrades_same_permit ... FAILED
+test node_reboot_requires_readoption_before_renewal_extends ... FAILED
+test readoption_refuses_backend_template_capability_changes_and_expired_grants ... FAILED
+test reconstructed_auth_fences_revocation_and_stale_boot ... ok
+
+failures:
+
+---- accept_issues_and_grant_atomically_upgrades_same_permit stdout ----
+
+thread 'accept_issues_and_grant_atomically_upgrades_same_permit' (3233588) panicked at crates/aq-server/src/lib.rs:362:10:
+Overlapping method route. Handler for `POST /v2/worker/register` already exists
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- node_reboot_requires_readoption_before_renewal_extends stdout ----
+
+thread 'node_reboot_requires_readoption_before_renewal_extends' (3233683) panicked at crates/aq-server/src/lib.rs:362:10:
+Overlapping method route. Handler for `POST /v2/worker/register` already exists
+
+---- readoption_refuses_backend_template_capability_changes_and_expired_grants stdout ----
+
+thread 'readoption_refuses_backend_template_capability_changes_and_expired_grants' (3233697) panicked at crates/aq-server/src/lib.rs:362:10:
+Overlapping method route. Handler for `POST /v2/worker/register` already exists
+
+
+failures:
+    accept_issues_and_grant_atomically_upgrades_same_permit
+    node_reboot_requires_readoption_before_renewal_extends
+    readoption_refuses_backend_template_capability_changes_and_expired_grants
+
+test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s
+
+error: test failed, to rerun pass `-p aq-server --test delegated_permit_runtime`

@@ -1,0 +1,127 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "Some online workers advertise no slot total",
+    "state": "partial"
+  },
+  "data": {
+    "nodes": [
+      {
+        "backend_kind": "boat",
+        "capability_fresh_until": "1970-01-01T00:17:10.000Z",
+        "capability_observed_at": "1970-01-01T00:16:39.995Z",
+        "eligibility": {
+          "reasons": [],
+          "state": "eligible"
+        },
+        "health": "online",
+        "last_seen_at": "1970-01-01T00:16:40.000Z",
+        "name": "boat-1",
+        "node": {
+          "id": "5d4cad0e-5f6c-4821-9ebf-b12de2c7dc0f",
+          "type": "worker"
+        },
+        "slots": {
+          "idle": 2,
+          "occupied": 0,
+          "total": 2
+        },
+        "storage": {
+          "disk_free_bytes": 50,
+          "disk_reserved_bytes": 0,
+          "disk_total_bytes": 100,
+          "disk_used_bytes": 50,
+          "observed_at": "1970-01-01T00:16:39.999Z",
+          "preserved_bytes": 7,
+          "preserved_count": 3,
+          "used_bps": 5000
+        }
+      },
+      {
+        "backend_kind": null,
+        "capability_fresh_until": null,
+        "capability_observed_at": null,
+        "eligibility": {
+          "reasons": [
+            "capability_unreported"
+          ],
+          "state": "ineligible"
+        },
+        "health": "online",
+        "last_seen_at": "1970-01-01T00:16:40.000Z",
+        "name": "profiled-fixture",
+        "node": {
+          "id": "88cd3ba4-eb9e-41e0-83d2-9500b177b8bb",
+          "type": "worker"
+        },
+        "slots": {
+          "idle": null,
+          "occupied": 0,
+          "total": null
+        },
+        "storage": null
+      }
+    ],
+    "providers": [
+      {
+        "account_ref": "acct-disabled",
+        "available_nodes": 0,
+        "fresh_until": null,
+        "observed_at": null,
+        "provider_id": "openai",
+        "reason": "account_disabled",
+        "state": "unavailable"
+      },
+      {
+        "account_ref": "acct-reported",
+        "available_nodes": 1,
+        "fresh_until": "1970-01-01T00:17:10.000Z",
+        "observed_at": "1970-01-01T00:16:39.995Z",
+        "provider_id": "openai",
+        "reason": null,
+        "state": "available"
+      },
+      {
+        "account_ref": "acct-silent",
+        "available_nodes": 0,
+        "fresh_until": null,
+        "observed_at": null,
+        "provider_id": "openai",
+        "reason": "no_fresh_node_report",
+        "state": "unknown"
+      }
+    ],
+    "slots": {
+      "coverage": {
+        "reason": "Some online workers advertise no slot total",
+        "state": "partial"
+      },
+      "idle": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "observed_at": "1970-01-01T00:16:40.000Z",
+      "occupied": {
+        "accuracy": "exact",
+        "value": 0
+      },
+      "total": {
+        "accuracy": "unknown",
+        "value": null
+      }
+    }
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "13e25b3f-4a4d-4539-8e53-69467f430f0d",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

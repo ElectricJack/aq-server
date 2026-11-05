@@ -13,6 +13,13 @@ use axum::response::{IntoResponse, Response};
 use crate::identity::IdentityError;
 use crate::store::StoreError;
 
+/// Classification only; never contains an internal message or request data.
+#[derive(Clone, Debug)]
+pub(crate) struct RefusalContext {
+    pub status: u16,
+    pub code: String,
+}
+
 #[derive(Debug)]
 pub enum AppError {
     Unauthenticated(String),
@@ -21,7 +28,12 @@ pub enum AppError {
     IdentityUnavailable(String),
     NotFound(String),
     BadRequest(String),
+    InputDeadline,
     Conflict(String),
+    DefinitionIdentityConflict,
+    /// Fixed endpoint diagnostic; never includes database or terminal payloads.
+    TerminalRelayFailure(&'static str),
+    ExecutionCancelled,
     PayloadTooLarge(String),
     /// 426 with a `CompatibilityError` body.
     UnsupportedProtocol(CompatibilityError),
@@ -44,7 +56,10 @@ impl AppError {
             AppError::IdentityUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::InputDeadline => StatusCode::UNPROCESSABLE_ENTITY,
+            AppError::Conflict(_)
+            | AppError::ExecutionCancelled
+            | AppError::DefinitionIdentityConflict => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::UnsupportedProtocol(_) => StatusCode::UPGRADE_REQUIRED,
             AppError::InvalidCredential(_) | AppError::CredentialRevoked => {
@@ -56,7 +71,9 @@ impl AppError {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             AppError::InvalidVersion(_) => StatusCode::BAD_REQUEST,
-            AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::Internal | AppError::TerminalRelayFailure(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
@@ -68,7 +85,20 @@ impl AppError {
             AppError::IdentityUnavailable(m) => (IDENTITY_UNAVAILABLE, m.clone()),
             AppError::NotFound(m) => (NOT_FOUND, m.clone()),
             AppError::BadRequest(m) => (BAD_REQUEST, m.clone()),
+            AppError::InputDeadline => (
+                "input_deadline",
+                aq_terminal_relay::Error::InputDeadline.to_string(),
+            ),
             AppError::Conflict(m) => (CONFLICT, m.clone()),
+            AppError::DefinitionIdentityConflict => (
+                "admission_definition_identity_conflict",
+                "Definition identity/version already retains different bytes; publish a new definition version".into(),
+            ),
+            AppError::TerminalRelayFailure(code) => (
+                *code,
+                "Terminal relay failed; retry the request and inspect server diagnostics if it persists".into(),
+            ),
+            AppError::ExecutionCancelled => (CONFLICT, "execution cancelled".into()),
             AppError::PayloadTooLarge(m) => (BAD_REQUEST, m.clone()),
             AppError::UnsupportedProtocol(c) => (c.error.as_str(), c.message.clone()),
             AppError::InvalidCredential(m) => (INVALID_CREDENTIAL, m.clone()),
@@ -95,10 +125,21 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        if matches!(self, AppError::InputDeadline) {
+            return crate::dashboard_api::errors::ApiError::from(self).into_response();
+        }
         if let AppError::UnsupportedProtocol(c) = &self {
             return (self.status(), Json(c.clone())).into_response();
         }
-        (self.status(), Json(self.to_api_error())).into_response()
+        let body = self.to_api_error();
+        let context = RefusalContext {
+            status: self.status().as_u16(),
+            code: body.error.clone(),
+        };
+        tracing::warn!(status=context.status, code=%context.code, "API request refused");
+        let mut response = (self.status(), Json(body)).into_response();
+        response.extensions_mut().insert(context);
+        response
     }
 }
 

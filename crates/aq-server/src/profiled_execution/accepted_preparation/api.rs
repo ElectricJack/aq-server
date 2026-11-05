@@ -52,9 +52,10 @@ async fn accept_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, super::super::control_api::Error> {
-    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let mut auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    auth.issuance = crate::delegated_permits::handoff::header(&headers, "aq-permit-issuance")?;
     let nonce = super::super::control_api::nonce(&headers)?;
-    Ok(match super::super::phase_profile::decode_accept(&body)? {
+    let mut response = match super::super::phase_profile::decode_accept(&body)? {
         super::super::phase_profile::AcceptRequest::Frozen(q) => Json(Document::AcceptedDelivery(
             Box::new(accept(&state, &auth, &q, nonce).await?),
         ))
@@ -65,5 +66,7 @@ async fn accept_request(
             )),
         )
         .into_response(),
-    })
+    };
+    crate::delegated_permits::handoff::response_header(&state, &auth, &mut response).await?;
+    Ok(response)
 }

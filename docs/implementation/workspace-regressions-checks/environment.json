@@ -1,0 +1,31 @@
+{
+  "base_main": "a860d3e03a6c114eaad5f32e5726f46f46fddcaf",
+  "synced_main": "59e6b56690872da084250c0a86a15412bf6a9424",
+  "workspace_validation_head": "35ccd683cfe77320cb01ac83a3bde7ea7f2ab957",
+  "cargo_build_jobs": 2,
+  "cargo_profile_dev_debug": 0,
+  "cargo_profile_test_debug": 0,
+  "cargo_incremental": 0,
+  "serial_test_threads": 1,
+  "workspace_test_threads": 2,
+  "exploratory_database": {
+    "host": "127.0.0.1",
+    "port": 55432,
+    "container": "agent-q-test-db",
+    "isolation": "shared disposable PostgreSQL"
+  },
+  "final_database": {
+    "host": "127.0.0.1",
+    "port": 20533,
+    "container": "aq-fair-zenith-27-test-db",
+    "isolation": "task-specific disposable PostgreSQL",
+    "image": "postgres:17-bookworm",
+    "image_id": "sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+    "storage": "tmpfs",
+    "endpoint_exceptions": "23 protected-engine fixture failures hardcode PostgreSQL 127.0.0.1:55432; see playbook-endpoint-failures.json. Assertions unchanged; baseline not rerun; supervisor directed acceptance-only verification."
+  },
+  "graph_sha256": "da79578f79181b8f9c4e2ecb393a04d441a6eb5fcd952c976bef436199c93f21",
+  "graph_pin_reference": "../A3b-checks/graph-test-binary.json",
+  "workspace_synced_main": "c802fed50bd579009b13a4cc11f77af52fe88d22",
+  "final_named_validation_head": "28a065027e969b37527b39991cacbbd787c2cf77"
+}

@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 1m 54s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-113d5f2b40a540bf)
+
+running 7 tests
+test store::central37::data::tests::retained_checker_reuses_frozen_predicates_without_writing_or_returning ... ok
+test store::central37_tests::corrupt_pre37_global_body_or_orphan_original_proof_refuses_atomic_upgrade ... ok
+test store::central37_tests::fresh37_actual36_upgrade_preserves_global_mail_media_and_refuses_old36_reader ... ok
+test store::central37_tests::missing_disabled_wrong_or_non_deferred37_guards_refuse_without_repair ... ok
+test store::central37_tests::post37_source_mutation_or_head_rewind_is_refused_without_repair ... ok
+test store::central37_tests::retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_reenabled ... ok
+test store::central37_tests::same_named37_checks_keys_indexes_fks_and_nullability_cannot_bypass_startup ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 186 filtered out; finished in 52.32s

@@ -1,5 +1,6 @@
 //! No-Started phase closure: revoke permission, retain task/source/effect holds.
 use super::common::{self, canonical, conflict, database, now};
+use super::wire;
 use crate::{
     AppState,
     error::AppError,
@@ -7,7 +8,6 @@ use crate::{
     worker_api::AuthenticatedNode,
 };
 use aq_admission::granted_closure::{Disposition, Evidence};
-use super::wire;
 use sqlx::Row;
 
 pub async fn record(

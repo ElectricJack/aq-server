@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/schema32_phase_execution.rs (target/debug/deps/schema32_phase_execution-6998a29bfb9346ac)
+
+running 1 test
+test current32_missing_execution_history_refuses_reopen_without_repair ... 
+thread 'current32_missing_execution_history_refuses_reopen_without_repair' (2119267) panicked at crates/aq-server/tests/schema32_phase_execution.rs:136:10:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "2BP01", message: "cannot drop table profiled_phase_execution_grants because other objects depend on it", detail: Some("constraint profiled_phase_terminal_capacity_attempt_id_fkey on table profiled_phase_terminal_capacity depends on table profiled_phase_execution_grants\nconstraint profiled_launch_closures_phase_origin_fk on table profiled_launch_closures depends on table profiled_phase_execution_grants\nconstraint profiled_result_execution_origin_fk on table profiled_result_reports depends on table profiled_phase_execution_grants"), hint: Some("Use DROP ... CASCADE to drop the dependent objects too."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("dependency.c"), line: Some(1148), routine: Some("reportDependentObjects") })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    current32_missing_execution_history_refuses_reopen_without_repair
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.61s
+
+error: test failed, to rerun pass `-p aq-server --test schema32_phase_execution`

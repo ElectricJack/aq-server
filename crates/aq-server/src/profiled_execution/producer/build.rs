@@ -2,7 +2,7 @@
 use super::{
     artifacts::{RetainedSet, canonical, reference},
     compose::Compiled,
-    now, refused, startup,
+    now, on_heap, refused, startup,
 };
 use crate::{
     AppState,
@@ -52,12 +52,14 @@ fn artifact(source: &aq_session_api::Source) -> Result<ArtifactRef, AppError> {
         digest: serde_json::from_value(json!(source.digest)).map_err(|_| refused())?,
     })
 }
-fn capabilities() -> Result<Vec<wire::Capability>, AppError> {
+/// Offer capabilities; `[2..]` is the manifest's harness list, which carries
+/// exactly one confinement capability for the frozen confinement mode.
+fn capabilities(mode: aq_selection::ConfinementMode) -> Result<Vec<wire::Capability>, AppError> {
     [
         "aq.profiled-launch",
         "aq.terminal",
         "aq.harness.startup-context",
-        "aq.harness.confined-worktree",
+        mode.capability(),
         "aq.harness.stop",
     ]
     .into_iter()
@@ -171,6 +173,29 @@ pub struct Assembly<'a> {
     pub logical_identity: &'a str,
     pub generation: u64,
 }
+/// Re-derives the frozen confinement mode from the selection's placement facts
+/// and the selected execution profile's confinement permission.
+fn confinement_mode(
+    compiled: &Compiled,
+    composition: &aq_profiles::FrozenComposition,
+    decision: &Decision,
+) -> Result<aq_selection::ConfinementMode, AppError> {
+    let key = composition
+        .execution_profile
+        .identity
+        .strip_prefix("execution:")
+        .ok_or_else(refused)?;
+    let execution = compiled
+        .catalog
+        .artifact()
+        .catalog
+        .execution
+        .iter()
+        .find(|e| aq_profiles::key(&e.id, e.version) == key)
+        .ok_or_else(refused)?;
+    aq_selection::admit_confinement(decision.inputs.placement.as_ref(), &execution.confinement)
+        .map_err(|_| refused())
+}
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
         state,
@@ -186,7 +211,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         generation,
     } = input;
     let selected: &ResolvedSelection = decision.outcome.resolved.as_ref().ok_or_else(refused)?;
-    if decision.inputs.budget.attempts_started != 0
+    if (decision.inputs.budget.attempts_started != 0 && decision.inputs.replacement.is_none())
         || decision
             .inputs
             .project
@@ -287,45 +312,55 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     for definition in definitions {
+        on_heap(|| {
+            set.retain(
+                state,
+                OwnerKind::Composition,
+                ArtifactKind::Definition,
+                definition.artifact().clone(),
+                definition.body().as_bytes(),
+            )
+        })
+        .await?;
+    }
+    let (catalog, mut modules) =
+        on_heap(|| catalog_definitions(state, &mut set, &compiled)).await?;
+    let startup = on_heap(|| {
+        startup::retain(
+            state,
+            &mut set,
+            &composition,
+            &counted,
+            &compiled.projection,
+            fact,
+        )
+    })
+    .await?;
+    modules.extend(startup.modules);
+    let policy_ref = policy.artifact().map_err(|_| refused())?;
+    let policy_bytes = canonical(&policy)?;
+    on_heap(|| {
         set.retain(
             state,
             OwnerKind::Composition,
             ArtifactKind::Definition,
-            definition.artifact().clone(),
-            definition.body().as_bytes(),
+            policy_ref.clone(),
+            &policy_bytes,
         )
-        .await?;
-    }
-    let (catalog, mut modules) = catalog_definitions(state, &mut set, &compiled).await?;
-    let startup = startup::retain(
-        state,
-        &mut set,
-        &composition,
-        &counted,
-        &compiled.projection,
-        fact,
-    )
-    .await?;
-    modules.extend(startup.modules);
-    let policy_ref = policy.artifact().map_err(|_| refused())?;
-    set.retain(
-        state,
-        OwnerKind::Composition,
-        ArtifactKind::Definition,
-        policy_ref.clone(),
-        &canonical(&policy)?,
-    )
+    })
     .await?;
     modules.push(policy_ref);
     let composition_bytes = canonical(&composition)?;
     let composition_ref = reference("aq.frozen-composition", &composition_bytes)?;
-    set.retain(
-        state,
-        OwnerKind::Composition,
-        ArtifactKind::Composition,
-        composition_ref,
-        &composition_bytes,
-    )
+    on_heap(|| {
+        set.retain(
+            state,
+            OwnerKind::Composition,
+            ArtifactKind::Composition,
+            composition_ref,
+            &composition_bytes,
+        )
+    })
     .await?;
     let model = aq_profiles::ResolvedGraphModel {
         provider: selected.choice.provider.clone(),
@@ -357,32 +392,38 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             .map_err(|_| refused())?,
         digest: Digest::of(&profile_bytes),
     };
-    set.retain(
-        state,
-        OwnerKind::Composition,
-        ArtifactKind::Definition,
-        profile_ref.clone(),
-        &profile_bytes,
-    )
+    on_heap(|| {
+        set.retain(
+            state,
+            OwnerKind::Composition,
+            ArtifactKind::Definition,
+            profile_ref.clone(),
+            &profile_bytes,
+        )
+    })
     .await?;
     let selection_bytes = canonical(selected)?;
     let selection_ref = reference("aq.sealed-selection", &selection_bytes)?;
-    set.retain(
-        state,
-        OwnerKind::Selection,
-        ArtifactKind::Selection,
-        selection_ref.clone(),
-        &selection_bytes,
-    )
+    on_heap(|| {
+        set.retain(
+            state,
+            OwnerKind::Selection,
+            ArtifactKind::Selection,
+            selection_ref.clone(),
+            &selection_bytes,
+        )
+    })
     .await?;
     let source_retention_id =
         Uuid::new_v5(&source_operation, &canonical(&(&source.artifact, until))?);
-    let source_retained = crate::profiled_execution::source::retain_admission(
-        state,
-        source_retention_id,
-        &source,
-        until,
-    )
+    let source_retained = on_heap(|| {
+        crate::profiled_execution::source::retain_admission(
+            state,
+            source_retention_id,
+            &source,
+            until,
+        )
+    })
     .await?;
     if set.entries.len() >= 126
         || set
@@ -450,13 +491,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     };
     outcome.validate().map_err(|_| refused())?;
     let outcome_ref = outcome.artifact().map_err(|_| refused())?;
-    set.retain(
-        state,
-        OwnerKind::Outcome,
-        ArtifactKind::Outcome,
-        outcome_ref.clone(),
-        &outcome.canonical_bytes().map_err(|_| refused())?,
-    )
+    let outcome_bytes = outcome.canonical_bytes().map_err(|_| refused())?;
+    on_heap(|| {
+        set.retain(
+            state,
+            OwnerKind::Outcome,
+            ArtifactKind::Outcome,
+            outcome_ref.clone(),
+            &outcome_bytes,
+        )
+    })
     .await?;
     let spec = ProfiledExecutionSpec {
         schema_version: 1,
@@ -473,13 +517,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     };
     outcome.validate_against(&spec).map_err(|_| refused())?;
     let spec_ref = spec.artifact().map_err(|_| refused())?;
-    set.retain(
-        state,
-        OwnerKind::Composition,
-        ArtifactKind::Composition,
-        spec_ref.clone(),
-        &spec.canonical_bytes().map_err(|_| refused())?,
-    )
+    let spec_bytes = spec.canonical_bytes().map_err(|_| refused())?;
+    on_heap(|| {
+        set.retain(
+            state,
+            OwnerKind::Composition,
+            ArtifactKind::Composition,
+            spec_ref.clone(),
+            &spec_bytes,
+        )
+    })
     .await?;
     let requested = composition
         .requested_permissions
@@ -493,7 +540,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .iter()
         .map(scope)
         .collect::<Result<Vec<_>, _>>()?;
-    let required_caps = capabilities()?;
+    let mode = confinement_mode(&compiled, &composition, &decision)?;
+    let required_caps = capabilities(mode)?;
     let spending_budget = project
         .ceilings
         .cost_limit_microunits
@@ -675,4 +723,35 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         decision,
         deadline,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aq_selection::ConfinementMode::{Container, Native};
+
+    #[test]
+    fn manifest_carries_exactly_one_confinement_capability() {
+        for (mode, want, other) in [
+            (
+                Native,
+                wire::NATIVE_CONFINEMENT_CAPABILITY,
+                wire::CONTAINER_CONFINEMENT_CAPABILITY,
+            ),
+            (
+                Container,
+                wire::CONTAINER_CONFINEMENT_CAPABILITY,
+                wire::NATIVE_CONFINEMENT_CAPABILITY,
+            ),
+        ] {
+            let caps = capabilities(mode).unwrap();
+            let harness: Vec<&str> = caps[2..].iter().map(|c| c.id.as_str()).collect();
+            assert_eq!(
+                harness,
+                ["aq.harness.startup-context", want, "aq.harness.stop"]
+            );
+            assert!(!harness.contains(&other));
+            wire::require_capabilities(&caps[2..], &caps).unwrap();
+        }
+    }
 }

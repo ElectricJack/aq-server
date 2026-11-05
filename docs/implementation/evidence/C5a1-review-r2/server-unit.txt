@@ -1,0 +1,53 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 0 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/c5a1/test_cargo.py -n 1 -s
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 1/1 worker
+1 worker [1 item]
+
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-session-api)
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-lifecycle-api)
+   Compiling aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-profiles)
+   Compiling png v0.18.1 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/png-0.18.1-aq1)
+   Compiling aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-admission)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-terminal-relay-protocol)
+   Compiling aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-release)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-phase-terminal-protocol)
+   Compiling aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-terminal-relay)
+   Compiling aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-playbook-host)
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-notifications)
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-result-media)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-selection)
+   Compiling aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-observation-api)
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-observation-admission)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-accounting)
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-central-authority)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-playbooks-compiler v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13m 31s
+     Running unittests src/lib.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/target/debug/deps/aq_server-a22abeff305308c3)
+
+running 4 tests
+test intelligence::registry::tests::credential_legacy_default_config_digest_is_unchanged ... ok
+test intelligence::registry::tests::credential_kind_and_backend_policy_change_registry_digest ... ok
+test intelligence::registry::tests::credential_narrowed_backend_order_does_not_change_digest ... ok
+test profiled_execution::material::tests::credential_backend_policy_gates_provisioning_before_private_reads ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.01s
+
+.
+======================== 1 passed in 821.51s (0:13:41) =========================

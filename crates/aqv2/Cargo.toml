@@ -1,0 +1,19 @@
+[package]
+name = "aqv2"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+aq-human-http = { path = "../aq-human-http", version = "=0.1.0" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+nix.workspace = true
+
+[dev-dependencies]
+aq-human-http = { path = "../aq-human-http", version = "=0.1.0", features = ["loopback-development"] }
+axum.workspace = true
+tempfile.workspace = true

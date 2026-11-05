@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "c9349a468bedb380282e085a7150b8f4c33752ed",
+  "publication_profile": "exact D4 AQ host catalog 1.0.0 data bundle (contracts/aq-host); decoded with the already vendored aq-playbooks model (byte-identical crates at 0173673); no path or repository dependencies",
+  "archive_format": "git archive --format=tar c9349a46 contracts/aq-host",
+  "archive_sha256": "63d0989835ddb33ee005bce898db7eba9082367c1236b30d79d8ae7829c640a5",
+  "catalog_version": "1.0.0",
+  "catalog_fingerprint": "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1",
+  "vendor_root": "vendor/aq-host-catalog-1.0.0",
+  "files": [
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "bytes": 1808,
+      "sha256": "411c213fc025e52a9982d34ec3d0661d2d5b579174e38ec457a1b835b022be19"
+    },
+    {
+      "path": "fixtures.json",
+      "mode": "100644",
+      "bytes": 7300,
+      "sha256": "865e234d827a9e1e1fa482d67d6ab252f211f48f420b690a8dab971861d1e21b"
+    },
+    {
+      "path": "manifest.json",
+      "mode": "100644",
+      "bytes": 586,
+      "sha256": "90bfb254a9d5dd96509de9ab2cc0918184602d10e0328a4ba70ad708319b1227"
+    },
+    {
+      "path": "registry.json",
+      "mode": "100644",
+      "bytes": 79253,
+      "sha256": "69c4e3482ecc522d0ba50ed78f00b77c0587e16b845bc4a93092381cea1d6d37"
+    }
+  ]
+}

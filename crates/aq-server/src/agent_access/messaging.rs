@@ -2,6 +2,7 @@
 use super::*;
 use axum::routing::post;
 pub mod global;
+pub(crate) mod session_action;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -19,9 +20,13 @@ pub(crate) enum Recipient {
         attempt_id: Uuid,
         generation: u64,
     },
+    /// bold-stone-51: the singleton supervisor conversation mailbox. Only an
+    /// agent session may address it here; owners use the conversation API.
+    GlobalSupervisor { conversation_id: Uuid },
 }
 impl Recipient {
-    fn scope(&self) -> (Uuid, Uuid, Uuid) {
+    /// Task scope of a task or session mailbox. The supervisor mailbox has none.
+    fn task_scope(&self) -> Option<(Uuid, Uuid, Uuid)> {
         match *self {
             Self::Task {
                 workspace_id,
@@ -33,14 +38,25 @@ impl Recipient {
                 project_id,
                 task_id,
                 ..
-            } => (workspace_id, project_id, task_id),
+            } => Some((workspace_id, project_id, task_id)),
+            Self::GlobalSupervisor { .. } => None,
         }
     }
-    fn key(&self) -> Result<String> {
+    fn scope(&self) -> Result<(Uuid, Uuid, Uuid)> {
+        self.task_scope().ok_or(Error("not_found"))
+    }
+    pub(in crate::agent_access) fn key(&self) -> Result<String> {
         digest(&serde_json::to_value(self)?)
     }
     fn validate(&self) -> Result<()> {
-        let (w, p, t) = self.scope();
+        if let Self::GlobalSupervisor { conversation_id } = self {
+            return if conversation_id.is_nil() {
+                Err(Error("invalid_request"))
+            } else {
+                Ok(())
+            };
+        }
+        let (w, p, t) = self.scope()?;
         if [w, p, t].iter().any(Uuid::is_nil) {
             return Err(Error("invalid_request"));
         }
@@ -130,7 +146,11 @@ fn sender_key(sender: &Value) -> Result<String> {
 }
 fn scope(p: &Principal, r: &Recipient, own: bool) -> Result<()> {
     r.validate()?;
-    let (w, project, task) = r.scope();
+    // Any bound session may write to the supervisor; none may read its mailbox.
+    if let Recipient::GlobalSupervisor { .. } = r {
+        return if own { Err(Error("not_found")) } else { Ok(()) };
+    }
+    let (w, project, task) = r.scope()?;
     if p.binding["workspace_id"] != json!(w)
         || p.binding["project_id"] != json!(project)
         || !p.readable(&json!(task))
@@ -233,16 +253,31 @@ async fn send(
     {
         return Err(Error("invalid_request"));
     }
+    let supervisor = match request.recipient {
+        // Owners write through the conversation API under its own receipt contract.
+        Recipient::GlobalSupervisor { .. } if sender["kind"] != "session" => {
+            return Err(Error("not_found"));
+        }
+        Recipient::GlobalSupervisor { conversation_id } if request.thread_id != conversation_id => {
+            return Err(Error("invalid_request"));
+        }
+        Recipient::GlobalSupervisor { conversation_id } => Some(conversation_id),
+        _ => None,
+    };
     let payload = digest(&json!({"kind":"send","request":request,"sender":sender}))?;
     let actor = sender_key(&sender)?;
     if let Some(r) = replay(tx, &actor, request.operation_id, &payload).await? {
         return Ok(r);
     }
-    validate_session(tx, &request.recipient).await?;
-    let (workspace, project, task) = request.recipient.scope();
-    let known: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_launch_bindings WHERE binding->>'workspace_id'=$1 AND binding->>'project_id'=$2 AND binding->>'task_id'=$3)").bind(workspace.to_string()).bind(project.to_string()).bind(task.to_string()).fetch_one(&mut **tx).await?;
-    if !known {
-        return Err(Error("not_found"));
+    if let Some(conversation) = supervisor {
+        admit_supervisor(tx, conversation, request.body.len()).await?;
+    } else {
+        validate_session(tx, &request.recipient).await?;
+        let (workspace, project, task) = request.recipient.scope()?;
+        let known: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_launch_bindings WHERE binding->>'workspace_id'=$1 AND binding->>'project_id'=$2 AND binding->>'task_id'=$3)").bind(workspace.to_string()).bind(project.to_string()).bind(task.to_string()).fetch_one(&mut **tx).await?;
+        if !known {
+            return Err(Error("not_found"));
+        }
     }
     let cursor = append(
         tx,
@@ -261,6 +296,26 @@ async fn send(
     let response = json!({"api_version":1,"operation_id":request.operation_id,"message_id":request.message_id,"recipient":request.recipient,"thread_id":request.thread_id,"cursor":cursor.to_string(),"disposition":"queued","node_delivery":"not_attempted","harness_delivery":"not_attempted","notification_delivery":"not_attempted"});
     receipt(tx, &actor, request.operation_id, &payload, &response).await?;
     Ok(response)
+}
+/// Lock the singleton conversation, require the current one, and reserve its
+/// retained capacity exactly as an owner admission does.
+async fn admit_supervisor(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+    body: usize,
+) -> Result<()> {
+    let current: Option<(Uuid, i64)> = sqlx::query_as(
+        "SELECT conversation_id,revision FROM global_supervisor_conversation WHERE singleton FOR UPDATE",
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    if current != Some((conversation, 1)) {
+        return Err(Error("not_found"));
+    }
+    let reserved = i64::try_from(body + 4096).map_err(|_| Error("invalid_request"))?;
+    let row: Option<Uuid> = sqlx::query_scalar("UPDATE global_supervisor_conversation SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton AND retained_operations<$2 AND retained_bytes<=$3-$1 RETURNING conversation_id")
+        .bind(reserved).bind(global::MAX_OPERATIONS).bind(global::MAX_BYTES).fetch_optional(&mut **tx).await?;
+    row.map(|_| ()).ok_or(Error("overloaded"))
 }
 // The caller must first authorize its exact recipient domain. This primitive
 // owns the one mailbox order/body boundary; it has no public request surface.
@@ -326,12 +381,87 @@ pub(crate) async fn owner_send_in_tx(
     }
     send(tx, request, json!({"kind":"owner","user_id":owner_id}), at)
         .await
-        .map_err(|error| match error.0 {
-            "invalid_request" => OwnerSendError::Invalid,
-            "not_found" | "stale_generation" => OwnerSendError::NotFound,
-            "id_conflict" => OwnerSendError::Conflict,
-            _ => OwnerSendError::Unknown,
-        })
+        .map_err(send_error)
+}
+fn send_error(error: Error) -> OwnerSendError {
+    match error.0 {
+        "invalid_request" => OwnerSendError::Invalid,
+        "not_found" | "stale_generation" => OwnerSendError::NotFound,
+        "id_conflict" => OwnerSendError::Conflict,
+        _ => OwnerSendError::Unknown,
+    }
+}
+/// H3 stall nudges from AQ itself. The sender is the fixed system component,
+/// never a caller-supplied principal; the ladder action ID is the operation ID.
+pub(crate) async fn system_send_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    request: Send,
+    at: u64,
+) -> std::result::Result<Value, OwnerSendError> {
+    send(
+        tx,
+        request,
+        json!({"kind":"system","component":"stall_ladder"}),
+        at,
+    )
+    .await
+    .map_err(send_error)
+}
+/// F5 owner answers for an asking attempt that already ended. Sent by the fixed
+/// system component to the task mailbox; the owner's answer operation is the
+/// mailbox operation ID.
+pub(crate) async fn question_send_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    request: Send,
+    at: u64,
+) -> std::result::Result<Value, OwnerSendError> {
+    send(
+        tx,
+        request,
+        json!({"kind":"system","component":"question_answer"}),
+        at,
+    )
+    .await
+    .map_err(send_error)
+}
+/// Mail the node may hand to the harness now, oldest first. H3: a stall nudge
+/// stored inbox-only, or any stall nudge while the attempt's terminal input is
+/// unknown or a human controller holds the pane, stays readable in the inbox
+/// but is never injected.
+async fn injectable(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    task_key: &str,
+    session_key: &str,
+    limit: i64,
+) -> Result<Vec<sqlx::postgres::PgRow>> {
+    let sql = format!(
+        "SELECT m.*,d.delivery_id,d.disposition FROM mailbox_messages m LEFT JOIN mailbox_deliveries d ON d.message_id=m.message_id AND d.attempt_id=$1 WHERE m.mailbox_key IN ($2,$3) AND (d.disposition IS NULL OR d.disposition IN ('pending','received_by_node')) AND NOT EXISTS(SELECT 1 FROM mailbox_receipts a WHERE a.message_id=m.message_id) AND NOT EXISTS(SELECT 1 FROM mailbox_deliveries previous WHERE previous.message_id=m.message_id AND (previous.disposition IN ('handed_to_harness','delivery_unknown') OR (previous.attempt_id<>$1 AND previous.disposition IN ('pending','received_by_node')))) AND NOT EXISTS(SELECT 1 FROM stall_nudges n WHERE n.message_id=m.message_id AND (n.inbox_only OR {} OR {})) ORDER BY m.created_at_ms,m.mailbox_key,m.cursor LIMIT $4",
+        crate::stall::ports::HUMAN_CONTROL_SQL,
+        crate::stall::ports::INPUT_UNKNOWN_SQL
+    );
+    Ok(sqlx::query(&sql)
+        .bind(attempt)
+        .bind(task_key)
+        .bind(session_key)
+        .bind(limit)
+        .fetch_all(&mut **tx)
+        .await?)
+}
+/// Message IDs `node_poll` would hand this attempt's harness now.
+pub(crate) async fn injectable_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    task: &Recipient,
+    session: &Recipient,
+    limit: i64,
+) -> std::result::Result<Vec<Uuid>, OwnerSendError> {
+    let keys = task.key().and_then(|t| Ok((t, session.key()?)));
+    let (task, session) = keys.map_err(|_| OwnerSendError::Invalid)?;
+    let rows = injectable(tx, attempt, &task, &session, limit)
+        .await
+        .map_err(|_| OwnerSendError::Unknown)?;
+    Ok(rows.iter().map(|r| r.get("message_id")).collect())
 }
 async fn owner_send(
     State(state): State<AppState>,
@@ -372,6 +502,8 @@ async fn inbox(
     attempt: Option<Uuid>,
 ) -> Result<Value> {
     request.recipient.validate()?;
+    // The supervisor mailbox is read only through the conversation API.
+    request.recipient.scope()?;
     let after: i64 = request
         .after
         .parse()
@@ -530,19 +662,24 @@ pub(super) fn node_routes() -> Router<AppState> {
 }
 async fn node_authority(
     state: &AppState,
-    headers: &HeaderMap,
+    node: &crate::worker_api::AuthenticatedNode,
     tx: &mut Transaction<'_, Postgres>,
     identity: &NodeIdentity,
     attempt: &AttemptRef,
 ) -> Result<Value> {
-    version(headers)?;
-    let node = crate::worker_api::authenticate(state, headers)
+    crate::worker_api::lock_current_node(tx, node)
         .await
         .map_err(|_| Error("unauthorized"))?;
-    if node.id != identity.node_id {
+    if node
+        .permitted_attempt()
+        .is_some_and(|id| id != attempt.attempt_id)
+    {
         return Err(Error("unauthorized"));
     }
-    let a = lock_attempt(state, tx, attempt.attempt_id, node.id).await?;
+    if node.id() != identity.node_id {
+        return Err(Error("unauthorized"));
+    }
+    let a = lock_attempt(state, tx, attempt.attempt_id, node.id()).await?;
     if a.identity != *identity || a.attempt != *attempt {
         return Err(Error("stale_generation"));
     }
@@ -560,7 +697,7 @@ fn recipients(b: &Value) -> Result<[Recipient; 2]> {
         project_id: id(b, "project_id")?,
         task_id: id(b, "task_id")?,
     };
-    let (workspace_id, project_id, task_id) = task.scope();
+    let (workspace_id, project_id, task_id) = task.scope()?;
     Ok([
         task,
         Recipient::Session {
@@ -581,8 +718,17 @@ async fn node_poll(
     if !(1..=16).contains(&r.limit) {
         return Err(Error("invalid_request"));
     }
+    version(&headers)?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::MailboxPoll,
+        Some(r.attempt.attempt_id),
+    )
+    .await
+    .map_err(|_| Error("unauthorized"))?;
     let mut tx = state.store.pool.begin().await?;
-    let b = node_authority(&state, &headers, &mut tx, &r.identity, &r.attempt).await?;
+    let b = node_authority(&state, &auth, &mut tx, &r.identity, &r.attempt).await?;
     let profile: Value =
         sqlx::query_scalar("SELECT profile FROM agent_launch_bindings WHERE attempt_id=$1")
             .bind(r.attempt.attempt_id)
@@ -597,7 +743,14 @@ async fn node_poll(
     let recipients = recipients(&b)?;
     let task = recipients[0].key()?;
     let session = recipients[1].key()?;
-    let rows=sqlx::query("SELECT m.*,d.delivery_id,d.disposition FROM mailbox_messages m LEFT JOIN mailbox_deliveries d ON d.message_id=m.message_id AND d.attempt_id=$1 WHERE m.mailbox_key IN ($2,$3) AND (d.disposition IS NULL OR d.disposition IN ('pending','received_by_node')) AND NOT EXISTS(SELECT 1 FROM mailbox_receipts a WHERE a.message_id=m.message_id) AND NOT EXISTS(SELECT 1 FROM mailbox_deliveries previous WHERE previous.message_id=m.message_id AND (previous.disposition IN ('handed_to_harness','delivery_unknown') OR (previous.attempt_id<>$1 AND previous.disposition IN ('pending','received_by_node')))) ORDER BY m.created_at_ms,m.mailbox_key,m.cursor LIMIT $4").bind(r.attempt.attempt_id).bind(task).bind(session).bind(r.limit as i64).fetch_all(&mut *tx).await?;
+    let rows = injectable(
+        &mut tx,
+        r.attempt.attempt_id,
+        &task,
+        &session,
+        r.limit as i64,
+    )
+    .await?;
     let mut deliveries = Vec::new();
     for row in rows {
         let message: Uuid = row.get("message_id");
@@ -607,7 +760,7 @@ async fn node_poll(
         sqlx::query("INSERT INTO mailbox_deliveries(delivery_id,message_id,attempt_id,disposition,updated_at_ms) VALUES($1,$2,$3,'pending',$4) ON CONFLICT(message_id,attempt_id) DO NOTHING").bind(delivery).bind(message).bind(r.attempt.attempt_id).bind(now(&state) as i64).execute(&mut *tx).await?;
         deliveries.push(json!({"delivery_id":delivery,"message_id":message,"recipient":row.get::<Value,_>("recipient"),"thread_id":row.get::<Uuid,_>("thread_id"),"cursor":row.get::<i64,_>("cursor").to_string(),"body":row.get::<String,_>("body"),"payload_digest":row.get::<String,_>("payload_digest"),"sender":row.get::<Value,_>("sender"),"disposition":row.get::<Option<String>,_>("disposition").unwrap_or_else(||"pending".into())}));
     }
-    node_authority(&state, &headers, &mut tx, &r.identity, &r.attempt).await?;
+    node_authority(&state, &auth, &mut tx, &r.identity, &r.attempt).await?;
     tx.commit().await?;
     Ok(ok(
         json!({"api_version":1,"attempt":r.attempt,"deliveries":deliveries}),
@@ -618,15 +771,24 @@ async fn node_ack(
     headers: HeaderMap,
     StrictJson(r): StrictJson<NodeAck>,
 ) -> Result<Response> {
+    version(&headers)?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::MailboxAck,
+        Some(r.attempt.attempt_id),
+    )
+    .await
+    .map_err(|_| Error("unauthorized"))?;
     let mut tx = state.store.pool.begin().await?;
-    node_authority(&state, &headers, &mut tx, &r.identity, &r.attempt).await?;
+    node_authority(&state, &auth, &mut tx, &r.identity, &r.attempt).await?;
     let actor = format!(
         "node-delivery:{}:{}",
         r.identity.node_id, r.attempt.attempt_id
     );
     let payload = digest(&serde_json::to_value(&r)?)?;
     if let Some(response) = replay(&mut tx, &actor, r.operation_id, &payload).await? {
-        node_authority(&state, &headers, &mut tx, &r.identity, &r.attempt).await?;
+        node_authority(&state, &auth, &mut tx, &r.identity, &r.attempt).await?;
         tx.commit().await?;
         return Ok(ok(response));
     }
@@ -648,7 +810,7 @@ async fn node_ack(
     .await?;
     let response = json!({"api_version":1,"operation_id":r.operation_id,"delivery_id":r.delivery_id,"attempt":r.attempt,"disposition":next});
     receipt(&mut tx, &actor, r.operation_id, &payload, &response).await?;
-    node_authority(&state, &headers, &mut tx, &r.identity, &r.attempt).await?;
+    node_authority(&state, &auth, &mut tx, &r.identity, &r.attempt).await?;
     tx.commit().await?;
     Ok(ok(response))
 }

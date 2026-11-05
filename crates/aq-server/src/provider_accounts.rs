@@ -23,7 +23,7 @@ pub struct Accounts {
     pub revision: Option<u64>,
     pub accounts: Vec<Account>,
 }
-fn project(registry: Option<&LoadedRegistry>, server_time_ms: u64) -> Accounts {
+pub(crate) fn project(registry: Option<&LoadedRegistry>, server_time_ms: u64) -> Accounts {
     let mut accounts = BTreeMap::<(&str, &str), Account>::new();
     if let Some(registry) = registry {
         // Startup validation bounds this snapshot to 32 credential profiles.
@@ -93,6 +93,7 @@ mod tests {
             enabled,
             provisionable,
             material_owner: None,
+            allowed_backends: aq_selection::default_allowed_backends(),
         }
     }
     #[test]

@@ -1,0 +1,2320 @@
+    Checking aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-session-api)
+    Checking aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-lifecycle-api)
+    Checking aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-agent-api)
+    Checking aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-profiles)
+    Checking aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-admission)
+    Checking aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-terminal-relay-protocol)
+    Checking aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-release)
+    Checking aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-terminal-relay)
+    Checking aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-selection)
+    Checking aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-central-authority)
+    Checking aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-phase-terminal-protocol)
+    Checking aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-playbook-host)
+    Checking aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-notifications)
+    Checking aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-result-media)
+    Checking aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-observation-api)
+    Checking aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-accounting)
+    Checking aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-observation-admission)
+    Checking aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-review-protocol)
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:23:37
+   |
+23 | async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>, AppError> {
+   |                                     ^^^^^^                          ---------- help: remove the unnecessary generic argument
+   |                                     |
+   |                                     expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:29:51
+   |
+29 | async fn commit(tx: Transaction<'_, Postgres>) -> Result<(), AppError> {
+   |                                                   ^^^^^^   ---------- help: remove the unnecessary generic argument
+   |                                                   |
+   |                                                   expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:32:83
+   |
+32 | pub(crate) async fn registered(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<Option<Registration>, AppError> {
+   |                                                                                   ^^^^^^                     ---------- help: remove the unnecessary generic argument
+   |                                                                                   |
+   |                                                                                   expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:40:64
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                ^^^^^^   ---------- help: remove the unnecessary generic argument
+   |                                                                |
+   |                                                                expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:61:93
+   |
+61 | pub(crate) async fn check_rebound(tx: &mut Transaction<'_, Postgres>, current: &Current) -> Result<(), AppError> {
+   |                                                                                             ^^^^^^   ---------- help: remove the unnecessary generic argument
+   |                                                                                             |
+   |                                                                                             expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:70:153
+   |
+70 | ..., evidence: &impl Serialize) -> Result<(), AppError> {
+   |                                    ^^^^^^   ---------- help: remove the unnecessary generic argument
+   |                                    |
+   |                                    expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:79:112
+   |
+79 | ...): Json<SandboxDocument>) -> Result<Response, AppError> {
+   |                                 ^^^^^^         ---------- help: remove the unnecessary generic argument
+   |                                 |
+   |                                 expected 1 generic argument
+   |
+note: type alias defined here, with 1 generic parameter: `T`
+  --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+   |
+35 | pub type Result<T> = std::result::Result<T, ContractError>;
+   |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:144:111
+    |
+144 | ...: Json<SandboxDocument>) -> Result<Response, AppError> {
+    |                                ^^^^^^         ---------- help: remove the unnecessary generic argument
+    |                                |
+    |                                expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+    |
+ 35 | pub type Result<T> = std::result::Result<T, ContractError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:208:126
+    |
+208 | ..., nonce: Uuid) -> Result<Option<RunnerRenewalResponse>, AppError> {
+    |                      ^^^^^^ expected 1 generic argument  ---------- help: remove the unnecessary generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+    |
+ 35 | pub type Result<T> = std::result::Result<T, ContractError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:131:79
+    |
+131 |     fn response(&self, state: &AppState, q: &ReadoptionRequest, time: u64) -> Result<ReadoptionResponse, AppError> {
+    |                                                                               ^^^^^^                   ---------- help: remove the unnecessary generic argument
+    |                                                                               |
+    |                                                                               expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+    |
+ 35 | pub type Result<T> = std::result::Result<T, ContractError>;
+    |          ^^^^^^ -
+
+error[E0277]: `?` couldn't convert the error to `error::AppError`
+   --> crates/aq-server/src/delegated_permits/handoff.rs:133:74
+    |
+133 |         registration: super::incarnation::registered(tx, auth.id()).await?,
+    |                       ---------------------------------------------------^ the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `error::AppError`
+    |                       |
+    |                       this can't be annotated with `?` because it has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `From<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `error::AppError` implements trait `From<T>`
+   --> crates/aq-server/src/error.rs:107:1
+    |
+107 | impl From<IdentityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<IdentityError>`
+...
+126 | impl From<StoreError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StoreError>`
+    |
+   ::: crates/aq-server/src/execution/authority.rs:49:1
+    |
+ 49 | impl From<AuthorityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AuthorityError>`
+    |
+   ::: crates/aq-server/src/observations/api.rs:125:1
+    |
+125 | impl From<Error> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<observations::Error>`
+
+error[E0277]: `?` couldn't convert the error to `error::AppError`
+   --> crates/aq-server/src/delegated_permits/runtime.rs:114:100
+    |
+114 |                 registration: super::incarnation::registered(tx, permit.binding.node.node_id).await?,
+    |                               ---------------------------------------------------------------------^ the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `error::AppError`
+    |                               |
+    |                               this can't be annotated with `?` because it has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `From<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `error::AppError` implements trait `From<T>`
+   --> crates/aq-server/src/error.rs:107:1
+    |
+107 | impl From<IdentityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<IdentityError>`
+...
+126 | impl From<StoreError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StoreError>`
+    |
+   ::: crates/aq-server/src/execution/authority.rs:49:1
+    |
+ 49 | impl From<AuthorityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AuthorityError>`
+    |
+   ::: crates/aq-server/src/observations/api.rs:125:1
+    |
+125 | impl From<Error> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<observations::Error>`
+
+error[E0277]: `?` couldn't convert the error to `error::AppError`
+   --> crates/aq-server/src/delegated_permits/runtime.rs:312:58
+    |
+312 |     super::incarnation::check_rebound(tx, &current).await?;
+    |     -----------------------------------------------------^ the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `error::AppError`
+    |     |
+    |     this can't be annotated with `?` because it has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `From<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `error::AppError` implements trait `From<T>`
+   --> crates/aq-server/src/error.rs:107:1
+    |
+107 | impl From<IdentityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<IdentityError>`
+...
+126 | impl From<StoreError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StoreError>`
+    |
+   ::: crates/aq-server/src/execution/authority.rs:49:1
+    |
+ 49 | impl From<AuthorityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AuthorityError>`
+    |
+   ::: crates/aq-server/src/observations/api.rs:125:1
+    |
+125 | impl From<Error> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<observations::Error>`
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:24:60
+   |
+24 |     let mut tx = state.store.pool.begin().await.map_err(db)?;
+   |                  ------------------------------ -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                  |                              |
+   |                  |                              this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                  this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:25:83
+   |
+25 |     sqlx::query("SET LOCAL lock_timeout='2s'").execute(&mut *tx).await.map_err(db)?;
+   |     ------------------------------------------------------------------ -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |     |                                                                  |
+   |     |                                                                  this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |     this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:26:88
+   |
+26 |     sqlx::query("SET LOCAL statement_timeout='3s'").execute(&mut *tx).await.map_err(db)?;
+   |     ----------------------------------------------------------------------- -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |     |                                                                       |
+   |     |                                                                       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |     this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:30:5
+   |
+29 | async fn commit(tx: Transaction<'_, Postgres>) -> Result<(), AppError> {
+   |                                                   -------------------- expected `std::result::Result<(), aq_admission::sandbox::ContractError>` because of return type
+30 |     tx.commit().await.map_err(|_| AppError::UpdatesUnavailable("incarnation commit outcome unknown; preserve exact operation intent".into()))
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<(), ContractError>`, found `Result<(), AppError>`
+   |
+   = note: expected enum `std::result::Result<_, aq_admission::sandbox::ContractError>`
+              found enum `std::result::Result<_, error::AppError>`
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:34:64
+   |
+33 |       let value: Option<serde_json::Value> = sqlx::query_scalar("SELECT registration FROM delegated_node_boots WHERE node_id=$1")
+   |  ____________________________________________-
+34 | |         .bind(node).fetch_optional(&mut **tx).await.map_err(db)?;
+   | |                                                   - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   | |                                                   | |
+   | |___________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                                                     this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:35:5
+   |
+35 |     value.map(parse).transpose()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<Registration>, ...>`, found `Result<Option<_>, AppError>`
+   |
+   = note: expected enum `std::result::Result<std::option::Option<aq_admission::sandbox::Registration>, aq_admission::sandbox::ContractError>`
+              found enum `std::result::Result<std::option::Option<_>, error::AppError>`
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:63:119
+   |
+63 |     let aq_session_protocol::SessionIdentity::Remote { boot_id, .. } = origin.grant.binding.session else { return Err(refused()); };
+   |                                                                                                                   --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                                                                                                   |
+   |                                                                                                                   arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:63:115
+   |
+63 |     let aq_session_protocol::SessionIdentity::Remote { boot_id, .. } = origin.grant.binding.session else { return Err(refused()); };
+   |                                                                                                                   ^^^^---------^
+   |                                                                                                                       |
+   |                                                                                                                       this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:65:104
+   |
+65 |         let registered = registered(tx, current.record.binding.node.node_id).await?.ok_or_else(refused)?;
+   |                                                                                     -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                                                                     |
+   |                                                                                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:66:69
+   |
+66 |         compatible(current.registration.as_ref().ok_or_else(refused)?, &registered)?;
+   |                                                  -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                                  |
+   |                                                  this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:71:135
+   |
+71 |     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-delegated-history-quota',0))").execute(&mut **tx).await.map_err(db)?;
+   |     ---------------------------------------------------------------------------------------------------------------------- -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |     |                                                                                                                      |
+   |     |                                                                                                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |     this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:73:59
+   |
+72 |   ...) = sqlx::query_as("SELECT COALESCE(sum(octet_length(evidence::text)+512),0)::BIGINT,COALESCE(sum(octet_length(evidence::text)+...
+   |  ________-
+73 | | ...t **tx).await.map_err(db)?;
+   | |                - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   | |                | |
+   | |________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                  this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:74:67
+   |
+74 |     let size = serde_json::to_vec(evidence).map_err(|_| refused())?.len() as i64 + 512;
+   |                ---------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                |                            |
+   |                |                            this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                this has type `Result<_, serde_json::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:75:95
+   |
+75 |     if size > 1_048_576 || total + size > 67_108_864 || local + size > 4_194_304 { return Err(refused()); }
+   |                                                                                           --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                                                                           |
+   |                                                                                           arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:75:91
+   |
+75 |     if size > 1_048_576 || total + size > 67_108_864 || local + size > 4_194_304 { return Err(refused()); }
+   |                                                                                           ^^^^---------^
+   |                                                                                               |
+   |                                                                                               this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:76:5
+   |
+76 |     handoff::remember(tx, node, op, kind, request, evidence).await
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<(), ContractError>`, found `Result<(), AppError>`
+   |
+   = note: expected enum `std::result::Result<_, aq_admission::sandbox::ContractError>`
+              found enum `std::result::Result<_, error::AppError>`
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:80:72
+   |
+80 |     let auth = worker_api::authenticate_context(&state, &headers).await?;
+   |                --------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                |
+   |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:81:67
+   |
+81 |     let SandboxDocument::Register(q) = document else { return Err(refused()); };
+   |                                                               --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                                               |
+   |                                                               arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:81:63
+   |
+81 |     let SandboxDocument::Register(q) = document else { return Err(refused()); };
+   |                                                               ^^^^---------^
+   |                                                                   |
+   |                                                                   this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:82:40
+   |
+82 |     q.validate().map_err(|_| refused())?;
+   |       ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |       |          |
+   |       |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |       this has type `Result<_, aq_admission::sandbox::ContractError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:83:16
+   |
+83 |     key(&state)?;
+   |     -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |     |
+   |     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:84:101
+   |
+84 | ...identity.node_id != auth.id() || serde_json::to_vec(&q).map_err(|_| refused())?.len() > 16_384 { return Err(refused()); }
+   |                                     ---------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                     |                      |
+   |                                     |                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                                     this has type `Result<_, serde_json::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:84:131
+   |
+84 | ...refused())?.len() > 16_384 { return Err(refused()); }
+   |                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                        |
+   |                                        arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:84:127
+   |
+84 | ...refused())?.len() > 16_384 { return Err(refused()); }
+   |                                        ^^^^---------^
+   |                                            |
+   |                                            this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:86:56
+   |
+86 |     worker_api::lock_current_node(&mut tx, &auth).await?;
+   |     ---------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |     |
+   |     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:88:117
+   |
+88 |     if let Some(replay) = handoff::replay(&mut tx, auth.id(), q.registration.operation_id, "registration", &q).await? {
+   |                           ------------------------------------------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                           |
+   |                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:89:109
+   |
+89 |         if old.as_ref().is_none_or(|old| old.registration.identity != q.registration.identity) { return Err(refused()); }
+   |                                                                                                         --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                                                                                         |
+   |                                                                                                         arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:89:105
+   |
+89 |         if old.as_ref().is_none_or(|old| old.registration.identity != q.registration.identity) { return Err(refused()); }
+   |                                                                                                         ^^^^---------^
+   |                                                                                                             |
+   |                                                                                                             this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:90:76
+   |
+90 |         let reply: RegistrationResponse = parse(replay["response"].clone())?;
+   |                                           ---------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                           |
+   |                                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:91:54
+   |
+91 |         reply.validate_for(&q).map_err(|_| refused())?;
+   |               ---------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |               |                |
+   |               |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |               this has type `Result<_, aq_admission::sandbox::ContractError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:97:113
+   |
+96 |   ...seen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM delegated_operations WHERE node_id=$1 AND kind='registration' AND ...
+   |  _________________-
+97 | | ....bind(auth.id()).bind(q.registration.identity.boot_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+   | |                                                                                               - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   | |                                                                                               | |
+   | |_______________________________________________________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |                                                                                                 this has type `Result<_, sqlx::Error>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:98:113
+   |
+98 |     if seen && old.as_ref().is_none_or(|old| old.registration.identity != q.registration.identity) { return Err(refused()); }
+   |                                                                                                             --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                                                                                                             |
+   |                                                                                                             arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:98:109
+   |
+98 |     if seen && old.as_ref().is_none_or(|old| old.registration.identity != q.registration.identity) { return Err(refused()); }
+   |                                                                                                             ^^^^---------^
+   |                                                                                                                 |
+   |                                                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:101:36
+    |
+101 |             let mut old = json(old)?;
+    |                           ---------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                           |
+    |                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:102:35
+    |
+102 |             let mut new = json(&q)?;
+    |                           --------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                           |
+    |                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:103:68
+    |
+103 |             old["registration"].as_object_mut().ok_or_else(refused)?.remove("operation_id");
+    |                                                 -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                 |
+    |                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:104:68
+    |
+104 |             new["registration"].as_object_mut().ok_or_else(refused)?.remove("operation_id");
+    |                                                 -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                 |
+    |                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:105:40
+    |
+105 |             if old != new { return Err(refused()); }
+    |                                    --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                    |
+    |                                    arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:105:36
+    |
+105 |             if old != new { return Err(refused()); }
+    |                                    ^^^^---------^
+    |                                        |
+    |                                        this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:109:68
+    |
+108 |       let native_boot: Option<Uuid> = sqlx::query_scalar("SELECT (state#>>'{identity,boot_id}')::uuid FROM execution_nodes WHERE no...
+    |  _____________________________________-
+109 | |         .bind(auth.id()).fetch_optional(&mut *tx).await.map_err(db)?;
+    | |                                                       - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    | |                                                       | |
+    | |_______________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                                         this has type `Result<_, sqlx::Error>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:111:118
+    |
+111 |         crate::profiled_execution::registration::register_locked(&state, &mut tx, &auth, &parse(json(&q.registration)?)?).await?;
+    |                                                                                                 ---------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                                                 |
+    |                                                                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:111:120
+    |
+111 |         crate::profiled_execution::registration::register_locked(&state, &mut tx, &auth, &parse(json(&q.registration)?)?).await?;
+    |                                                                                           -----------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                                           |
+    |                                                                                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:111:128
+    |
+111 |         crate::profiled_execution::registration::register_locked(&state, &mut tx, &auth, &parse(json(&q.registration)?)?).await?;
+    |         -----------------------------------------------------------------------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |         |
+    |         this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:113:67
+    |
+113 |     let active = if old.is_some() { boot(&mut tx, auth.id()).await? } else { native_boot.unwrap_or(q.registration.identity.boot_id) };
+    |                                     ------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                     |
+    |                                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:115:52
+    |
+115 |         .bind(auth.id()).bind(active).bind(json(&q)?).execute(&mut *tx).await.map_err(db)?;
+    |                                            --------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                            |
+    |                                            this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:115:90
+    |
+114 | /     sqlx::query("INSERT INTO delegated_node_boots(node_id,boot_id,registration) VALUES($1,$2,$3) ON CONFLICT(node_id) DO UPDATE S...
+115 | |         .bind(auth.id()).bind(active).bind(json(&q)?).execute(&mut *tx).await.map_err(db)?;
+    | |                                                                             - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    | |                                                                             | |
+    | |_____________________________________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                                                               this has type `Result<_, sqlx::Error>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:117:50
+    |
+117 |     reply.validate_for(&q).map_err(|_| refused())?;
+    |           ---------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |           |                |
+    |           |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |           this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:145:72
+    |
+145 |     let auth = worker_api::authenticate_context(&state, &headers).await?;
+    |                --------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:146:76
+    |
+146 |     let SandboxDocument::ReadoptionRequest(q) = document else { return Err(refused()); };
+    |                                                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                                        |
+    |                                                                        arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:146:72
+    |
+146 |     let SandboxDocument::ReadoptionRequest(q) = document else { return Err(refused()); };
+    |                                                                        ^^^^---------^
+    |                                                                            |
+    |                                                                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:147:40
+    |
+147 |     q.validate().map_err(|_| refused())?;
+    |       ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |       |          |
+    |       |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |       this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:148:52
+    |
+148 |     if q.current.node_id != auth.id() { return Err(refused()); }
+    |                                                --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                |
+    |                                                arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:148:48
+    |
+148 |     if q.current.node_id != auth.id() { return Err(refused()); }
+    |                                                ^^^^---------^
+    |                                                    |
+    |                                                    this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:150:56
+    |
+150 |     worker_api::lock_current_node(&mut tx, &auth).await?;
+    |     ---------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |     |
+    |     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:151:81
+    |
+151 |     let registration = registered(&mut tx, auth.id()).await?.ok_or_else(refused)?;
+    |                                                              -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                              |
+    |                                                              this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:152:69
+    |
+152 |     if registration.registration.identity != q.current { return Err(refused()); }
+    |                                                                 --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                                 |
+    |                                                                 arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:152:65
+    |
+152 |     if registration.registration.identity != q.current { return Err(refused()); }
+    |                                                                 ^^^^---------^
+    |                                                                     |
+    |                                                                     this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:153:48
+    |
+153 |     let active = boot(&mut tx, auth.id()).await?;
+    |                  ------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                  |
+    |                  this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:154:116
+    |
+154 |     let retained = if let Some(value) = handoff::replay(&mut tx, auth.id(), q.operation_id, "readoption", &q).await? {
+    |                                         ---------------------------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                         |
+    |                                         this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:155:53
+    |
+155 |         if active != q.current.boot_id { return Err(refused()); }
+    |                                                 --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                 |
+    |                                                 arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:155:49
+    |
+155 |         if active != q.current.boot_id { return Err(refused()); }
+    |                                                 ^^^^---------^
+    |                                                     |
+    |                                                     this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:156:46
+    |
+156 |         let retained: Adoption = parse(value)?;
+    |                                  ------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                  |
+    |                                  this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:158:43
+    |
+158 |             lock_owner(&mut tx, old).await?;
+    |             ------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:159:68
+    |
+159 |             let current = load(&mut tx, old.record.permit_id).await?;
+    |                           -----------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                           |
+    |                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:160:30
+    |
+160 |             if json(&current)? != json(old)? { return Err(refused()); }
+    |                --------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:160:44
+    |
+160 |             if json(&current)? != json(old)? { return Err(refused()); }
+    |                                   ---------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                   |
+    |                                   this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:160:59
+    |
+160 |             if json(&current)? != json(old)? { return Err(refused()); }
+    |                                                       --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                       |
+    |                                                       arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:160:55
+    |
+160 |             if json(&current)? != json(old)? { return Err(refused()); }
+    |                                                       ^^^^---------^
+    |                                                           |
+    |                                                           this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:161:59
+    |
+161 |             let context = context(&mut tx, &current).await?;
+    |                           --------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                           |
+    |                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:163:83
+    |
+163 |             current.record.authorize(&context, RunnerOperation::Renew, now(&state)?).map_err(|_| refused())?;
+    |                                                                        -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                        |
+    |                                                                        this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:163:108
+    |
+163 |             current.record.authorize(&context, RunnerOperation::Renew, now(&state)?).map_err(|_| refused())?;
+    |                            --------------------------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                            |                                                         |
+    |                            |                                                         this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                            this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:167:54
+    |
+167 |         if active != q.previous.boot_id { return Err(refused()); }
+    |                                                  --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                  |
+    |                                                  arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:167:50
+    |
+167 |         if active != q.previous.boot_id { return Err(refused()); }
+    |                                                  ^^^^---------^
+    |                                                      |
+    |                                                      this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:171:100
+    |
+170 |   ... Option<serde_json::Value> = sqlx::query_scalar("SELECT c.state FROM delegated_permit_current c JOIN delegated_permits p USING...
+    |  _________________________________-
+171 | | ...d(sandbox.permit_id).bind(auth.id()).fetch_optional(&mut *tx).await.map_err(db)?;
+    | |                                                                      - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    | |                                                                      | |
+    | |______________________________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                                                        this has type `Result<_, sqlx::Error>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:173:42
+    |
+173 |             let old: Current = parse(raw)?;
+    |                                ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                |
+    |                                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:174:44
+    |
+174 |             lock_owner(&mut tx, &old).await?;
+    |             -------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:175:69
+    |
+175 |             let mut current = load(&mut tx, sandbox.permit_id).await?;
+    |                               --------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                               |
+    |                               this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `error::AppError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:179:94
+    |
+179 |                 compatible(current.registration.as_ref().ok_or_else(refused)?, &registration)?;
+    |                 -----------------------------------------------------------------------------^ the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `error::AppError`
+    |                 |
+    |                 this can't be annotated with `?` because it has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `From<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `error::AppError` implements trait `From<T>`
+   --> crates/aq-server/src/error.rs:107:1
+    |
+107 | impl From<IdentityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<IdentityError>`
+...
+126 | impl From<StoreError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StoreError>`
+    |
+   ::: crates/aq-server/src/execution/authority.rs:49:1
+    |
+ 49 | impl From<AuthorityError> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<AuthorityError>`
+    |
+   ::: crates/aq-server/src/observations/api.rs:125:1
+    |
+125 | impl From<Error> for AppError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<observations::Error>`
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:185:46
+    |
+185 |             current.record.rebind(key(&state)?, q.current.boot_id).map_err(|_| refused())?;
+    |                                   -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                   |
+    |                                   this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:185:90
+    |
+185 |             current.record.rebind(key(&state)?, q.current.boot_id).map_err(|_| refused())?;
+    |                            --------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                            |                                       |
+    |                            |                                       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                            this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:188:42
+    |
+188 |             save(&mut tx, &current).await?;
+    |             -----------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:191:159
+    |
+191 | ...   sqlx::query("UPDATE delegated_node_boots SET boot_id=$2 WHERE node_id=$1").bind(auth.id()).bind(q.current.boot_id).execute(&mut *tx).await.map_err(db)?;
+    |       ------------------------------------------------------------------------------------------------------------------------------------------ -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |       |                                                                                                                                          |
+    |       |                                                                                                                                          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |       this has type `Result<_, sqlx::Error>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:196:58
+    |
+196 |     let reply = retained.response(&state, &q, now(&state)?)?;
+    |                                               -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                               |
+    |                                               this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:209:40
+    |
+209 |     q.validate().map_err(|_| refused())?;
+    |       ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |       |          |
+    |       |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |       this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:210:36
+    |
+210 |     if nonce.is_nil() { return Err(refused()); }
+    |                                --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                |
+    |                                arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:210:32
+    |
+210 |     if nonce.is_nil() { return Err(refused()); }
+    |                                ^^^^---------^
+    |                                    |
+    |                                    this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:212:55
+    |
+212 |     worker_api::lock_current_node(&mut tx, auth).await?;
+    |     --------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |     |
+    |     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:213:52
+    |
+213 |     let old = &auth.delegated().ok_or_else(refused)?.current;
+    |                                 -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                 |
+    |                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:214:121
+    |
+214 | ...|| json(&Some(&q.authority))? != json(&old.authority)? { return Err(refused()); }
+    |       -------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |       |
+    |       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:214:146
+    |
+214 | ...? != json(&old.authority)? { return Err(refused()); }
+    |         --------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |         |
+    |         this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:214:161
+    |
+214 | ...? != json(&old.authority)? { return Err(refused()); }
+    |                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:214:157
+    |
+214 | ...? != json(&old.authority)? { return Err(refused()); }
+    |                                        ^^^^---------^
+    |                                            |
+    |                                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:215:86
+    |
+215 |     old.record.verify_credential(q.permit.credential.expose()).map_err(|_| refused())?;
+    |                ----------------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |                                               |
+    |                |                                               this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:218:124
+    |
+218 | ...grant.binding.session else { return Err(refused()); };
+    |                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:218:120
+    |
+218 | ...grant.binding.session else { return Err(refused()); };
+    |                                        ^^^^---------^
+    |                                            |
+    |                                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:221:89
+    |
+221 |     let replay = handoff::replay(&mut tx, auth.id(), q.operation_id, "renewal", q).await?.map(parse::<Renewal>).transpose()?;
+    |                  -----------------------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                  |
+    |                  this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:221:124
+    |
+221 |     let replay = handoff::replay(&mut tx, auth.id(), q.operation_id, "renewal", q).await?.map(parse::<Renewal>).transpose()?;
+    |                                                                                                                 -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                                                                 |
+    |                                                                                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:223:33
+    |
+223 |         if json(&replay.current)? != json(old)? { return Err(refused()); }
+    |            ---------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |            |
+    |            this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:223:47
+    |
+223 |         if json(&replay.current)? != json(old)? { return Err(refused()); }
+    |                                      ---------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                      |
+    |                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:223:62
+    |
+223 |         if json(&replay.current)? != json(old)? { return Err(refused()); }
+    |                                                          --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                          |
+    |                                                          arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:223:58
+    |
+223 |         if json(&replay.current)? != json(old)? { return Err(refused()); }
+    |                                                          ^^^^---------^
+    |                                                              |
+    |                                                              this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:60
+    |
+224 | ...sion || json(&q.permit)? != json(&old.record.delivery(key(state)?).map_err(|_| refused())?)? { return Err(refused()); }
+    |            ---------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |            |
+    |            this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:101
+    |
+224 | ....delivery(key(state)?).map_err(|_| refused())?)? { return Err(refused()); }
+    |              ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |              |
+    |              this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:126
+    |
+224 | ...(&q.permit)? != json(&old.record.delivery(key(state)?).map_err(|_| refused())?)? { return Err(refused()); }
+    |                                     --------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                     |                     |
+    |                                     |                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                     this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:128
+    |
+224 | ...n || json(&q.permit)? != json(&old.record.delivery(key(state)?).map_err(|_| refused())?)? { return Err(refused()); }
+    |                             ---------------------------------------------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                             |
+    |                             this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:143
+    |
+224 | ....map_err(|_| refused())?)? { return Err(refused()); }
+    |                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:224:139
+    |
+224 | ....map_err(|_| refused())?)? { return Err(refused()); }
+    |                                        ^^^^---------^
+    |                                            |
+    |                                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:225:46
+    |
+225 |     let context = context(&mut tx, old).await?;
+    |                   ---------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                   |
+    |                   this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:226:26
+    |
+226 |     let time = now(state)?;
+    |                ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:227:88
+    |
+227 |     old.record.authorize(&context, RunnerOperation::Renew, time).map_err(|_| refused())?;
+    |                ------------------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |                                                 |
+    |                |                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:230:48
+    |
+230 |         reply.validate().map_err(|_| refused())?;
+    |               ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |               |          |
+    |               |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |               this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:234:61
+    |
+234 |     compatible(old.registration.as_ref().ok_or_else(refused)?, &registration)?;
+    |                                          -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                          |
+    |                                          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:236:81
+    |
+236 |         if context.grant_expires_at_ms != old.record.expires_at_ms { return Err(refused()); }
+    |                                                                             --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:236:77
+    |
+236 |         if context.grant_expires_at_ms != old.record.expires_at_ms { return Err(refused()); }
+    |                                                                             ^^^^---------^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:237:67
+    |
+237 |         let expiry = time.checked_add(120_000).ok_or_else(refused)?.min(old.record.hard_deadline_ms);
+    |                                                -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                |
+    |                                                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:238:60
+    |
+238 |         if expiry <= old.record.expires_at_ms { return Err(refused()); }
+    |                                                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+    |                                                        |
+    |                                                        arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:238:56
+    |
+238 |         if expiry <= old.record.expires_at_ms { return Err(refused()); }
+    |                                                        ^^^^---------^
+    |                                                            |
+    |                                                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:242:73
+    |
+242 |         next.revision = next.revision.checked_add(1).ok_or_else(refused)?;
+    |                                                      -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                      |
+    |                                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:244:68
+    |
+244 |             .bind(old.record.binding.attempt_id).bind(json(&expiry)?).execute(&mut *tx).await.map_err(db)?;
+    |                                                       -------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                       |
+    |                                                       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:244:106
+    |
+243 | /         sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{grant,expires_at_ms}',$2) WHERE attempt_id=$1")
+244 | |             .bind(old.record.binding.attempt_id).bind(json(&expiry)?).execute(&mut *tx).await.map_err(db)?;
+    | |                                                                                             - -----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    | |                                                                                             | |
+    | |_____________________________________________________________________________________________| this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                                                                               this has type `Result<_, sqlx::Error>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:245:35
+    |
+245 |         save(&mut tx, &next).await?;
+    |         --------------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |         |
+    |         this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:249:26
+    |
+249 |     let time = now(state)?;
+    |                ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:251:88
+    |
+251 |     old.record.authorize(&context, RunnerOperation::Renew, time).map_err(|_| refused())?;
+    |                ------------------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                |                                                 |
+    |                |                                                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:252:49
+    |
+252 |     let permit = next.record.delivery(key(state)?).map_err(|_| refused())?;
+    |                                       ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                       |
+    |                                       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:252:74
+    |
+252 |     let permit = next.record.delivery(key(state)?).map_err(|_| refused())?;
+    |                              --------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                              |                     |
+    |                              |                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                              this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:253:283
+    |
+253 | ...k: aq_admission_sandbox::transport::DeliveryClock::new_interactive_session(time, permit.expires_at_ms).map_err(|_| refused())? })...
+    |       --------------------------------------------------------------------------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |       |                                                                                                   |
+    |       |                                                                                                   this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |       this has type `Result<_, aq_admission::Invalid>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:254:44
+    |
+254 |     reply.validate().map_err(|_| refused())?;
+    |           ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |           |          |
+    |           |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |           this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `control_api::Error`
+  --> crates/aq-server/src/profiled_execution/renewal/api.rs:43:137
+   |
+43 | ...ome(reply) = crate::delegated_permits::incarnation::renew_after_reboot(&state, &auth, &request, nonce).await? {
+   |                 -----------------------------------------------------------------------------------------------^ the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `control_api::Error`
+   |                 |
+   |                 this can't be annotated with `?` because it has type `Result<_, aq_admission::sandbox::ContractError>`
+   |
+note: `control_api::Error` needs to implement `From<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/profiled_execution/control_api.rs:16:1
+   |
+16 | pub(crate) struct Error(AppError);
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<aq_admission::sandbox::ContractError>` is not implemented for `control_api::Error`
+      but trait `From<error::AppError>` is implemented for it
+  --> crates/aq-server/src/profiled_execution/control_api.rs:17:1
+   |
+17 | impl From<AppError> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `error::AppError`, found `aq_admission::sandbox::ContractError`
+
+error[E0277]: the trait bound `fn(State<AppState>, HeaderMap, ...) -> ... {register}: Handler<_, _>` is not satisfied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:13:44
+    |
+ 13 |         .route("/v2/worker/register", post(register))
+    |                                       ---- ^^^^^^^^ the trait `Handler<_, _>` is not implemented for fn item `fn(State<AppState>, HeaderMap, Json<...>) -> ... {register}`
+    |                                       |
+    |                                       required by a bound introduced by this call
+    |
+    = note: Consider using `#[axum::debug_handler]` to improve the error message
+note: required by a bound in `axum::routing::post`
+   --> /home/jkern/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/method_routing.rs:167:16
+    |
+167 |             H: Handler<T, S>,
+    |                ^^^^^^^^^^^^^ required by this bound in `post`
+...
+445 | top_level_handler_fn!(post, POST);
+    | ---------------------------------
+    | |                     |
+    | |                     required by a bound in this function
+    | in this macro invocation
+    = note: the full name for the type has been written to '/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/target/debug/deps/aq_server-61dbd37146089744.long-type-7859603412634844982.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `top_level_handler_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `fn(State<AppState>, HeaderMap, ...) -> ... {readopt}: Handler<_, _>` is not satisfied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:14:43
+    |
+ 14 |         .route("/v2/worker/readopt", post(readopt))
+    |                                      ---- ^^^^^^^ the trait `Handler<_, _>` is not implemented for fn item `fn(State<AppState>, HeaderMap, Json<SandboxDocument>) -> ... {readopt}`
+    |                                      |
+    |                                      required by a bound introduced by this call
+    |
+    = note: Consider using `#[axum::debug_handler]` to improve the error message
+note: required by a bound in `axum::routing::post`
+   --> /home/jkern/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/method_routing.rs:167:16
+    |
+167 |             H: Handler<T, S>,
+    |                ^^^^^^^^^^^^^ required by this bound in `post`
+...
+445 | top_level_handler_fn!(post, POST);
+    | ---------------------------------
+    | |                     |
+    | |                     required by a bound in this function
+    | in this macro invocation
+    = note: the full name for the type has been written to '/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/target/debug/deps/aq_server-61dbd37146089744.long-type-16607000111939181195.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `top_level_handler_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:41:47
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+41 |     original.validate().map_err(|_| refused())?;
+   |              ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |              |          |
+   |              |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |              this has type `Result<_, aq_admission::sandbox::ContractError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:42:43
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+41 |     original.validate().map_err(|_| refused())?;
+42 |     next.validate().map_err(|_| refused())?;
+   |          ---------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |          |          |
+   |          |          this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |          this has type `Result<_, aq_admission::sandbox::ContractError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:43:31
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+43 |     let mut a = json(original)?;
+   |                 --------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                 |
+   |                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:44:27
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+44 |     let mut b = json(next)?;
+   |                 ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                 |
+   |                 this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:46:62
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+46 |         v["registration"].as_object_mut().ok_or_else(refused)?.remove("operation_id");
+   |                                           -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                           |
+   |                                           this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:47:74
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+47 |         v["registration"]["identity"].as_object_mut().ok_or_else(refused)?.remove("boot_id");
+   |                                                       -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                                       |
+   |                                                       this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:50:71
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+50 |         let backend = v["backend"].as_object_mut().ok_or_else(refused)?;
+   |                                                    -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                                    |
+   |                                                    this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:53:104
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+53 |         for template in backend.get_mut("templates").and_then(|v| v.as_array_mut()).ok_or_else(refused)? {
+   |                                                                                     -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                                                                     |
+   |                                                                                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:54:57
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+54 |             template.as_object_mut().ok_or_else(refused)?.remove("estimated_cold_start_ms");
+   |                                      -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                      |
+   |                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:55:57
+   |
+40 | fn compatible(original: &Registration, next: &Registration) -> Result<(), AppError> {
+   |                                                                -------------------- expected `aq_admission::sandbox::ContractError` because of this
+...
+55 |             template.as_object_mut().ok_or_else(refused)?.remove("estimated_cold_start_cost");
+   |                                      -------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+   |                                      |
+   |                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+   |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+  --> crates/aq-server/src/error.rs:17:1
+   |
+17 | pub enum AppError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:58:28
+   |
+58 |     if a != b { return Err(refused()); }
+   |                        --- ^^^^^^^^^ expected `ContractError`, found `AppError`
+   |                        |
+   |                        arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `error::AppError` due to the type of the argument passed
+  --> crates/aq-server/src/delegated_permits/incarnation.rs:58:24
+   |
+58 |     if a != b { return Err(refused()); }
+   |                        ^^^^---------^
+   |                            |
+   |                            this argument influences the type of `Err`
+note: tuple variant defined here
+  --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:566:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:134:96
+    |
+134 |             results.push(ReadoptionResult::Rebound { permit: current.record.delivery(key(state)?).map_err(|_| refused())? });
+    |                                                                                      ----------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                                      |
+    |                                                                                      this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:134:121
+    |
+134 |             results.push(ReadoptionResult::Rebound { permit: current.record.delivery(key(state)?).map_err(|_| refused())? });
+    |                                                                             --------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |                                                                             |                     |
+    |                                                                             |                     this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |                                                                             this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:139:116
+    |
+139 | ...rr(|_| refused())).collect::<Result<Vec<_>, AppError>>()?;
+    |                                 ^^^^^^       ---------- help: remove the unnecessary generic argument
+    |                                 |
+    |                                 expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> vendor/aq-admission-0.3.0/src/sandbox.rs:35:10
+    |
+ 35 | pub type Result<T> = std::result::Result<T, ContractError>;
+    |          ^^^^^^ -
+
+error[E0277]: a value of type `std::result::Result<Vec<_>, aq_admission::sandbox::ContractError>` cannot be built from an iterator over elements of type `std::result::Result<aq_admission::sandbox::DelegatedPermit, error::AppError>`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:139:116
+    |
+139 | ...key(state)?).map_err(|_| refused())).collect::<Result<Vec<_>, AppError>>()?;
+    |                                         -------   ^^^^^^^^^^^^^^^^^^^^^^^^ value of type `std::result::Result<Vec<_>, aq_admission::sandbox::ContractError>` cannot be built from `std::iter::Iterator<Item=std::result::Result<aq_admission::sandbox::DelegatedPermit, error::AppError>>`
+    |                                         |
+    |                                         required by a bound introduced by this call
+    |
+help: the trait `FromIterator<std::result::Result<_, error::AppError>>` is not implemented for `std::result::Result<Vec<_>, _>`
+      but trait `FromIterator<std::result::Result<_, aq_admission::sandbox::ContractError>>` is implemented for `std::result::Result<Vec<aq_admission::sandbox::DelegatedPermit>, _>`
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/result.rs:2111:0
+    = help: for that trait implementation, expected `aq_admission::sandbox::ContractError`, found `error::AppError`
+note: the method call chain might not have had the expected associated types
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:139:43
+    |
+139 | ...    let previous = self.before.iter().map(|c| c.record.delivery(key(state)?).map_err(|_| refused())).collect::<Result<Vec<_>, Ap...
+    |                       ----------- ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Iterator::Item` changed to `Result<DelegatedPermit, AppError>` here
+    |                       |           |
+    |                       |           `Iterator::Item` is `&Current` here
+    |                       this expression has type `Vec<Current>`
+note: required by a bound in `std::iter::Iterator::collect`
+   --> /rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/iter/traits/iterator.rs:2079:4
+
+error[E0277]: `?` couldn't convert the error to `aq_admission::sandbox::ContractError`
+   --> crates/aq-server/src/delegated_permits/incarnation.rs:140:70
+    |
+140 |         reply.validate_for(q, &previous, time).map_err(|_| refused())?;
+    |               -------------------------------- ----------------------^ the trait `From<error::AppError>` is not implemented for `aq_admission::sandbox::ContractError`
+    |               |                                |
+    |               |                                this can't be annotated with `?` because it has type `Result<_, error::AppError>`
+    |               this has type `Result<_, aq_admission::sandbox::ContractError>`
+    |
+note: `error::AppError` needs to implement `Into<aq_admission::sandbox::ContractError>`
+   --> crates/aq-server/src/error.rs:17:1
+    |
+ 17 | pub enum AppError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+Some errors have detailed explanations: E0107, E0277, E0308.
+For more information about an error, try `rustc --explain E0107`.
+error: could not compile `aq-server` (lib) due to 139 previous errors

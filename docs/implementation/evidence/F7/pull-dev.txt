@@ -1,0 +1,1 @@
+{"schema_version": 1, "error": {"code": "command_error", "message": "git merge refs/remotes/origin/dev failed: merge: refs/remotes/origin/dev - not something we can merge"}, "data": null}

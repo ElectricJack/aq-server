@@ -1,0 +1,197 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 16s
+     Running tests/native_accepted_preparation.rs (target/debug/deps/native_accepted_preparation-f2c667251f6edd44)
+
+running 17 tests
+test absent_policy_has_no_route_and_invalid_policy_refuses_configuration ... ok
+test changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts ... FAILED
+test changed_current_project_and_private_bytes_cannot_deliver_inputs ... ok
+test current30_missing_both_phase_tables_cannot_undercharge_legacy_admission ... ok
+test current_original_inputs_expire_then_release_with_exact_phase_absence_proof ... ok
+test failure_after_actual_material_insert_rolls_back_entire_admission ... FAILED
+test legacy_and_v2_accept_share_one_actual_owner_and_material_scope ... FAILED
+test mixed_candidate_schema_is_corruption_not_older_profile ... ok
+test mounted_v2_routes_require_machine_auth_negotiation_and_physical_nonce ... ok
+test observed_node_wait_charges_expiry_before_any_new_accept_commit ... ok
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... ok
+test real_timed_accept_retains_independent_lease_and_exact_replay ... ok
+test reopened_store_and_reloaded_protected_policy_replay_exact_accepted_receipt ... ok
+test shared_bytes_quota_rolls_back_new_accept_but_never_forgets_exact_replay ... ok
+test structurally_complete_v2_prepare_never_falls_back_to_legacy_execution_issuer ... ok
+test unsupported_history::accepted_phase_origin_cannot_acquire_legacy_original_grant_through_renewal ... ok
+test unsupported_history::accepted_phase_origin_cannot_enter_legacy_started_through_shaped_hot_grant ... ok
+
+failures:
+
+---- changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts stdout ----
+
+thread 'changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts' (2245379) panicked at crates/aq-server/tests/native_accepted_preparation.rs:423:10:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- failure_after_actual_material_insert_rolls_back_entire_admission stdout ----
+
+thread 'failure_after_actual_material_insert_rolls_back_entire_admission' (2246508) panicked at crates/aq-server/tests/native_accepted_preparation.rs:127:10:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+
+---- legacy_and_v2_accept_share_one_actual_owner_and_material_scope stdout ----
+
+thread 'legacy_and_v2_accept_share_one_actual_owner_and_material_scope' (2246931) panicked at crates/aq-server/tests/native_accepted_preparation.rs:587:5:
+assertion `left != right` failed: exactly one admission wins: v2=Err(Conflict("selection expired during admission locks")) legacy=Err(Conflict("native preparation is not currently available"))
+  left: false
+ right: false
+
+
+failures:
+    changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts
+    failure_after_actual_material_insert_rolls_back_entire_admission
+    legacy_and_v2_accept_share_one_actual_owner_and_material_scope
+
+test result: FAILED. 14 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 94.33s
+
+error: test failed, to rerun pass `-p aq-server --test native_accepted_preparation`
+     Running tests/native_cancellation.rs (target/debug/deps/native_cancellation-4ef3422166a32933)
+
+running 5 tests
+test native_cancel_after_start_stops_and_settles_cancelled ... ok
+test native_cancel_before_grant_releases_claim ... ok
+test native_cancel_granted_without_started_retains_unknown_writer_and_claim ... ok
+test native_cancel_owner_validation_attempt_replay_and_concurrency ... FAILED
+test native_cancel_slow_offer_continues_after_prompt_directive ... ok
+
+failures:
+
+---- native_cancel_owner_validation_attempt_replay_and_concurrency stdout ----
+
+thread 'native_cancel_owner_validation_attempt_replay_and_concurrency' (2249187) panicked at crates/aq-server/tests/native_cancellation.rs:301:5:
+assertion `left == right` failed: retained cancellation must not starve the released task
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_cancel_owner_validation_attempt_replay_and_concurrency
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.40s
+
+error: test failed, to rerun pass `-p aq-server --test native_cancellation`
+     Running tests/native_expiry.rs (target/debug/deps/native_expiry-b313352d6facc46f)
+
+running 6 tests
+test configured_runtime_closes_offline_offer_and_obeys_shutdown ... ok
+test fresh_offer_remains_held_then_cursor_wrap_closes_exact_expired_owner_once ... ok
+test granted_without_started_remains_held_even_after_grant_and_wall_expiry ... ok
+test node_lock_refusal_advances_cursor_and_does_not_drop_claim_or_poison_pool ... ok
+test published_offer_actual_accept_and_expiry_preserve_source_while_revoking_material ... ok
+test unconfigured_runtime_returns_without_closing_fixture_claims ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.07s
+
+     Running tests/phase_execution_transport.rs (target/debug/deps/phase_execution_transport-ad4a54b68873b533)
+
+running 4 tests
+test absent_qualified_cleanup_keeps_transport_inactive_without_legacy_fallback ... ok
+test actual_production_prepare_issues_once_and_replay_keeps_independent_execution_deadline ... ok
+test auth_exact_nonce_type_negotiation_and_body_bounds_refuse_before_issuance ... ok
+test genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.24s
+
+     Running tests/phase_never_granted.rs (target/debug/deps/phase_never_granted-7d3ab82d0fece796)
+
+running 3 tests
+test actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence_proof ... ok
+test actual_refresh_cancellation_before_grant_uses_typed_absence_owner ... ok
+test actual_refresh_issued_phase_grant_never_uses_absence_release ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.61s
+
+     Running tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-d615e61739dac0a0)
+
+running 4 tests
+test failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity ... ok
+test pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started ... ok
+test suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held ... FAILED
+test wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority ... FAILED
+
+failures:
+
+---- suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held stdout ----
+
+thread 'suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held' (2252961) panicked at crates/aq-server/tests/phase_terminal_closure.rs:67:6:
+called `Result::unwrap()` on an `Err` value: Conflict("phase execution authority is not currently available")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority stdout ----
+
+thread 'wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority' (2253299) panicked at crates/aq-server/tests/common/phase_execution_core.rs:259:10:
+called `Result::unwrap()` on an `Err` value: Conflict("accepted preparation v2 is not currently available")
+
+
+failures:
+    suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held
+    wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.88s
+
+error: test failed, to rerun pass `-p aq-server --test phase_terminal_closure`
+     Running tests/profiled_hot.rs (target/debug/deps/profiled_hot-3c497a4038a2c418)
+
+running 5 tests
+test actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback ... ok
+test adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_seals ... ok
+test immutable_cache_hit_never_caches_renewal_revocation_or_expiry ... ok
+test immutable_cache_is_exact_keyed_count_and_byte_bounded ... ok
+test production_typed_spec_checks_actual_sealed_selection_and_source ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.88s
+
+     Running tests/schema30_preparation.rs (target/debug/deps/schema30_preparation-f961cb8dc186aa3c)
+
+running 4 tests
+test current30_missing_one_or_both_tables_refuses_reopen_without_repair ... ok
+test failure_after_sql_metadata_transition_rolls_back_tables_and_meta_before_commit ... ok
+test fresh_ordered30_is_empty_and_reopens_without_activating_any_owner ... ok
+test real29_collision_rolls_back_all30_and_explicit_repair_allows_exact_upgrade ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.80s
+
+     Running tests/schema32_phase_execution.rs (target/debug/deps/schema32_phase_execution-0dd88092ca88e01a)
+
+running 4 tests
+test current32_missing_execution_history_refuses_reopen_without_repair ... ok
+test failure_after32_sql_meta_transition_rolls_back_table_and_version_together ... ok
+test ordered32_preserves_prior_metadata_and_creates_no_execution_authority ... ok
+test real31_table_collision_rolls_back32_and_explicit_fixture_repair_allows_retry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.25s
+
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-e15fbd1bfbdc1cec)
+
+running 9 tests
+test actual32_history_survives33_and_reserves_cleanup_without_terminal_effects ... ok
+test actual_grant_cannot_commit_without_reserved_terminal_capacity ... ok
+test already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant ... ok
+test collision_rolls_back33_without_changing_actual32_history ... ok
+test legacy_parent::actual_current33_legacy_closure_retains_parent_against_delete_and_key_update ... ok
+test old_snapshot_classifies_actual030_origin_even_without_visible032_grant ... ok
+test ordered::actual32_open_owner_history_survives_registered33_upgrade ... ok
+test ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair ... ok
+test relational_only_over_budget_backfill_rolls_back_entire_migration ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 59.83s
+
+     Running tests/schema43_cancellation.rs (target/debug/deps/schema43_cancellation-9cc7e346aa2c6223)
+
+running 3 tests
+test cancellation43_startup_refuses_missing_or_changed_proof_owners ... ok
+test cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses ... ok
+test cancellation43_upgrade_preserves_prior_records_and_old41_refuses ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.47s
+
+error: 3 targets failed:
+    `-p aq-server --test native_accepted_preparation`
+    `-p aq-server --test native_cancellation`
+    `-p aq-server --test phase_terminal_closure`

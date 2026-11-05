@@ -27,6 +27,9 @@ use sqlx::Row;
 use std::sync::{Arc, OnceLock};
 
 pub const METADATA_HEADER: &str = "aq-material-delivery";
+/// C5b: the subscription-login version these bytes are (decimal). Echoed as
+/// `MaterialRefresh.base_version` on write-back. Absent for other credentials.
+pub const VERSION_HEADER: &str = "aq-material-version";
 pub const MAX_METADATA_HEADER_BYTES: usize = 4096;
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
@@ -44,6 +47,8 @@ fn same(a: &impl serde::Serialize, b: &impl serde::Serialize) -> Result<bool, Ap
 /// Kept opaque to avoid accidental logging/serialization of secret bytes.
 pub struct Delivery {
     pub metadata: MaterialDelivery,
+    /// Login version of the delivered bytes, for subscription logins.
+    pub version: Option<i64>,
     material: material::ProtectedMaterial,
 }
 impl Delivery {
@@ -90,11 +95,13 @@ pub async fn fetch(
         .map_err(|_| refused())?;
     let read_lease = lease.clone();
     let node_id = auth.id();
+    let (source, version) =
+        super::login_refresh::lease_versioned(&state.store.pool, &registry, &lease).await?;
     let bytes = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            material::read_for_lease(&registry, &read_lease, node_id)
+            material::read_for_lease_from(&registry, &read_lease, node_id, source.as_ref())
         }),
     )
     .await
@@ -208,6 +215,27 @@ pub async fn fetch(
     {
         return Err(refused());
     }
+    // A delegated caller may fetch only the lease bound to its own permit, and
+    // only while that permit's row is still unrevoked.
+    if let Some(delegate) = auth.delegated() {
+        let record = &delegate.current.record;
+        let bound: Option<uuid::Uuid> = row.get("permit_id");
+        let live: Option<bool> = sqlx::query_scalar(
+            "SELECT NOT revoked FROM delegated_permits WHERE permit_id=$1 AND node_id=$2 AND attempt_id=$3 FOR SHARE",
+        )
+        .bind(record.permit_id)
+        .bind(auth.id())
+        .bind(request.binding.attempt_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        if bound != Some(record.permit_id)
+            || record.binding.attempt_id != request.binding.attempt_id
+            || live != Some(true)
+        {
+            return Err(refused());
+        }
+    }
     let selected: Value = sqlx::query_scalar(
         "SELECT selection FROM intelligence_attempt_selections WHERE attempt_id=$1",
     )
@@ -243,6 +271,7 @@ pub async fn fetch(
     tx.commit().await.map_err(db)?;
     Ok(Delivery {
         metadata,
+        version,
         material: bytes,
     })
 }
@@ -266,7 +295,14 @@ async fn report(
     headers: HeaderMap,
     crate::admin_api::ApiJson(request): crate::admin_api::ApiJson<MaterialFetch>,
 ) -> Result<Response, AppError> {
-    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::FetchPreparationMaterial,
+        None,
+    )
+    .await?;
+    crate::delegated_permits::runtime::require_binding(&auth, &request.binding)?;
     let delivery = fetch(&state, &auth, &request).await?;
     // The HTTP stack owns this one response copy; zeroization of the private
     // reader cannot promise erasure of kernel/network/client buffers.
@@ -281,6 +317,11 @@ async fn report(
     response
         .headers_mut()
         .insert(METADATA_HEADER, metadata_header(&delivery.metadata)?);
+    if let Some(version) = delivery.version {
+        response
+            .headers_mut()
+            .insert(VERSION_HEADER, HeaderValue::from(version));
+    }
     Ok(response)
 }
 

@@ -191,6 +191,19 @@ async fn paired_stop_does_not_qualify_old_sql_result_or_release_owners() {
         .unwrap();
     let before = snapshot(&f).await;
     let pool = &f.c.env.env.pool;
+    // A physical stop alone cannot authorize a retry of unsettled source/effects.
+    let error = sqlx::query("UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1")
+        .bind(start.original.binding.attempt_id)
+        .execute(pool)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .as_database_error()
+            .unwrap()
+            .message()
+            .contains("actual owner-verified release record required")
+    );
     // Relational-only denied requests, not valid report/release authority. The
     // exact new guard context proves refusal precedes unrelated payload checks.
     let bytes = b"{}".to_vec();
@@ -201,7 +214,7 @@ async fn paired_stop_does_not_qualify_old_sql_result_or_release_owners() {
             .as_database_error()
             .unwrap()
             .message()
-            .contains("phase result and settlement protocol not qualified")
+            .contains("qualified exact phase result origin required")
     );
     let error=sqlx::query("INSERT INTO profiled_verified_releases(attempt_id,release_id,stop_operation_id,stop_evidence_digest,host_owner_qualification,source_receipt_digest,effect_receipt_digest,verified_at_ms) VALUES($1,$2,$3,$4,'{}',$4,$4,1)").bind(start.original.binding.attempt_id).bind(uuid::Uuid::new_v4()).bind(stop.original.evidence.stop_operation_id).bind(digest.as_str()).execute(pool).await.unwrap_err();
     assert!(
@@ -209,7 +222,7 @@ async fn paired_stop_does_not_qualify_old_sql_result_or_release_owners() {
             .as_database_error()
             .unwrap()
             .message()
-            .contains("phase result and settlement protocol not qualified")
+            .contains("qualified settlement release owner required")
     );
     assert_eq!(snapshot(&f).await, before);
 }

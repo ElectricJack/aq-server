@@ -1,0 +1,2 @@
+$ /home/jkern/dev/agent-queue2/.venv/bin/python protocol/dashboard-read/v1/check.py
+5 actual-route synthetic fixtures match dashboard-read-1 schema

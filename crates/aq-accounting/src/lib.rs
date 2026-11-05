@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub mod pricing;
 pub mod projection;
 pub mod reconcile;
+pub mod vm_time;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid accounting evidence")]

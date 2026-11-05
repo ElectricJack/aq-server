@@ -61,12 +61,15 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     fixture_response("sessions", &list);
     let row = &list["data"]["items"][0];
     assert_eq!(row["observation"]["state"], "unknown");
-    assert!(list["data"]["total"]["value"].is_null());
+    assert_eq!(list["data"]["total"], json!({"value":1,"accuracy":"exact"}));
     let id = row["id"].as_str().unwrap();
     let (status, detail) = read(&app, &format!("/api/v1/sessions/{id}"), "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["data"]["id"], id);
     fixture_response("session", &detail);
+    assert_eq!(row["last_output_at"], detail["data"]["last_activity_at"]);
+    // No launch binding: inspect only, no session message slot.
+    assert_eq!(detail["data"]["permissions"], json!(["session.inspect"]));
     assert_eq!(
         read(
             &app,
@@ -91,13 +94,14 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     fixture_response("projects", &p);
     assert_eq!(p["data"]["items"].as_array().unwrap().len(), 1);
     let (_, o) = read(&app, "/api/v1/overview", "owner@localhost").await;
-    assert!(o["data"]["counts"]["running"]["value"].is_null());
+    assert_eq!(o["data"]["counts"]["running"]["value"], 0);
+    assert_eq!(o["data"]["counts"]["running"]["accuracy"], "exact");
     fixture_response("overview", &o);
     assert_eq!(
         read(&app, "/api/v1/sessions?limit=101", "owner@localhost")
             .await
             .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 }
 #[tokio::test]
@@ -147,7 +151,7 @@ async fn malformed_inputs_have_dashboard_error_envelopes() {
     ] {
         let (status, body) = read(&app, path, "owner@localhost").await;
         assert!(
-            status == StatusCode::BAD_REQUEST || status == StatusCode::CONFLICT,
+            status == StatusCode::UNPROCESSABLE_ENTITY || status == StatusCode::GONE,
             "{body}"
         );
         assert!(body["code"].is_string(), "{body}");
@@ -175,7 +179,19 @@ async fn acl_expiry_during_database_wait_refuses_read() {
         .await
         .unwrap();
     let request = tokio::spawn(async move { read(&app, "/api/v1/bootstrap", email).await });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Advance the fake clock only after auth sampled the pre-expiry time and
+    // its ACL query is actually blocked. A fixed delay races pool startup.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND application_name='aq-dashboard-read' AND wait_event_type='Lock' AND query LIKE 'SELECT session_key,session_identity,revision,expires_at_ms FROM session_inspection_acl%')")
+                .fetch_one(&pool).await.unwrap();
+            if waiting {
+                break;
+            }
+            assert!(!request.is_finished(), "request completed before ACL lock wait");
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }).await.expect("dashboard auth must wait for the held ACL lock");
     assert!(!request.is_finished());
     f.time.store((NOW + 100) as i64, Ordering::SeqCst);
     lock.commit().await.unwrap();
@@ -322,4 +338,47 @@ async fn session_lifecycle_reports_are_historical_acl_scoped_and_never_live_obse
     assert_eq!(visible["data"]["lifecycle"], after["data"]["lifecycle"]);
     f.time.store((NOW + 3000) as i64, Ordering::SeqCst);
     assert_eq!(read(&app, &path, email).await.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn search_validates_queries_and_returns_all_groups() {
+    let f = fixture().await;
+    insert(&f).await;
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/search?q=Remote&limit=1", "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let groups = body["data"]["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 5);
+    assert!(
+        groups
+            .iter()
+            .all(|g| g["hits"].is_array() && g["has_more"].is_boolean())
+    );
+    let sessions = groups.iter().find(|g| g["type"] == "session").unwrap();
+    assert_eq!(sessions["hits"].as_array().unwrap().len(), 1);
+    assert!(!body.to_string().contains("private-search-canary"));
+    for suffix in [
+        "q=",
+        "q=%0A",
+        "q=Remote&limit=0",
+        "q=Remote&limit=101",
+        "q=Remote&types=invalid",
+    ] {
+        assert_eq!(
+            read(&app, &format!("/api/v1/search?{suffix}"), "owner@localhost")
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    assert_eq!(
+        read(
+            &app,
+            &format!("/api/v1/search?q={}", "a".repeat(257)),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }

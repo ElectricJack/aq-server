@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-a3b-main-isolation-20261103/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.48s
+     Running tests/native_initial_grant.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-cc865813db64cad0)
+
+running 1 test
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.86s
+

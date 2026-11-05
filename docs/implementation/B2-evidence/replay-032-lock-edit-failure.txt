@@ -1,0 +1,6 @@
+    Updating crates.io index
+error: failed to select a version for the requirement `js-sys = "^0.3"` (locked to 0.3.207)
+candidate versions found which didn't match: 0.3.107, 0.3.106, 0.3.105, ...
+location searched: crates.io index
+required by package `uuid v1.29.0`
+    ... which satisfies dependency `uuid = "^1"` (locked to 1.29.0) of package `aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-supervisor-host)`

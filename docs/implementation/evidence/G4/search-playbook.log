@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.04s
+     Running tests/playbook_activation.rs (target/debug/deps/playbook_activation-4a4b3e92c46a0911)
+
+running 1 test
+test definitions::dashboard_search_loaded_definition_uses_true_name_and_source_digest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 1.46s
+

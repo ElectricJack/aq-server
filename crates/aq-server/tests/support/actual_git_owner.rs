@@ -213,7 +213,12 @@ impl Owner {
                 // aq-git's legitimate Git children allocate separate PGIDs.
                 // Keep their exact identities through reparenting; only their
                 // own aq-git supervisor may signal/reap those nested groups.
-                if p.session != self.leader.session {
+                // A child that created its own session can remain as an
+                // unreaped zombie after termination. It cannot touch
+                // private state. Retain its exact identity and require it to
+                // disappear before teardown; never signal its foreign group.
+                // Any live session escape still fails closed.
+                if p.session != self.leader.session && p.state != 'Z' {
                     return Err("Git descendant escaped the owned foreground session".into());
                 }
                 self.observed.insert((p.pid, p.start), p.clone());

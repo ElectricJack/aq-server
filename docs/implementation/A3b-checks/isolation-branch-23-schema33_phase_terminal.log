@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-16b6bd5d0ff418d2)
+
+running 1 test
+test actual_grant_cannot_commit_without_reserved_terminal_capacity ... 
+thread 'actual_grant_cannot_commit_without_reserved_terminal_capacity' (2119613) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"unavailable","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 500
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    actual_grant_cannot_commit_without_reserved_terminal_capacity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 2.16s
+
+error: test failed, to rerun pass `-p aq-server --test schema33_phase_terminal`

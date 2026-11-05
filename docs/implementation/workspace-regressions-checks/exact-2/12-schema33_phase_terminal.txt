@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.17s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-e15fbd1bfbdc1cec)
+
+running 1 test
+test already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant ... 
+thread 'already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant' (2235785) panicked at crates/aq-server/tests/common/phase_execution_core.rs:259:10:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.87s
+
+error: test failed, to rerun pass `-p aq-server --test schema33_phase_terminal`

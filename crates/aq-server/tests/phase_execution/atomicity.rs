@@ -45,11 +45,30 @@ async fn final_receipt_insert_failure_rolls_back_hot_journal_and_installation() 
 }
 #[tokio::test]
 async fn original_proposal_expiry_does_not_limit_new_execution_lease() {
-    let f = prepared(true).await;
+    // The live offer window is the minimum of its input facts. A short-lived
+    // node-scoped observation bounds it, while the operator observation keeps
+    // current health, so only the original proposal expiry passes.
+    let f = prepared_with_short_observation(true, 2000).await;
     let now = (f.c.env.env.state.clock)().timestamp_millis() as u64;
-    let wait = f.p.original.offered.clock.expires_at_ms.saturating_sub(now) + 25;
-    assert!(wait < 5000, "bounded actual original proposal wait");
-    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    let offer_expiry = f.p.original.offered.clock.expires_at_ms;
+    assert!(
+        offer_expiry > now,
+        "original proposal is still live before the advance"
+    );
+    let wait = offer_expiry - now + 25;
+    assert!(
+        wait < 2100,
+        "short observation bounds the original proposal"
+    );
+    assert!(
+        now + wait < f.a.lease.expires_at_ms,
+        "original proposal must expire inside the live preparation lease"
+    );
+    // The injected owner clock advances; nothing sleeps.
+    f.c.env
+        .env
+        .time
+        .fetch_add(wait as i64, std::sync::atomic::Ordering::SeqCst);
     let grant = phase_execution::prepare(
         &f.c.env.env.state,
         &auth(&f.c).await,
@@ -115,12 +134,7 @@ async fn final_insert_wait_expiring_facts_rolls_back_despite_live_preparation_an
     let clock = Arc::new(AtomicI64::new(at));
     let sample = clock.clone();
     f.c.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(
-            sample
-                .load(Ordering::SeqCst)
-                .max(chrono::Utc::now().timestamp_millis()),
-        )
-        .unwrap()
+        chrono::DateTime::from_timestamp_millis(sample.load(Ordering::SeqCst)).unwrap()
     });
     let before = rows(&f.c).await;
     sqlx::raw_sql("CREATE FUNCTION fixture_phase_insert_wait() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtextextended('fixture-phase-final-insert',0)); RETURN NEW; END $$; CREATE TRIGGER zz_fixture_phase_insert_wait AFTER INSERT ON profiled_phase_execution_grants FOR EACH ROW EXECUTE FUNCTION fixture_phase_insert_wait();").execute(&f.c.env.env.pool).await.unwrap();

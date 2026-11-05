@@ -1,0 +1,36 @@
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-central-authority)
+    Finished `test` profile [unoptimized] target(s) in 8.87s
+     Running unittests src/lib.rs (target/debug/deps/aq_central_authority-e48be13f3fd47a98)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/authority.rs (target/debug/deps/authority-deb71dbe67a47d0f)
+
+running 16 tests
+test all_generation_history_blocks_gen1_replay_after_disjoint_gen2 ... ok
+test cancellation_is_not_stopped_proof_and_late_observations_do_not_revive ... ok
+test closed_wire_rejects_unknown_duplicates_oversize_and_fabricated_task_scope ... ok
+test exported_schema_stays_frozen ... ok
+test expired_permit_cannot_revive_and_refused_event_preserves_expiry ... ok
+test foreign_boot_and_clock_regression_cannot_mutate_state ... ok
+test history_refuses_missing_duplicate_foreign_and_stale_coverage ... ok
+test history_requires_exact_cursor_identity_and_all_operation_roles ... ok
+test known_handed_off_mail_and_changed_original_receipt_cannot_be_reused ... ok
+test published_plan_and_permit_are_exact_roundtrippable_pins ... ok
+test runtime_is_always_unavailable_and_export_admits_only_central_identity ... ok
+test renewals_are_monotonic_bounded_and_do_not_reset_wall_deadline ... ok
+test snapshot_decode_checks_cross_associations_and_deadline_not_only_shape ... ok
+test start_is_bound_to_exact_plan_permit_batch_and_launch ... ok
+test validates_real_identity_generations_batches_and_bounded_turns ... ok
+test uncertain_input_needs_exact_explicit_reconciliation_and_never_changes_known_outcome ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Doc-tests aq_central_authority
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

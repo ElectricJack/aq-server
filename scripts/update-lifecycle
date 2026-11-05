@@ -161,8 +161,7 @@ poll() {
 # ---------------------------------------------------------------- images
 
 # The release labels, from the same constants release.yml reads.
-STATE_FORMAT=$(sed -n 's/^pub const STATE_FORMAT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' \
-  "$REPO/crates/aq-server/src/lib.rs")
+STATE_FORMAT=$(python3 "$REPO/scripts/migration_catalog.py")
 PROTOCOL_SOURCE=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["workspace"]["dependencies"]["aq-protocol"]["path"] + "/src/lib.rs")' "$REPO/Cargo.toml")
 PROTOCOL_MAX=$(sed -n 's/^pub const SUPPORTED_WORKER_PROTOCOLS: (u32, u32) = ([0-9][0-9]*, \([0-9][0-9]*\));$/\1/p' \
   "$REPO/$PROTOCOL_SOURCE")
@@ -208,6 +207,8 @@ versioned_copy() {
   cp -r "$REPO/crates" "$dir/"
   cp -r "$REPO/vendor" "$dir/"
   cp -r "$REPO/protocol" "$dir/"
+  # Dockerfile.worker installs the worker volume initializer from scripts/.
+  mkdir -p "$dir/scripts" && cp "$REPO/scripts/worker-init-volumes.sh" "$dir/scripts/"
   sed -i -E '/^\[workspace\.package\]/,/^\[/ s/^version = "[^"]*"/version = "'"$version"'"/' \
     "$dir/Cargo.toml"
   grep -q "^version = \"$version\"$" "$dir/Cargo.toml" || fail "cannot set version $version"
@@ -319,8 +320,9 @@ expect_status() {
   }
 }
 
+# In the server's own database, which the updater backs up and restores.
 psql_suite() {
-  dc exec -T postgres psql -U agent_q -d agent_q -v ON_ERROR_STOP=1 -tAc "$1" \
+  dc exec -T postgres psql -U agent_q -d aq_server -v ON_ERROR_STOP=1 -tAc "$1" \
     </dev/null 2>>"$COMPOSE_LOG"
 }
 
@@ -413,9 +415,12 @@ PY
   if docker run -d --name "$REGISTRY_NAME" -p "$REGISTRY:5000" registry:2 >>"$COMPOSE_LOG" 2>&1 &&
       poll "registry API" 30 0.5 curl -fsS --max-time 2 "http://$REGISTRY/v2/"; then
     # A missing manifest proves the daemon reaches the registry as well as WSL.
+    # The classic image store says "manifest unknown"; the containerd image
+    # store (GitHub runners) says 'failed to resolve reference "<ref>": ... not found'.
     timeout -k 5 30 docker pull "$REGISTRY/aq-connectivity-probe:not-present" \
       </dev/null >"$LOG_DIR/registry-daemon-probe.log" 2>&1 || true
-    if grep -Eq 'manifest unknown|manifest .*not found' "$LOG_DIR/registry-daemon-probe.log"; then
+    if grep -Eq 'manifest unknown|manifest .*not found|failed to resolve reference .*aq-connectivity-probe:not-present: not found$' \
+        "$LOG_DIR/registry-daemon-probe.log"; then
       REGISTRY_READY=1
       break
     fi
@@ -446,15 +451,29 @@ audience = "suite"
 owner_email = "suite@example.com"
 enabled = true
 
+# As vault.production.example: the server's graph and Git dependencies.
+[agent_access]
+graph_url = "http://aq-graph:8741"
+graph_token_file = "/run/aq/graph_token"
+mutation_actor_id = "aq-server"
+
+[source_retention]
+staging_root = "/var/lib/aq/source-staging"
+git_root = "/var/lib/aq/git"
+git_socket = "/run/aq-git/central.sock"
+
 [updates]
 spool_dir = "/updater"
 EOF
 chmod 0644 "$VAULT/config.toml"
-# Read by the postgres and server container users through Compose secrets.
-(umask 022 && head -c 24 /dev/urandom | base64 | tr -d '\n' >"$SECRETS/postgres_password")
+# Every secret compose.yaml binds, independently generated (docs/operations.md).
+# Read by the container users through Compose secrets.
+for secret in postgres_password server_database_password graph_database_password graph_token; do
+  (umask 022 && head -c 24 /dev/urandom | base64 | tr -d '\n' >"$SECRETS/$secret")
+done
 # cloudflared is never started; Compose only needs the file to exist.
 echo "suite-dummy-tunnel-token" >"$SECRETS/tunnel_token"
-chmod 0644 "$SECRETS/postgres_password" "$SECRETS/tunnel_token"
+chmod 0644 "$SECRETS"/*
 "$UPDATER" test-keygen "$KEYS" >/dev/null 2>>"$UPDATER_LOG"
 cat >"$CONFIG" <<EOF
 state_dir = "$STATE"
@@ -569,6 +588,13 @@ step "start postgres"
 dc up -d --wait --wait-timeout 120 postgres </dev/null >>"$COMPOSE_LOG" 2>&1 || {
   tail -20 "$COMPOSE_LOG" >&2
   fail "postgres did not become healthy"
+}
+# Create the server's aq_server role and database before the first install,
+# as `compose up` would on a real host (the updater also re-runs this
+# idempotent provisioning before each pre-update backup).
+dc run --rm --no-deps server-db-init </dev/null >>"$COMPOSE_LOG" 2>&1 || {
+  tail -20 "$COMPOSE_LOG" >&2
+  fail "server-db-init failed"
 }
 
 # ------------------------------------------------------------------ cases

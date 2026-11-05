@@ -1,0 +1,13 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8m 21s
+     Running tests/dashboard_assets.rs (target/debug/deps/dashboard_assets-33950a1bd7acb5bb)
+
+running 4 tests
+test actual_local_human_http_serves_loaded_bytes_after_source_removal ... ok
+test current_owner_viewer_and_removed_user_authenticate_each_get_and_head ... ok
+test exact_spa_paths_do_not_capture_api_machine_unknown_assets_or_traversal ... ok
+test server_image_serves_pinned_dashboard_digest ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.05s
+

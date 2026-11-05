@@ -1,0 +1,94 @@
+[
+  {
+    "case": "playbook_activation::catalog::actual_empty_startup_preserves_installed_definitions_and_activations",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::catalog::actual_current_catalog_tracks_later_install_and_activation_without_restamping_startup",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::catalog::current_catalog_refuses_foreign_scope_roles_bad_query_and_unmounted_owner",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::catalog::actual_explicit_empty_owner_has_current_catalog_without_grants_or_startup_snapshot",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::catalog::held_catalog_read_pins_original_owner_binding_and_authorization_version",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::changed_bootstrap_binding_is_refused_and_successful_stop_replay_is_exact",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::definitions::actual_startup_definitions_are_redacted_historical_and_do_not_read_engine_snapshot",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_socket_directory",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::definitions::inert_development_startup_and_quanta_create_no_work_or_delivery",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::definitions::dashboard_search_loaded_definition_uses_true_name_and_source_digest",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drains",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::definitions::loaded_definitions_refuse_foreign_scope_roles_unknown_query_and_absent_runtime",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::inspection_discovers_actual_admissions_runs_and_public_timeline",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::inspection_refuses_other_owner_viewer_and_absent_runtime",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::startup_missing_registered_schema_refuses_before_engine_creation",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_activation::lost_engine_connection_does_not_fabricate_shutdown_release_ack",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_bridge::actual_engine_commit_lost_aq_ack_recovers_same_run_after_owner_restart_and_revocation",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_bridge::actual_http_renew_cancel_progress_while_real_mail_host_exhausts_bridge_work_permits",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_bridge::actual_protected_engine_host_queues_one_message_and_replays_fixed_event_outbox",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_bridge::expired_admission_page_is_held_without_starving_later_current_grant",
+    "package": "aq-server"
+  },
+  {
+    "case": "playbook_bridge::optional_http_mount_requires_owner_csrf_and_only_finite_controls_survive_maintenance",
+    "package": "aq-server"
+  },
+  {
+    "case": "profiled_results::bounded_owner_quantum_expires_its_accepted_question_and_delivers_exact_finality",
+    "package": "aq-server"
+  },
+  {
+    "case": "profiled_results::protected_engine_question_waits_for_real_owner_and_exact_completion_event",
+    "package": "aq-server"
+  }
+]

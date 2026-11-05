@@ -1,0 +1,5 @@
+COMMAND: cargo fmt EXIT: 0 LOG: overview-fmt.log
+COMMAND: cargo fmt --check EXIT: 0 LOG: overview-fmt-check.log
+COMMAND: cargo test --locked -p aq-server --test dashboard_read acl_expiry_during_database_wait_refuses_read EXIT: 0 LOG: overview-acl-fixed.log
+COMMAND: cargo test --locked -p aq-server --test dashboard_read --test dashboard_mounts EXIT: 0 LOG: overview-read-regressions-final.log
+COMMAND: cargo clippy --locked -p aq-server --test dashboard_read -- -D warnings EXIT: 0 LOG: overview-read-clippy.log

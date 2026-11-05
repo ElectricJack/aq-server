@@ -1,0 +1,12 @@
+$ cargo test --locked -p aq-server --lib delivery_
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 11s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-4f89422fbe2e836c)
+
+running 3 tests
+test delivery::protocol::tests::delivery_envelopes_reject_uncorrelated_contradictory_and_causal_presence ... ok
+test profiled_execution::material::tests::delivery_requires_exact_scope_and_current_bounded_file_bytes ... ok
+test delivery::protocol::tests::delivery_frames_enforce_both_limits_and_newline ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.11s
+

@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/schema30_preparation.rs (target/debug/deps/schema30_preparation-d72e6beb4248957b)
+
+running 1 test
+test current30_missing_one_or_both_tables_refuses_reopen_without_repair ... 
+thread 'current30_missing_one_or_both_tables_refuses_reopen_without_repair' (2119169) panicked at crates/aq-server/tests/schema30_preparation.rs:124:10:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "2BP01", message: "cannot drop table profiled_v2_accepts because other objects depend on it", detail: Some("constraint profiled_phase_execution_grants_attempt_id_fkey on table profiled_phase_execution_grants depends on table profiled_v2_accepts"), hint: Some("Use DROP ... CASCADE to drop the dependent objects too."), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("dependency.c"), line: Some(1148), routine: Some("reportDependentObjects") })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    current30_missing_one_or_both_tables_refuses_reopen_without_repair
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.33s
+
+error: test failed, to rerun pass `-p aq-server --test schema30_preparation`

@@ -733,3 +733,94 @@ fn worker_complete_claim_requires_owner_parser_qualification() {
     assert_eq!(projection.incomplete_calls, 0);
     assert_eq!(projection.known_subtotals[0], 100);
 }
+fn revision(revision: u64, input_rate: u64) -> RateCardRevision {
+    let mut card = rate();
+    card.reference = artifact(&format!("rate-{revision}"));
+    card.rules[0].microunits_per_million_tokens = input_rate;
+    RateCardRevision {
+        revision,
+        corrects: (revision > 1).then(|| artifact(&format!("rate-{}", revision - 1))),
+        card,
+    }
+}
+fn priced(r: &ObservationRecord, pin: Option<&ArtifactRef>) -> Fact {
+    let p = policy();
+    let mut c = context(r, &p, None);
+    c.pricing_reference = pin;
+    appended(decide(r, c).unwrap())
+}
+#[test]
+fn rate_card_corrections_are_revisions_that_reprice_once() {
+    let book = RateCardBook::new(vec![revision(1, 2_000_000), revision(2, 1_000_000)]).unwrap();
+    assert_eq!(
+        book.current(&text("provider"), &text("model"))
+            .unwrap()
+            .reference,
+        artifact("rate-2")
+    );
+    // A correction must name its predecessor and keep the revision chain dense.
+    let mut gap = revision(3, 1);
+    gap.corrects = Some(artifact("rate-1"));
+    assert!(RateCardBook::new(vec![revision(1, 2_000_000), revision(2, 1), gap]).is_err());
+    assert!(RateCardBook::new(vec![revision(2, 1)]).is_err());
+    assert!(RateCardBook::new(vec![revision(1, 1), revision(1, 2)]).is_err());
+    // A fact pinned to revision 1 is billed once, at the corrected revision.
+    let mut r = record();
+    usage(&mut r).cost = Cost::Unknown {
+        reason: UnknownReason::NotReported,
+    };
+    let fact = priced(&reseal(r), Some(&artifact("rate-1")));
+    let s = summarize(&[(Some(EstimateBasis::TokenRates), &fact)], &book).unwrap();
+    // 70 x 1 + 20 x 0.5 + 10 x 3 + 50 x 4 = 310 microunits under revision 2.
+    assert_eq!(s.spent_microunits, Some(310));
+    assert!(s.complete);
+    assert!(matches!(
+        &s.costs[..],
+        [Cost::NonInvoiceEstimate { amount_microunits: 310, rate_card, .. }] if *rate_card == artifact("rate-2")
+    ));
+}
+#[test]
+fn reported_zero_is_distinct_from_unknown() {
+    let book = RateCardBook::new(vec![revision(1, 2_000_000)]).unwrap();
+    let mut zero = record();
+    usage(&mut zero).cost = Cost::ProviderReported {
+        amount_microunits: 0,
+        currency: text("USD"),
+        receipt: artifact("receipt"),
+    };
+    let zero = priced(&reseal(zero), None);
+    let s = summarize(&[(Some(EstimateBasis::TokenRates), &zero)], &book).unwrap();
+    assert_eq!(s.spent_microunits, Some(0));
+    assert!(s.complete);
+    assert!(matches!(
+        &s.costs[..],
+        [Cost::ProviderReported {
+            amount_microunits: 0,
+            ..
+        }]
+    ));
+    let mut unknown = record();
+    usage(&mut unknown).cost = Cost::Unknown {
+        reason: UnknownReason::NotReported,
+    };
+    usage(&mut unknown).call.native_call_id = text("call-2");
+    let unknown = priced(&reseal(unknown), None);
+    let s = summarize(&[(Some(EstimateBasis::TokenRates), &unknown)], &book).unwrap();
+    assert!(!s.complete);
+    assert_eq!(s.spent_microunits, Some(0));
+    assert!(matches!(&s.costs[..], [Cost::Unknown { .. }]));
+    // Flat subscription usage is labelled, never charged at token rates.
+    let s = summarize(
+        &[(Some(EstimateBasis::SubscriptionAllocation), &unknown)],
+        &book,
+    )
+    .unwrap();
+    assert!(!s.complete);
+    assert_eq!(
+        s.costs,
+        vec![Cost::Unknown {
+            reason: UnknownReason::NotApplicable
+        }]
+    );
+    assert!(s.reason.unwrap().contains("subscription"));
+}

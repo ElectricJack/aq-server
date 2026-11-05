@@ -1,5 +1,5 @@
 //! Actual old-profile owner fixture for mixed-profile route qualification.
-//! The dispatch test restores real clocks before testing old library issuance.
+//! The dispatch and old library issuer share the controlled synthetic clock.
 use aq_admission::preparation_v2 as phase;
 use aq_server::profiled_execution::accepted_preparation as owner;
 const POLICY_ID: &str = "aq.accepted-preparation-policy/synthetic-test";

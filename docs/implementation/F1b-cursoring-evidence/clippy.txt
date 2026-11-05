@@ -1,0 +1,40 @@
+    Checking tokio v1.54.1
+    Checking aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-agent-api)
+    Checking aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-session-api)
+    Checking aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-lifecycle-api)
+    Checking aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-terminal-relay-protocol)
+    Checking tokio-stream v0.1.19
+    Checking sqlx-core v0.8.6
+    Checking hyper v1.12.0
+    Checking hyper-util v0.1.21
+    Checking sqlx-postgres v0.8.6
+    Checking tower v0.5.3
+    Checking tokio-rustls v0.26.6
+    Checking tokio-util v0.7.20
+    Checking tokio-postgres v0.7.18
+    Checking sqlx v0.8.6
+    Checking hyper-rustls v0.27.10
+    Checking tower-http v0.6.11
+    Checking reqwest v0.12.28
+    Checking postgres v0.19.14
+    Checking aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-central-authority)
+    Checking aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+    Checking aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-profiles)
+    Checking aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-admission)
+    Checking axum v0.8.9
+    Checking aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-release)
+    Checking aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-selection)
+    Checking aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-result-media)
+    Checking aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-phase-terminal-protocol)
+    Checking aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-playbook-host)
+    Checking aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-notifications)
+    Checking aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-terminal-relay)
+    Checking aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-observation-api)
+    Checking aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-accounting)
+    Checking aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-observation-admission)
+    Checking aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-review-protocol)
+    Checking aq-responses-transport v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/vendor/aq-responses-transport-0.1.0)
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Checking aq-session-host v0.1.7 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/vendor/aq-session-host-0.1.7)
+    Checking aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-supervisor-host)
+    Finished `dev` profile [unoptimized] target(s) in 4m 46s

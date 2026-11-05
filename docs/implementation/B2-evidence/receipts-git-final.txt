@@ -1,0 +1,23 @@
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-central-authority)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 36s
+     Running tests/phase_source_retention.rs (target/debug/deps/phase_source_retention-50589287c4059f3c)
+
+running 2 tests
+test frozen::delegated_central_receipts ... SOURCE_RETENTION_OWNER group=3341401 start=5808427 session=3334201 root=/tmp/.tmpSZsiIh/rc
+SOURCE_RETENTION_OWNER group=3341622 start=5808752 session=3334201 root=/tmp/.tmpSZsiIh/rw
+SOURCE_RETENTION_OWNER_DRAINED group=3341622
+SOURCE_RETENTION_OWNER_DRAINED group=3341401
+actual phase source retained checkpoint upload report and current-retention proof; no physical/provider/settlement claim
+ok
+test refresh::delegated_central_receipts ... SOURCE_RETENTION_OWNER group=3342655 start=5809870 session=3334201 root=/tmp/.tmpAE9t47/rc
+SOURCE_RETENTION_OWNER group=3342929 start=5810050 session=3334201 root=/tmp/.tmpAE9t47/rw
+SOURCE_RETENTION_OWNER_DRAINED group=3342929
+SOURCE_RETENTION_OWNER_DRAINED group=3342655
+actual phase source retained checkpoint upload report and current-retention proof; no physical/provider/settlement claim
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 25.71s
+
+
+Owned test session 3334201; remaining processes: []

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/playbook_activation.rs (target/debug/deps/playbook_activation-4a4b3e92c46a0911)
+
+running 1 test
+test definitions::dashboard_search_loaded_definition_uses_true_name_and_source_digest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 2.68s
+

@@ -1,0 +1,76 @@
+{
+  "observed_at_utc": "2026-11-03T18:53:04Z",
+  "operations": "read-only SQL (default_transaction_read_only=on) inside aq-e0-qual-postgres-1; no admission, model run, settlement mutation or restart",
+  "source_report": {
+    "repository": "aq-worker",
+    "branch": "origin/aq/calm-stone-85 (also contained in origin/main)",
+    "commit": "29e23f70b597696ac58b6bfab802a4da33446158",
+    "frozen_copies_sha256": {
+      "I0-first-real-run.md": "a79666cc78d63a58df9a50713894e942501fdbabcedd1ba743c3c0bcabc36317",
+      "run13.json": "3ef49be9466ffda680330564778505265b7811679c8c141da547e4012bd6da25",
+      "run12.json": "f8d6be67ff25162a5c6601cd73b34f912e549fadf2b9112544d2909a278f276d"
+    }
+  },
+  "containers": {
+    "aq-e0-qual-server-1": {"image_prefix": "f7f726c88654", "health": "healthy"},
+    "aq-e0-qual-aq-graph-1": {"image_prefix": "807beba98dcd", "health": "healthy"},
+    "aq-e0-qual-aq-git-1": {"image_prefix": "94a3d9adea2c", "health": "healthy"},
+    "aq-e0-qual-postgres-1": {"image": "postgres:17-bookworm", "health": "healthy"}
+  },
+  "agent_q": {
+    "execution_attempts": {
+      "f246a730-1fcd-5c62-a4a2-d98f4851eaab": {
+        "task_id": "e0a10000-0000-4000-8000-000000000007",
+        "holds_task": false,
+        "kind": "profiled_v1",
+        "record_revision": 2,
+        "state.status": "offered",
+        "note": "stale against the confirmed settlement; filed as bold-delta-91"
+      },
+      "still_holding_task": {
+        "2d41bbec-5601-56b0-bcd9-d329f6956faa": "e0a10000-0000-4000-8000-000000000004 (run 9)",
+        "87d16454-c2cc-593c-9bfd-60ac4ea56911": "e0a10000-0000-4000-8000-000000000005 (run 11)",
+        "ab352201-950e-5a77-9008-a374c85f2f00": "e0a10000-0000-4000-8000-000000000006 (run 12)"
+      }
+    },
+    "source_transfers": {
+      "df5a8007-6e5c-41ad-851a-6f0df3a287ac": {
+        "attempt_id": "f246a730-1fcd-5c62-a4a2-d98f4851eaab",
+        "state": "retained",
+        "central_receipt.source": "sha1 17fe8a728b05d97963b86116a1543f54d0785db8",
+        "central_receipt.retention_state": "active",
+        "central_receipt.accepted_at": "2026-11-03T18:31:45.648278085+00:00"
+      }
+    },
+    "profiled_settlement_evaluations": {
+      "d58ab4f8-3fcc-48cc-898e-8be679885b64": {"disposition": "accepted"}
+    },
+    "profiled_task_completions": {
+      "b196d43a-5c0f-4d8e-b389-6b412f730edb": {
+        "attempt_id": "f246a730-1fcd-5c62-a4a2-d98f4851eaab",
+        "evaluation_operation_id": "d58ab4f8-3fcc-48cc-898e-8be679885b64",
+        "release_id": "c821499f-f9a6-47af-9354-938a1684a173",
+        "task_id": "e0a10000-0000-4000-8000-000000000007",
+        "state": "confirmed",
+        "dispatch_count": 1,
+        "receipt": {"version": 2, "content_revision": 2, "change_set_id": "47ffc167-50ae-46e6-b9e2-e354641755f0"},
+        "payload_patch": {"task_state": "completed"},
+        "outbox_event": "task.completed",
+        "outbox_report": "aq.result-record/095807a2-9dc3-4a16-be5a-9abbb26c2730 digest 8654521d...",
+        "outbox_acknowledged": false
+      }
+    }
+  },
+  "aq_graph": {
+    "nodes(kind=task)": {
+      "e0a10000-0000-4000-8000-000000000004": {"version": 1, "task_state": "active"},
+      "e0a10000-0000-4000-8000-000000000005": {"version": 1, "task_state": "active"},
+      "e0a10000-0000-4000-8000-000000000006": {"version": 1, "task_state": "active"},
+      "e0a10000-0000-4000-8000-000000000007": {"version": 2, "content_revision": 2, "task_state": "completed", "updated_at": "2026-11-03 18:35:12.492726+00"}
+    }
+  },
+  "not_checked": [
+    "checkpoint 17fe8a72 file contents (I0 reports reading the central object store directly; MS0 relied on the retained receipt OID)",
+    "owner auth.json bytes (not read, copied or hashed by MS0)"
+  ]
+}

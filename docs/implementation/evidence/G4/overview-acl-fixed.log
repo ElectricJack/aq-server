@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.67s
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-8e5b4124fb0bb9e7)
+
+running 1 test
+test acl_expiry_during_database_wait_refuses_read ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 2.07s
+

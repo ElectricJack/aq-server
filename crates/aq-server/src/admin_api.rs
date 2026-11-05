@@ -115,6 +115,14 @@ struct WorkerView {
     enrolled_at: DateTime<Utc>,
     last_seen_at: Option<DateTime<Utc>>,
     status: &'static str,
+    /// X3/SBX25: the latest node storage report, flattened; absent when the
+    /// node has never reported storage.
+    #[serde(flatten)]
+    storage: Option<crate::node_storage::StorageReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_used_bps: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_observed_at: Option<DateTime<Utc>>,
 }
 
 async fn workers(
@@ -124,11 +132,32 @@ async fn workers(
     let now = (state.clock)();
     let offline_after = Duration::from_secs(state.config.workers.offline_after_secs);
     let nodes = state.store.list_nodes().await?;
+    let ids: Vec<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let mut conn = state
+        .store
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let mut storage = crate::node_storage::latest(&mut conn, &ids).await?;
+    drop(conn);
     Ok(Json(
         nodes
             .into_iter()
-            .map(|n| WorkerView {
+            .map(|n| {
+                let report = storage
+                    .iter()
+                    .position(|(id, ..)| *id == n.id)
+                    .map(|i| storage.swap_remove(i));
+                (n, report)
+            })
+            .map(|(n, report)| WorkerView {
                 status: worker_status(&n, now, offline_after),
+                storage_used_bps: report.as_ref().map(|r| r.2),
+                storage_observed_at: report
+                    .as_ref()
+                    .and_then(|r| DateTime::from_timestamp_millis(r.3 as i64)),
+                storage: report.map(|r| r.1),
                 id: n.id,
                 name: n.name,
                 worker_version: n.worker_version,

@@ -1,0 +1,26 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 12.31s
+     Running tests/native_cancellation.rs (target/debug/deps/native_cancellation-f39312daefa2b15d)
+
+running 5 tests
+test native_cancel_after_start_stops_and_settles_cancelled ... ok
+test native_cancel_granted_without_started_retains_unknown_writer_and_claim ... ok
+test native_cancel_before_grant_releases_claim ... ok
+test native_cancel_owner_validation_attempt_replay_and_concurrency ... ok
+test native_cancel_slow_offer_continues_after_prompt_directive ... FAILED
+
+failures:
+
+---- native_cancel_slow_offer_continues_after_prompt_directive stdout ----
+
+thread 'native_cancel_slow_offer_continues_after_prompt_directive' (2125990) panicked at crates/aq-server/tests/native_cancellation.rs:43:14:
+slow healthy scheduling must finish after cancellation delivery: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_cancel_slow_offer_continues_after_prompt_directive
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.74s
+
+error: test failed, to rerun pass `-p aq-server --test native_cancellation`

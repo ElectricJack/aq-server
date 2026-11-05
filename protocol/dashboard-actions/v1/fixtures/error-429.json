@@ -1,0 +1,7 @@
+{
+  "request_id": "00000000-0000-4000-8000-000000000101",
+  "code": "capacity_exceeded",
+  "message": "Synthetic contract fixture",
+  "retryable": true,
+  "retry_after_ms": 1000
+}

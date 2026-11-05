@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized] target(s) in 0.47s
+     Running tests/native_registration.rs (target/debug/deps/native_registration-aa6672ee14dbb7af)
+
+running 4 tests
+test configured_allowlist_does_not_synthesize_registration_and_admitted_identity_is_exact ... ok
+test native_semantics_ignore_only_operation_id_not_runtime_or_capability_change ... ok
+test native_writer_replays_without_reinstall_and_fences_held_claims_and_credentials ... ok
+test startup_installs_policy_anchor_and_refuses_stale_configuration ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.67s

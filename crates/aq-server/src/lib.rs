@@ -5,24 +5,35 @@ pub mod authz;
 pub mod config;
 pub mod dashboard_api;
 pub mod dashboard_assets;
+pub mod delegated_permits;
+pub mod delivery;
 pub mod error;
 pub mod execution;
+pub mod execution_permits;
+pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
+pub mod lifecycle_artifacts;
+pub mod node_storage;
 pub mod notifications;
 pub mod observations;
 pub mod playbooks;
 pub mod profile_catalog;
 pub mod profiled_execution;
-pub mod provider_accounts;
 pub mod project_bindings;
 pub mod protected_storage;
+pub mod provider_accounts;
 pub mod readiness;
+pub mod repository_onboarding;
 pub mod result_media;
+pub mod results_feedback;
 pub mod reviews;
+pub mod row_retention;
 pub mod session_access;
 pub mod source_retention;
+pub mod stall;
 pub mod store;
+pub mod templates;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -45,16 +56,13 @@ use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// The database state format: always the newest migration's number, because
-/// every migration is a state-format change (`store` tests enforce it). The
-/// updater restores the pre-update backup on rollback only when the format
-/// changes, so a migration without a bump would strand the old release.
-pub const STATE_FORMAT_VERSION: u32 = 41;
-/// State formats this binary can read; always contains `STATE_FORMAT_VERSION`.
-pub const READABLE_STATE_FORMATS: &[u32] = &[
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
-];
+// Generated from the sorted SQL directory; adding a migration needs no registry edit.
+mod migration_catalog {
+    include!(concat!(env!("OUT_DIR"), "/migration_catalog.rs"));
+}
+/// Database format and readable prefixes, derived from the migration catalog.
+/// Every migration changes the format so updater rollback restores its backup.
+pub use migration_catalog::{READABLE_STATE_FORMATS, STATE_FORMAT_VERSION};
 /// Versions that may be upgraded to this release.
 pub const UPGRADE_FROM: &str = ">=0.1.0";
 
@@ -93,6 +101,13 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The D1 delivery service over the configured aq-git socket, if source
+    /// retention (which owns that socket) is configured.
+    pub fn delivery(&self) -> Option<delivery::DeliveryService> {
+        self.source_retention
+            .as_ref()
+            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config))
+    }
     pub(crate) fn terminal_read_view(&self) -> Self {
         Self {
             store: self.store.terminal_read_view(),
@@ -126,13 +141,22 @@ impl AppState {
 }
 
 async fn harden(req: Request, next: Next) -> Response {
+    let api = req.uri().path() == "/api" || req.uri().path().starts_with("/api/");
     let mut resp = next.run(req).await;
+    let success = resp.status().is_success();
     let h = resp.headers_mut();
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    if h.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()) != Some("private, no-store") {
+    let cache = h.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok());
+    let cacheable_asset = !api
+        && success
+        && matches!(
+            cache,
+            Some("no-cache" | "private, max-age=31536000, immutable")
+        );
+    if cache != Some("private, no-store") && !cacheable_asset {
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     resp
@@ -205,7 +229,7 @@ fn build_admin_router_with_optional_dashboard(
     build_admin_router_with_optional_owners(state, playbooks, reviews, dashboard, None)
 }
 /// Explicit configured media injection alongside the existing human owners.
-/// Default constructors continue to mount no media endpoints.
+/// Default constructors expose typed upload refusals without a media store.
 pub fn build_admin_router_with_optional_owners(
     state: AppState,
     playbooks: Option<Arc<playbooks::driver::Driver>>,
@@ -213,6 +237,13 @@ pub fn build_admin_router_with_optional_owners(
     dashboard: Option<Arc<dashboard_assets::DashboardAssets>>,
     media: Option<Arc<result_media::runtime::Runtime>>,
 ) -> Router {
+    let reviews = reviews.or_else(|| {
+        state
+            .config
+            .reviews
+            .as_ref()
+            .map(|keys| Arc::new(reviews::Service::new(state.clone(), keys.clone())))
+    });
     let mounted = dashboard_api::MountedOwners {
         graph: true,
         session_usage: true,
@@ -223,6 +254,9 @@ pub fn build_admin_router_with_optional_owners(
         notifications: true,
         supervisor_conversation: true,
         reviews: reviews.is_some(),
+        waits: true,
+        session_operations: true,
+        questions: true,
         playbook_loaded_definitions: playbooks
             .as_ref()
             .is_some_and(|driver| driver.loaded_definitions_available()),
@@ -231,9 +265,17 @@ pub fn build_admin_router_with_optional_owners(
             .as_ref()
             .map(|d| d.service.namespace.owner_user_id),
     };
-    let policy_routes = playbooks.map(playbooks::api::routes).unwrap_or_default();
-    let review_routes = reviews.map(reviews::admin_routes).unwrap_or_default();
-    let media_routes = media.map(result_media::api::routes).unwrap_or_default();
+    let policy_routes = playbooks
+        .clone()
+        .map(playbooks::api::routes)
+        .unwrap_or_default();
+    let review_routes = reviews
+        .clone()
+        .map(reviews::admin_routes)
+        .unwrap_or_default();
+    let media_routes = media
+        .map(result_media::api::routes)
+        .unwrap_or_else(|| result_media::api::unavailable_routes(false));
     let app = Router::new()
         .merge(
             dashboard
@@ -245,22 +287,30 @@ pub fn build_admin_router_with_optional_owners(
         .merge(review_routes)
         .merge(media_routes)
         .merge(admin_api::admin_routes())
-        .merge(dashboard_api::routes(state.clone()))
+        .merge(
+            dashboard_api::routes_with_reviews(state.clone(), reviews, playbooks.clone())
+                .layer(axum::Extension(playbooks)),
+        )
         .merge(agent_access::human::routes(&state))
         .merge(agent_access::supervisor_conversation::routes(&state))
         .merge(profiled_execution::human_results::routes())
+        .merge(profiled_execution::disposition::routes(state.clone()))
+        .merge(results_feedback::routes())
         .merge(provider_accounts::routes())
         .merge(notifications::api::routes(state.clone()))
         .merge(observations::api::admin_routes(state.clone()))
         .merge(terminal::api::human_routes(state.clone()))
         .merge(profile_catalog::admin_routes())
         .merge(project_bindings::admin_routes())
+        .merge(repository_onboarding::admin_routes())
         .merge(intelligence::admin_routes())
         .merge(agent_access::admin_routes(state.clone()))
+        .merge(hibernation::admin_routes())
         .merge(source_retention::admin_routes())
         .merge(execution::api::admin_routes(state.clone()))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readiness::readyz))
+        .route("/dependency-readyz", get(readiness::dependency_readyz))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(from_fn_with_state(
@@ -272,6 +322,7 @@ pub fn build_admin_router_with_optional_owners(
             state.store.admission.clone(),
             admission::gate,
         ))
+        .layer(from_fn(dashboard_api::errors::normalize_errors))
         .layer(from_fn(harden))
         .layer(axum::Extension(mounted));
     let app = if let Some(dashboard) = dashboard {
@@ -306,6 +357,7 @@ fn build_worker_router_inner(
     Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))
+        .merge(delegated_permits::incarnation::routes(state.clone()))
         .merge(profiled_execution::api::routes(state.clone()))
         .merge(profiled_execution::control_api::routes(state.clone()))
         .merge(profiled_execution::accepted_preparation::routes(
@@ -325,17 +377,29 @@ fn build_worker_router_inner(
         .merge(profiled_execution::stopped::routes(state.clone()))
         .merge(profiled_execution::results::routes(state.clone()))
         .merge(profiled_execution::material_api::routes(state.clone()))
+        .merge(profiled_execution::login_refresh::api::routes(
+            state.clone(),
+        ))
         .merge(profiled_execution::artifact_api::routes(state.clone()))
         .merge(profiled_execution::source_api::routes(state.clone()))
+        .merge(node_storage::routes(state.clone()))
         .merge(observations::api::routes(state.clone()))
         .merge(observations::api::transport_routes(state.clone()))
         .merge(intelligence::worker_routes())
         .merge(agent_access::machine_routes(state.clone()))
+        .merge(hibernation::routes(state.clone()))
+        .merge(agent_access::supervisor_conversation::supervisor_routes(
+            &state,
+        ))
+        .merge(agent_access::human::enqueue::supervisor::routes())
         .merge(source_retention::machine_routes(state.clone()))
+        .merge(lifecycle_artifacts::routes(state.clone()))
+        .merge(execution_permits::routes(state.clone()))
         .merge(execution::api::worker_routes(state.clone()))
         .merge(terminal::api::worker_routes(state.clone()))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readiness::readyz))
+        .route("/dependency-readyz", get(readiness::dependency_readyz))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(from_fn_with_state(
@@ -409,7 +473,12 @@ async fn run_with_listeners_and_dashboard(
         rx.clone(),
     ));
     let terminal_task = tokio::spawn(terminal::runtime::run(state.clone(), rx.clone()));
+    let retention_task = tokio::spawn(row_retention::run(state.clone(), rx.clone()));
+    let waits_task = tokio::spawn(agent_access::waits::run(state.clone(), rx.clone()));
+    let wakes_task = tokio::spawn(agent_access::wakes::run(state.clone(), rx.clone()));
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
+    let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
+    let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
     tokio::spawn(async move {
         shutdown.await;
         let _ = tx.send(true);
@@ -443,12 +512,22 @@ async fn run_with_listeners_and_dashboard(
             .await
         },
     );
+    retention_task.abort();
+    let _ = retention_task.await;
+    waits_task.abort();
+    let _ = waits_task.await;
+    wakes_task.abort();
+    let _ = wakes_task.await;
     terminal_task.abort();
     let _ = terminal_task.await;
     notification_task.abort();
     let _ = notification_task.await;
+    source_gc_task.abort();
+    let _ = source_gc_task.await;
     expiry_task.abort();
     let _ = expiry_task.await;
+    stall_task.abort();
+    let _ = stall_task.await;
     let policy_shutdown = match policy_runtime {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
@@ -482,6 +561,30 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
+/// Builds the runtime state shared by `serve` and one-shot owner commands.
+pub async fn build_state(
+    config: Config,
+    store: Store,
+    http: reqwest::Client,
+) -> anyhow::Result<AppState> {
+    let agent_access = match &config.agent_access {
+        Some(settings) => Some(Arc::new(agent_access::Runtime::new(settings).await?)),
+        None => None,
+    };
+    let source_retention = match &config.source_retention {
+        Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
+        None => None,
+    };
+    Ok(AppState {
+        agent_access,
+        source_retention,
+        identity: identity::verifier_from_config(&config.auth, http),
+        config: Arc::new(config),
+        store,
+        clock: system_clock(),
+    })
+}
+
 /// Binds both listeners and serves until SIGTERM or ctrl-c.
 pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
     let dashboard = std::env::var_os("AQ_DASHBOARD_DIR")
@@ -495,21 +598,6 @@ pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
     let admin = tokio::net::TcpListener::bind(config.server.admin_bind).await?;
     let worker = tokio::net::TcpListener::bind(config.server.worker_bind).await?;
     tracing::info!(admin = %admin.local_addr()?, worker = %worker.local_addr()?, "listening");
-    let agent_access = match &config.agent_access {
-        Some(settings) => Some(Arc::new(agent_access::Runtime::new(settings).await?)),
-        None => None,
-    };
-    let source_retention = match &config.source_retention {
-        Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
-        None => None,
-    };
-    let state = AppState {
-        agent_access,
-        source_retention,
-        identity: identity::verifier_from_config(&config.auth, http),
-        config: Arc::new(config),
-        store,
-        clock: system_clock(),
-    };
+    let state = build_state(config, store, http).await?;
     run_with_listeners_and_dashboard(state, admin, worker, shutdown_signal(), dashboard).await
 }

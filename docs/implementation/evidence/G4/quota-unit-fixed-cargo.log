@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 51s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-a22abeff305308c3)
+
+running 2 tests
+test dashboard_api::quota::tests::quota_percent_and_account_validation_reject_malformed_values ... ok
+test dashboard_api::quota::tests::quota_collector_qualifies_mock_protocol_and_preserves_stale_values ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.01s
+

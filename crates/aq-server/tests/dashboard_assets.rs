@@ -140,7 +140,7 @@ async fn current_owner_viewer_and_removed_user_authenticate_each_get_and_head() 
         for email in ["owner@example.test", "viewer@example.test"] {
             let (status, headers, body) = request(&app, "GET", path, Some(email), false).await;
             assert_eq!(status, StatusCode::OK, "{path} {email}");
-            assert_eq!(headers["cache-control"], "no-store");
+            assert_eq!(headers["cache-control"], "no-cache");
             assert_eq!(headers["x-content-type-options"], "nosniff");
             assert_eq!(
                 body,
@@ -219,14 +219,12 @@ async fn exact_spa_paths_do_not_capture_api_machine_unknown_assets_or_traversal(
     }
     for path in [
         "/projects",
-        "/index.html",
         "/unknown",
         "/api/missing",
         "/v1/worker/missing",
         "/assets/missing.js",
         "/assets/not-listed.js",
         "/assets/app.js.map",
-        "/dashboard-manifest.json",
         "/work/..",
         "/work/%2e%2e",
         "/work/a%2fb",
@@ -310,4 +308,131 @@ async fn actual_local_human_http_serves_loaded_bytes_after_source_removal() {
     );
     task.abort();
     let _ = task.await;
+}
+
+#[tokio::test]
+async fn server_image_serves_pinned_dashboard_digest() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = tempfile::tempdir().unwrap();
+    let checked = std::process::Command::new("python3")
+        .arg(repo.join("scripts/check-dashboard-candidate.py"))
+        .arg("--extract")
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let pin: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repo.join("vendor/dashboard-candidate.json")).unwrap(),
+    )
+    .unwrap();
+    let assets = Arc::new(DashboardAssets::load(root.path()).unwrap());
+    assert_eq!(
+        format!("sha256:{}", assets.digest()),
+        pin["dashboard_digest"]
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("dashboard-manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let (_db, state) = state().await;
+    let app = build_admin_router_with_dashboard(state, assets);
+    let (status, headers, body) = request(
+        &app,
+        "GET",
+        "/api/v1/bootstrap",
+        Some("owner@example.test"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "no-store");
+    let bootstrap: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        bootstrap["data"]["product"]["dashboard_digest"],
+        pin["dashboard_digest"]
+    );
+    let capabilities = bootstrap["data"]["capabilities"].as_array().unwrap();
+    for required in manifest["required_capabilities"].as_array().unwrap() {
+        assert!(
+            capabilities.iter().any(|cap| cap["name"] == *required),
+            "missing capability {required}"
+        );
+    }
+    for required in manifest["required_api_versions"].as_array().unwrap() {
+        assert!(
+            bootstrap["data"]["contracts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|contract| contract["version"] == *required),
+            "missing API {required}"
+        );
+    }
+    for path in [
+        "/",
+        "/index.html",
+        "/dashboard-manifest.json",
+        "/work/task_1",
+    ] {
+        for method in ["GET", "HEAD"] {
+            let (status, headers, body) =
+                request(&app, method, path, Some("owner@example.test"), false).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(headers["cache-control"], "no-cache", "{path}");
+            if method == "HEAD" {
+                assert!(body.is_empty());
+            } else {
+                let file = if path == "/dashboard-manifest.json" {
+                    "dashboard-manifest.json"
+                } else {
+                    "index.html"
+                };
+                assert_eq!(body, std::fs::read(root.path().join(file)).unwrap());
+            }
+        }
+    }
+    let asset = manifest["files"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .find(|p| p.ends_with(".js"))
+        .unwrap();
+    for method in ["GET", "HEAD"] {
+        let (status, headers, body) = request(
+            &app,
+            method,
+            &format!("/{asset}"),
+            Some("owner@example.test"),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers["cache-control"],
+            "private, max-age=31536000, immutable"
+        );
+        if method == "HEAD" {
+            assert!(body.is_empty());
+        } else {
+            assert_eq!(
+                hex::encode(Sha256::digest(&body)),
+                manifest["files"][asset]["sha256"]
+            );
+            assert_eq!(body.len() as u64, manifest["files"][asset]["bytes"]);
+        }
+    }
+    for path in [
+        format!("/{asset}"),
+        "/dashboard-manifest.json".into(),
+        "/api/v1/bootstrap".into(),
+        "/api/missing".into(),
+    ] {
+        let (status, headers, _) = request(&app, "GET", &path, None, false).await;
+        assert!(status.is_client_error());
+        assert_eq!(headers["cache-control"], "no-store");
+    }
 }

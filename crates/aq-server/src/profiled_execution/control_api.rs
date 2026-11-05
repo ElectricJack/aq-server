@@ -24,13 +24,22 @@ impl IntoResponse for Error {
         #[cfg(feature = "test-support")]
         let classification = crate::test_support::control_diagnostics::classify(&self.0);
         let status = self.0.status();
-        let code = match status {
-            StatusCode::UNAUTHORIZED => FailureCode::AuthenticationRequired,
-            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => FailureCode::UnknownOrNotOwned,
-            StatusCode::BAD_REQUEST => FailureCode::InvalidRequest,
-            StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS => FailureCode::Capacity,
-            StatusCode::CONFLICT => FailureCode::Conflict,
-            _ => FailureCode::Unavailable,
+        // The pinned native failure enum stays wire-compatible. A fixed safe
+        // diagnostic header names this recoverable configuration conflict.
+        let definition_conflict = matches!(self.0, AppError::DefinitionIdentityConflict);
+        let code = if matches!(self.0, AppError::ExecutionCancelled) {
+            FailureCode::Cancelled
+        } else {
+            match status {
+                StatusCode::UNAUTHORIZED => FailureCode::AuthenticationRequired,
+                StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => FailureCode::UnknownOrNotOwned,
+                StatusCode::BAD_REQUEST => FailureCode::InvalidRequest,
+                StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS => {
+                    FailureCode::Capacity
+                }
+                StatusCode::CONFLICT => FailureCode::Conflict,
+                _ => FailureCode::Unavailable,
+            }
         };
         let mut reply = (
             status,
@@ -44,6 +53,16 @@ impl IntoResponse for Error {
         reply
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        if definition_conflict {
+            reply.headers_mut().insert(
+                "aq-error-code",
+                "admission_definition_identity_conflict".parse().unwrap(),
+            );
+            tracing::warn!(
+                code = "admission_definition_identity_conflict",
+                "native admission refused"
+            );
+        }
         // In-process test observation only. Extensions are never HTTP headers
         // or body fields; the public failure remains deliberately redacted.
         #[cfg(feature = "test-support")]
@@ -51,6 +70,32 @@ impl IntoResponse for Error {
             reply.extensions_mut().insert(classification);
         }
         reply
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn definition_identity_conflict_has_named_native_diagnostic() {
+        let response = Error::from(AppError::DefinitionIdentityConflict).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.headers()["aq-error-code"],
+            "admission_definition_identity_conflict"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let reply: ControlReply = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            reply,
+            ControlReply::Failure(Failure {
+                code: FailureCode::Conflict,
+                ..
+            })
+        ));
     }
 }
 pub(crate) fn nonce(headers: &HeaderMap) -> Result<Uuid, AppError> {

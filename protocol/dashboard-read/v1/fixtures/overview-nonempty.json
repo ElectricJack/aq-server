@@ -1,0 +1,285 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "See per-source coverage; unavailable owners do not contribute zero",
+    "state": "partial"
+  },
+  "data": {
+    "attention": [
+      {
+        "action": null,
+        "id": "worker:c46754c8-0870-4638-bb23-f15b8f93854d:00000000-0000-0000-0000-000000000001",
+        "impact": "Review the owning record for current context",
+        "kind": "worker_offline",
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "reason": "No heartbeat has been observed",
+        "since": null,
+        "subject": {
+          "id": "c46754c8-0870-4638-bb23-f15b8f93854d",
+          "revision": "41997",
+          "type": "worker"
+        },
+        "title": "Worker offline"
+      },
+      {
+        "action": null,
+        "id": "decision:abd7887d-48f1-4db2-bb87-fc6f39dbd8ed:00000000-0000-0000-0000-000000000001",
+        "impact": "Review the owning record for current context",
+        "kind": "decision",
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "reason": "An eligible owner can review this pending decision",
+        "since": null,
+        "subject": {
+          "id": "abd7887d-48f1-4db2-bb87-fc6f39dbd8ed",
+          "revision": "1",
+          "type": "decision"
+        },
+        "title": "Waiting decision"
+      },
+      {
+        "action": null,
+        "id": "result:ae2dde95-086d-4a5b-ad60-f877e404a807:00000000-0000-0000-0000-000000000001",
+        "impact": "Review the owning record for current context",
+        "kind": "failed",
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "reason": "The current retained result reports process failure; task settlement is separate",
+        "since": "1970-01-01T00:16:40.000Z",
+        "subject": {
+          "id": "ae2dde95-086d-4a5b-ad60-f877e404a807",
+          "revision": "sha256:cfb9d52c2ba0a0a9b34957d5e6b5163bc218bbd34bf1028255b1c3e7cb80b0fc",
+          "type": "result"
+        },
+        "title": "Failed process result"
+      }
+    ],
+    "counts": {
+      "needs_you": {
+        "accuracy": "estimated",
+        "value": 1
+      },
+      "ready": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "recovering": {
+        "accuracy": "exact",
+        "value": 1
+      },
+      "running": {
+        "accuracy": "exact",
+        "value": 0
+      }
+    },
+    "in_motion": [
+      {
+        "last_progress_at": null,
+        "next_constraint": null,
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "running": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      }
+    ],
+    "recent_outcomes": [
+      {
+        "at": "1970-01-01T00:16:40.000Z",
+        "outcome": "process_failed",
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "subject": {
+          "id": "ae2dde95-086d-4a5b-ad60-f877e404a807",
+          "revision": "sha256:cfb9d52c2ba0a0a9b34957d5e6b5163bc218bbd34bf1028255b1c3e7cb80b0fc",
+          "title": "Recorded process result",
+          "type": "result"
+        }
+      }
+    ],
+    "sources": [
+      {
+        "coverage": {
+          "reason": "question_owner_not_mounted",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "questions",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "blocked_task_owner_not_mounted",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "blocked_tasks",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "attempts"
+        },
+        "project": null,
+        "source": "attempts",
+        "total": {
+          "accuracy": "exact",
+          "value": 1
+        }
+      },
+      {
+        "coverage": {
+          "reason": "association_from_retained_attempts",
+          "state": "partial"
+        },
+        "observation": {
+          "coverage": "partial",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "workers"
+        },
+        "project": null,
+        "source": "workers",
+        "total": {
+          "accuracy": "exact",
+          "value": 1
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "graph_ready",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "sampled_code_review_decisions; decision_transition_time_unavailable",
+          "state": "partial"
+        },
+        "observation": {
+          "coverage": "partial",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "reviews"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "source": "reviews",
+        "total": {
+          "accuracy": "estimated",
+          "value": 1
+        }
+      },
+      {
+        "coverage": {
+          "reason": "recorded_native_results_only",
+          "state": "partial"
+        },
+        "observation": {
+          "coverage": "partial",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "results"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "source": "results",
+        "total": {
+          "accuracy": "exact",
+          "value": 1
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "settlement"
+        },
+        "project": null,
+        "source": "settlement",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      },
+      {
+        "coverage": {
+          "reason": "dashboard_journal_only",
+          "state": "partial"
+        },
+        "observation": {
+          "coverage": "partial",
+          "fresh_until": "1970-01-01T00:16:45.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "operations"
+        },
+        "project": null,
+        "source": "operations",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      }
+    ]
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "6b473d63-1e23-49ec-bf8b-15803412a0b7",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

@@ -1,0 +1,11 @@
+[package]
+name = "aq-codex-mapper"
+version = "0.1.1"
+edition.workspace = true
+publish.workspace = true
+description = "Pure closed Codex recipe metadata without worker or execution authority"
+
+[dependencies]
+aq-session-protocol.workspace = true
+anyhow.workspace = true
+toml.workspace = true

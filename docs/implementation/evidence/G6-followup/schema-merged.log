@@ -1,0 +1,4 @@
+$ cargo run --locked -p aq-server --example results_feedback_contract -- --check
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.51s
+     Running `target/debug/examples/results_feedback_contract --check`

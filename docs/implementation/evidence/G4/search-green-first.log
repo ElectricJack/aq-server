@@ -1,0 +1,9 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 31s
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-8e5b4124fb0bb9e7)
+
+running 1 test
+test search_validates_queries_and_returns_all_groups ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.08s
+

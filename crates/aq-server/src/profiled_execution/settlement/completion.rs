@@ -47,7 +47,7 @@ fn status(row: &sqlx::postgres::PgRow) -> Result<CompletionStatus> {
             .map_err(|_| crate::error::AppError::Internal)?,
     })
 }
-fn confirmed(raw: &Value, row: &sqlx::postgres::PgRow) -> Result<CompletionReceipt> {
+pub(super) fn confirmed(raw: &Value, row: &sqlx::postgres::PgRow) -> Result<CompletionReceipt> {
     if !crate::agent_access::settlement_response_valid(raw) {
         return Err(unavailable());
     }
@@ -160,6 +160,9 @@ impl Service {
             row.get::<String, _>("state").as_str(),
             "confirmed" | "conflict" | "blocked"
         ) {
+            if row.get::<String, _>("state") == "confirmed" {
+                self.refresh_settled_attempt(&mut tx, e.attempt_id).await?;
+            }
             let s = status(&row)?;
             tx.commit().await.map_err(db)?;
             return Ok(s);
@@ -293,13 +296,7 @@ impl Service {
         let event=receipt.as_ref().map(|receipt|json!({"event_id":operation,"producer":"aq.task.settlement@1","event":"task.completed","attempt_id":e.attempt_id,"evaluation_operation_id":e.operation_id,"report":e.report,"release_id":e.release_id,"receipt":receipt}));
         sqlx::query("UPDATE profiled_task_completions SET state=$2,receipt=$3,outbox=$4,lease_id=NULL,lease_expires_at_ms=NULL WHERE operation_id=$1").bind(operation).bind(next).bind(receipt.map(serde_json::to_value).transpose().map_err(|_|crate::error::AppError::Internal)?).bind(event).execute(&mut *tx).await.map_err(db)?;
         if next == "confirmed" {
-            sqlx::query(
-                "UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1 AND holds_task",
-            )
-            .bind(e.attempt_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+            self.refresh_settled_attempt(&mut tx, e.attempt_id).await?;
         }
         let row = sqlx::query("SELECT * FROM profiled_task_completions WHERE operation_id=$1")
             .bind(operation)
@@ -309,5 +306,20 @@ impl Service {
         let s = status(&row)?;
         tx.commit().await.map_err(db)?;
         Ok(s)
+    }
+
+    /// Preserve the immutable launch fields and project the owner-verified hot
+    /// state only after Graph confirmation. Replay also repairs older snapshots.
+    async fn refresh_settled_attempt(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        attempt: Uuid,
+    ) -> Result<()> {
+        sqlx::query("UPDATE execution_attempts a SET state=a.state || (h.state-ARRAY['owner','preparation_operation_id']),holds_task=false,execution_deadline_ms=(h.state->>'execution_deadline_ms')::bigint FROM profiled_authority_hot h WHERE a.attempt_id=$1 AND h.attempt_id=a.attempt_id AND (a.holds_task OR a.execution_deadline_ms IS DISTINCT FROM (h.state->>'execution_deadline_ms')::bigint OR a.state IS DISTINCT FROM a.state || (h.state-ARRAY['owner','preparation_operation_id']))")
+            .bind(attempt)
+            .execute(&mut **tx)
+            .await
+            .map_err(db)?;
+        Ok(())
     }
 }

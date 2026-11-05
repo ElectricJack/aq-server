@@ -1,0 +1,19 @@
+   Compiling aq-server v0.1.0 (/tmp/aq-a3b-main-isolation-20261103/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.49s
+     Running tests/profiled_hot.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/profiled_hot-3c497a4038a2c418)
+
+running 1 test
+test actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback ... 
+thread 'actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback' (2154650) panicked at crates/aq-server/tests/profiled_hot.rs:451:260:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "P0001", message: "qualified settlement release owner required", detail: None, hint: None, position: None, where: Some("PL/pgSQL function settlement_release_guard() line 4 at RAISE"), schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("pl_exec.c"), line: Some(3897), routine: Some("exec_stmt_raise") })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.16s
+
+error: test failed, to rerun pass `-p aq-server --test profiled_hot`

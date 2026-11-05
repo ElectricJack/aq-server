@@ -1,0 +1,191 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 0 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/c5a1/test_cargo.py -n 1 -s
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 1/1 worker
+1 worker [1 item]
+
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.9
+   Compiling serde v1.0.229
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+   Compiling typenum v1.20.1
+   Compiling serde_derive v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.154
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling cfg-if v1.0.5
+   Compiling autocfg v1.5.1
+   Compiling ref-cast v1.0.27
+   Compiling num-traits v0.2.19
+   Compiling digest v0.10.7
+   Compiling ref-cast-impl v1.0.27
+   Compiling serde_derive_internals v0.30.0
+   Compiling uuid v1.29.0
+   Compiling utf8parse v0.2.2
+   Compiling thiserror v2.0.21
+   Compiling cpufeatures v0.2.17
+   Compiling sha2 v0.10.9
+   Compiling schemars_derive v1.2.3
+   Compiling anstyle-parse v1.0.0
+   Compiling thiserror-impl v2.0.21
+   Compiling anstyle v1.0.14
+   Compiling libc v0.2.191
+   Compiling anstyle-query v1.1.5
+   Compiling dyn-clone v1.0.20
+   Compiling colorchoice v1.0.5
+   Compiling cfg_aliases v0.2.2
+   Compiling hashbrown v0.17.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling equivalent v1.0.3
+   Compiling anstream v1.0.0
+   Compiling nix v0.29.0
+   Compiling indexmap v2.14.2
+   Compiling schemars v1.2.3
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.1
+   Compiling strsim v0.11.1
+   Compiling toml_write v0.1.2
+   Compiling winnow v0.7.15
+   Compiling iana-time-zone v0.1.65
+   Compiling chrono v0.4.45
+   Compiling toml_edit v0.22.27
+   Compiling clap_builder v4.6.7
+   Compiling clap_derive v4.6.7
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-session-protocol-0.1.0)
+   Compiling bitflags v2.13.2
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-session-api)
+   Compiling clap v4.6.7
+   Compiling toml v0.8.23
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-agent-api)
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-profiles)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-selection)
+error[E0609]: no field `backend_kind` on type `aq_selection::CapabilitySnapshot`
+   --> crates/aq-selection/tests/selection.rs:720:16
+    |
+720 |     input.node.backend_kind = Some(BackendKind::Boat);
+    |                ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `target`, `revision`, `observed_at_ms`, `expires_at_ms`, `harnesses` ... and 2 others
+
+error[E0433]: cannot find type `BackendKind` in this scope
+   --> crates/aq-selection/tests/selection.rs:720:36
+    |
+720 |     input.node.backend_kind = Some(BackendKind::Boat);
+    |                                    ^^^^^^^^^^^ use of undeclared type `BackendKind`
+
+error[E0609]: no field `allowed_backends` on type `&mut aq_selection::AuthorizedCredential`
+   --> crates/aq-selection/tests/selection.rs:722:20
+    |
+722 |         credential.allowed_backends = vec![BackendKind::DockerLocal];
+    |                    ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+error[E0433]: cannot find type `BackendKind` in this scope
+   --> crates/aq-selection/tests/selection.rs:722:44
+    |
+722 |         credential.allowed_backends = vec![BackendKind::DockerLocal];
+    |                                            ^^^^^^^^^^^ use of undeclared type `BackendKind`
+
+error[E0609]: no field `backend_kind` on type `aq_selection::CapabilitySnapshot`
+   --> crates/aq-selection/tests/selection.rs:729:16
+    |
+729 |     input.node.backend_kind = None;
+    |                ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `target`, `revision`, `observed_at_ms`, `expires_at_ms`, `harnesses` ... and 2 others
+
+error[E0609]: no field `backend_kind` on type `aq_selection::CapabilitySnapshot`
+   --> crates/aq-selection/tests/selection.rs:734:16
+    |
+734 |     input.node.backend_kind = Some(BackendKind::DockerLocal);
+    |                ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `target`, `revision`, `observed_at_ms`, `expires_at_ms`, `harnesses` ... and 2 others
+
+error[E0433]: cannot find type `BackendKind` in this scope
+   --> crates/aq-selection/tests/selection.rs:734:36
+    |
+734 |     input.node.backend_kind = Some(BackendKind::DockerLocal);
+    |                                    ^^^^^^^^^^^ use of undeclared type `BackendKind`
+
+error[E0609]: no field `allowed_backends` on type `&mut aq_selection::AuthorizedCredential`
+   --> crates/aq-selection/tests/selection.rs:738:20
+    |
+738 |         credential.allowed_backends = default_allowed_backends();
+    |                    ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+error[E0425]: cannot find function `default_allowed_backends` in this scope
+   --> crates/aq-selection/tests/selection.rs:738:39
+    |
+738 |         credential.allowed_backends = default_allowed_backends();
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0609]: no field `backend_kind` on type `aq_selection::CapabilitySnapshot`
+   --> crates/aq-selection/tests/selection.rs:740:16
+    |
+740 |     input.node.backend_kind = None;
+    |                ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `target`, `revision`, `observed_at_ms`, `expires_at_ms`, `harnesses` ... and 2 others
+
+error[E0425]: cannot find function `default_allowed_backends` in this scope
+   --> crates/aq-selection/tests/selection.rs:742:20
+    |
+742 |     for backend in default_allowed_backends() {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0609]: no field `backend_kind` on type `aq_selection::CapabilitySnapshot`
+   --> crates/aq-selection/tests/selection.rs:743:20
+    |
+743 |         input.node.backend_kind = Some(backend);
+    |                    ^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `target`, `revision`, `observed_at_ms`, `expires_at_ms`, `harnesses` ... and 2 others
+
+error[E0609]: no field `allowed_backends` on type `&mut aq_selection::AuthorizedCredential`
+   --> crates/aq-selection/tests/selection.rs:747:20
+    |
+747 |         credential.allowed_backends.clear();
+    |                    ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+Some errors have detailed explanations: E0425, E0433, E0609.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aq-selection` (test "selection") due to 13 previous errors
+warning: build failed, waiting for other jobs to finish...
+F
+=================================== FAILURES ===================================
+__________________________________ test_cargo __________________________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+    def test_cargo():
+        command = json.loads(os.environ['C5A1_COMMAND'])
+        result = subprocess.run(command, cwd=os.environ['C5A1_WORKDIR'], check=False)
+>       assert result.returncode == 0, f'{command} exited {result.returncode}'
+E       AssertionError: ['cargo', 'test', '--locked', '-p', 'aq-selection', 'credential_restricted_backend_is_ineligible'] exited 101
+E       assert 101 == 0
+E        +  where 101 = CompletedProcess(args=['cargo', 'test', '--locked', '-p', 'aq-selection', 'credential_restricted_backend_is_ineligible'], returncode=101).returncode
+
+.aq/tmp/c5a1/test_cargo.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED .aq/tmp/c5a1/test_cargo.py::test_cargo - AssertionError: ['cargo', 'te...
+============================== 1 failed in 30.24s ==============================

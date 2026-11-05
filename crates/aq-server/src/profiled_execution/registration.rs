@@ -114,6 +114,23 @@ pub async fn register(
     auth: &crate::worker_api::AuthenticatedNode,
     request: &Register,
 ) -> Result<Register, AppError> {
+    let mut tx = state
+        .store
+        .pool
+        .begin()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let reply = register_locked(state, &mut tx, auth, request).await?;
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    Ok(reply)
+}
+
+pub(crate) async fn register_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &crate::worker_api::AuthenticatedNode,
+    request: &Register,
+) -> Result<Register, AppError> {
     use sqlx::Row;
     TransportDocument::Register(request.clone())
         .validate()
@@ -132,15 +149,9 @@ pub async fn register(
     }
     let digest = aq_selection::digest(request).map_err(|_| AppError::Internal)?;
     let semantic = semantic_digest(request)?;
-    let mut tx = state
-        .store
-        .pool
-        .begin()
-        .await
-        .map_err(|_| AppError::Internal)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    crate::worker_api::lock_current_node(tx, auth).await?;
     if let Some(row) = sqlx::query("SELECT request_digest,response FROM native_registration_receipts WHERE node_id=$1 AND operation_id=$2")
-        .bind(auth.id()).bind(request.operation_id).fetch_optional(&mut *tx).await.map_err(|_| AppError::Internal)? {
+        .bind(auth.id()).bind(request.operation_id).fetch_optional(&mut **tx).await.map_err(|_| AppError::Internal)? {
         if row.get::<String,_>("request_digest") != digest.as_str() {
             return Err(AppError::Conflict("native operation ID reused".into()));
         }
@@ -151,7 +162,7 @@ pub async fn register(
         .profiled_execution
         .as_deref()
         .ok_or_else(|| AppError::Conflict("native policy is not configured".into()))?;
-    super::policies::fence_configuration_locked(&mut tx, config).await?;
+    super::policies::fence_configuration_locked(tx, config).await?;
     let qualification = config
         .qualified(request)
         .map_err(|_| AppError::Conflict("native runtime qualification unavailable".into()))?
@@ -160,7 +171,7 @@ pub async fn register(
     let existing: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1 FOR UPDATE")
             .bind(auth.id())
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(|_| AppError::Internal)?;
     let unchanged = existing
@@ -177,7 +188,7 @@ pub async fn register(
                     == serde_json::to_value(&request.identity).ok().as_ref()
         });
     if existing.is_some() && !unchanged {
-        let held = super::compute::busy_locked(&mut tx, auth.id()).await?;
+        let held = super::compute::busy_locked(tx, auth.id()).await?;
         if held {
             return Err(AppError::Conflict(
                 "prior execution claims remain held".into(),
@@ -187,7 +198,7 @@ pub async fn register(
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM native_registration_receipts WHERE node_id=$1")
             .bind(auth.id())
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|_| AppError::Internal)?;
     if count >= 1024 {
@@ -210,13 +221,12 @@ pub async fn register(
         };
         let body = serde_json::json!({"identity":request.identity,"capabilities":[],"worker_version":request.runtime.version,"replacement_boot":null,"native":metadata});
         sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2) ON CONFLICT(node_id) DO UPDATE SET state=excluded.state")
-            .bind(auth.id()).bind(body).execute(&mut *tx).await.map_err(|_|AppError::Internal)?;
+            .bind(auth.id()).bind(body).execute(&mut **tx).await.map_err(|_|AppError::Internal)?;
     }
-    let actual = admitted_runtime_locked(&mut tx, auth.id(), request.identity.boot_id).await?;
-    super::closure::history::capture_locked(&mut tx, &actual).await?;
+    let actual = admitted_runtime_locked(tx, auth.id(), request.identity.boot_id).await?;
+    super::closure::history::capture_locked(tx, &actual).await?;
     sqlx::query("INSERT INTO native_registration_receipts(node_id,operation_id,request_digest,response) VALUES($1,$2,$3,$4)")
         .bind(auth.id()).bind(request.operation_id).bind(digest.as_str()).bind(serde_json::to_value(request).map_err(|_|AppError::Internal)?)
-        .execute(&mut *tx).await.map_err(|_|AppError::Internal)?;
-    tx.commit().await.map_err(|_| AppError::Internal)?;
+        .execute(&mut **tx).await.map_err(|_|AppError::Internal)?;
     Ok(request.clone())
 }

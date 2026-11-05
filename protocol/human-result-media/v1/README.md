@@ -24,10 +24,10 @@ Let R be `/api/human/results/{report}/revisions/{revision}`.
 | --- | --- |
 | POST `R/media-uploads` | UploadCreate, at most 16KiB; 201 newly reserved or 200 exact replay UploadStatus |
 | GET `/api/human/result-media-uploads/{operation}` | No query/body; pure 200 UploadStatus, original actor only |
-| PUT `/api/human/result-media-uploads/{operation}/content` | Whole image/png matching retained size/SHA; 200 received/retained, 202 busy, 410 expired/422 rejected UploadStatus |
+| PUT `/api/human/result-media-uploads/{operation}/content` | Whole image/png (or video/mp4 for a clip intent) matching retained size/SHA; 200 received/retained, 202 busy, 410 expired/422 rejected UploadStatus |
 | POST `/api/human/result-media-uploads/{operation}/finalize` | Exactly `{}`; 200 retained, 202 processing, 409 input needed, 410 expired/422 rejected UploadStatus |
 | GET `R/media` | No query/body; 200 MediaPage, at most eight immutable receipts/tombstones |
-| GET `R/media/{artifact}/content?variant=preview\|render` | Exactly one recognized variant; 200 image/png after final role/link/expiry/digest fence |
+| GET `R/media/{artifact}/content?variant=preview\|render` | Exactly one recognized variant; 200 image/png (clip render: video/mp4, or 206 for one byte range) after final role/link/expiry/digest fence |
 
 All routes require current human Owner. Admission/content/finalize require the
 upload capability, while finalized media browse/content requires the read
@@ -43,8 +43,9 @@ Known authorized media content failures are closed ContentFailure bodies:
 410 media_expired/media_withheld, 404 media_missing, 409 media_failed. Unknown or
 unauthorized object associations disclose no descriptor; 401/403 are application
 auth failures, not a missing-image placeholder. No original-input, download,
-arbitrary URL/path, Range or conditional-cache surface is provided. Reject
-unsupported Range/conditional headers after authorization with 416/400.
+arbitrary URL/path or conditional-cache surface is provided. Range is accepted
+only for a clip render (see Clips). Reject other Range and conditional headers
+after authorization with 416/400.
 
 On success Content-Type is image/png; Content-Length matches the chosen variant;
 AQ-Media-Digest and AQ-Media-Receipt-Digest match the variant and immutable
@@ -105,12 +106,40 @@ an arbitrary response URL. HTTP routes and headers are mediated by AQ.
   intent's deadlines or immutable receipt. Unsupported native-report coverage
   is rejected; every binding explicitly declares recorded_legacy_native_only.
 
+## Clips (X26)
+
+An UploadCreate may add `"media":"video"` with `poster_artifact_id`; image
+requests omit both, so image request/receipt bytes and digests are unchanged.
+A clip intent reserves the same 10MiB budget and pins `aq.mp4.passthrough-v1`:
+
+- Input is a whole `video/mp4` of at most `max_clip_bytes` (4MiB hard maximum).
+  Finalize runs a structural ISO-BMFF preflight only (no codec is linked): `ftyp`
+  first with an ISO/MP4 brand, one `moov` with an `mvhd` duration and exactly one
+  `vide` track, an `mdat`, at most 4096 boxes, and no fragmented (`moof`/`mvex`)
+  layout. Duration (rounded up to whole ms) is at most `max_clip_duration_ms`
+  (60s hard maximum). Failures reject as `invalid_video`, `unsupported_video` or
+  `processing_limit`.
+- The poster is a retained, available PNG artifact on the same report revision and
+  storage. Its preview bytes become the clip's `preview` variant; a missing,
+  withheld, expired or non-PNG poster rejects as `poster_unavailable`.
+- The `render` variant is the retained input byte-for-byte (`video/mp4`, input
+  digest and size, track header dimensions). The receipt adds
+  `clip:{duration_ms,poster_artifact_id}`; image receipts never carry `clip`.
+- Content reads of a clip render send `Accept-Ranges: bytes`. One
+  `Range: bytes=a-b`, `a-` or `-n` returns 206 with `Content-Range` and the
+  exact span length; multiple ranges or an unsatisfiable range return 416 with
+  `Content-Range: bytes */total`. Any Range on an image or preview returns 416.
+- The results feed `media=video` filter and `video_range` comment anchors use the
+  same retained filter (retained, not withheld, not cleaned up, unexpired) and
+  cite only the receipt's `clip.duration_ms`.
+
 ## Storage and migration review
 
 `proposed-ddl.sql` remains an earlier review sketch outside migrations; it is not
 an installation source. Actual migration 36 and its startup refusal guards live
 in `crates/aq-server/migrations/0036_result_media_owner.sql` and
-`store/media36.rs`. See the actual
+`store/media36.rs`; migration 75 (`0075_result_media_clips.sql`) widens the
+policy/size/rejection checks and replaces the intent guard for clips. See the actual
 [storage qualification](../../../docs/implementation/API-11-storage-owner.md)
 and [optional HTTP port](../../../docs/implementation/API-11-http-port.md).
 No source qualification authorizes executing a migration on a canonical database.

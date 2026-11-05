@@ -15,7 +15,7 @@ async fn compute41_upgrade_preserves_prior_records_and_old40_refuses() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    let _store = db.store().await;
+    test_support::migrate_profile(&pool, 41).await.unwrap();
     assert_eq!(
         before,
         sqlx::query_scalar::<_, Value>(

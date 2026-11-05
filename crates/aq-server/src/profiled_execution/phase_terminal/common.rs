@@ -116,9 +116,18 @@ pub(super) async fn load_locked(
                 || o.launch_id != history.request.original.launch_id
                 || o.reservation_id != history.request.original.reservation.reservation_id
         })
-        || hot.grant.as_ref() != Some(&issued.grant)
     {
         return Err(conflict());
+    }
+    if hot.grant.as_ref() != Some(&issued.grant) {
+        crate::delegated_permits::runtime::verify_extended_grant_locked(
+            tx,
+            &issued.grant,
+            hot.grant.as_ref().ok_or_else(conflict)?,
+            &history.receipt_digest,
+            issued.execution_deadline_ms,
+        )
+        .await?;
     }
     let registration =
         closure::history::load_locked(tx, history.provenance.registration_id).await?;

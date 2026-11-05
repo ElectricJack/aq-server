@@ -52,6 +52,7 @@ fn input() -> ActualSetup {
                 currency: None,
                 require_hard_cost_enforcement: false,
             },
+            publication: None,
         },
         catalog_artifact_json: String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap(),
         graph: AgentAccessConfig {
@@ -67,6 +68,8 @@ fn input() -> ActualSetup {
             content_revision: 1,
         },
         source: SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             staging_root: "not-created-staging".into(),
             git_root: "not-opened-git".into(),
             git_socket: "not-opened-socket".into(),

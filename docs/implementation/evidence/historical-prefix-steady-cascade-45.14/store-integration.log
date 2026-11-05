@@ -1,0 +1,21 @@
+Command: cargo test --locked --offline -p aq-server --test store -- --test-threads=2
+    Finished `test` profile [unoptimized] target(s) in 0.29s
+     Running tests/store.rs (/tmp/aq-b3-slot2-target/debug/deps/store-aa20ce5cfe168352)
+
+running 14 tests
+test concurrent_redeem_yields_one_node ... ok
+test bootstrap_owner_only_once ... ok
+test email_unique_case_insensitive ... ok
+test enrollment_code_expires ... ok
+test enrollment_code_single_use ... ok
+test exact_schema_two_upgrades_preserving_node_and_result_receipt ... ok
+test invited_user_binds_once ... ok
+test migrations_are_idempotent ... ok
+test node_lifecycle ... ok
+test reconnect_preserves_state ... ok
+test refuses_newer_state_format ... ok
+test tokens_have_prefixes_and_are_unique ... ok
+test verifier_is_deterministic_and_hex64 ... ok
+test refuses_unknown_future_migration ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.67s

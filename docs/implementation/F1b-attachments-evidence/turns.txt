@@ -1,0 +1,15 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 1m 58s
+     Running tests/supervisor_turns.rs (target/debug/deps/supervisor_turns-aca49b49585a2157)
+
+running 7 tests
+test attachment_fixtures_match_schema_and_published_digest ... ok
+test reply_attachments_serve_typed_drafts_and_session_receipts_through_history ... ok
+test reply_consumes_reservation_and_allows_successor_turn ... ok
+test terminal_not_delivered_consumes_but_unknown_and_running_hold_mail ... ok
+test unknown_reply_releases_reservation_without_resending_unknown_input ... ok
+test upgrade_consumes_already_recorded_reply_and_keeps_receipt ... ok
+test upgrade_consumes_known_failure_and_retains_unknown_delivery ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.70s
+

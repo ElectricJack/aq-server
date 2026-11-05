@@ -1,11 +1,33 @@
 use super::*;
 use sqlx::{Postgres, Transaction};
+/// One credential's digest contribution. Untagged tuple variants serialize as
+/// plain JSON arrays, so `Legacy` is byte-identical to the pre-C5a1
+/// `(credential, allowed_node_ids)` tuple: an unchanged default configuration
+/// keeps its stored digest across the upgrade and needs no revision bump.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum Placement<'a> {
+    Legacy(&'a aq_selection::AuthorizedCredential, &'a [uuid::Uuid]),
+    Kinded(
+        &'a aq_selection::AuthorizedCredential,
+        &'a [uuid::Uuid],
+        aq_selection::CredentialKind,
+    ),
+}
 fn configuration(registry: &config::LoadedRegistry) -> Result<aq_selection::Digest> {
+    // The backend allowlist participates through `registry.credentials`, whose
+    // canonical, skip-if-unrestricted field `load` derives; `c.credential` is
+    // validated unrestricted, so it also serializes exactly as before.
     let placements: Vec<_> = registry
         .config
         .credentials
         .iter()
-        .map(|c| (&c.credential, &c.allowed_node_ids))
+        .map(|c| match c.kind {
+            aq_selection::CredentialKind::ApiKey => {
+                Placement::Legacy(&c.credential, &c.allowed_node_ids)
+            }
+            kind => Placement::Kinded(&c.credential, &c.allowed_node_ids, kind),
+        })
         .collect();
     aq_selection::digest(&(
         registry.config.revision,
@@ -128,9 +150,10 @@ pub(super) async fn check_current(
     let row = sqlx::query(
         "SELECT revision,config_digest FROM intelligence_registry WHERE singleton=TRUE FOR UPDATE",
     )
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await
-    .map_err(db)?;
+    .map_err(db)?
+    .ok_or_else(|| conflict("intelligence registry has not been installed"))?;
     if row.get::<String, _>("config_digest") != configuration(loaded(state)?)?.as_str() {
         return Err(conflict("daemon intelligence configuration is stale"));
     }
@@ -188,4 +211,82 @@ pub(super) async fn machine_quota(
         return Err(conflict("node intelligence receipt retention limit"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aq_selection::{BackendKind, CredentialKind};
+
+    /// A pre-C5a1 startup configuration: no `kind`, no `allowed_backends`.
+    fn legacy_config() -> config::IntelligenceConfig {
+        serde_json::from_value(serde_json::json!({
+            "revision": 7,
+            "credentials": [{
+                "credential": {
+                    "profile": {"id":"test", "version":"1", "digest":"a".repeat(64)},
+                    "provider":"test", "account_reference":"acct", "endpoint_reference":"endpoint",
+                    "revision":3, "enabled":true, "provisionable":false
+                },
+                "allowed_node_ids": ["00000000-0000-4000-8000-000000000001"],
+                "secret_file": null
+            }],
+            "qualified_harnesses": []
+        }))
+        .unwrap()
+    }
+    fn digest(cfg: &config::IntelligenceConfig) -> aq_selection::Digest {
+        configuration(&cfg.load().unwrap()).unwrap()
+    }
+
+    /// Pinned from base 86ca279 (pre-C5a1 `configuration`) on this exact
+    /// input; see docs/implementation/C5a1.md. A change here forces every
+    /// existing installation through a 409 until its revision is bumped.
+    const LEGACY_DIGEST: &str = "35c9911673be2ce9dece9de54ea211f45be4b59f83f6b238e08a215cd0873ebd";
+
+    #[test]
+    fn credential_legacy_default_config_digest_is_unchanged() {
+        let cfg = legacy_config();
+        assert_eq!(digest(&cfg).as_str(), LEGACY_DIGEST);
+        // Spelling the defaults explicitly, in any order, is the same policy.
+        let mut explicit = cfg.clone();
+        explicit.credentials[0].kind = CredentialKind::ApiKey;
+        explicit.credentials[0].allowed_backends = vec![
+            BackendKind::CloudflareContainers,
+            BackendKind::DockerLocal,
+            BackendKind::Boat,
+        ];
+        assert_eq!(digest(&explicit).as_str(), LEGACY_DIGEST);
+    }
+
+    #[test]
+    fn credential_kind_and_backend_policy_change_registry_digest() {
+        let cfg = legacy_config();
+        let baseline = digest(&cfg);
+        let mut changed = cfg.clone();
+        changed.credentials[0].kind = CredentialKind::SubscriptionLogin;
+        assert_ne!(digest(&changed), baseline);
+        let mut narrowed = cfg.clone();
+        narrowed.credentials[0].allowed_backends = vec![BackendKind::Boat];
+        assert_ne!(digest(&narrowed), baseline);
+        let mut denied = cfg;
+        denied.credentials[0].allowed_backends = vec![];
+        assert_ne!(digest(&denied), baseline);
+        assert_ne!(digest(&denied), digest(&narrowed));
+    }
+
+    #[test]
+    fn credential_narrowed_backend_order_does_not_change_digest() {
+        let mut first = legacy_config();
+        first.credentials[0].allowed_backends =
+            vec![BackendKind::CloudflareContainers, BackendKind::DockerLocal];
+        let mut second = legacy_config();
+        second.credentials[0].allowed_backends =
+            vec![BackendKind::DockerLocal, BackendKind::CloudflareContainers];
+        assert_eq!(digest(&first), digest(&second));
+        assert_eq!(
+            first.load().unwrap().credentials[0].allowed_backends,
+            vec![BackendKind::DockerLocal, BackendKind::CloudflareContainers]
+        );
+    }
 }

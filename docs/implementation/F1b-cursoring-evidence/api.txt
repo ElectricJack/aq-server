@@ -1,0 +1,27 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling serde_core v1.0.229
+   Compiling quote v1.0.47
+   Compiling typenum v1.20.1
+   Compiling num-traits v0.2.19
+   Compiling generic-array v0.14.7
+   Compiling syn v3.0.9
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling serde_json v1.0.154
+   Compiling serde v1.0.229
+   Compiling digest v0.10.7
+   Compiling memchr v2.8.3
+   Compiling serde_derive v1.0.229
+   Compiling sha2 v0.10.9
+   Compiling chrono v0.4.45
+   Compiling uuid v1.29.0
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/crates/aq-agent-api)
+    Finished `test` profile [unoptimized] target(s) in 10.27s
+     Running unittests src/lib.rs (target/debug/deps/aq_agent_api-7fc8339532fd85d2)
+
+running 2 tests
+test human_digest_pattern_tests::prefixed_sha256_pattern_is_exact_and_existing_hex_remains_exact ... ok
+test reply_cursor_pattern_tests::reply_and_history_cursor_patterns_are_exact ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

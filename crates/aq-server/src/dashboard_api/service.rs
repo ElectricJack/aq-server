@@ -1,5 +1,7 @@
 #[path = "lifecycle.rs"]
 mod lifecycle;
+#[path = "operations.rs"]
+mod operations;
 use super::{
     runtime::{self, Resource, Snapshot},
     *,
@@ -11,17 +13,17 @@ use crate::{
 };
 use aq_session_protocol::{ProfiledOffer, SessionIdentity as OwnerSession, Validate};
 use chrono::{DateTime, SecondsFormat, Utc};
+pub(super) use operations::operations;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use sqlx::{Postgres, Row, Transaction};
-use std::collections::BTreeMap;
-fn stamp(state: &AppState) -> Result<u64> {
+pub(super) fn stamp(state: &AppState) -> Result<u64> {
     u64::try_from((state.clock)().timestamp_millis())
         .ok()
         .filter(|n| *n > 0)
         .ok_or(Error::Unavailable)
 }
-fn timestamp(ms: u64) -> Result<Timestamp> {
+pub(super) fn timestamp(ms: u64) -> Result<Timestamp> {
     let value =
         DateTime::<Utc>::from_timestamp_millis(ms.try_into().map_err(|_| Error::Unavailable)?)
             .ok_or(Error::Unavailable)?;
@@ -29,19 +31,19 @@ fn timestamp(ms: u64) -> Result<Timestamp> {
         value.to_rfc3339_opts(SecondsFormat::Millis, true),
     ))
 }
-async fn tx(runtime: &Runtime) -> Result<Transaction<'_, Postgres>> {
+pub(super) async fn tx(runtime: &Runtime) -> Result<Transaction<'_, Postgres>> {
     let mut tx = runtime.pool.begin().await?;
     sqlx::query("SELECT set_config('statement_timeout','500ms',true),set_config('lock_timeout','250ms',true)").execute(&mut *tx).await?;
     Ok(tx)
 }
-struct Auth {
+pub(super) struct Auth {
     actor: Uuid,
-    owner: bool,
+    pub(super) owner: bool,
     email: String,
-    partition: String,
+    pub(super) partition: String,
     visibility_complete: bool,
 }
-async fn auth(state: &AppState, runtime: &Runtime, user: &User) -> Result<Auth> {
+pub(super) async fn auth(state: &AppState, runtime: &Runtime, user: &User) -> Result<Auth> {
     let mut tx = tx(runtime).await?;
     let row = sqlx::query(
         "SELECT role,email,issuer,subject,xmin::text AS version FROM users WHERE id=$1 FOR SHARE",
@@ -100,7 +102,12 @@ async fn auth(state: &AppState, runtime: &Runtime, user: &User) -> Result<Auth> 
     }
     Ok(value)
 }
-async fn fence(state: &AppState, runtime: &Runtime, user: &User, expected: &Auth) -> Result<()> {
+pub(super) async fn fence(
+    state: &AppState,
+    runtime: &Runtime,
+    user: &User,
+    expected: &Auth,
+) -> Result<()> {
     let current = auth(state, runtime, user).await?;
     if current.partition != expected.partition {
         return Err(Error::AuthorizationChanged);
@@ -109,13 +116,14 @@ async fn fence(state: &AppState, runtime: &Runtime, user: &User, expected: &Auth
 }
 fn capability(name: &str, enabled: bool, reason: &str) -> Capability {
     Capability {
+        operation_retention: (name == "dashboard.actions").then(Default::default),
         name: name.into(),
         version: CapabilityVersion::V1,
         enabled,
         reason: if enabled { None } else { Some(reason.into()) },
     }
 }
-fn envelope<T>(
+pub(super) fn envelope<T>(
     state: &AppState,
     scope: Scope,
     data: T,
@@ -151,6 +159,37 @@ fn envelope<T>(
         },
     })
 }
+/// X4: the mounted conversation and whether an active central session serves it.
+async fn global_supervisor(pool: &sqlx::PgPool) -> Supervisor {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT conversation_id FROM global_supervisor_conversation WHERE singleton AND revision=1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .filter(|id: &Uuid| !id.is_nil());
+    let Some(id) = id else {
+        return Supervisor {
+            status: "unconfigured".into(),
+            conversation_id: None,
+            reason: "The global supervisor conversation is not provisioned".into(),
+        };
+    };
+    let bound = crate::agent_access::supervisor_conversation::dispatch::binding(pool, Some(id))
+        .await
+        .is_some();
+    Supervisor {
+        status: if bound { "available" } else { "unavailable" }.into(),
+        conversation_id: Some(id),
+        reason: if bound {
+            "central_session_active"
+        } else {
+            "central_runtime_not_connected"
+        }
+        .into(),
+    }
+}
 pub(super) async fn bootstrap(
     state: &AppState,
     runtime: &Runtime,
@@ -160,8 +199,20 @@ pub(super) async fn bootstrap(
 ) -> Result<Envelope<Bootstrap>> {
     let a = auth(state, runtime, user).await?;
     let graph = mounted.graph && a.owner && state.agent_access.is_some();
+    let graph_mutation = graph && crate::agent_access::human::task_create_available(state);
     let reviews = a.owner && mounted.reviews;
+    let actions = a.owner;
     let playbooks = a.owner && mounted.playbook_owner == Some(a.actor);
+    let global = if mounted.supervisor_conversation && a.owner {
+        global_supervisor(&state.store.pool).await
+    } else {
+        Supervisor {
+            status: "unconfigured".into(),
+            conversation_id: None,
+            reason: "The global supervisor is not connected yet".into(),
+        }
+    };
+    let conversation = global.status == "available";
     let caps = vec![
         capability("dashboard.overview", true, ""),
         capability(
@@ -208,8 +259,68 @@ pub(super) async fn bootstrap(
         ),
         capability(
             "tasks.create",
-            graph && crate::agent_access::human::task_create_available(state),
+            graph_mutation,
             "Task creation requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.graph.create",
+            graph_mutation,
+            "Task graph creation requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.edit",
+            graph_mutation,
+            "Task edits require an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.reprioritize",
+            graph_mutation,
+            "Task reprioritization requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.dependencies.add",
+            graph_mutation,
+            "Dependency changes require an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.dependencies.remove",
+            graph_mutation,
+            "Dependency changes require an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.cancel",
+            graph_mutation,
+            "Task cancellation requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.retry",
+            graph_mutation,
+            "Task retry requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "knowledge.author",
+            graph_mutation,
+            "Knowledge authoring requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "knowledge.correct",
+            graph_mutation,
+            "Knowledge correction requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "knowledge.verify",
+            graph_mutation,
+            "Knowledge verification requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "knowledge.retire",
+            graph_mutation,
+            "Knowledge retirement requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "knowledge.restore",
+            graph_mutation,
+            "Knowledge restore requires an owner account and configured Graph mutation identity",
         ),
         capability(
             "knowledge.read",
@@ -218,8 +329,8 @@ pub(super) async fn bootstrap(
         ),
         capability(
             "search.read",
-            graph,
-            "Search requires an owner account and configured Graph runtime",
+            a.visibility_complete,
+            "Session visibility exceeds the bounded authorization partition",
         ),
         capability(
             "decisions.read",
@@ -232,14 +343,30 @@ pub(super) async fn bootstrap(
             "Decision resolution requires an owner account and a mounted review owner",
         ),
         capability(
+            "questions.read",
+            mounted.questions && a.owner,
+            "Agent question inspection requires an owner account",
+        ),
+        capability(
+            "questions.answer",
+            // `question.answer` is a dashboard-actions-1 kind, gated with `dashboard.actions`.
+            mounted.questions && a.owner && actions,
+            "Answering agent questions requires an owner account and dashboard actions",
+        ),
+        capability(
             "providers.configured.read",
             a.owner,
             "Configured provider inspection requires an owner account",
         ),
         capability(
             "provider.quota",
-            false,
+            a.owner,
             "Provider account usage is unavailable",
+        ),
+        capability(
+            "capacity.read",
+            a.owner,
+            "Capacity and provider availability require an owner account",
         ),
         capability(
             "supervisor.history.read",
@@ -252,8 +379,28 @@ pub(super) async fn bootstrap(
             "Global supervisor enqueue requires an owner account and mounted conversation owner",
         ),
         capability(
+            "session.message.enqueue",
+            a.owner,
+            "Session messages require an owner account",
+        ),
+        capability(
+            "session.nudge",
+            a.owner,
+            "Session nudges require an owner account",
+        ),
+        capability(
+            "session.operations.read",
+            mounted.session_operations && a.owner && a.visibility_complete,
+            "Session operations require an owner account",
+        ),
+        capability(
+            "waits.read",
+            mounted.waits && a.owner,
+            "Wait inspection requires an owner account",
+        ),
+        capability(
             "supervisor.conversation",
-            false,
+            conversation,
             "The global supervisor is not connected yet",
         ),
         capability(
@@ -268,13 +415,23 @@ pub(super) async fn bootstrap(
         ),
         capability(
             "dashboard.actions",
-            false,
-            "Dashboard actions are not connected yet",
+            actions,
+            "Dashboard actions require an owner account",
         ),
         capability(
             "results.read",
             mounted.results && a.owner,
             "Result inspection requires an owner account",
+        ),
+        capability(
+            "results.comment",
+            mounted.results && a.owner,
+            "Comments require an owner account and a mounted Results owner",
+        ),
+        capability(
+            "results.feedback",
+            mounted.results && a.owner,
+            "Feedback requires an owner account and a mounted Results owner",
         ),
         capability(
             "results.media.read",
@@ -284,7 +441,13 @@ pub(super) async fn bootstrap(
         capability(
             "results.media.upload",
             mounted.media_upload && a.owner,
-            "Supplemental image uploads require an owner account and enabled uploads",
+            if !a.owner {
+                "Supplemental image uploads require an owner account"
+            } else if !mounted.media_read {
+                "Result media store is not configured"
+            } else {
+                "Result media uploads are disabled"
+            },
         ),
         capability(
             "playbooks.inspect",
@@ -305,6 +468,26 @@ pub(super) async fn bootstrap(
                     .is_some_and(|support| support.available()),
             "Current catalog inspection requires the mounted component query and namespace owner",
         ),
+        capability(
+            "playbooks.runs.start",
+            playbooks,
+            "Starting runs requires the mounted runtime namespace owner",
+        ),
+        capability(
+            "playbooks.runs.cancel",
+            playbooks,
+            "Cancelling runs requires the mounted runtime namespace owner",
+        ),
+        capability(
+            "playbooks.activations.activate",
+            playbooks,
+            "Activating definitions requires the mounted runtime namespace owner",
+        ),
+        capability(
+            "playbooks.activations.rollback",
+            playbooks,
+            "Rolling back definitions requires the mounted runtime namespace owner",
+        ),
     ];
     let bytes = contract::schema_bytes();
     let data = Bootstrap {
@@ -317,11 +500,21 @@ pub(super) async fn bootstrap(
             version: env!("CARGO_PKG_VERSION").into(),
             dashboard_digest: digest.map(Digest),
         },
-        contracts: vec![ContractRef {
-            name: "dashboard-read".into(),
-            version: ApiVersion::Read1,
-            digest: Digest(format!("sha256:{}", hex::encode(Sha256::digest(bytes)))),
-        }],
+        contracts: vec![
+            ContractRef {
+                name: "dashboard-read".into(),
+                version: ContractVersion::Read1,
+                digest: Digest(format!("sha256:{}", hex::encode(Sha256::digest(bytes)))),
+            },
+            ContractRef {
+                name: "dashboard-actions".into(),
+                version: ContractVersion::Actions1,
+                digest: Digest(format!(
+                    "sha256:{}",
+                    hex::encode(Sha256::digest(super::actions::contract::schema_bytes()))
+                )),
+            },
+        ],
         capabilities: caps,
         limits: Limits {
             page_size: runtime::PAGE,
@@ -330,16 +523,29 @@ pub(super) async fn bootstrap(
             snapshot_ttl_ms: runtime::TTL as u32,
         },
         default_scope: Scope::AllAuthorized,
-        global_supervisor: Supervisor {
-            status: "unconfigured".into(),
-            conversation_id: None,
-            reason: "The global supervisor is not connected yet".into(),
-        },
+        global_supervisor: global,
     };
+    let mut tx = tx(runtime).await?;
+    let mut pending: Vec<Uuid> = if a.owner {
+        sqlx::query_scalar("SELECT operation_id FROM (SELECT operation_id,created_at FROM dashboard_operations WHERE principal_id=$1 AND retired_at IS NULL AND disposition IN ('pending','unknown') UNION ALL SELECT n.operation_id,to_timestamp(n.created_at_ms::double precision/1000) AS created_at FROM human_graph_operations n WHERE n.actor_id=$1 AND n.status->>'state' IN ('pending','unknown') AND NOT EXISTS(SELECT 1 FROM dashboard_operations d WHERE d.operation_id=n.operation_id)) pending ORDER BY created_at,operation_id LIMIT 101")
+            .bind(a.actor).fetch_all(&mut *tx).await.map_err(|_|Error::Unavailable)?
+    } else {
+        vec![]
+    };
+    tx.commit().await.map_err(|_| Error::Unavailable)?;
+    let truncated = pending.len() > 100;
+    pending.truncate(100);
     fence(state, runtime, user, &a).await?;
-    envelope(state, Scope::AllAuthorized, data, None)
+    let mut response = envelope(
+        state,
+        Scope::AllAuthorized,
+        data,
+        truncated.then_some("pending_operations_truncated"),
+    )?;
+    response.pending_operations = pending;
+    Ok(response)
 }
-async fn membership(
+pub(super) async fn membership(
     state: &AppState,
     runtime: &Runtime,
     a: &Auth,
@@ -353,6 +559,7 @@ async fn membership(
     let project = scope.project();
     let now = stamp(state)?;
     let mut ids:Vec<Uuid>=match resource {
+  Resource::Search => return Err(Error::Invalid),
   Resource::Projects=>{
    if !a.owner {return Err(AppError::Forbidden("project inspection requires owner".into()).into());}
    sqlx::query_scalar("SELECT project_id FROM project_execution_bindings WHERE ($1::uuid IS NULL OR project_id=$1) ORDER BY project_id LIMIT 257").bind(project).fetch_all(&mut *tx).await?
@@ -392,6 +599,8 @@ async fn snapshot(
         scope,
         resource,
         ids,
+        filters: json!({}),
+        search: None,
         truncated,
         created: now,
         expires: now.checked_add(runtime::TTL).ok_or(Error::Unavailable)?,
@@ -457,7 +666,7 @@ async fn project_label(
     };
     Ok(ProjectRef { id: project, label })
 }
-async fn session(
+pub(super) async fn session(
     state: &AppState,
     runtime: &Runtime,
     user: &User,
@@ -565,13 +774,28 @@ async fn session(
                 terminal = Some(EntityRef {
                     kind: "terminal".into(),
                     id: row.get("terminal_id"),
-                    revision: Some(Revision(row.get::<i64, _>("terminal_epoch").to_string())),
+                    revision: Some(
+                        Revision(row.get::<i64, _>("terminal_epoch").to_string()).into(),
+                    ),
                 });
                 let at: i64 = row.get("last_output_at_ms");
                 if at > 0 {
                     last_activity = Some(timestamp(at as u64)?);
                 }
             }
+        }
+    }
+    let mut permissions = vec!["session.inspect".to_string()];
+    if access.owner {
+        // The Message slot needs a live scoped mailbox: an unrevoked launch binding.
+        let mailbox: Option<bool> =
+            sqlx::query_scalar("SELECT NOT revoked FROM agent_launch_bindings WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if mailbox == Some(true) && !view.revoked {
+            permissions.push(crate::agent_access::messaging::session_action::KIND.into());
+            permissions.push(crate::agent_access::messaging::session_action::NUDGE_KIND.into());
         }
     }
     let now = stamp(state)?;
@@ -597,7 +821,7 @@ async fn session(
         task: Some(TitledRef {
             kind: "task".into(),
             id: view.task_id,
-            revision: task_revision,
+            revision: task_revision.map(Into::into),
             title: view.task_id.to_string(),
         }),
         attempt_id: Some(attempt),
@@ -629,12 +853,13 @@ async fn session(
             "profiled_v1"
         }
         .into(),
+        last_output_at: last_activity.clone(),
     };
     tx.commit().await?;
     Ok(SessionDetail {
         summary,
         profile_revisions: revisions,
-        permissions: vec!["session.inspect".into()],
+        permissions,
         last_activity_at: last_activity,
         observation_binding,
     })
@@ -670,11 +895,11 @@ pub(super) async fn sessions(
     let limit = query.limit()?;
     let end = (offset + usize::from(limit)).min(snapshot.ids.len());
     let mut items = vec![];
-
+    let mut skipped = false;
     for id in &snapshot.ids[offset..end] {
         match session(state, runtime, user, *id, &snapshot.scope).await {
             Ok(value) => items.push(value.summary),
-            Err(Error::Api(AppError::Forbidden(_) | AppError::NotFound(_))) => {}
+            Err(Error::Api(AppError::Forbidden(_) | AppError::NotFound(_))) => skipped = true,
             Err(error) => return Err(error),
         }
     }
@@ -689,7 +914,20 @@ pub(super) async fn sessions(
         next_cursor: next.clone(),
         has_more: next.is_some(),
         snapshot_id: snapshot.id,
-        total: Total::unknown(),
+        // The authorized snapshot membership, so the Sessions selector can show
+        // a count. A truncated snapshot is unknown; a member that vanished or
+        // lost inspection while paging makes the count an estimate.
+        total: match (snapshot.truncated, skipped) {
+            (true, _) => Total::unknown(),
+            (false, skipped) => Total {
+                value: Some(snapshot.ids.len() as u32),
+                accuracy: if skipped {
+                    Accuracy::Estimated
+                } else {
+                    Accuracy::Exact
+                },
+            },
+        },
     };
     envelope(
         state,
@@ -752,51 +990,27 @@ pub(super) async fn projects(
         },
     )
 }
-pub(super) async fn overview(
+pub(super) async fn provider_usage(
     state: &AppState,
     runtime: &Runtime,
     user: &User,
     scope: Scope,
-) -> Result<Envelope<Overview>> {
+) -> Result<Envelope<Vec<ProviderUsage>>> {
     let a = auth(state, runtime, user).await?;
-    let (ids, _) = membership(state, runtime, &a, &scope, Resource::Sessions).await?;
-    let mut projects = BTreeMap::new();
-    for id in ids.iter().take(8) {
-        match session(state, runtime, user, *id, &scope).await {
-            Ok(value) => {
-                projects.insert(value.summary.project.id, value.summary.project);
-            }
-            Err(Error::Api(AppError::Forbidden(_) | AppError::NotFound(_))) => {}
-            Err(e) => return Err(e),
-        }
+    if !a.owner {
+        return Err(AppError::Forbidden("provider account usage requires owner".into()).into());
     }
+    let now = stamp(state)?;
+    let inventory = crate::provider_accounts::project(state.config.intelligence.as_deref(), now);
+    let (data, partial) = runtime
+        .quota
+        .collect(inventory.accounts, &state.config.provider_quota, now)
+        .await;
     fence(state, runtime, user, &a).await?;
-    let data = Overview {
-        counts: Counts {
-            running: Total::unknown(),
-            ready: Total::unknown(),
-            needs_you: Total::unknown(),
-            recovering: Total::unknown(),
-        },
-        attention: vec![],
-        in_motion: projects
-            .into_values()
-            .map(|project| InMotion {
-                project,
-                running: Total::unknown(),
-                next_constraint: Some(Constraint {
-                    kind: "unknown".into(),
-                    explanation: "Task constraints are not connected yet".into(),
-                }),
-                last_progress_at: None,
-            })
-            .collect(),
-        recent_outcomes: vec![],
-    };
     envelope(
         state,
         scope,
         data,
-        Some("Task readiness, decisions, and result summaries are not connected yet"),
+        partial.then_some("Some account quota observations are unavailable or stale"),
     )
 }

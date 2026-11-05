@@ -1,0 +1,36 @@
+   Compiling aqv2 v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aqv2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+     Running unittests src/lib.rs (target/debug/deps/aqv2-8915594cfa909189)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/aqv2-80c3a2af2e5a9b0a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (target/debug/deps/cli-2f81d3516ac95bd0)
+
+running 1 test
+test missing_server_action_kind_is_explicitly_unsupported_without_fallback ... FAILED
+
+failures:
+
+---- missing_server_action_kind_is_explicitly_unsupported_without_fallback stdout ----
+
+thread 'missing_server_action_kind_is_explicitly_unsupported_without_fallback' (1428918) panicked at crates/aqv2/tests/cli.rs:651:5:
+assertion `left == right` failed
+  left: String("invalid_request")
+ right: "unsupported"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    missing_server_action_kind_is_explicitly_unsupported_without_fallback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aqv2 --test cli`

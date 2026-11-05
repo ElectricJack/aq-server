@@ -1,0 +1,9 @@
+aq-worker commit: 4992a16d6c2f794d692803fbe25e69ea400a97db
+archive: vendor/aq-session-host-0.1.7-source.tar.gz
+archive SHA-256: ab37cb192870f07290b4aff887b57b73783931ba5dfc248184da483c99036bdb
+release receipt: 1201 file digests verified
+vendor/aq-session-host-0.1.7/src: identical to published archive
+vendor/aq-codex-mapper-0.1.1/src: identical to published archive
+vendor/aq-responses-transport-0.1.0/src: identical to published archive
+crates/aq-terminal-relay-protocol/src: identical to published archive
+vendor/aq-session-protocol-0.1.0/src: identical to published archive

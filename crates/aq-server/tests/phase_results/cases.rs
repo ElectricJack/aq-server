@@ -6,20 +6,29 @@ use aq_server::profiled_execution::results;
 use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
+/// Builds a large owner future in this helper's frame and moves it to the heap,
+/// so unoptimized test poll frames keep a pointer instead of the whole future.
+fn on_heap<F, Fut>(build: F) -> std::pin::Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    Box::pin(build())
+}
 async fn ready() -> (terminal::Prepared, ResultReport) {
     Box::pin(ready_with_stop(true)).await
 }
 async fn ready_with_stop(stopped: bool) -> (terminal::Prepared, ResultReport) {
     let f = Box::pin(terminal::prepared_terminal()).await;
-    let issued = terminal::issue(&f).await;
+    let issued = on_heap(|| terminal::issue(&f)).await;
     let auth = terminal::auth(&f).await;
     let start = terminal::started_request(&f, &issued);
-    terminal_owner::started::record(&f.c.env.env.state, &auth, &start)
+    on_heap(|| terminal_owner::started::record(&f.c.env.env.state, &auth, &start))
         .await
         .unwrap();
     let stop = terminal::stop_request(&start);
     if stopped {
-        terminal_owner::stopped::record(&f.c.env.env.state, &auth, &stop)
+        on_heap(|| terminal_owner::stopped::record(&f.c.env.env.state, &auth, &stop))
             .await
             .unwrap();
     }
@@ -146,13 +155,13 @@ async fn historical_phase_read_and_replay_survive_expiry_cancellation_and_runtim
 async fn correction_race_and_changed_operation_bytes_keep_one_immutable_head() {
     let (f, report) = Box::pin(ready()).await;
     let auth = terminal::auth(&f).await;
-    results::record(&f.c.env.env.state, &auth, &report)
+    on_heap(|| results::record(&f.c.env.env.state, &auth, &report))
         .await
         .unwrap();
     let mut changed = report.clone();
     changed.conclusion = Label::new("Changed under same identity").unwrap();
     assert!(
-        results::record(&f.c.env.env.state, &auth, &changed)
+        on_heap(|| results::record(&f.c.env.env.state, &auth, &changed))
             .await
             .is_err()
     );
@@ -166,8 +175,8 @@ async fn correction_race_and_changed_operation_bytes_keep_one_immutable_head() {
     let a = terminal::auth(&f).await;
     let b = terminal::auth(&f).await;
     let (x, y) = tokio::join!(
-        results::record(&f.c.env.env.state, &a, &left),
-        results::record(&f.c.env.env.state, &b, &right)
+        on_heap(|| results::record(&f.c.env.env.state, &a, &left)),
+        on_heap(|| results::record(&f.c.env.env.state, &b, &right))
     );
     assert_ne!(x.is_ok(), y.is_ok());
     assert_eq!(
@@ -180,7 +189,7 @@ async fn correction_race_and_changed_operation_bytes_keep_one_immutable_head() {
         .unwrap(),
         2
     );
-    results::test_load_retained(&f.c.env.env.state, report.report_id)
+    on_heap(|| results::test_load_retained(&f.c.env.env.state, report.report_id))
         .await
         .unwrap();
 }

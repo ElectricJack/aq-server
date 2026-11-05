@@ -1,0 +1,52 @@
+$ cargo test --locked -p aq-server --test dashboard_read --test dashboard_actions --test dashboard_mounts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/dashboard_actions.rs (target/debug/deps/dashboard_actions-a548a1a57c3f2e82)
+
+running 8 tests
+test action_union_rejects_unknown_kind_with_envelope ... ok
+test bootstrap_lists_pending_operations ... ok
+test production_registry_is_enabled_and_lookup_is_neutral ... ok
+test supervisor_action_and_legacy_share_one_enqueue_and_retained_operation ... ok
+test supervisor_action_lookup_reconciles_native_commit_without_reenqueue ... ok
+test supervisor_union_bounds_identity_and_concurrent_legacy_admission ... ok
+test unknown_fields_duplicate_keys_and_oversized_bodies_are_rejected_before_admission ... ok
+test v1_outer_rejections_and_validation_use_common_safe_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.57s
+
+     Running tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-732d812296b4937e)
+
+running 3 tests
+test configured_graph_and_injected_review_owner_are_visible_only_to_owner ... ok
+test mounted_routes_and_absent_owners_have_granular_truthful_capabilities ... ok
+test unsupported_saved_graph_adapter_is_refused_before_upstream_io ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.05s
+
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-5c8907e921dd9f29)
+
+running 6 tests
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test acl_expiry_during_database_wait_refuses_read ... FAILED
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test session_lifecycle_reports_are_historical_acl_scoped_and_never_live_observation ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+
+failures:
+
+---- acl_expiry_during_database_wait_refuses_read stdout ----
+
+thread 'acl_expiry_during_database_wait_refuses_read' (2072977) panicked at crates/aq-server/tests/dashboard_read.rs:183:5:
+assertion `left == right` failed: {"api_version":"dashboard-read-1","coverage":{"state":"complete"},"data":{"capabilities":[{"enabled":true,"name":"dashboard.overview","version":"1"},{"enabled":true,"name":"sessions.read","version":"1"},{"enabled":true,"name":"session.usage.read","version":"1"},{"enabled":true,"name":"session.events.read","version":"1"},{"enabled":false,"name":"projects.read","reason":"Project inspection requires an owner account","version":"1"},{"enabled":true,"name":"status.read","version":"1"},{"enabled":true,"name":"workers.read","version":"1"},{"enabled":true,"name":"notifications.read","version":"1"},{"enabled":false,"name":"human.graph.read","reason":"Human Graph inspection requires an owner account and configured Graph runtime","version":"1"},{"enabled":false,"name":"human.overview.tasks.read","reason":"Recorded task summaries require an owner account and configured Graph runtime","version":"1"},{"enabled":false,"name":"tasks.read","reason":"Task inspection requires an owner account and configured Graph runtime","version":"1"},{"enabled":false,"name":"tasks.create","reason":"Task creation requires an owner account and configured Graph mutation identity","version":"1"},{"enabled":false,"name":"knowledge.read","reason":"Knowledge inspection requires an owner account and configured Graph runtime","version":"1"},{"enabled":false,"name":"search.read","reason":"Search requires an owner account and configured Graph runtime","version":"1"},{"enabled":false,"name":"decisions.read","reason":"Decision inspection requires an owner account and a mounted review owner","version":"1"},{"enabled":false,"name":"decisions.resolve","reason":"Decision resolution requires an owner account and a mounted review owner","version":"1"},{"enabled":false,"name":"providers.configured.read","reason":"Configured provider inspection requires an owner account","version":"1"},{"enabled":false,"name":"provider.quota","reason":"Provider account usage is unavailable","version":"1"},{"enabled":false,"name":"supervisor.history.read","reason":"Global supervisor history requires an owner account and mounted conversation owner","version":"1"},{"enabled":false,"name":"supervisor.message.enqueue","reason":"Global supervisor enqueue requires an owner account and mounted conversation owner","version":"1"},{"enabled":false,"name":"supervisor.conversation","reason":"The global supervisor is not connected yet","version":"1"},{"enabled":false,"name":"terminal.watch","reason":"Terminal relay or session inspection is unavailable","version":"1"},{"enabled":false,"name":"terminal.control","reason":"Terminal control requires an owner account and configured terminal relay","version":"1"},{"enabled":false,"name":"dashboard.actions","operation_retention":{"minimum_days":90,"retired_ids_indefinite":true,"unresolved_indefinite":true},"reason":"Dashboard actions require an owner account","version":"1"},{"enabled":false,"name":"results.read","reason":"Result inspection requires an owner account","version":"1"},{"enabled":false,"name":"results.comment","reason":"Comments require an owner account and a mounted Results owner","version":"1"},{"enabled":false,"name":"results.feedback","reason":"Feedback requires an owner account and a mounted Results owner","version":"1"},{"enabled":false,"name":"results.media.read","reason":"Supplemental images require an owner account and mounted media storage","version":"1"},{"enabled":false,"name":"results.media.upload","reason":"Supplemental image uploads require an owner account","version":"1"},{"enabled":false,"name":"playbooks.inspect","reason":"Playbook inspection requires the mounted runtime namespace owner","version":"1"},{"enabled":false,"name":"playbooks.loaded-definitions.read","reason":"Loaded definitions require the configured runtime namespace owner","version":"1"},{"enabled":false,"name":"playbooks.catalog.read","reason":"Current catalog inspection requires the mounted component query and namespace owner","version":"1"}],"contracts":[{"digest":"sha256:a913e589689043d743ca8ccbe756f34fb7a2beb0f44d14a3cb089de777ca00fb","name":"dashboard-read","version":"dashboard-read-1"},{"digest":"sha256:97fdea9aa4aeae795415d53bb3a4081684416bafd6f1b44e598a8e70a51df9ce","name":"dashboard-actions","version":"dashboard-actions-1"}],"default_scope":{"kind":"all_authorized"},"global_supervisor":{"conversation_id":null,"reason":"The global supervisor is not connected yet","status":"unconfigured"},"limits":{"max_page_size":100,"page_size":25,"snapshot_members":256,"snapshot_ttl_ms":30000},"principal":{"authorization_revision":"279913617392021436566250904677582992482","display_name":"expiry@localhost","id":"d09bd280-f7f4-4037-afe0-6bb0adb4834d"},"product":{"dashboard_digest":null,"version":"0.1.0"}},"observation":{"coverage":"complete","fresh_until":"1970-01-01T00:16:45.100Z","observed_at":"1970-01-01T00:16:40.100Z","quality":"reported","source":"aq_dashboard_read"},"pending_operations":[],"request_id":"08cd2c95-0c1d-47a1-814f-63e68834d6fc","scope":{"kind":"all_authorized"},"server_time":"1970-01-01T00:16:40.100Z"}
+  left: 200
+ right: 403
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    acl_expiry_during_database_wait_refuses_read
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.57s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_read`

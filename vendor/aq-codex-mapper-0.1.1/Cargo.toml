@@ -1,0 +1,11 @@
+[package]
+name = "aq-codex-mapper"
+version = "0.1.1"
+edition = "2024"
+publish = false
+description = "Pure closed Codex recipe metadata without worker or execution authority"
+
+[dependencies]
+aq-session-protocol = { path = "../aq-session-protocol-0.1.0", version = "=0.1.0" }
+anyhow = "1"
+toml = "0.8"

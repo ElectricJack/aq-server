@@ -31,7 +31,7 @@ pub(super) async fn load_locked(
     auth: &AuthenticatedNode,
     q: &PrepareRequest,
 ) -> Result<Pinned, AppError> {
-    Box::pin(load_for_locked(state, tx, auth, q, None)).await
+    Box::pin(load_for_locked(state, tx, auth, q, None, false)).await
 }
 
 /// Only the actual immutable issued-history owner supplies this receipt. This
@@ -45,7 +45,29 @@ pub(super) async fn load_replay_locked(
     q: &PrepareRequest,
     issued: &history::PhaseExecutionHistory,
 ) -> Result<Pinned, AppError> {
-    Box::pin(load_for_locked(state, tx, auth, q, Some(issued))).await
+    Box::pin(load_for_locked(state, tx, auth, q, Some(issued), false)).await
+}
+
+/// Continuing permission is authenticated against the live delegated record.
+/// Only its expiry may advance beyond the immutable phase issuance receipt.
+pub(super) async fn load_continuing_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    issued: &history::PhaseExecutionHistory,
+) -> Result<Pinned, AppError> {
+    if auth.delegated().is_none() {
+        return Err(refused());
+    }
+    Box::pin(load_for_locked(
+        state,
+        tx,
+        auth,
+        &issued.request,
+        Some(issued),
+        true,
+    ))
+    .await
 }
 
 async fn load_for_locked(
@@ -54,6 +76,7 @@ async fn load_for_locked(
     auth: &AuthenticatedNode,
     q: &PrepareRequest,
     issued: Option<&history::PhaseExecutionHistory>,
+    continuing: bool,
 ) -> Result<Pinned, AppError> {
     use aq_session_protocol::Validate;
     q.original.binding.validate().map_err(|_| refused())?;
@@ -124,10 +147,17 @@ async fn load_for_locked(
         .validate_after(&h.receipt.versions)
         .map_err(|_| refused())?;
     if let Some(issued) = issued {
-        if !same(
-            hot.grant.as_ref().ok_or_else(refused)?,
-            &issued.receipt.grant,
-        )? || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
+        let live = hot.grant.as_ref().ok_or_else(refused)?;
+        let grant_matches = if continuing {
+            live.binding == issued.receipt.grant.binding
+                && live.grant_id == issued.receipt.grant.grant_id
+                && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
+                && live.expires_at_ms <= issued.receipt.execution_deadline_ms
+        } else {
+            same(live, &issued.receipt.grant)?
+        };
+        if !grant_matches
+            || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
             || hot.preparation_operation_id != Some(h.request.original.operation_id)
             || hot.owner.as_ref().is_none_or(|o| {
                 o.guardian_id != q.original.guardian_id
@@ -242,9 +272,10 @@ async fn load_for_locked(
     let mut expected = Vec::new();
     let mut context = None;
     let mut ceiling = match issued {
-        Some(h) => h
-            .receipt
+        Some(h) => hot
             .grant
+            .as_ref()
+            .ok_or_else(refused)?
             .expires_at_ms
             .min(h.receipt.execution_deadline_ms),
         None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),

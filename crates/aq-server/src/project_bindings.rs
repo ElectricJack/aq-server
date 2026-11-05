@@ -216,6 +216,32 @@ async fn put(
     Path(id): Path<Uuid>,
     Json(request): Json<PutBinding>,
 ) -> Result<Json<Value>> {
+    put_request(&state, actor.id, id, request).await.map(Json)
+}
+/// Owner project-binding mutation core, shared by the route and D2 onboarding.
+pub(crate) async fn put_binding(
+    state: &AppState,
+    actor: Uuid,
+    operation_id: Uuid,
+    expected_revision: u64,
+    binding: ProjectBinding,
+) -> Result<Value> {
+    let id = binding.project_id;
+    let request = PutBinding {
+        operation_id,
+        expected_revision,
+        binding,
+    };
+    put_request(state, actor, id, request).await
+}
+async fn put_request(
+    state: &AppState,
+    actor: Uuid,
+    id: Uuid,
+    request: PutBinding,
+) -> Result<Value> {
+    let actor_id = actor;
+    let state = state.clone();
     if request.operation_id.is_nil()
         || id != request.binding.project_id
         || request.expected_revision >= i64::MAX as u64
@@ -224,10 +250,10 @@ async fn put(
     }
     let digest = aq_profiles::digest(&json!({"kind":"put","project_id":id,"request":request}))
         .map_err(|_| bad("invalid project mutation"))?;
-    if let Some(receipt) = existing_receipt(&state, actor.id, request.operation_id, &digest).await?
+    if let Some(receipt) = existing_receipt(&state, actor_id, request.operation_id, &digest).await?
     {
         install_profiled_policies_after_commit(&state).await;
-        return Ok(Json(receipt));
+        return Ok(receipt);
     }
     request
         .binding
@@ -272,7 +298,7 @@ async fn put(
     }
     let response = mutate(
         &state,
-        actor.id,
+        actor_id,
         id,
         request.operation_id,
         request.expected_revision,
@@ -282,7 +308,7 @@ async fn put(
     )
     .await?;
     install_profiled_policies_after_commit(&state).await;
-    Ok(Json(response))
+    Ok(response)
 }
 async fn disable(
     State(state): State<AppState>,

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/phase_execution.rs (target/debug/deps/phase_execution-f5da02ca1a3c3c58)
+
+running 1 test
+test refusals::no_longer_in_bounded_ready_page_cannot_issue_execution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 3.84s
+

@@ -1,0 +1,45 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 3 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/c5a1/test_cargo.py -n 1 -s
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 1/1 worker
+1 worker [1 item]
+
+F
+=================================== FAILURES ===================================
+__________________________________ test_cargo __________________________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+    def test_cargo():
+        command = json.loads(os.environ['C5A1_COMMAND'])
+        log = Path(os.environ['C5A1_WORKDIR']) / '.aq/tmp/c5a1' / (hashlib.sha256(json.dumps(command).encode()).hexdigest()[:12] + '.command.log')
+>       with log.open('w') as output:
+             ^^^^^^^^^^^^^
+
+.aq/tmp/c5a1/test_cargo.py:12:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = PosixPath('/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/.aq/tmp/c5a1/642b00be21a0.command.log')
+mode = 'w', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/.aq/tmp/c5a1/642b00be21a0.command.log'
+
+/usr/lib/python3.12/pathlib.py:1015: FileNotFoundError
+=========================== short test summary info ============================
+FAILED .aq/tmp/c5a1/test_cargo.py::test_cargo - FileNotFoundError: [Errno 2] ...
+============================== 1 failed in 2.53s ===============================

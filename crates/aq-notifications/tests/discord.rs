@@ -173,7 +173,11 @@ fn protected_endpoint_is_fixed_origin_path_and_has_no_arbitrary_query_or_redirec
     assert!(
         Webhook::parse("https://discord.com/api/v10/webhooks/42/fixture_token_1234567890").is_ok()
     );
+    // The form Discord issues is accepted and pinned to v10.
+    assert!(Webhook::parse("https://discord.com/api/webhooks/42/fixture_token_1234567890").is_ok());
     for value in [
+        "https://discord.com/api/v9/webhooks/42/fixture_token_1234567890",
+        "https://discord.com/api/webhooks/42/fixture_token_1234567890/other",
         "http://discord.com/api/v10/webhooks/42/fixture_token_1234567890",
         "https://evil.example/api/v10/webhooks/42/fixture_token_1234567890",
         "https://discord.com/api/v10/webhooks/42/fixture_token_1234567890?wait=false",

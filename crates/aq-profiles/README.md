@@ -9,11 +9,11 @@ current tenant/project/caller authority; passing a compiler request is no grant.
 Run the actual CLI without a daemon:
 
 ```
-cargo run -p aq-profiles --bin aq -- profile validate --catalog crates/aq-profiles/examples/catalog
-cargo run -p aq-profiles --bin aq -- profile explain --catalog CATALOG --request REQUEST.json --graph-access-profile-digest SHA256
+cargo run -p aq-profiles --bin aq-profile -- profile validate --catalog crates/aq-profiles/examples/catalog
+cargo run -p aq-profiles --bin aq-profile -- profile explain --catalog CATALOG --request REQUEST.json --graph-access-profile-digest SHA256
 ```
 
-This binary currently supplies only `aq profile validate` and `aq profile explain`.
+This binary currently supplies only `aq-profile profile validate` and `aq-profile profile explain`.
 Validate optionally accepts the same request/digest arguments as explain.
 `validate --artifact-out FILE` exports canonical immutable artifact bytes for the
 central activation API; export alone never activates a catalog. Exit 0

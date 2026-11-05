@@ -1,0 +1,73 @@
+{
+  "digest": "sha256:0d0918ce4bc486501f851a66c9b1e080d35126061d310d8a5de7701f1bb1c8d3",
+  "executable_fingerprint": "sha256:53087ab226ebed27a593f391bda87c85d228a5a7da8858d7dd2ce20ac9d69fe0",
+  "content": {
+    "format_version": 1,
+    "compiler": "agent-q labelled development inert example",
+    "source": {
+      "digest": "sha256:8d7ed20d32c269c4ac3d4b977d6e10ef0b45dae5b21d4c0957eb6e02bfc5559e",
+      "header": {
+        "format_version": 1,
+        "id": "development-inspection-only",
+        "scope": "project",
+        "interfaces": [
+          "main"
+        ],
+        "definitions": []
+      }
+    },
+    "playbook": {
+      "id": "development-inspection-only",
+      "purpose": "Development inspection-only definition. No triggers or commands. If explicitly admitted, main returns ok with null output. Startup must not admit it.",
+      "scope": "project",
+      "entries": {
+        "main": {
+          "input": {
+            "type": "null"
+          },
+          "outcomes": {
+            "ok": {
+              "type": "null"
+            }
+          },
+          "start": "done"
+        }
+      },
+      "steps": {
+        "done": {
+          "op": {
+            "kind": "return",
+            "outcome": "ok",
+            "output": {
+              "op": "literal",
+              "value": null
+            }
+          },
+          "edges": {},
+          "on_error": null
+        }
+      },
+      "triggers": [],
+      "limits": {
+        "max_step_visits": 10000,
+        "max_children": 100,
+        "max_depth": 8,
+        "max_concurrent_effects": 16,
+        "max_concurrent_children": 16,
+        "max_payload_bytes": 1048576,
+        "max_history_bytes": 16777216,
+        "max_duration_ms": 86400000,
+        "max_iterations": 1000,
+        "max_iteration_depth": 4
+      },
+      "required_capabilities": []
+    },
+    "registry": {
+      "commands": {},
+      "events": {}
+    },
+    "dependencies": {},
+    "definitions": {},
+    "source_map": {}
+  }
+}

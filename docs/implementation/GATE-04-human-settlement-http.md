@@ -1,5 +1,9 @@
 # First-pilot combined review and settlement HTTP ports
 
+Production activation and the later combined-decision admission ports are
+documented in [I0 settlement activation](I0-settlement-path.md). The qualification
+record below describes the original adapter delivery.
+
 This is a thin protected adapter over the existing combined-review and settlement owners. It adds no schema, decision admission, automatic answer, scheduler or eligibility logic. A real human must choose the answer; synthetic answers in component tests are not physical execution or human-review qualification.
 
 The existing optional `reviews::admin_routes` injection mounts these routes beneath the daemon's current identity, origin/CSRF, admission, maintenance and response-hardening layers. Default constructors without a configured reviews owner keep every new route absent. Handlers pass the complete authenticated `store::User` from `RequireOwner`; they never substitute a UUID, worker or agent credential. Settlement uses the injected reviews owner's actual AppState and Service.

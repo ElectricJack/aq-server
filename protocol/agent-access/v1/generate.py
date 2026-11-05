@@ -71,7 +71,8 @@ def definitions():
     obj('TaskMailbox', {'kind': const('task'), 'workspace_id': UUID, 'project_id': UUID, 'task_id': UUID})
     obj('SessionMailbox', {'kind': const('session'), 'workspace_id': UUID, 'project_id': UUID, 'task_id': UUID,
                            'session_id': UUID, 'attempt_id': UUID, 'generation': integer(2**63-1, 1)})
-    union('MailboxRecipient', ['TaskMailbox', 'SessionMailbox'])
+    obj('SupervisorMailbox', {'kind': const('global_supervisor'), 'conversation_id': UUID})
+    union('MailboxRecipient', ['TaskMailbox', 'SessionMailbox', 'SupervisorMailbox'])
     obj('MessageSend', {'operation_id': UUID, 'message_id': UUID, 'thread_id': UUID,
                         'recipient': ref('MailboxRecipient'), 'body': text(16384, 1)})
     cursor = {'type': 'string', 'pattern': '^(0|[1-9][0-9]{0,18})$'}
@@ -91,7 +92,9 @@ def definitions():
                               'harness_delivery': delivery})
     obj('OwnerMessageSender', {'kind': const('owner'), 'user_id': UUID})
     obj('SessionMessageSender', {'kind': const('session'), 'binding': ref('Binding')})
-    union('MessageSender', ['OwnerMessageSender', 'SessionMessageSender'])
+    obj('SupervisorMessageSender', {'kind': const('central_supervisor'), 'actor_id': UUID,
+                                    'generation': integer(2**63-1, 1), 'session_id': UUID, 'conversation_id': UUID})
+    union('MessageSender', ['OwnerMessageSender', 'SessionMessageSender', 'SupervisorMessageSender'])
     obj('MailboxMessage', {'message_id': UUID, 'thread_id': UUID, 'cursor': VERSION,
                            'sender': ref('MessageSender'), 'recipient': ref('MailboxRecipient'),
                            'body': text(16384, 1), 'payload_digest': SHA, 'created_at_ms': integer(2**63-1),

@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-e15fbd1bfbdc1cec)
+
+running 1 test
+test relational_only_over_budget_backfill_rolls_back_entire_migration ... 
+thread 'relational_only_over_budget_backfill_rolls_back_entire_migration' (2237621) panicked at crates/aq-server/tests/common/phase_execution_core.rs:133:10:
+called `Result::unwrap()` on an `Err` value: UpdatesUnavailable("scoped material owner temporarily unavailable")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    relational_only_over_budget_backfill_rolls_back_entire_migration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 3.69s
+
+error: test failed, to rerun pass `-p aq-server --test schema33_phase_terminal`

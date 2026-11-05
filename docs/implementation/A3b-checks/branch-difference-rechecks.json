@@ -1,0 +1,94 @@
+{
+  "source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+  "reason": "Repeat cases failing serially on A3b but passing on clean main, with the original unmodified compiled A3b test executable.",
+  "RUST_TEST_THREADS": 1,
+  "graph_binary": {
+    "image": "aq-graph:graph01-225329cd6acf-pinned",
+    "image_id": "sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be",
+    "source_revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+    "binary": "/tmp/aq-a3b-qualification/aq-graph",
+    "sha256": "da79578f79181b8f9c4e2ecb393a04d441a6eb5fcd952c976bef436199c93f21"
+  },
+  "runs": [
+    {
+      "target": "native_initial_grant",
+      "test": "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "command": [
+        "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+        "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+      "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+      "started_utc": "2026-11-03T03:40:50.732400+00:00",
+      "log": "branch-difference-recheck-01.log",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:54.776404+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.13s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+      "command": [
+        "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+        "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+      "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+      "started_utc": "2026-11-03T03:40:55.205692+00:00",
+      "log": "branch-difference-recheck-02.log",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:40:57.897059+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.68s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+      "command": [
+        "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+        "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+      "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+      "started_utc": "2026-11-03T03:40:58.266349+00:00",
+      "log": "branch-difference-recheck-03.log",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:41:00.743874+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.47s"
+      ]
+    },
+    {
+      "target": "phase_results",
+      "test": "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+      "command": [
+        "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_results-f84dd70510a4a7d6",
+        "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "binary_sha256": "fb109994214f34dc7d01f0889b086a1224bb52b87c51d29d8a2cd5ba86e769d7",
+      "binary_last_modified_utc": "2026-11-03T02:36:19.630045+00:00",
+      "started_utc": "2026-11-03T03:41:01.359323+00:00",
+      "log": "branch-difference-recheck-04.log",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:41:07.688871+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 6.32s"
+      ]
+    }
+  ]
+}

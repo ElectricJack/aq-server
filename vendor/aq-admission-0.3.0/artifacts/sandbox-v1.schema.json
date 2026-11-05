@@ -1,0 +1,1404 @@
+{
+  "$comment": "Maximum encoded frame 1 MiB. Rust validators additionally enforce nonnil identities, UTF-8 byte bounds, duplicate rejection, currency and harness constraints, exact request/node/boot/attempt/generation/sandbox/channel correlation, operation scope, original and current deadlines, and replay equality. Authentication, revocation, current incarnation fencing, channel allocation uniqueness, aggregate limits and atomic replay persistence are server responsibilities. Awaiting node re-adoption grants no deadline extension. Permit issuance, grant upgrade and registration envelopes correlate to their frozen phase payloads by digest and exact identity; a preparation permit authorizes Prepared, and mailbox poll/ack require execution scope.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "BackendAdvertisement": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/BackendCapability"
+          },
+          "maxItems": 4,
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/BackendKind"
+        },
+        "max_concurrent_sandboxes": {
+          "format": "uint32",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "spend_ceiling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templates": {
+          "items": {
+            "$ref": "#/$defs/TemplateAdvertisement"
+          },
+          "maxItems": 128,
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "capabilities",
+        "max_concurrent_sandboxes",
+        "templates"
+      ],
+      "type": "object"
+    },
+    "BackendCapability": {
+      "enum": [
+        "vm-isolation",
+        "nested-docker",
+        "suspend-snapshot",
+        "persistent-disk-during-attempt"
+      ],
+      "type": "string"
+    },
+    "BackendKind": {
+      "enum": [
+        "docker-local",
+        "boat",
+        "cloudflare-containers"
+      ],
+      "type": "string"
+    },
+    "Capability": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "CompatibilityReply": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "compatible",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unsupported_required_capability",
+              "type": "string"
+            },
+            "missing": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "missing"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DelegatedPermit": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/RunnerChannelIdentity"
+        },
+        "credential": {
+          "$ref": "#/$defs/PermitCredential"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hard_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issued_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/PermitScope"
+        }
+      },
+      "required": [
+        "schema_version",
+        "permit_id",
+        "credential",
+        "binding",
+        "scope",
+        "issued_at_ms",
+        "expires_at_ms",
+        "hard_deadline_ms"
+      ],
+      "type": "object"
+    },
+    "DeliveryClock": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "valid_for_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "server_time_ms",
+        "expires_at_ms",
+        "valid_for_ms"
+      ],
+      "type": "object"
+    },
+    "DeliveryStamp": {
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "$ref": "#/$defs/DeliveryClock"
+        },
+        "nonce": {
+          "description": "Echo of the UUID aq-delivery-nonce on this physical HTTP transmission.\nThis is outside the immutable mutation request/receipt digest.",
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "nonce",
+        "clock"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Feature": {
+      "enum": [
+        "artifact_transfer_v1",
+        "server_material_v1",
+        "durable_host_journal_v1",
+        "host_stop_evidence_v1"
+      ],
+      "type": "string"
+    },
+    "HarnessVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "harness": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness",
+        "version"
+      ],
+      "type": "object"
+    },
+    "LaunchBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "assignment_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "execution_spec_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "graph_access_profile_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "launch_manifest_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        }
+      },
+      "required": [
+        "session",
+        "schema_version",
+        "offer_id",
+        "attempt_id",
+        "assignment_generation",
+        "execution_spec_digest",
+        "launch_manifest_digest",
+        "graph_access_profile_digest"
+      ],
+      "type": "object"
+    },
+    "LiveSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "grant_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "permit_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "sandbox_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "permit_id",
+        "attempt_id",
+        "grant_generation",
+        "sandbox_id"
+      ],
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "maxLength": 3,
+          "minLength": 3,
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "currency",
+        "micros"
+      ],
+      "type": "object"
+    },
+    "PermitCredential": {
+      "description": "An opaque server-verified credential, never a self-authorizing JSON claim.",
+      "maxLength": 256,
+      "minLength": 32,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "PermitIssuanceRequest": {
+      "additionalProperties": false,
+      "description": "Sent with the frozen accept. Supplies the sandbox identity the frozen\n`AcceptRequest` lacks; the runner channel is allocated by the server.",
+      "properties": {
+        "accept_request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "grant_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "node": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "operation_id": {
+          "description": "Equals the frozen accept's `operation_id`.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/PhaseProfile"
+        },
+        "sandbox_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "profile",
+        "accept_request_digest",
+        "attempt_id",
+        "grant_generation",
+        "sandbox_id",
+        "node"
+      ],
+      "type": "object"
+    },
+    "PermitIssuanceResponse": {
+      "additionalProperties": false,
+      "description": "Returned with the frozen accepted delivery: the preparation-scoped permit.",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/PreparationAuthority"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit": {
+          "$ref": "#/$defs/DelegatedPermit"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "authority",
+        "permit"
+      ],
+      "type": "object"
+    },
+    "PermitScope": {
+      "enum": [
+        "preparation",
+        "execution"
+      ],
+      "type": "string"
+    },
+    "PermitUpgradeRequest": {
+      "additionalProperties": false,
+      "description": "Sent with the frozen Prepared request, authenticated by the preparation\npermit's credential (never carried in this body).",
+      "properties": {
+        "accepted_receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "binding": {
+          "$ref": "#/$defs/RunnerChannelIdentity"
+        },
+        "operation_id": {
+          "description": "Equals the frozen Prepare's `operation_id`.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "prepare_request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "profile": {
+          "$ref": "#/$defs/PhaseProfile"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "profile",
+        "prepare_request_digest",
+        "accepted_receipt_digest",
+        "permit_id",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "PermitUpgradeResponse": {
+      "additionalProperties": false,
+      "description": "Returned with the frozen execution delivery when the grant commits. The\nsame permit identity and binding are upgraded to execution scope, bounded by\nthe grant's execution deadline.",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/PhaseExecutionAuthority"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit": {
+          "$ref": "#/$defs/DelegatedPermit"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "authority",
+        "permit"
+      ],
+      "type": "object"
+    },
+    "PhaseExecutionAuthority": {
+      "additionalProperties": false,
+      "description": "Immutable origin retained by B2, not authority established by deserializing it.",
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ProfiledGrant"
+        },
+        "hard_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issued_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "profile": {
+          "$ref": "#/$defs/PhaseProfile"
+        },
+        "receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "profile",
+        "receipt_digest",
+        "grant",
+        "issued_at_ms",
+        "hard_deadline_ms"
+      ],
+      "type": "object"
+    },
+    "PhaseProfile": {
+      "enum": [
+        "phase_v2",
+        "phase_refresh_v1"
+      ],
+      "type": "string"
+    },
+    "PreparationAuthority": {
+      "additionalProperties": false,
+      "description": "Projection of a validated frozen `AcceptedReceipt`, retained by B2 as the\ntrusted preparation state. Deserializing it establishes no authority.",
+      "properties": {
+        "accepted_receipt_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding",
+          "description": "The accepted binding; `assignment_generation` is the reserved next grant generation."
+        },
+        "issued_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "preparation_deadline_ms": {
+          "description": "The accepted preparation lease expiry; the preparation permit's hard deadline.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "profile": {
+          "$ref": "#/$defs/PhaseProfile"
+        }
+      },
+      "required": [
+        "profile",
+        "accepted_receipt_digest",
+        "binding",
+        "issued_at_ms",
+        "preparation_deadline_ms"
+      ],
+      "type": "object"
+    },
+    "ProfiledGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "grant_id",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "ReadoptionRefusal": {
+      "enum": [
+        "unknown_sandbox",
+        "no_current_grant",
+        "expired",
+        "revoked"
+      ],
+      "type": "string"
+    },
+    "ReadoptionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "previous": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "sandboxes": {
+          "items": {
+            "$ref": "#/$defs/LiveSandbox"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "previous",
+        "current",
+        "sandboxes"
+      ],
+      "type": "object"
+    },
+    "ReadoptionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "previous": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ReadoptionResult"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "previous",
+        "current",
+        "results"
+      ],
+      "type": "object"
+    },
+    "ReadoptionResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "rebound",
+              "type": "string"
+            },
+            "permit": {
+              "$ref": "#/$defs/DelegatedPermit"
+            }
+          },
+          "required": [
+            "kind",
+            "permit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ReadoptionRefusal"
+            },
+            "kind": {
+              "const": "refused",
+              "type": "string"
+            },
+            "sandbox_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "sandbox_id",
+            "code"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Register": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "type": "array"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/Feature"
+          },
+          "type": "array"
+        },
+        "identity": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "identity",
+        "runtime",
+        "capabilities",
+        "features"
+      ],
+      "type": "object"
+    },
+    "Registration": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/BackendAdvertisement"
+        },
+        "registration": {
+          "$ref": "#/$defs/Register"
+        },
+        "schema_version": {
+          "const": 2,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "registration",
+        "backend"
+      ],
+      "type": "object"
+    },
+    "RegistrationResponse": {
+      "additionalProperties": false,
+      "description": "Registration v2 reply. `compatible` enrolls exactly the registered node\nincarnation; a decline enrolls nothing and issues no permit.",
+      "properties": {
+        "compatibility": {
+          "$ref": "#/$defs/CompatibilityReply"
+        },
+        "node": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 2,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "node",
+        "compatibility"
+      ],
+      "type": "object"
+    },
+    "RenewalReply": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No delivery clock, expiry or hard deadline: this reply extends nothing.",
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/RunnerChannelIdentity"
+            },
+            "kind": {
+              "const": "awaiting_node_readoption",
+              "type": "string"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "operation_id",
+            "binding"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "renewed",
+              "type": "string"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "permit": {
+              "$ref": "#/$defs/DelegatedPermit"
+            }
+          },
+          "required": [
+            "kind",
+            "operation_id",
+            "permit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RunnerChannelIdentity": {
+      "additionalProperties": false,
+      "description": "The server assigns one channel per sandbox and retains it across boot changes.\nBoth terminal and observation streams use this same identity.",
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "grant_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "node": {
+          "$ref": "#/$defs/WorkerIdentity"
+        },
+        "sandbox_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "grant_generation",
+        "sandbox_id",
+        "node",
+        "channel_id"
+      ],
+      "type": "object"
+    },
+    "RunnerRenewalRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/PhaseExecutionAuthority"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit": {
+          "$ref": "#/$defs/DelegatedPermit"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "authority",
+        "permit",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "RunnerRenewalResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reply": {
+          "$ref": "#/$defs/RenewalReply"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "revision",
+        "reply"
+      ],
+      "type": "object"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "remote",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TemplateAdvertisement": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "estimated_cold_start_cost": {
+          "$ref": "#/$defs/Money"
+        },
+        "estimated_cold_start_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "harnesses": {
+          "items": {
+            "$ref": "#/$defs/HarnessVersion"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "digest",
+        "harnesses",
+        "estimated_cold_start_ms",
+        "estimated_cold_start_cost"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "WorkerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "node_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "boot_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/DelegatedPermit"
+        },
+        "kind": {
+          "const": "permit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PhaseExecutionAuthority"
+        },
+        "kind": {
+          "const": "phase_authority",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RunnerRenewalRequest"
+        },
+        "kind": {
+          "const": "runner_renewal_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RunnerRenewalResponse"
+        },
+        "kind": {
+          "const": "runner_renewal_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ReadoptionRequest"
+        },
+        "kind": {
+          "const": "readoption_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ReadoptionResponse"
+        },
+        "kind": {
+          "const": "readoption_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Registration"
+        },
+        "kind": {
+          "const": "register",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RenewalReply"
+        },
+        "kind": {
+          "const": "renewal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RunnerChannelIdentity"
+        },
+        "kind": {
+          "const": "channel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/CompatibilityReply"
+        },
+        "kind": {
+          "const": "compatibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PreparationAuthority"
+        },
+        "kind": {
+          "const": "preparation_authority",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PermitIssuanceRequest"
+        },
+        "kind": {
+          "const": "permit_issuance_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PermitIssuanceResponse"
+        },
+        "kind": {
+          "const": "permit_issuance_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PermitUpgradeRequest"
+        },
+        "kind": {
+          "const": "permit_upgrade_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/PermitUpgradeResponse"
+        },
+        "kind": {
+          "const": "permit_upgrade_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RegistrationResponse"
+        },
+        "kind": {
+          "const": "registration_response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "body"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "SandboxDocument"
+}

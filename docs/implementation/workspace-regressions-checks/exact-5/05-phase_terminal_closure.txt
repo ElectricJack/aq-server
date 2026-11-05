@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized] target(s) in 0.34s
+     Running tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-74a7f6057b780b00)
+
+running 1 test
+test suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.28s
+

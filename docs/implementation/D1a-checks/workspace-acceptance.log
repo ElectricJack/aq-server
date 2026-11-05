@@ -1,0 +1,26 @@
+$ cargo test --locked --workspace candidate_from_retained_source_publishes_once
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+   Compiling aq-updater v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-updater)
+   Compiling aq-session-cli v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-session-cli)
+   Compiling aq-notify v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-notify)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-review-protocol)
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-central-authority)
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-observation-admission)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-accounting)
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-result-media)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-selection)
+error[E0063]: missing field `allowed_backends` in initializer of `AuthorizedCredential`
+  --> crates/aq-server/tests/dashboard_aggregation.rs:35:22
+   |
+35 |     let credential = AuthorizedCredential {
+   |                      ^^^^^^^^^^^^^^^^^^^^ missing `allowed_backends`
+
+error[E0063]: missing fields `allowed_backends` and `kind` in initializer of `CredentialConfig`
+  --> crates/aq-server/tests/dashboard_aggregation.rs:53:27
+   |
+53 |         .map(|credential| CredentialConfig {
+   |                           ^^^^^^^^^^^^^^^^ missing `allowed_backends` and `kind`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `aq-server` (test "dashboard_aggregation") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

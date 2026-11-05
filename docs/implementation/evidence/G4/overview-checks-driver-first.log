@@ -1,0 +1,39 @@
+COMMAND: cargo fmt EXIT: 0 LOG: overview-fmt.log
+COMMAND: cargo fmt --check EXIT: 0 LOG: overview-fmt-check.log
+COMMAND: cargo clippy --locked -p aq-server --lib --test dashboard_aggregation --test dashboard_read --test profiled_results -- -D warnings EXIT: 0 LOG: overview-clippy.log
+COMMAND: cargo test --locked -p aq-server --test dashboard_aggregation --test profiled_results overview_ EXIT: 101 LOG: overview-area-final.log
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 00s
+     Running tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-7b9453c1da41bc70)
+
+running 4 tests
+test overview_ready_owner_preserves_samples_failures_and_binding_fence ... ok
+test overview_empty_and_bounded_project_sources_are_truthful ... ok
+test overview_uncertain_operations_are_principal_and_scope_bound ... ok
+test overview_workers_use_configured_threshold_and_project_association ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.75s
+
+     Running tests/profiled_results.rs (target/debug/deps/profiled_results-034af8115d6d8c27)
+
+running 3 tests
+test review_inbox::overview_running_and_recovering_use_started_and_stopped_owners ... ok
+test review_inbox::overview_attention_lists_waiting_decision_and_failed_task ... ok
+test settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion ... FAILED
+
+failures:
+
+---- settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion stdout ----
+
+thread 'settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion' (1600488) panicked at crates/aq-server/tests/profiled_results/settlement_owner39.rs:780:10:
+accepted evaluation is observed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 60 filtered out; finished in 3.95s
+
+error: test failed, to rerun pass `-p aq-server --test profiled_results`
+

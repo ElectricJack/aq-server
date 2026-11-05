@@ -867,6 +867,8 @@ mod tests {
     }
     fn runtime_for(f: &Fixture) -> Runtime {
         Runtime::new(super::super::SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             staging_root: f._dir.path().join("staging"),
             git_root: f.root.clone(),
             git_socket: f._dir.path().join("git.sock"),
@@ -957,6 +959,8 @@ mod actual_git_test {
             hex: git(&seed, &["rev-parse", "HEAD"]).await,
         };
         let settings = super::super::SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
             staging_root: dir.path().join("staging"),
             git_root: dir.path().join("git"),
             git_socket: dir.path().join("git.sock"),

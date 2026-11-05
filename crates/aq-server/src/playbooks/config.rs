@@ -37,11 +37,72 @@ struct Configuration {
     protection: ProtectionConfig,
     drive_interval_ms: u64,
     deployments: Vec<DeploymentInput>,
+    /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
+    #[serde(default)]
+    integration: Option<IntegrationInput>,
+}
+/// Commit identity for central candidates and the publication evidence policy.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntegrationInput {
+    commit_name: String,
+    commit_email: String,
+    #[serde(default)]
+    checks: Vec<String>,
+    #[serde(default)]
+    review: bool,
+    #[serde(default)]
+    judgment_choices: Vec<String>,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct IntegrationSettings {
+    pub(crate) commit_name: String,
+    pub(crate) commit_email: String,
+    pub(crate) evidence: super::host_adapters::EvidencePolicy,
+}
+impl IntegrationInput {
+    fn load(self) -> Result<IntegrationSettings> {
+        let identity =
+            |s: &str| !s.is_empty() && s.len() <= 256 && !s.contains(['\n', '\r', '\0', '<', '>']);
+        let names = |v: &[String]| {
+            v.len() <= 16
+                && v.iter().enumerate().all(|(i, x)| {
+                    (1..=64).contains(&x.len()) && !x.contains('\0') && !v[..i].contains(x)
+                })
+        };
+        if !identity(&self.commit_name)
+            || !identity(&self.commit_email)
+            || !names(&self.checks)
+            || !names(&self.judgment_choices)
+            || (self.checks.is_empty() && !self.review && self.judgment_choices.is_empty())
+        {
+            return Err("invalid playbook integration policy");
+        }
+        Ok(IntegrationSettings {
+            commit_name: self.commit_name,
+            commit_email: self.commit_email,
+            evidence: super::host_adapters::EvidencePolicy {
+                checks: self.checks,
+                review: self.review,
+                judgment_choices: self.judgment_choices,
+            },
+        })
+    }
 }
 #[derive(Deserialize)]
 enum Profile {
     #[serde(rename = "human_review_v2")]
     HumanReview2,
+    #[serde(rename = "graph_events_v3")]
+    GraphEvents3,
+    #[serde(rename = "settlement_events_v4")]
+    SettlementEvents4,
+    #[serde(rename = "monitoring_v6")]
+    Monitoring6,
+    #[serde(rename = "host_v7")]
+    Host7,
+    #[serde(rename = "host_v8")]
+    Host8,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +131,8 @@ pub struct Loaded {
     port: u16,
     pub(crate) interval: Duration,
     pub(crate) deployments: Vec<Deployment>,
+    pub(crate) profile: CatalogProfile,
+    pub(crate) integration: Option<IntegrationSettings>,
 }
 impl std::fmt::Debug for Loaded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -127,7 +190,18 @@ impl Configuration {
         if !self.enabled {
             return Err("omit playbooks section to disable owner");
         }
-        let Profile::HumanReview2 = self.profile;
+        let profile = match self.profile {
+            Profile::HumanReview2 => CatalogProfile::HumanReview2,
+            Profile::GraphEvents3 => CatalogProfile::GraphEvents3,
+            Profile::SettlementEvents4 => CatalogProfile::SettlementEvents4,
+            Profile::Monitoring6 => CatalogProfile::Monitoring6,
+            Profile::Host7 => CatalogProfile::Host7,
+            Profile::Host8 => CatalogProfile::Host8,
+        };
+        if self.integration.is_some() && !profile.is_host2() {
+            return Err("playbook integration requires the host_v7 or host_v8 profile");
+        }
+        let integration = self.integration.map(IntegrationInput::load).transpose()?;
         let n = &self.namespace;
         if [
             n.namespace_id,
@@ -239,7 +313,7 @@ impl Configuration {
             {
                 return Err("invalid playbook deployment binding");
             }
-            CatalogProfile::HumanReview2
+            profile
                 .validate_scope(&d.scope)
                 .map_err(|_| "invalid playbook deployment scope")?;
             let raw = private(&d.artifact_file, 245760)?;
@@ -271,6 +345,8 @@ impl Configuration {
             port,
             interval: Duration::from_millis(self.drive_interval_ms),
             deployments,
+            profile,
+            integration,
         };
         loaded.check_socket()?;
         Ok(loaded)

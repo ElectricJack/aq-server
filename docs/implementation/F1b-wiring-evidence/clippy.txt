@@ -1,0 +1,3 @@
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server)
+    Checking aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-supervisor-host)
+    Finished `dev` profile [unoptimized] target(s) in 49.88s

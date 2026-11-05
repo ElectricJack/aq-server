@@ -1,0 +1,26 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/crates/aq-server)
+error: `Document` is ambiguous
+   --> crates/aq-server/tests/supervisor_turns.rs:224:13
+    |
+224 |         let Document::Plan(mut p) =
+    |             ^^^^^^^^ ambiguous name
+    |
+    = note: ambiguous because of multiple glob imports of a name in the same module
+note: `Document` could refer to the enum imported here
+   --> crates/aq-server/tests/supervisor_turns.rs:3:38
+    |
+  3 | use aq_central_authority::{owner::*, *};
+    |                                      ^
+    = help: consider adding an explicit import of `Document` to disambiguate
+note: `Document` could also refer to the enum imported here
+   --> crates/aq-server/tests/supervisor_turns.rs:7:48
+    |
+  7 |         self as conversation, dispatch, reply, reservations::*,
+    |                                                ^^^^^^^^^^^^^^^
+    = help: consider adding an explicit import of `Document` to disambiguate
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+    = note: `#[deny(ambiguous_glob_imports)]` (part of `#[deny(future_incompatible)]`) on by default
+
+error: could not compile `aq-server` (test "supervisor_turns") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

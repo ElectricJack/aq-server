@@ -1,0 +1,117 @@
+{
+  "contract": "human-supervisor-conversation-1",
+  "conversation": {
+    "id": "00000000-0000-4000-8000-0000000000c0",
+    "revision": "1",
+    "label": "Global supervisor"
+  },
+  "runtime": {
+    "state": "unavailable",
+    "binding": null,
+    "reason": "central_runtime_not_connected"
+  },
+  "direction": "backward",
+  "through_cursor": "1",
+  "items": [
+    {
+      "message_id": "00000000-0000-4000-8000-0000000000d0",
+      "thread_id": "00000000-0000-4000-8000-0000000000c0",
+      "conversation_id": "00000000-0000-4000-8000-0000000000c0",
+      "cursor": "1",
+      "author": {
+        "kind": "human",
+        "user_id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      "body": "Plan the history attachment work.",
+      "body_digest": "sha256:ec8a9631bc894acaf439eef603b63133a48f073946c4ddb395f12b156af789ab",
+      "created_at_ms": 1000,
+      "logical_admission": "queued",
+      "host_delivery": "delivered",
+      "agent_receipt": null
+    },
+    {
+      "message_id": "00000000-0000-4000-8000-0000000000d1",
+      "thread_id": "00000000-0000-4000-8000-0000000000c0",
+      "conversation_id": "00000000-0000-4000-8000-0000000000c0",
+      "cursor": "1.1",
+      "author": {
+        "kind": "supervisor",
+        "actor_id": "00000000-0000-4000-8000-0000000000b1",
+        "generation": 1,
+        "session_id": "00000000-0000-4000-8000-0000000000b2"
+      },
+      "body": "I drafted two tasks for review and created the earlier graph.",
+      "body_digest": "sha256:ebe2940c7afb6725b705d075483356378bcd58b56bccfd87d8ed99cfee9a1225",
+      "created_at_ms": 2000,
+      "dispatch": {
+        "dispatch_id": "00000000-0000-4000-8000-0000000000e1",
+        "host_operation_id": "00000000-0000-4000-8000-0000000000e2",
+        "batch_digest": "abababababababababababababababababababababababababababababababab"
+      },
+      "attachments": [
+        {
+          "type": "proposed_task_draft",
+          "message_id": "00000000-0000-4000-8000-0000000000d1",
+          "draft_id": "00000000-0000-4000-8000-000000000040",
+          "project_id": "00000000-0000-4000-8000-000000000010",
+          "revision": "7",
+          "payload_digest": "sha256:f8767c3686400e26ef0365ffeec3bdd67e76a5a9b8e05ed5a8ec44fc1779a66e",
+          "payload": {
+            "operation_id": "00000000-0000-4000-8000-000000000041",
+            "project_id": "00000000-0000-4000-8000-000000000010",
+            "expected_version": "7",
+            "tasks": [
+              {
+                "id": "00000000-0000-4000-8000-000000000051",
+                "title": "Implement history attachments",
+                "priority": 200,
+                "task_type": "feature"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000052",
+                "title": "Verify",
+                "task_state": "draft",
+                "parent_id": "00000000-0000-4000-8000-000000000051"
+              }
+            ],
+            "edges": [
+              {
+                "id": "00000000-0000-4000-8000-000000000053",
+                "source": "00000000-0000-4000-8000-000000000051",
+                "target": "00000000-0000-4000-8000-000000000052"
+              }
+            ]
+          }
+        },
+        {
+          "type": "action_receipt",
+          "message_id": "00000000-0000-4000-8000-0000000000d1",
+          "operation_id": "00000000-0000-4000-8000-000000000001",
+          "kind": "task.graph.create",
+          "project_id": "00000000-0000-4000-8000-000000000010",
+          "project_revision": "6",
+          "created_task_ids": [
+            "00000000-0000-4000-8000-000000000031",
+            "00000000-0000-4000-8000-000000000032"
+          ],
+          "created_edge_ids": [
+            "00000000-0000-4000-8000-000000000033",
+            "00000000-0000-4000-8000-000000000034"
+          ],
+          "receipt_refs": [
+            {
+              "type": "graph_change_set",
+              "id": "00000000-0000-4000-8000-000000000035"
+            }
+          ],
+          "request_digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        }
+      ],
+      "logical_admission": "queued",
+      "host_delivery": "not_attempted",
+      "agent_receipt": null
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}

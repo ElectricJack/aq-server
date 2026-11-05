@@ -1,0 +1,12 @@
+{
+  "Id": "sha256:6f119d44a482162e7c8d8c04255e56e1e571b9b9e518efd03a8c0fbbd4fd4f96",
+  "RepoDigests": [],
+  "Created": "2026-11-03T05:18:44.018971635Z",
+  "labels": {
+    "io.agent-q.protocol-max": "1",
+    "io.agent-q.state-format": "44",
+    "org.opencontainers.image.revision": "c802fed50bd579009b13a4cc11f77af52fe88d22",
+    "org.opencontainers.image.title": "agent-q-server",
+    "org.opencontainers.image.version": "unknown"
+  }
+}

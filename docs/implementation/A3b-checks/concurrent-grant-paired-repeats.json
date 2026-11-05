@@ -1,0 +1,82 @@
+[
+  {
+    "round": 1,
+    "mode": "branch",
+    "source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+    "command": [
+      "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+      "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+    "log": "concurrent-grant-paired-1-branch.log",
+    "started_utc": "2026-11-03T03:42:47.820691+00:00",
+    "exit_code": 0,
+    "finished_utc": "2026-11-03T03:42:50.390702+00:00",
+    "test_results": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.55s"
+    ]
+  },
+  {
+    "round": 1,
+    "mode": "main",
+    "source_commit": "ea28da1ca62184e9f5f945b73b62320edbe903e0",
+    "command": [
+      "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-cc865813db64cad0",
+      "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "binary_sha256": "da32dd249fbae1c17772465a2506bec39960cc3c46348cb56673f5f020df4d6a",
+    "log": "concurrent-grant-paired-1-main.log",
+    "started_utc": "2026-11-03T03:42:51.254273+00:00",
+    "exit_code": 0,
+    "finished_utc": "2026-11-03T03:42:54.559361+00:00",
+    "test_results": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 3.28s"
+    ]
+  },
+  {
+    "round": 2,
+    "mode": "branch",
+    "source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+    "command": [
+      "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+      "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+    "log": "concurrent-grant-paired-2-branch.log",
+    "started_utc": "2026-11-03T03:42:55.052061+00:00",
+    "exit_code": 0,
+    "finished_utc": "2026-11-03T03:42:58.042811+00:00",
+    "test_results": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.98s"
+    ]
+  },
+  {
+    "round": 2,
+    "mode": "main",
+    "source_commit": "ea28da1ca62184e9f5f945b73b62320edbe903e0",
+    "command": [
+      "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-cc865813db64cad0",
+      "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "binary_sha256": "da32dd249fbae1c17772465a2506bec39960cc3c46348cb56673f5f020df4d6a",
+    "log": "concurrent-grant-paired-2-main.log",
+    "started_utc": "2026-11-03T03:42:58.594424+00:00",
+    "exit_code": 0,
+    "finished_utc": "2026-11-03T03:43:04.171462+00:00",
+    "test_results": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 3.66s"
+    ]
+  }
+]

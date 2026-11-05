@@ -222,8 +222,9 @@ async fn post_body(
         }
         body.extend_from_slice(&chunk);
     }
-    let contract::StrictValue(value) =
-        serde_json::from_slice(&body).map_err(|_| Error("overloaded"))?;
+    // Graph metadata permits finite fractions. Keep duplicate-key rejection,
+    // while leaving integer-only StrictValue at the agent request/hash boundary.
+    let value = super::super::scheduling::parse::parse(&body).map_err(|_| Error("overloaded"))?;
     Ok((status, value))
 }
 pub(super) async fn run(state: &AppState, op: Uuid) -> Result<Value> {
@@ -416,6 +417,46 @@ pub(super) async fn recoverable_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn mutation_response_accepts_fractions_but_rejects_duplicate_keys() {
+        use axum::{Router, routing::post};
+        for (body, valid) in [
+            (r#"{"results":[{"metadata":{"weight":0.25}}]}"#, true),
+            (
+                r#"{"results":[{"metadata":{"weight":0.25,"weight":1}}]}"#,
+                false,
+            ),
+            (r#"{"results":[],"results":[]}"#, false),
+            (r#"{"results":[{"metadata":{"weight":1e999}}]}"#, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().route(
+                        "/v1/workspaces/{workspace}/mutations",
+                        post(move || async move { ([("X-AQ-Graph-API-Version", "1")], body) }),
+                    ),
+                )
+                .await
+                .unwrap();
+            });
+            let rt = Runtime {
+                mutation_actor: Some("fixture".into()),
+                client: reqwest::Client::new(),
+                url: format!("http://{address}/").parse().unwrap(),
+                token: "fixture-token".into(),
+                ttl: 1000,
+            };
+            let result = post_mutation_bytes(&rt, Uuid::new_v4(), b"{}".to_vec()).await;
+            assert_eq!(result.is_ok(), valid, "{body}");
+            if valid {
+                assert_eq!(result.unwrap().1["results"][0]["metadata"]["weight"], 0.25);
+            }
+            task.abort();
+        }
+    }
     #[test]
     fn native_draft_defaults_preserve_exact_plan_but_extra_meaning_is_refused() {
         let fixture: Value = serde_json::from_str(include_str!(

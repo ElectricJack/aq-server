@@ -1,0 +1,7 @@
+    Finished `test` profile [unoptimized] target(s) in 0.59s
+     Running tests/native_initial_grant.rs (target/debug/deps/native_initial_grant-92a380e18e39de88)
+
+running 1 test
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 3.64s

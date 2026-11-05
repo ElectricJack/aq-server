@@ -418,6 +418,27 @@ class Conformance(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate('MessageSend', invalid)
 
+    def test_supervisor_recipient_and_sender_are_strict_additive_branches(self):
+        fixtures = {f['name']: f['value'] for f in json.loads((ROOT / 'fixtures/messaging.json').read_text())}
+        send = fixtures['agent-to-supervisor-send']
+        message = fixtures['supervisor-sent-session-message']
+        validate('MessageSend', send)
+        validate('MailboxMessage', message)
+        for extra in [{'task_id': send['message_id']}, {'workspace_id': send['message_id']}]:
+            bad = deepcopy(send)
+            bad['recipient'].update(extra)
+            with self.assertRaises(ValidationError):
+                validate('MessageSend', bad)
+        for change in [{'binding': {}}, {'generation': 0}, {'user_id': message['message_id']}]:
+            bad = deepcopy(message)
+            bad['sender'].update(change)
+            with self.assertRaises(ValidationError):
+                validate('MailboxMessage', bad)
+        bad = deepcopy(message)
+        del bad['sender']['conversation_id']
+        with self.assertRaises(ValidationError):
+            validate('MailboxMessage', bad)
+
 
     def test_mutation_delivery_guards_and_explicit_structural_scope(self):
         vectors = json.loads((ROOT / 'fixtures/mutation-delivery.json').read_text())

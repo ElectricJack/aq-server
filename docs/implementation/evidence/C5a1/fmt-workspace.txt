@@ -1,0 +1,95 @@
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/lib.rs:14:
+ pub mod playbooks;
+ pub mod profile_catalog;
+ pub mod profiled_execution;
+-pub mod provider_accounts;
+ pub mod project_bindings;
+ pub mod protected_storage;
++pub mod provider_accounts;
+ pub mod readiness;
+ pub mod result_media;
+ pub mod reviews;
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution/phase_terminal/closure.rs:1:
+ //! No-Started phase closure: revoke permission, retain task/source/effect holds.
+ use super::common::{self, canonical, conflict, database, now};
++use super::wire;
+ use crate::{
+     AppState,
+     error::AppError,
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution/phase_terminal/closure.rs:7:
+     worker_api::AuthenticatedNode,
+ };
+ use aq_admission::granted_closure::{Disposition, Evidence};
+-use super::wire;
+ use sqlx::Row;
+
+ pub async fn record(
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution/phase_terminal/started.rs:1:
+ //! Qualified phase start observation. No lease extension or task/resource release.
+ use super::common::{self, Loaded};
++use super::wire;
+ use crate::{AppState, error::AppError, execution::profiled::Stop, worker_api::AuthenticatedNode};
+ use aq_admission::{Digest, started};
+-use super::wire;
+ use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
+
+ pub async fn record(
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution/phase_terminal/stopped.rs:1:
+ //! Paired actual phase Started→Stopped owner. No renewal or release is implied.
+ use super::common::{self, canonical, conflict, database, now};
++use super::wire;
+ use crate::{
+     AppState,
+     error::AppError,
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution/phase_terminal/stopped.rs:8:
+     worker_api::AuthenticatedNode,
+ };
+ use aq_admission::Digest;
+-use super::wire;
+ use sqlx::Row;
+
+ pub async fn record(
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/profiled_execution.rs:4:
+ pub mod api;
+ pub mod artifact_api;
+ pub mod artifacts;
+-pub mod config;
+ pub(crate) mod compute;
++pub mod config;
+ pub mod context_budget;
+ pub mod context_projection;
+ pub mod expiry;
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/store.rs:268:
+         include_str!("../migrations/0038_profiled_result_origins.sql"),
+     ),
+     (39, include_str!("../migrations/0039_pilot_settlement.sql")),
+-    (40, include_str!("../migrations/0040_phase_never_granted.sql")),
+-    (41, include_str!("../migrations/0041_native_compute_occupancy.sql")),
++    (
++        40,
++        include_str!("../migrations/0040_phase_never_granted.sql"),
++    ),
++    (
++        41,
++        include_str!("../migrations/0041_native_compute_occupancy.sql"),
++    ),
+ ];
+
+ /// Applies missing migrations in one transaction under an advisory lock.
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/src/store.rs:1030:
+ #[path = "store/settlement39_tests.rs"]
+ mod settlement39_tests;
+
+-#[path = "store/never_granted40.rs"]
+-mod never_granted40;
+ #[path = "store/compute41.rs"]
+ mod compute41;
++#[path = "store/never_granted40.rs"]
++mod never_granted40;
+
+Diff in /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server/tests/codex_runtime_recipe.rs:1:
+ //! Pure recipe checks only: no DB, source process, worker or model is started.
+-mod common;
+ #[path = "support/codex_runtime_recipe.rs"]
+ mod codex_runtime_recipe;
++mod common;

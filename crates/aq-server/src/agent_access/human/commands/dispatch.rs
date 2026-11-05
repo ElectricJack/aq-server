@@ -11,8 +11,32 @@ pub(super) fn receipt(op: &Operation, raw: &Value) -> Result<Receipt> {
     let payload: Value = serde_json::from_slice(&op.payload).map_err(|_| unavailable())?;
     let expected = &payload["operations"][0];
     let rows = raw["results"].as_array().ok_or_else(unavailable)?;
-    if rows.len() != 1 {
+    let operations = payload["operations"].as_array().ok_or_else(unavailable)?;
+    if rows.len() != operations.len() || !(1..=2).contains(&rows.len()) {
         return Err(unavailable());
+    }
+    if operations.len() == 2 {
+        let edge = &rows[1];
+        let expected = &operations[1];
+        if !contract::upstream_valid("Edge", edge)
+            || edge["workspace_id"] != json!(op.workspace)
+            || edge["deleted"] != false
+            || edge["version"] != 1
+            || !edge["created_at"].is_string()
+            || [
+                "id",
+                "source",
+                "target",
+                "edge_type",
+                "description",
+                "source_revision",
+                "target_revision",
+            ]
+            .iter()
+            .any(|key| edge[*key] != expected[*key])
+        {
+            return Err(unavailable());
+        }
     }
     let node = &rows[0];
     if !contract::upstream_valid("Node", node)

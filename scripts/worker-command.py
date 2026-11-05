@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory(prefix="aq-worker-source-") as directory:
     with tarfile.open(ROOT / "vendor" / candidate["archive"]) as archive:
         archive.extractall(directory, filter="data")
     env = os.environ.copy()
+    env["CARGO_INCREMENTAL"] = "0"
     env["CARGO_TARGET_DIR"] = str(ROOT / "state.dev/worker-target" / candidate["archive_sha256"])
     env["AQ_SOURCE_REVISION"] = candidate["source_revision"]
     sys.exit(subprocess.call([

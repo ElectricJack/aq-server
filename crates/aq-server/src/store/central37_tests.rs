@@ -197,7 +197,7 @@ async fn retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_r
     ] {
         let (db, pool) = database(37).await;
         seed_original(&pool).await;
-        let store = db.store().await;
+        let store = db.store_at_version(37).await;
         let user = store
             .find_user_by_binding("dev", "retained@localhost")
             .await

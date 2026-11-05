@@ -1,0 +1,61 @@
+# Agent Q vault configuration (production example; set your origin and Access application).
+
+# Schema version of this file. This server reads only version 1.
+format_version = 1
+
+# "development" or "production". Production forbids dev auth and requires https.
+environment = "production"
+
+[server]
+# Address of the human-facing admin listener.
+admin_bind = "0.0.0.0:8080"
+# Address of the worker-facing listener.
+worker_bind = "0.0.0.0:8081"
+# Externally visible origin of the admin UI; must be https:// in production.
+public_origin = "https://aq.example.com"
+
+[auth]
+# "dev" (development only) or "cloudflare_access".
+mode = "cloudflare_access"
+# Cloudflare Access team URL and application audience.
+team_domain = "https://example.cloudflareaccess.com"
+audience = "replace-with-your-access-application-audience"
+
+[bootstrap]
+# Email that becomes the first owner when bootstrap is enabled.
+owner_email = "owner@example.com"
+# Whether the first owner may be created automatically on first sign-in.
+enabled = true
+
+[enrollment]
+# Lifetime of a worker enrollment code, in seconds (default 600).
+code_ttl_secs = 600
+
+[workers]
+# How often workers send heartbeats, in seconds (default 15).
+heartbeat_interval_secs = 15
+# A worker is shown offline after this many seconds without a heartbeat (default 60); must exceed the heartbeat interval.
+offline_after_secs = 60
+
+# Optional production PNG evidence store. Enable only after mounting a persistent
+# private volume at this absolute path (owned by the server UID, mode 0700).
+# Generate storage_id once per installation and retain it with the volume and DB;
+# replacing it on restart prevents the retained owner from reopening its store.
+# [result_media]
+# root = "/var/lib/aq/result-media"
+# storage_id = "<stable-installation-UUID>"
+# uploads_enabled = true
+
+# Match AQ_GRAPH_WORKSPACE and AQ_GRAPH_ACTOR in the operator environment.
+[agent_access]
+graph_url = "http://aq-graph:8741"
+graph_token_file = "/run/aq/graph_token"
+mutation_actor_id = "aq-server"
+[source_retention]
+keep_per_task = 2
+max_age = 2592000 # seconds (30 days)
+staging_root = "/var/lib/aq/source-staging"
+git_root = "/var/lib/aq/git"
+git_socket = "/run/aq-git/central.sock"
+[updates]
+spool_dir = "/updater"

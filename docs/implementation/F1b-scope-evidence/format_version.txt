@@ -1,0 +1,10 @@
+$ cargo test --locked -p aq-server --features test-support --lib state_format_is_the_latest_migration
+    Finished `test` profile [unoptimized] target(s) in 0.66s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-f456347a0886e933)
+
+running 1 test
+test store::tests::state_format_is_the_latest_migration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 199 filtered out; finished in 0.02s
+
+exit code: 0

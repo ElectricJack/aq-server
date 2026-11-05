@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 3m 31s
+  Executable tests/native_accepted_preparation.rs (target/debug/deps/native_accepted_preparation-7f4ccbf443d835b6)
+  Executable tests/phase_execution_transport.rs (target/debug/deps/phase_execution_transport-78188c5ae3291c32)
+  Executable tests/phase_terminal_closure.rs (target/debug/deps/phase_terminal_closure-74a7f6057b780b00)
+  Executable tests/profiled_hot.rs (target/debug/deps/profiled_hot-c503942922d74c13)
+  Executable tests/schema30_preparation.rs (target/debug/deps/schema30_preparation-7a6a933f69641114)
+  Executable tests/schema32_phase_execution.rs (target/debug/deps/schema32_phase_execution-cd0df811c9845c01)
+  Executable tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-a30900e7ed07dbfe)
+  Executable tests/schema43_cancellation.rs (target/debug/deps/schema43_cancellation-b6775d877830a857)

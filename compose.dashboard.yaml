@@ -1,5 +1,6 @@
-# Optional overlay for an independently built aq-dashboard bundle.
-# Combine with the installation's normal Compose files/environment.
+# Development-only override for a locally built aq-dashboard bundle.
+# Production uses the digest-verified bundle embedded in the server image.
+# Explicit opt-in: docker compose -f compose.yaml -f compose.dashboard.yaml up
 services:
   server:
     environment:

@@ -1,7 +1,9 @@
 //! Neutral structural records and pure transitions, not authenticated authority.
-//! This crate cannot execute, dispatch, reply, access credentials or persist data.
+//! The dormant SQL owner persists transitions but cannot execute, dispatch,
+//! reply or access credentials. A trusted embedding must verify source evidence.
 #![forbid(unsafe_code)]
 mod contracts;
+pub mod owner;
 mod reducer;
 use aq_session_protocol::Validate;
 pub use aq_session_protocol::{ArtifactRef, Digest, SessionIdentity, Text};

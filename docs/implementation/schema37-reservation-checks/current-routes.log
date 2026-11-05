@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 7m 53s
+     Running tests/dashboard_actions.rs (/tmp/aq-b3-slot2-target/debug/deps/dashboard_actions-4d3f60e3bd89b3c9)
+
+running 8 tests
+test action_union_rejects_unknown_kind_with_envelope ... ok
+test bootstrap_lists_pending_operations ... ok
+test production_registry_is_enabled_and_lookup_is_neutral ... ok
+test supervisor_action_and_legacy_share_one_enqueue_and_retained_operation ... ok
+test supervisor_action_lookup_reconciles_native_commit_without_reenqueue ... ok
+test supervisor_union_bounds_identity_and_concurrent_legacy_admission ... ok
+test unknown_fields_duplicate_keys_and_oversized_bodies_are_rejected_before_admission ... ok
+test v1_outer_rejections_and_validation_use_common_safe_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.15s
+
+     Running tests/supervisor_conversation.rs (/tmp/aq-b3-slot2-target/debug/deps/supervisor_conversation-b070cc69b44eb192)
+
+running 6 tests
+test dropped_http_reply_recovers_byte_identical_receipt_and_one_committed_message ... ok
+test actual_mount_has_owner_caps_and_csrf_while_standalone_and_viewer_do_not ... ok
+test finite_retention_preserves_original_replay_and_lookup_at_capacity ... ok
+test history_replay_retained_refusals_and_shared_owner_scope_use_one_mailbox ... ok
+test max_body_pages_trim_to_byte_budget_and_preserve_both_cursor_directions ... ok
+test owner_current_identity_and_input_bounds_refuse_without_mail_or_worker_fallback ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.93s
+

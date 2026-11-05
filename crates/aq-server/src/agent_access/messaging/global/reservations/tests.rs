@@ -1,11 +1,7 @@
 //! Disposable persisted reservation qualification; no host/provider/runtime exists.
 use super::*;
 use crate::{config::Config, identity::verifier_from_config, test_support::TestDb};
-use axum::{
-    Extension,
-    body::Bytes,
-    extract::{Path, State},
-};
+use axum::body::Bytes;
 use chrono::{TimeZone, Utc};
 use std::sync::Arc;
 struct Fixture {
@@ -18,13 +14,14 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(register: bool) -> Self {
-        assert_eq!(
-            crate::STATE_FORMAT_VERSION,
-            37,
-            "use the registered37migration; never hand-apply SQL in owner fixtures"
-        );
         let db = TestDb::create().await;
-        let store = db.store().await;
+        let store = db.store_at_version(37).await;
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(version, "37", "owner fixtures must remain on registered37");
         let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
         let user = store
             .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
@@ -87,16 +84,28 @@ impl Fixture {
     async fn seed(&self, body: &str) -> Uuid {
         let message = Uuid::new_v4();
         let raw = json!({"operation_id":Uuid::new_v4(),"message_id":message,"expected_conversation_revision":"1","body":body,"context":[],"attachments":[]});
-        let response = crate::agent_access::messaging::global::writes::enqueue(
-            State(self.state.clone()),
-            Extension(Arc::new(Service::new(&self.state))),
-            crate::authz::RequireOwner(self.user.clone()),
-            Path(self.conversation),
+        // This qualification stays on registered37. Exercise the actual mailbox
+        // writer, while the HTTP action wrapper requires the schema42 journal.
+        let response = super::super::writes::enqueue_historical_fixture(
+            &self.state,
+            &self.user,
+            self.conversation,
             Bytes::from(raw.to_string()),
         )
         .await
         .unwrap();
         assert!(response.status().is_success());
+        let (version, dashboard_absent): (String, bool) = sqlx::query_as(
+            "SELECT value, to_regclass('dashboard_operations') IS NULL FROM meta WHERE key='state_format_version'",
+        )
+        .fetch_one(&self.state.store.pool)
+        .await
+        .unwrap();
+        assert_eq!(version, "37", "seeding must preserve registered37");
+        assert!(
+            dashboard_absent,
+            "registered37 has no dashboard action journal"
+        );
         message
     }
     async fn preview(&self, after: u64) -> Preview {

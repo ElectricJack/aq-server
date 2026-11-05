@@ -1,0 +1,302 @@
+[
+  {
+    "body": {
+      "expires_at_ms": 2000,
+      "observed_at_ms": 1000,
+      "policy": {
+        "digest": "6ee1bde77b69cf256a3e2769893d45e90cb0988239caf3a6ae9c1a5eee711ac0",
+        "id": "source-policy",
+        "version": "1"
+      },
+      "project_id": "00000000-0000-0000-0000-00000000001f",
+      "project_revision": 1,
+      "repository_binding_generation": 1,
+      "repository_id": "00000000-0000-0000-0000-000000000029",
+      "resolved_object": {
+        "format": "sha1",
+        "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "schema_version": 1,
+      "selection": {
+        "kind": "named_ref",
+        "reference": "refs/heads/main"
+      }
+    },
+    "kind": "source_admission"
+  },
+  {
+    "body": {
+      "artifact": {
+        "digest": "a16b70fdd0d6e54af458165992459f6e78e05e57fbc21bc432f3e39710c6e529",
+        "id": "context",
+        "version": "1"
+      },
+      "bytes": 15,
+      "kind": "context",
+      "retain_until_ms": 2000,
+      "retained_at_ms": 1000,
+      "retention_receipt": {
+        "digest": "6f32860910ca0fb2a20c7fda143666b09dbf8db5238195c90a586fb542ff0cad",
+        "id": "receipt",
+        "version": "1"
+      }
+    },
+    "kind": "retained_artifact"
+  },
+  {
+    "body": {
+      "account_reference": "fixture-account",
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+        "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+        "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "offer_id": "00000000-0000-0000-0000-00000000000f",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "session_id": "00000000-0000-0000-0000-00000000000e"
+        }
+      },
+      "credential_profile": {
+        "digest": "cadd9b19c2abc6f2cdcaadbf3bb3dffe057f84a7e1b6859dc536598388dbd867",
+        "id": "credential-profile",
+        "version": "1"
+      },
+      "credential_revision": 1,
+      "endpoint_reference": "fixture-endpoint",
+      "expires_at_ms": 2000,
+      "issued_at_ms": 1000,
+      "lease_id": "00000000-0000-0000-0000-000000000010",
+      "material_bytes": 13,
+      "material_digest": "2ee8f42267a3635138b7b04501b6a854349d168cdc4e2db23bf05b64e65371f7",
+      "provider": "fixture-provider",
+      "purpose": "model-authentication",
+      "schema_version": 1
+    },
+    "kind": "material_lease"
+  },
+  {
+    "body": {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+        "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+        "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "offer_id": "00000000-0000-0000-0000-00000000000f",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "session_id": "00000000-0000-0000-0000-00000000000e"
+        }
+      },
+      "lease_id": "00000000-0000-0000-0000-000000000010",
+      "material_digest": "2ee8f42267a3635138b7b04501b6a854349d168cdc4e2db23bf05b64e65371f7",
+      "operation_id": "00000000-0000-0000-0000-000000000011",
+      "private_binding": {
+        "digest": "4ebe8fcd739f17d235b04dd74e93d6cf116f38cf1ae4c9078332592e2b47bb45",
+        "id": "worker-private-credential-binding",
+        "version": "1"
+      },
+      "received_at_ms": 1500,
+      "schema_version": 1
+    },
+    "kind": "material_receipt"
+  },
+  {
+    "body": {
+      "after_project": null,
+      "candidates": [
+        {
+          "expires_at_ms": 2000,
+          "nodes": [
+            {
+              "boot_id": "00000000-0000-0000-0000-00000000000c",
+              "eligible": true,
+              "node_id": "00000000-0000-0000-0000-00000000000b",
+              "reason_codes": [],
+              "source_warm": false
+            }
+          ],
+          "priority": 0,
+          "project_id": "00000000-0000-0000-0000-00000000001f",
+          "queued_at_ms": 1000,
+          "resources": {
+            "cpu_millis": 100,
+            "disk_bytes": 100,
+            "memory_bytes": 100,
+            "slots": 1
+          },
+          "selection": {
+            "digest": "ece8dc024dc874bf8b15fe8c0ef77416e616007465a1aacd579f5bf3a4825a74",
+            "id": "sealed-selection",
+            "version": "1"
+          },
+          "task": {
+            "content_revision": 1,
+            "task_id": "00000000-0000-0000-0000-000000000033",
+            "version": 1,
+            "workspace_id": "00000000-0000-0000-0000-000000000015"
+          }
+        },
+        {
+          "expires_at_ms": 2000,
+          "nodes": [
+            {
+              "boot_id": "00000000-0000-0000-0000-00000000000c",
+              "eligible": true,
+              "node_id": "00000000-0000-0000-0000-00000000000b",
+              "reason_codes": [],
+              "source_warm": false
+            }
+          ],
+          "priority": 0,
+          "project_id": "00000000-0000-0000-0000-00000000001f",
+          "queued_at_ms": 1000,
+          "resources": {
+            "cpu_millis": 100,
+            "disk_bytes": 100,
+            "memory_bytes": 100,
+            "slots": 1
+          },
+          "selection": {
+            "digest": "ece8dc024dc874bf8b15fe8c0ef77416e616007465a1aacd579f5bf3a4825a74",
+            "id": "sealed-selection",
+            "version": "1"
+          },
+          "task": {
+            "content_revision": 1,
+            "task_id": "00000000-0000-0000-0000-000000000034",
+            "version": 1,
+            "workspace_id": "00000000-0000-0000-0000-000000000015"
+          }
+        },
+        {
+          "expires_at_ms": 2000,
+          "nodes": [
+            {
+              "boot_id": "00000000-0000-0000-0000-00000000000c",
+              "eligible": true,
+              "node_id": "00000000-0000-0000-0000-00000000000b",
+              "reason_codes": [],
+              "source_warm": false
+            }
+          ],
+          "priority": 0,
+          "project_id": "00000000-0000-0000-0000-000000000020",
+          "queued_at_ms": 1000,
+          "resources": {
+            "cpu_millis": 100,
+            "disk_bytes": 100,
+            "memory_bytes": 100,
+            "slots": 1
+          },
+          "selection": {
+            "digest": "ece8dc024dc874bf8b15fe8c0ef77416e616007465a1aacd579f5bf3a4825a74",
+            "id": "sealed-selection",
+            "version": "1"
+          },
+          "task": {
+            "content_revision": 1,
+            "task_id": "00000000-0000-0000-0000-000000000035",
+            "version": 1,
+            "workspace_id": "00000000-0000-0000-0000-000000000015"
+          }
+        }
+      ],
+      "max_offers": 2,
+      "nodes": [
+        {
+          "available": {
+            "cpu_millis": 200,
+            "disk_bytes": 200,
+            "memory_bytes": 200,
+            "slots": 2
+          },
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "expires_at_ms": 2000,
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "observed_at_ms": 1000,
+          "revision": 1
+        }
+      ],
+      "now_ms": 1500,
+      "schema_version": 1
+    },
+    "kind": "placement_input"
+  },
+  {
+    "body": {
+      "authority_admission": false,
+      "next_after_project": "00000000-0000-0000-0000-000000000020",
+      "proposed": [
+        {
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "capacity_revision": 1,
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "project_id": "00000000-0000-0000-0000-00000000001f",
+          "resources": {
+            "cpu_millis": 100,
+            "disk_bytes": 100,
+            "memory_bytes": 100,
+            "slots": 1
+          },
+          "selection": {
+            "digest": "ece8dc024dc874bf8b15fe8c0ef77416e616007465a1aacd579f5bf3a4825a74",
+            "id": "sealed-selection",
+            "version": "1"
+          },
+          "source_warm": false,
+          "task": {
+            "content_revision": 1,
+            "task_id": "00000000-0000-0000-0000-000000000033",
+            "version": 1,
+            "workspace_id": "00000000-0000-0000-0000-000000000015"
+          }
+        },
+        {
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "capacity_revision": 1,
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "project_id": "00000000-0000-0000-0000-000000000020",
+          "resources": {
+            "cpu_millis": 100,
+            "disk_bytes": 100,
+            "memory_bytes": 100,
+            "slots": 1
+          },
+          "selection": {
+            "digest": "ece8dc024dc874bf8b15fe8c0ef77416e616007465a1aacd579f5bf3a4825a74",
+            "id": "sealed-selection",
+            "version": "1"
+          },
+          "source_warm": false,
+          "task": {
+            "content_revision": 1,
+            "task_id": "00000000-0000-0000-0000-000000000035",
+            "version": 1,
+            "workspace_id": "00000000-0000-0000-0000-000000000015"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "reason": "batch_limit",
+          "task_id": "00000000-0000-0000-0000-000000000034"
+        }
+      ],
+      "schema_version": 1
+    },
+    "kind": "placement_output"
+  }
+]

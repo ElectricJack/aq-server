@@ -1,0 +1,36 @@
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-admission)
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-central-authority)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-selection)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-phase-terminal-protocol)
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/vendor/aq-admission-0.2.0)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 35s
+     Running tests/central_sessions.rs (target/debug/deps/central_sessions-27efcdbc01cb4805)
+
+running 10 tests
+test central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit ... ok
+test central_owner_boot_clock_sequence_deadline_and_identity_fences ... ok
+test central_owner_expiry_and_cancel_survive_refused_renewal_and_running ... ok
+test central_owner_historical_rows_and_identity_cannot_be_rewritten ... ok
+test central_owner_rejects_unverified_admission_and_stop ... ok
+test central_owner_reopens_committed_permit_without_new_generation ... ok
+test central_owner_reused_conversation_for_new_actor_is_typed_conflict ... ok
+test central_owner_retained_history_blocks_old_mail_and_cross_role_ids ... ok
+test central_owner_serializes_start_and_successor_races ... ok
+test inspect_reads_without_locking_the_session_head ... FAILED
+
+failures:
+
+---- inspect_reads_without_locking_the_session_head stdout ----
+
+thread 'inspect_reads_without_locking_the_session_head' (3436879) panicked at crates/aq-server/tests/central_sessions.rs:558:10:
+inspect must not wait on the head row lock: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    inspect_reads_without_locking_the_session_head
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.99s
+
+error: test failed, to rerun pass `-p aq-server --test central_sessions`

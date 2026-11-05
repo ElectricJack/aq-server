@@ -1,0 +1,1891 @@
+{
+  "invalid_shape": [
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 11
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1,
+        "secret": "forbidden"
+      },
+      "case": "unknown_input"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 11
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000000",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "nil_operation"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "never_granted",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 11
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "unknown_disposition"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 0
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "zero_terminal_revision"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-0000000003e7",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 11
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "changed_suppression_boot"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 18446744073709551615
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "overflow_revision"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "kind": "suppressed",
+          "record": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "operation_id": "00000000-0000-0000-0000-000000000385",
+            "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+            "previous": {
+              "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+              "revision": 10
+            },
+            "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+            "reservation_id": "00000000-0000-0000-0000-000000000064",
+            "schema_version": 1,
+            "suppression_id": "00000000-0000-0000-0000-000000000386",
+            "terminal_revision": 11
+          },
+          "record_digest": "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+          "revision": 11
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000385",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "changed_record_digest"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": false,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "false_echild"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": true,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "running",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "running_is_not_stopped"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "3f0fc68ff2ccf9c76aeb9b7d2b3894bcb17d30f3ed4cb91ceb774c5259d2fbf0",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": true,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "changed_physical_intent"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 0
+                }
+              },
+              "kernel_wait_echild": true,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "zero_guardian_birth"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[not-a-number]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": true,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 2,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "bad_pid_namespace"
+    },
+    {
+      "body": {
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+          "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+          "offer_id": "00000000-0000-0000-0000-000000000001",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "boot_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "session_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "evidence": {
+          "driver_intent": {
+            "binding": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+              "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+              "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "offer_id": "00000000-0000-0000-0000-000000000001",
+              "schema_version": 1,
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "grant_id": "00000000-0000-0000-0000-000000000071",
+            "guardian_id": "00000000-0000-0000-0000-000000000067",
+            "host": {
+              "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+              "launch_id": "00000000-0000-0000-0000-000000000068",
+              "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+              "session": {
+                "assignment_generation": 1,
+                "attempt_id": "00000000-0000-0000-0000-000000000001",
+                "boot_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "remote",
+                "node_id": "00000000-0000-0000-0000-000000000001",
+                "session_id": "00000000-0000-0000-0000-000000000001"
+              }
+            },
+            "journal": {
+              "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+              "revision": 11
+            },
+            "reservation_id": "00000000-0000-0000-0000-000000000064"
+          },
+          "kind": "host_stopped",
+          "proof": {
+            "observation": {
+              "guardian": {
+                "intent": {
+                  "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                  "launch_id": "00000000-0000-0000-0000-000000000068",
+                  "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                  "session": {
+                    "assignment_generation": 1,
+                    "attempt_id": "00000000-0000-0000-0000-000000000001",
+                    "boot_id": "00000000-0000-0000-0000-000000000001",
+                    "kind": "remote",
+                    "node_id": "00000000-0000-0000-0000-000000000001",
+                    "session_id": "00000000-0000-0000-0000-000000000001"
+                  }
+                },
+                "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+                "nonce": "00000000-0000-0000-0000-00000000004f",
+                "pid_namespace": "pid:[4026532000]",
+                "process": {
+                  "pid": 10,
+                  "start_ticks": 100
+                }
+              },
+              "kernel_wait_echild": true,
+              "observed_boot_ms": 31000,
+              "pane": {
+                "pane": {
+                  "pid": 12,
+                  "start_ticks": 102
+                },
+                "pane_id": "%0",
+                "server": {
+                  "pid": 11,
+                  "start_ticks": 101
+                },
+                "session_name": "aq"
+              },
+              "permit_deadline_boot_ms": 30000,
+              "permit_sequence": 1,
+              "phase": "stopped",
+              "reaped_count": 0,
+              "root_status": 0,
+              "stop_reason": "execution permit expired"
+            }
+          },
+          "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+        },
+        "grant_id": "00000000-0000-0000-0000-000000000071",
+        "guardian_id": "00000000-0000-0000-0000-000000000067",
+        "journal": {
+          "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+          "revision": 12
+        },
+        "launch_id": "00000000-0000-0000-0000-000000000068",
+        "operation_id": "00000000-0000-0000-0000-000000000389",
+        "qualification": {
+          "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+          "id": "host-start-qualification",
+          "version": "1"
+        },
+        "reservation_id": "00000000-0000-0000-0000-000000000064",
+        "runtime": {
+          "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+          "id": "qualified-worker-runtime",
+          "version": "1"
+        },
+        "schema_version": 1
+      },
+      "case": "root_status_without_reap"
+    }
+  ],
+  "profile": "pure synthetic contracts; no opaque journal/kernel attestation",
+  "valid_receipts": [
+    {
+      "authority_revision_at_record": 7,
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "disposition": "launch_closed_awaiting_settlement",
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "operation_id": "00000000-0000-0000-0000-000000000385",
+      "recorded_at_ms": 9000,
+      "request_digest": "8976cdb61029956978c1ca8e0f1da6d43a56efead7384b00c7cbefcb13b2e75e",
+      "schema_version": 1
+    },
+    {
+      "authority_revision_at_record": 7,
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "disposition": "launch_closed_awaiting_settlement",
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "operation_id": "00000000-0000-0000-0000-000000000389",
+      "recorded_at_ms": 9000,
+      "request_digest": "49c6e069fe9d375eed4b52c3c0ad715bc919e3187de0d36724ac287389b7b25f",
+      "schema_version": 1
+    },
+    {
+      "authority_revision_at_record": 7,
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "disposition": "launch_closed_awaiting_settlement",
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "operation_id": "00000000-0000-0000-0000-00000000038a",
+      "recorded_at_ms": 9000,
+      "request_digest": "dd713b791029e6d45226175b3e2379a1fb9680754d53531d071fda4c68c5424f",
+      "schema_version": 1
+    },
+    {
+      "authority_revision_at_record": 7,
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "disposition": "launch_closed_awaiting_settlement",
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "operation_id": "00000000-0000-0000-0000-00000000038b",
+      "recorded_at_ms": 9000,
+      "request_digest": "63d1b1992165c2d23de6166dec6cef4bea3f5a1b7bab6e1c6c0a6d56a908e491",
+      "schema_version": 1
+    }
+  ],
+  "valid_requests": [
+    {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "evidence": {
+        "kind": "suppressed",
+        "record": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000071",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "launch_id": "00000000-0000-0000-0000-000000000068",
+          "operation_id": "00000000-0000-0000-0000-000000000385",
+          "original_kernel_boot_id": "00000000-0000-0000-0000-000000000387",
+          "previous": {
+            "digest": "b41195792531c99a3bbb570d2f045f22f945b438be7a1e00b5317ece0c2ca3b0",
+            "revision": 10
+          },
+          "recording_kernel_boot_id": "00000000-0000-0000-0000-000000000388",
+          "reservation_id": "00000000-0000-0000-0000-000000000064",
+          "schema_version": 1,
+          "suppression_id": "00000000-0000-0000-0000-000000000386",
+          "terminal_revision": 11
+        },
+        "record_digest": "6cbe7ee3fbfe7319c79eaea4705d9575a7c87e345de613fe44fef1ca74bdd49c"
+      },
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "guardian_id": "00000000-0000-0000-0000-000000000067",
+      "journal": {
+        "digest": "017db48b62aeccbe159f5794f03e20e5c6025e42b956be30e1f9954ff9c20a87",
+        "revision": 11
+      },
+      "launch_id": "00000000-0000-0000-0000-000000000068",
+      "operation_id": "00000000-0000-0000-0000-000000000385",
+      "qualification": {
+        "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+        "id": "host-start-qualification",
+        "version": "1"
+      },
+      "reservation_id": "00000000-0000-0000-0000-000000000064",
+      "runtime": {
+        "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+        "id": "qualified-worker-runtime",
+        "version": "1"
+      },
+      "schema_version": 1
+    },
+    {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "evidence": {
+        "driver_intent": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000071",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "host": {
+            "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "journal": {
+            "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+            "revision": 11
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064"
+        },
+        "kind": "host_stopped",
+        "proof": {
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": true,
+            "observed_boot_ms": 31000,
+            "pane": {
+              "pane": {
+                "pid": 12,
+                "start_ticks": 102
+              },
+              "pane_id": "%0",
+              "server": {
+                "pid": 11,
+                "start_ticks": 101
+              },
+              "session_name": "aq"
+            },
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "stopped",
+            "reaped_count": 2,
+            "root_status": 0,
+            "stop_reason": "execution permit expired"
+          }
+        },
+        "proof_digest": "b8405576d2ed9dedefad8af0aba01a15afe150c3b7cc4007c68e9cb3a1246a40"
+      },
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "guardian_id": "00000000-0000-0000-0000-000000000067",
+      "journal": {
+        "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+        "revision": 12
+      },
+      "launch_id": "00000000-0000-0000-0000-000000000068",
+      "operation_id": "00000000-0000-0000-0000-000000000389",
+      "qualification": {
+        "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+        "id": "host-start-qualification",
+        "version": "1"
+      },
+      "reservation_id": "00000000-0000-0000-0000-000000000064",
+      "runtime": {
+        "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+        "id": "qualified-worker-runtime",
+        "version": "1"
+      },
+      "schema_version": 1
+    },
+    {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "evidence": {
+        "driver_intent": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000071",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "host": {
+            "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "journal": {
+            "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+            "revision": 11
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064"
+        },
+        "kind": "host_stopped",
+        "proof": {
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": true,
+            "observed_boot_ms": 31000,
+            "pane": null,
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "stopped",
+            "reaped_count": 2,
+            "root_status": 0,
+            "stop_reason": "execution permit expired"
+          }
+        },
+        "proof_digest": "d0130ca7dd23ed9748e1277a8cb9bf5cecb55dd32f6b84c847d5846fa8d5c974"
+      },
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "guardian_id": "00000000-0000-0000-0000-000000000067",
+      "journal": {
+        "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+        "revision": 12
+      },
+      "launch_id": "00000000-0000-0000-0000-000000000068",
+      "operation_id": "00000000-0000-0000-0000-00000000038a",
+      "qualification": {
+        "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+        "id": "host-start-qualification",
+        "version": "1"
+      },
+      "reservation_id": "00000000-0000-0000-0000-000000000064",
+      "runtime": {
+        "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+        "id": "qualified-worker-runtime",
+        "version": "1"
+      },
+      "schema_version": 1
+    },
+    {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-000000000001",
+        "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+        "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+        "offer_id": "00000000-0000-0000-0000-000000000001",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-000000000001",
+          "boot_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "session_id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      "evidence": {
+        "driver_intent": {
+          "binding": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000001",
+            "execution_spec_digest": "a402c4336ebfd78227dea06341f394c60ab50d13d841cedf38df329afe4a304e",
+            "graph_access_profile_digest": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            "launch_manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "offer_id": "00000000-0000-0000-0000-000000000001",
+            "schema_version": 1,
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "grant_id": "00000000-0000-0000-0000-000000000071",
+          "guardian_id": "00000000-0000-0000-0000-000000000067",
+          "host": {
+            "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+            "launch_id": "00000000-0000-0000-0000-000000000068",
+            "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000001",
+              "boot_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "session_id": "00000000-0000-0000-0000-000000000001"
+            }
+          },
+          "journal": {
+            "digest": "efe47bd799efe881da64d03f4712ba4a8ef1bf23bad293a52d52e355dc9e41cd",
+            "revision": 11
+          },
+          "reservation_id": "00000000-0000-0000-0000-000000000064"
+        },
+        "kind": "host_stopped",
+        "proof": {
+          "observation": {
+            "guardian": {
+              "intent": {
+                "configuration_digest": "ffc97f1d2e34b3ffb1f2b48ea02c5e4a904460987f1ad27539a33d462e57f6cd",
+                "launch_id": "00000000-0000-0000-0000-000000000068",
+                "manifest_digest": "54b2b3a6da981fafed19f45a8394d16d9e1dcf641b161f7171a2933ee502b2eb",
+                "session": {
+                  "assignment_generation": 1,
+                  "attempt_id": "00000000-0000-0000-0000-000000000001",
+                  "boot_id": "00000000-0000-0000-0000-000000000001",
+                  "kind": "remote",
+                  "node_id": "00000000-0000-0000-0000-000000000001",
+                  "session_id": "00000000-0000-0000-0000-000000000001"
+                }
+              },
+              "machine_boot_id": "00000000-0000-0000-0000-000000000050",
+              "nonce": "00000000-0000-0000-0000-00000000004f",
+              "pid_namespace": "pid:[4026532000]",
+              "process": {
+                "pid": 10,
+                "start_ticks": 100
+              }
+            },
+            "kernel_wait_echild": true,
+            "observed_boot_ms": 31000,
+            "pane": null,
+            "permit_deadline_boot_ms": 30000,
+            "permit_sequence": 1,
+            "phase": "stopped",
+            "reaped_count": 0,
+            "root_status": null,
+            "stop_reason": "execution permit expired"
+          }
+        },
+        "proof_digest": "c06711781a0230c75c267f5985fced939b1206aeed977e18a498ae19396bcba8"
+      },
+      "grant_id": "00000000-0000-0000-0000-000000000071",
+      "guardian_id": "00000000-0000-0000-0000-000000000067",
+      "journal": {
+        "digest": "52b4b81de020a1e7c955ed7129a810594e54b4174a911652e88a109edef74a27",
+        "revision": 12
+      },
+      "launch_id": "00000000-0000-0000-0000-000000000068",
+      "operation_id": "00000000-0000-0000-0000-00000000038b",
+      "qualification": {
+        "digest": "b927af2b303b74628c1bf7478e8ed686cd179463d13b414f55fb318eaca0e2d2",
+        "id": "host-start-qualification",
+        "version": "1"
+      },
+      "reservation_id": "00000000-0000-0000-0000-000000000064",
+      "runtime": {
+        "digest": "abacb54cc633aa780d28e485476e99f5581233d63367d02948bc21e6fb200b05",
+        "id": "qualified-worker-runtime",
+        "version": "1"
+      },
+      "schema_version": 1
+    }
+  ]
+}

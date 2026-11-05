@@ -1,0 +1,72 @@
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-central-authority)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 5m 21s
+     Running tests/central_sessions.rs (target/debug/deps/central_sessions-938860d1640cca72)
+
+running 8 tests
+test central_owner_boot_clock_sequence_deadline_and_identity_fences ... FAILED
+test central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit ... FAILED
+test central_owner_expiry_and_cancel_survive_refused_renewal_and_running ... FAILED
+test central_owner_historical_rows_and_identity_cannot_be_rewritten ... FAILED
+test central_owner_rejects_unverified_admission_and_stop ... FAILED
+test central_owner_reopens_committed_permit_without_new_generation ... FAILED
+test central_owner_retained_history_blocks_old_mail_and_cross_role_ids ... FAILED
+test central_owner_serializes_start_and_successor_races ... FAILED
+
+failures:
+
+---- central_owner_boot_clock_sequence_deadline_and_identity_fences stdout ----
+
+thread 'central_owner_boot_clock_sequence_deadline_and_identity_fences' (2229342) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit stdout ----
+
+thread 'central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit' (2229515) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_expiry_and_cancel_survive_refused_renewal_and_running stdout ----
+
+thread 'central_owner_expiry_and_cancel_survive_refused_renewal_and_running' (2229595) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_historical_rows_and_identity_cannot_be_rewritten stdout ----
+
+thread 'central_owner_historical_rows_and_identity_cannot_be_rewritten' (2229714) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_rejects_unverified_admission_and_stop stdout ----
+
+thread 'central_owner_rejects_unverified_admission_and_stop' (2229870) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_reopens_committed_permit_without_new_generation stdout ----
+
+thread 'central_owner_reopens_committed_permit_without_new_generation' (2230156) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_retained_history_blocks_old_mail_and_cross_role_ids stdout ----
+
+thread 'central_owner_retained_history_blocks_old_mail_and_cross_role_ids' (2230373) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+---- central_owner_serializes_start_and_successor_races stdout ----
+
+thread 'central_owner_serializes_start_and_successor_races' (2230508) panicked at crates/aq-server/src/test_support.rs:79:14:
+connect store: Database(Database(PgDatabaseError { severity: Error, code: "42P17", message: "generation expression is not immutable", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(2864), routine: Some("cookDefault") }))
+
+
+failures:
+    central_owner_boot_clock_sequence_deadline_and_identity_fences
+    central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit
+    central_owner_expiry_and_cancel_survive_refused_renewal_and_running
+    central_owner_historical_rows_and_identity_cannot_be_rewritten
+    central_owner_rejects_unverified_admission_and_stop
+    central_owner_reopens_committed_permit_without_new_generation
+    central_owner_retained_history_blocks_old_mail_and_cross_role_ids
+    central_owner_serializes_start_and_successor_races
+
+test result: FAILED. 0 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.13s
+
+error: test failed, to rerun pass `-p aq-server --test central_sessions`

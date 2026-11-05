@@ -1,0 +1,36 @@
+$ cargo test --locked -p aq-server --test dashboard_read --test dashboard_actions --test dashboard_mounts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running tests/dashboard_actions.rs (target/debug/deps/dashboard_actions-a548a1a57c3f2e82)
+
+running 8 tests
+test action_union_rejects_unknown_kind_with_envelope ... ok
+test bootstrap_lists_pending_operations ... ok
+test production_registry_is_enabled_and_lookup_is_neutral ... ok
+test supervisor_action_and_legacy_share_one_enqueue_and_retained_operation ... ok
+test supervisor_action_lookup_reconciles_native_commit_without_reenqueue ... ok
+test supervisor_union_bounds_identity_and_concurrent_legacy_admission ... ok
+test unknown_fields_duplicate_keys_and_oversized_bodies_are_rejected_before_admission ... ok
+test v1_outer_rejections_and_validation_use_common_safe_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.34s
+
+     Running tests/dashboard_mounts.rs (target/debug/deps/dashboard_mounts-732d812296b4937e)
+
+running 3 tests
+test configured_graph_and_injected_review_owner_are_visible_only_to_owner ... ok
+test mounted_routes_and_absent_owners_have_granular_truthful_capabilities ... ok
+test unsupported_saved_graph_adapter_is_refused_before_upstream_io ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.90s
+
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-5c8907e921dd9f29)
+
+running 6 tests
+test acl_expiry_during_database_wait_refuses_read ... ok
+test live_subset_bootstrap_and_exact_session_scope_are_truthful ... ok
+test malformed_inputs_have_dashboard_error_envelopes ... ok
+test overflow_visibility_refuses_detail_and_wrong_boot_acl_does_not_list_session ... ok
+test viewer_requires_current_exact_acl_and_never_gets_project_catalog ... ok
+test session_lifecycle_reports_are_historical_acl_scoped_and_never_live_observation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.12s

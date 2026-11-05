@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/terminal_tail.rs (target/debug/deps/terminal_tail-9d3e92e6ad59c164)
+
+running 1 test
+test maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 6.62s
+

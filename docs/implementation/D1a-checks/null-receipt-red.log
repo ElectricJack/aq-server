@@ -1,0 +1,23 @@
+$ cargo test --locked -p aq-server --test source_retention delivery_rejects_unretained_sources
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.75s
+     Running tests/source_retention.rs (target/debug/deps/source_retention-c3f887eae28f7ae0)
+
+running 1 test
+test delivery::delivery_rejects_unretained_sources ... FAILED
+
+failures:
+
+---- delivery::delivery_rejects_unretained_sources stdout ----
+
+thread 'delivery::delivery_rejects_unretained_sources' (2268954) panicked at crates/aq-server/src/delivery.rs:233:30:
+called `Result::unwrap()` on an `Err` value: ColumnDecode { index: "\"central_receipt\"", source: UnexpectedNullError }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    delivery::delivery_rejects_unretained_sources
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 1.54s
+
+error: test failed, to rerun pass `-p aq-server --test source_retention`

@@ -1,0 +1,57 @@
+$ cargo fmt -p aq-server --check
+$ cargo test --locked --offline -p aq-server --test permit_fixture_conformance
+   Compiling aq-admission v0.3.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-admission-0.3.3)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 16s
+     Running tests/permit_fixture_conformance.rs (target/debug/deps/permit_fixture_conformance-09d7ad157d5c66e9)
+
+running 5 tests
+test permit_fixture_conformance_frozen_transport ... ok
+test permit_fixture_conformance ... ok
+test permit_fixture_conformance_shared_build_cache_opt_in ... ok
+test published_runner_receipts_match_native_owners ... ok
+test permit_fixture_conformance_source_pin ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+$ cargo test --locked --offline -p aq-admission@0.3.3 --test sandbox
+   Compiling aq-admission v0.3.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-admission-0.3.3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.14s
+     Running tests/sandbox.rs (target/debug/deps/sandbox-1d2ddba31ba8f519)
+
+running 16 tests
+test sandbox_context_is_validated_and_secret_debug_is_redacted ... ok
+test sandbox_awaiting_readoption_has_no_deadline_extension ... ok
+test sandbox_decoding_rejects_unknown_duplicate_fields_and_oversized_frames ... ok
+test sandbox_handoff_vectors_derive_from_frozen_phase_payloads ... ok
+test sandbox_published_fixtures_conform ... ok
+test sandbox_registration_rejects_duplicates_bounds_and_false_capabilities ... ok
+test sandbox_renewal_accepts_only_live_correlated_extensions_from_prior_state ... ok
+test sandbox_phase_receipt_projections_keep_native_identity_and_deadlines ... ok
+test sandbox_schema_constrains_versions_and_missing_capability_bounds ... ok
+test sandbox_schema_drift ... ok
+test sandbox_renewal_delivery_cannot_retime_replay_or_revive_local_expiry ... ok
+test sandbox_stopped_original_boot_replay_after_readoption ... ok
+test sandbox_stopped_readoption_preserves_ended_scope ... ok
+test sandbox_stopped_replay_refuses_mismatched_or_forged_boot ... ok
+test shared_build_cache_registration_round_trips_and_negotiates ... ok
+test sandbox_stopped_same_boot_replay ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+$ cargo test --locked --offline -p aq-admission@0.1.11 --test transport
+   Compiling uuid v1.29.0
+   Compiling schemars v1.2.3
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-admission)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.48s
+     Running tests/transport.rs (target/debug/deps/transport-564e77094a638944)
+
+running 4 tests
+test exact_stop_replay_is_immutable_and_journal_order_is_launch_scoped ... ok
+test roundtrip_budget_is_charged_and_replay_cannot_restart_ttl ... ok
+test stop_journal_requires_durable_closed_reservation_and_unknown_never_releases ... ok
+test published_transport_replays_and_mutations_reject_duplicate_unknown_and_scope ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

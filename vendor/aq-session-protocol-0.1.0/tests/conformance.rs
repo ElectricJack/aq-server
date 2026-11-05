@@ -382,3 +382,36 @@ fn published_artifact_mirrors_match_when_in_repository() {
         );
     }
 }
+#[test]
+fn manifest_declares_exactly_one_confinement_mode() {
+    let f = fixtures();
+    let container: LaunchManifest =
+        decode(&serde_json::to_vec(&f["container_manifest"]).unwrap()).unwrap();
+    assert!(
+        container
+            .harness
+            .required_capabilities
+            .iter()
+            .any(|c| c.id.as_str() == CONTAINER_CONFINEMENT_CAPABILITY)
+    );
+    assert!(
+        !container
+            .harness
+            .required_capabilities
+            .iter()
+            .any(|c| c.id.as_str() == NATIVE_CONFINEMENT_CAPABILITY)
+    );
+    let cap = Capability {
+        id: Text::new(CONTAINER_CONFINEMENT_CAPABILITY).unwrap(),
+        version: 1,
+    };
+    assert!(require_capabilities(std::slice::from_ref(&cap), std::slice::from_ref(&cap)).is_ok());
+    let invalid = f["invalid_manifests"].as_array().unwrap();
+    for name in ["both_confinements", "no_confinement"] {
+        let bad = invalid
+            .iter()
+            .find(|m| m["selection_explanation"]["id"] == name)
+            .unwrap_or_else(|| panic!("missing invalid fixture {name}"));
+        assert!(decode::<LaunchManifest>(&serde_json::to_vec(bad).unwrap()).is_err());
+    }
+}

@@ -1,0 +1,41 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 2 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest -n 6 --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/g4/task4-checks.py -q
+bringing up nodes...
+bringing up nodes...
+
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________________________ test_final __________________________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+    def test_final():
+        env=os.environ.copy()
+        env.update(CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',DATABASE_URL='postgres://postgres:test@127.0.0.1:55432/postgres')
+        commands=[
+          ('final-named-overview',['cargo','test','--locked','--workspace','overview_attention_lists_waiting_decision_and_failed_task','--test','profiled_results']),
+          ('final-named-quota',['cargo','test','--locked','--workspace','quota_unknown_is_not_zero','--test','dashboard_aggregation']),
+          ('final-area',['cargo','test','--locked','-p','aq-server','--test','dashboard_aggregation','--test','dashboard_search','--test','dashboard_read','--test','dashboard_mounts']),
+          ('final-overview-area',['cargo','test','--locked','-p','aq-server','--test','profiled_results','overview_']),
+          ('final-result',['cargo','test','--locked','-p','aq-server','--test','profiled_results','dashboard_search_uses_retained_result_metadata_and_digest']),
+          ('final-playbook',['cargo','test','--locked','-p','aq-server','--test','playbook_activation','dashboard_search_loaded_definition_uses_true_name_and_source_digest']),
+          ('final-runtime',['cargo','test','--locked','-p','aq-server','--lib','dashboard_api::runtime::tests']),
+          ('final-schema-generate',['cargo','run','--locked','-p','aq-server','--example','dashboard_contract']),
+          ('final-schema-check',['/home/jkern/dev/agent-queue2/.venv/bin/python','protocol/dashboard-read/v1/check.py']),
+          ('final-schema-drift',['cargo','run','--locked','-p','aq-server','--example','dashboard_contract','--','--check']),
+          ('final-fmt',['cargo','fmt','--check']),
+          ('final-clippy',['cargo','clippy','--locked','--all-targets','--','-D','warnings']),
+        ]
+        failures=[]
+        for name,cmd in commands:
+            p=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+            Path('docs/implementation/evidence/G4/'+name+'.log').write_text(p.stdout)
+            if p.returncode: failures.append((name,p.returncode))
+>       assert not failures, str(failures)
+E       AssertionError: [('final-area', 101)]
+E       assert not [('final-area', 101)]
+
+.aq/tmp/g4/task4-checks.py:26: AssertionError
+=========================== short test summary info ============================
+FAILED .aq/tmp/g4/task4-checks.py::test_final - AssertionError: [('final-area...
+1 failed in 279.03s (0:04:39)

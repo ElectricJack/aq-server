@@ -101,7 +101,7 @@ fn admission_clock(state: &AppState) -> super::AdmissionClock {
 
 pub fn worker_routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/v2/worker/register", post(register))
+        .route("/v2/worker/register", post(register_dispatch))
         .route("/v2/worker/accept", post(accept))
         .route("/v2/worker/artifact-handoff", post(artifact_handoff))
         .with_state(state.clone())
@@ -136,6 +136,54 @@ pub fn admin_routes(state: AppState) -> Router<AppState> {
     let routes = routes.merge(super::testing::routes(state));
     routes.layer(DefaultBodyLimit::max(1024 * 1024))
 }
+// The published sandbox registration shares the fixture route. Probe only the
+// envelope discriminator; decode the original bytes again with the exact type
+// so duplicate wire fields cannot be erased by a Value round-trip.
+async fn register_dispatch(State(state): State<AppState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let (parts, body) = request.into_parts();
+    let invalid = || {
+        Error::Refused(
+            ErrorCode::InvalidRequest,
+            "invalid or oversized execution JSON",
+        )
+        .into_response()
+    };
+    let Ok(bytes) = axum::body::to_bytes(body, 1024 * 1024).await else {
+        return invalid();
+    };
+    let Ok(probe) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return invalid();
+    };
+    let sandbox = probe.get("kind").is_some();
+    if sandbox && bytes.len() > 32_768 {
+        return AppError::PayloadTooLarge("sandbox registration body bound".into()).into_response();
+    }
+    let request = Request::from_parts(parts, axum::body::Body::from(bytes));
+    if sandbox {
+        match Json::<aq_admission_sandbox::sandbox::SandboxDocument>::from_request(request, &state)
+            .await
+        {
+            Ok(document) => crate::delegated_permits::incarnation::register(
+                State(state.control_view()),
+                headers,
+                document,
+            )
+            .await
+            .unwrap_or_else(IntoResponse::into_response),
+            Err(error) => error.into_response(),
+        }
+    } else {
+        match ExecutionJson::<RegisterRequest>::from_request(request, &state).await {
+            Ok(document) => register(State(state), headers, document)
+                .await
+                .map(IntoResponse::into_response)
+                .unwrap_or_else(IntoResponse::into_response),
+            Err(error) => error.into_response(),
+        }
+    }
+}
+
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -255,14 +303,32 @@ async fn cancel(
     RequireOwner(_): RequireOwner,
     Path(id): Path<Uuid>,
     ExecutionJson(request): ExecutionJson<CancelRequest>,
-) -> Result<Json<AttemptState>, Error> {
-    Ok(Json(
-        state
+) -> Response {
+    let kind =
+        sqlx::query_scalar::<_, String>("SELECT kind FROM execution_attempts WHERE attempt_id=$1")
+            .bind(id)
+            .fetch_optional(&state.store.pool)
+            .await;
+    match kind {
+        Ok(Some(kind)) if kind == "profiled_v1" => crate::profiled_execution::cancellation::cancel(
+            &state,
+            id,
+            request.operation_id,
+            &request.reason,
+        )
+        .await
+        .map(Json)
+        .into_response(),
+        Ok(_) => state
             .store
             .execution_cancel(id, request.operation_id, &request.reason)
-            .await?,
-    ))
+            .await
+            .map(Json)
+            .into_response(),
+        Err(_) => AppError::Internal.into_response(),
+    }
 }
+
 async fn replace_incarnation(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,

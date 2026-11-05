@@ -1,0 +1,6 @@
+{
+  "algorithm": "SHA256 of UTF8 compact recursively sorted JSON, Python json.dumps ensure_ascii=False",
+  "request": "f24d4c7813c82b6f1fe65a28cc9df0460b12bdeb67cbf53f1bab5a3ca0ad99d6",
+  "observation": "6b910ffd66db5dec50df85c934108e993928b05719cc31aa8438b27e0cf14d0e",
+  "unicode_request": "3f72da850fbfbddc59ba8e1748af0661bd3635e29376394bd59b189f22399b1d"
+}

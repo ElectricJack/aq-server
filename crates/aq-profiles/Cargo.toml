@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [[bin]]
-name = "aq"
+name = "aq-profile"
 path = "src/main.rs"
 
 [[example]]

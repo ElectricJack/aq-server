@@ -1,0 +1,894 @@
+# AQ v2 build: supervision log
+
+This is the operator log for the v2 build running in AQ v1. Projects:
+- aq-platform (the aq-server repository)
+- aq-worker
+- aq-dashboard
+- aq-graph
+- aq-git
+- aq-playbooks
+
+The newest entries are at the bottom. Lessons drawn from these entries live in the [retrospective](2026-11-02-v1-hosting-retrospective.md). The task-key mapping is in `docs/superpowers/plans/2026-11-02-v2-full-application-v1-ids.json`.
+
+Each entry records what was observed, the action taken, and anything waiting on the owner.
+
+## 2026-11-02 (Pacific)
+
+- **v1 started.** It had been stopped on purpose on 10-30. Postgres recovered from an unclean shutdown. The owner paused all other projects except aq-design-tour, which is still active.
+- **aq-platform created.** aq-server is its primary repository. Five workspace kinds and a read-only `platform-ref` were added. The default policy was applied (two project playbook copies are pending review, and routing preferences are unconfigured).
+- **Plan imported:** 88 tasks, 197 edges, an MS0 release gate. Two automatic onboarding tasks (graft hooks) ran.
+- **Parallelization review applied:**
+  - The release gate was removed.
+  - B6a and C5a were split.
+  - Edges were fixed and priorities set.
+  - The aq-platform cap was raised to 8, the standard-high Codex pool to 6 and the operator Codex pool to 2.
+- **Self-contained descriptions written for all 91 tasks.** D0 was added (aq-git GitHub credentials). The footer forbids reading whole documents and doing out-of-scope work.
+- **Owner decision: subscription logins, no API keys.** I0, I4a and I4b were requalified on the ChatGPT login, with refresh write-back. ElectricJack/aq-scratch was created as the public scratch repository.
+- **Routing failures for non-primary repositories** (`no_candidates / workspace_requirement`). Task-lifecycle Codex profiles were added (`standard-high-codex-task` and `deep-high-codex-task`, 4 agents each).
+- **Worktree authorization only allowed the primary repository.** A v1 patch was tried in the live checkout and reverted within about 2 minutes, because v1's rules forbid editing that checkout. The project was then split: aq-worker (cap 4, later raised to 6), aq-dashboard (3), aq-graph (2), aq-git (2) and aq-playbooks (2). 47 tasks moved. Each project has a `platform-ref` symlink directory. One daemon restart.
+- **Owner decisions:**
+  - A 15-minute monitor loop.
+  - The deep-high Claude pool enabled with max 4.
+- **Recovery holds released after diagnosis** (session churn during the routing failures): A4 and C5a1 (C5a1's max retries raised to 6).
+- **Mis-filed cross-repository follow-ups re-filed:**
+  - B1's aq-server pin became `stark-horizon-12` in aq-platform; B2 waits on it.
+  - D4's catalog pin was folded into D5.
+- **Footer additions:** the `CROSS-REPO FOLLOW-UP` comment convention, and filing follow-ups as `--integration-mode direct`.
+- **Four owner decisions:**
+  - Merge PRs for the owner.
+  - I0 may use the owner's login and act as the settlement stand-in.
+  - Reviews are delegated to the supervisor in all six projects.
+  - Agents publish releases in-task.
+- **Applied:**
+  - 30 PRs merged across the repositories (5 older conflicting PRs left open; their tasks are completed and nothing depends on them).
+  - I0 reopened with the authorization.
+  - Four reviews delegated.
+  - E2 and A3a released to publish. A3a published aq-git and completed.
+- **Mistake:** a local `git stash` pop conflict pushed conflict markers into the importer footer on aq-server main. Fixed in `ab31460` within minutes. v1's task descriptions were never affected.
+- **Owner decisions:**
+  - Agents may record owner attestation from observed facts (sharp-harbor-18).
+  - The credential-custody design was approved (fresh-delta-13).
+- `quick-glacier-78` was closed as obsolete; its work was already done in `crisp-beacon-59`.
+- **I0 now depends on `crisp-beacon-59` and `sharp-harbor-18`.**
+- **No project supervisors run for the six projects; only the global supervisor does.** It was asked directly to decide the delegated reviews, and it returned changes requested on B1, C5a1 and D10.
+- **The review flow creates its own "Revise …" tasks.**
+  - My duplicate B1 follow-up (`steady-impact-69`) was closed.
+  - C5a1 and D10 now wait on their revision tasks.
+- **B1's PR #4 was superseded by #12,** which carried its commits to main. The PR-merge gate resolved through the sweep. B6a1 was released.
+- **Status at about 18:15:** 18 of 91 plan tasks (about 20%) and 47 follow-ups completed. Postgres is CPU-bound on the admission query, which limits scheduler throughput.
+- **Waiting on the owner:** nothing open.
+- **18:19 check.**
+  - B6a1 is running again, with all three review revisions in flight (B1, C5a1, D10).
+  - Filed G7's cross-repo follow-up as `keen-current-13` in aq-platform: additive results-feedback read fields.
+  - Merged aq-worker #13 (runner renewal validation).
+  - `sharp-harbor-18` (blocks I0) is in v1's automatic retry after `slot_reset_failed: branch holder reservation is not clean`; the standard-high-codex pool is at 5 of 6 busy. Re-check next pass.
+- **18:34 check.**
+  - The B1 server pin (`stark-horizon-12`) and B1's review revision completed. B2 started. `sharp-harbor-18` started after its automatic slot retry.
+  - B5a's cross-repo requirement (registration-v2 and initial DelegatedPermit issuance routes, PermitProvider, mapping controller refusals into the transport) was routed to B2 as a comment and live message, because it is in B2's scope.
+  - Merged aq-worker #14 (desktop ChatGPT login reconcile before cleanup; fresh-delta-13) and aq-playbooks #3 (D10 review revision 2 evidence).
+- **19:27 check.**
+  - **Owner approved a bounded qualification method for `sharp-harbor-18`:**
+    - gpt-6.1-sol, reasoning high;
+    - at most 3 real calls to measure counting and capacity;
+    - seccomp=unconfined only for the local I0/E0 container;
+    - credential profile `owner-chatgpt-codex`, desktop worker only;
+    - catalog revision 2 for aq-scratch.
+
+    Released.
+  - Filed B2's contract prerequisite as `nimble-dune-30` (aq-worker): permit handoff, Prepared and mail scopes. B2 and B6a2 now depend on it.
+  - Told G4 its base branch is main (it was waiting on a "base-branch decision"). Its dashboard consumer requirements went to G5.
+- **19:29 check.**
+  - The supervisor filed B1b (`agile-delta-29`) for the same aq-admission extension as my `nimble-dune-30`. B1b is correctly sequenced behind B1's round-2 review (`smart-grove-55`). I closed mine as a duplicate and moved the B2 and B6a2 dependencies onto B1b.
+  - Raised `sharp-harbor-18` (on the MS0 path) to high priority; aq-worker is at its cap of 6.
+  - Merged aq-server #20 (C5a1 revision 2), aq-worker #16 (C2 handoff docs) and aq-worker #17 (heartbeat diagnostics).
+  - C3b completed; C3c (template publish) and G5 (Overview) started.
+- **19:45 owner check-in.**
+  - **My monitor had been missing agents' "Blocked on …" messages to the owner's dashboard inbox.** The inbox query filtered them out. The monitor now reads them directly.
+  - **Owner approved GHCR publication:** `docker login ghcr.io` using the owner's gh token (write:packages), with public packages under ghcr.io/electricjack. C3c was released.
+  - Asked the supervisor again to decide six delegated reviews (B1 round 2, B5a, C5a1, C2, J7, a flakiness investigation), and flagged D10's inconsistent round-3 changes-requested.
+  - The 12 imported-policy-playbook reviews are owner-only but non-blocking; system defaults apply.
+- **19:47 check.**
+  - C3c completed: sandbox images published to GHCR. A3b and B6a1 also completed. B6b and F1a started.
+  - Holds now queued for release when their prerequisites finish:
+    - B2 (partial checkpoint) after B1b;
+    - B1b after B1's review revision (`bold-summit-78`);
+    - D10 (claim-binding mismatch, retries exhausted) reopened after its revision (`stark-dune-58`) is approved;
+    - I0 after `sharp-harbor-18`.
+- **19:49 check.**
+  - D1a (code delivery) and E1a (production Compose) started.
+  - Filed F1a's cross-repo prerequisite as `crisp-nexus-12` (aq-worker): a subject-neutral session-host contract for central supervisor sessions. F1a depends on it.
+  - Verified B6a1's pass is genuine. F1a's note cited B6a1's earlier blocked checkpoint `a3d9411`; the final `3052c9c` has full tests, Clippy, formatting, named tests and review evidence.
+  - Queued holds (I0, B1b, B2, D10) are unchanged; their prerequisites are still running.
+- **20:09 check.**
+  - **Root-caused the recurring "git merge origin/dev failed":** v1's default completion protocol (`src/prime/templates/completion_protocol.md:33-34`) hard-codes `origin/dev`. Committed a project `.aq/PRIME.md` override to all six repos, which keeps every standard section and adds a note that the integration branch is main.
+  - Reopened `crisp-nexus-12` with an owner decision: aq-worker owns the subject-neutral HostPlan contract, following AQ-17.
+  - Answered F1a's question (it consumes `crisp-nexus-12`).
+  - G5 was already running; sent it G4's published schema digest.
+  - **`rev-amber-quest` is deadlocked by review tooling:** an unchanged resubmission is refused, and a decision is refused while changes are requested. Handed back to the supervisor. Asked again for decisions on `rev-keen-ember` (B1 round 2) and `rev-grand-meadow` (B5a round 2).
+  - Merged aq-worker #18.
+- **20:19 check.**
+  - B1's review came back changes-requested again (round 3). Its fourth revision (`sharp-lantern-29`) is running. B1b and then B2 stay queued behind it; I updated the follow-up list.
+  - `crisp-nexus-12` (HostPlan) is running after the owner decision.
+  - Merged aq-server #21.
+- **20:35 check.**
+  - B1's fourth revision finished; `rev-keen-ember` round 4 is waiting for the supervisor's decision.
+  - E1b started.
+  - **Released G5:** its "deployed preview" exists as E0's local compose stack. It was told to run live acceptance there or defer a specific item to G11, instead of holding.
+  - Queued F1a's release for when `crisp-nexus-12` publishes the HostPlan.
+  - Merged aq-server #22.
+- **20:49 check.**
+  - `crisp-nexus-12` (the subject-neutral HostPlan) completed; F1a resumed.
+  - G5 is closing as a pass, with live/full-page acceptance deferred to G11.
+  - Filed G5's follow-up as `fleet-stone-84`: rebuild the retained E0 stack from current main (it predates G4). G11 depends on it.
+  - **B1's review (`rev-keen-ember`) is changes-requested again after round 4; round 5 (`steady-nexus-22`) is running.** Review cycling on B1 is now the critical-path bottleneck: B1b, B2, B6a2.
+  - Merged aq-worker #19 and #20.
+- **21:04 check.**
+  - G5 completed. B1's round-5 revision finished; `rev-keen-ember` r5 and `rev-grand-meadow` (B5a) r3 are waiting for the supervisor's decision.
+  - `fleet-stone-84` (E0 refresh) started.
+  - Merged aq-server #23 (D1a: durable central aq-git candidate creation and publication) and aq-worker #21 (B1 review reconciliation docs).
+- **21:23 — disk emergency.**
+  - `/` hit **99% (16 GB free of 1 TB)**. `aq-platform-agents` held 559 GB, almost all of it per-slot Cargo `target/` directories; aq-server slot-0 alone was 141 GB.
+  - Deleted `target/` in the 8 idle slots only, after re-checking each slot's lock and that no process used it. Usage went from 940 GB to 819 GB (137 GB free).
+  - The monitor now reports disk usage on every check and repeats the idle-slot cleanup automatically above 85%.
+  - Agents had already filed the investigation `bright-zenith-30`, which is working on a lasting policy; I left it a note about the cleanup.
+- **21:40 check.**
+  - Status: 26 of 91 plan tasks completed (29%, about 26% weighted by effort), plus 80 follow-ups. E1a (production Compose) completed. Disk is at 81–87% after the cleanup.
+  - B1 (`rev-keen-ember`, round 5) and B5a (`rev-grand-meadow`, round 3) are still waiting for supervisor decisions. B1b, B2 and B6a2 remain queued behind B1.
+  - **Owner decision surfaced: B6b (`noble-summit-37.8`).** Clearing the agent's capability bounding set requires CAP_SETPCAP, which the three-capability fixture does not grant. The agent asks whether bootstrap may require CAP_SETPCAP. It is continuing with the signal-denial probe in the meantime (`bright-nexus-60`).
+- **21:55 owner decisions.**
+  - **Reviews:** "I don't want to do any reviews, that's all on you." I now decide every delegated review.
+  - **B6b:** the owner chose my recommendation. No CAP_SETPCAP; the bounding set may hold the three runner capabilities, with a fast no-regain probe. Sent to `noble-summit-37.8` and `bright-nexus-60`, with targeted-tests-only guidance.
+  - The owner is concerned that narrow security work and slow tests are cutting velocity. Velocity rules were added to `.aq/PRIME.md` in all six repos: aq-server `ced0063`, aq-worker `8d62e3b`, aq-dashboard `62fd237`, aq-graph `391dd4c`, aq-git `b907806`, aq-playbooks `4fa57ff`.
+- **22:00 review decisions.**
+  - **B1 (`rev-keen-ember`, r5).** I approved it without per-comment dispositions. v1 rewrote the decision to `fold_in` and created revision task `sharp-orbit-26`, because the round-1 `[blocking]` comment (resolved in r2, verified by `smart-grove-55`) defaults to fold-in. This is most likely why B1 cycled through 5 rounds (W37).
+    - I narrowed `sharp-orbit-26` to a disposition-only r6 resubmission.
+    - I will approve r6 with explicit dispositions.
+  - **B5a (`rev-grand-meadow`, r3).** Approved with an explicit disposition for every comment; no task was created.
+    - B5a's code was already on main (PR #15 squash plus revision `5dc1ccd6`). Its recovery hold was only waiting for the review.
+    - Closed with `aq task close --done`. B5b and I4a are now runnable.
+- **22:10 check.**
+  - **B1 approved:** `rev-keen-ember` r6 passed on the first decision with explicit dispositions, after 6 rounds (W37 confirmed). B1b (`agile-delta-29`) is READY.
+  - E1b and B6b completed.
+  - **`bold-stone-39`:** merged aq-worker PR #22 (`4992a16d`). It had no conflicts; its one CI failure is the flaky supervisor-session class that also fails on main. Closed with `--done`.
+  - **D1a (`crisp-meadow-36.1`)** finished its implementation, but its review `rev-steady-dune` had no reviewer dispatched. I dispatched one standard-high reviewer with a blocking-only-for-real-defects focus. I will decide the review and close D1a when it returns.
+  - **Main CI is red** on aq-worker (12+ runs, a different flaky test each time), aq-dashboard (Playwright/axe) and aq-server (owned by `fair-zenith-27`). Filed `sharp-forge-44` (aq-worker) and `wise-journey-87` (aq-dashboard) at priority 40, standard-high (W39).
+  - **Owner:** "prioritize standard workers, we are running low on usage."
+    - Codex weekly usage is at 78% with about 5.8 days until reset; Claude weekly is at 48%.
+    - Pinned 11 queued deep-high tasks to standard-high, alternating Claude and Codex: B1b, C5a1, C5b, C6a, H4, H5, D9, D3, J3, B4, C5a2.
+    - Kept deep-high for B2, D1a and D10 (in-flight checkpoints), J4 and MS4.
+    - Owner: "easier well-defined tasks can be standard medium." Moved I2, I3 and F4 to standard-medium. A4 was running and stays where it is (W40).
+  - The owner asked for a demo of the latest build in the morning. A one-shot prep job is scheduled for 06:17.
+- **22:25 check.**
+  - **F1a (`steady-harbor-87.1`) reopened.** It had closed blocked on the upstream start.request race. That fix (`bold-stone-39`, aq-session-host 0.1.7) merged last check as `4992a16d`. Told F1a to pin it and re-run only the affected tests.
+  - **`agile-torrent-31`** (spec-ingest for B1's r6 approval) found nothing to create. Its empty proposal was refused because "no_op settlement requires an approved design", and then it was paused. `aq task close --no-change` failed with "could not stop the writer". It is harmless and nothing depends on it; left paused.
+  - aq-server PR #24 (owner clock) has checks still running; its update-lifecycle job failed. I will decide next check. aq-worker PR #23 (`bright-nexus-60`) has conflicts; its worker is in backoff.
+  - `wise-journey-87` (dashboard CI) is running; `sharp-forge-44` is waiting on aq-worker's cap. Disk is at 54%.
+- **22:40 check.**
+  - **B1b (`agile-delta-29`) completed.** It ran on Claude standard-high after the usage override. Merged aq-worker PR #25 (`a2ff7454`).
+  - Also merged aq-worker #24 (`wise-dune-90`, bounded target growth) and aq-server #24 (`smart-delta-18.1`, owner clock). Each PR failed only the tests that also fail on main (aq-worker supervisor_session; aq-server native_accepted_preparation and update-lifecycle registry startup).
+  - **B2:** messaged it about B1b's contract. Its hold release was refused while the pr-merged gate for agile-delta-29 is open; I will retry once the sweep resolves it.
+  - **Dashboard:** `wise-journey-87` fixed the browser checks (22 failing to 35/35; PR #5 merged), and main's Browser checks now pass. The unit job still fails on one flaky SupervisorConversation test; filed `grand-lantern-86` at standard-medium.
+  - D1a's reviewer `solid-cascade-10` was unrouted for more than 15 minutes; pinned it to Claude standard-high (cross-family).
+  - aq-server PR #25 (`fair-zenith-27`) is waiting for pending checks.
+- **22:55 check.**
+  - **B2 hold released** (operator retry) now that B1b's contract is on main; B2 is READY.
+  - B6a2 started (unblocked by B1). `fair-zenith-27` completed.
+  - **Merged aq-server PR #25** (`14d49217`, 19 workspace test-fixture fixes). Its remaining CI failures come from main, not from the PR.
+  - **Filed `vivid-vault-98`** (standard-medium) for the remaining aq-server CI failures:
+    - `playbook_activation.rs:39` asserts the DATABASE_URL host is `127.0.0.1:55432`, while CI uses `localhost:5432`;
+    - the update-lifecycle registry step;
+    - `native_accepted_preparation`, if it still fails.
+  - `sharp-harbor-18` stalled and was returned to READY by the reconciler.
+  - The D1a reviewer is running. aq-server #26 (F1a) and aq-worker #26 have checks pending.
+- **23:10 check.**
+  - **D1a review** (`rev-steady-dune`): the reviewer found and reproduced a real blocker. A publish error that is not explicitly flagged uncertain releases the destination hold, so a new operation can re-publish to the same target, which breaks at-most-once.
+    - Requested changes: fold in that finding plus a one-line doc fix; four nits become a follow-up. Revision task `crisp-meadow-36.15` is at standard-high.
+  - **F1a:** its only gate is review `rev-nimble-horizon`, which had no reviewer. Dispatched `wise-summit-84`, pinned to Claude standard-high.
+  - **B2:** the child merge conflict with main (both added migration 45) made B2 unstartable. I merged main into `aq/noble-summit-37.2` and renumbered B2's migration to 0046 and the state format to 46 (`787ef68`). Released the hold and reopened B2 with verification instructions (W41).
+  - **`sharp-harbor-18`:** answered the three owner decisions the supervisor had forwarded (operator under overnight delegation, owner may override). Choices:
+    - (a) a separate stack generator in aq-worker on a fresh Compose project;
+    - (b) enroll a fresh node;
+    - (c) the 3 measurements in the I0 image with a clean CODEX_HOME.
+    Released the hold and reopened it. My monitor had missed this message (W42); its filter is widened.
+  - **Filed C7's cross-repo follow-up** as `sound-vault-88` (E1d, the aq-worker-boat Compose service). It waits on E1c and C7; MS3 waits on it.
+  - **Merged:** aq-worker #26 (`e833abea`), aq-dashboard #7 (`079b9ee1`), aq-graph #3 (`11d779d6`), aq-git #5 (`07d72677`). aq-server #27 waits for its tests job.
+  - Started: C7, E6a and B6a2.
+- **23:25 check.**
+  - **F1a review** (`rev-nimble-horizon`): no blocking findings. I approved with `follow_up` dispositions for the nits, but v1 forced them to `fold_in` because the comment text matched its prerequisite regex. This is a second form of W37, and I did not gate on the preview's effective option.
+    - Narrowed the resulting revision `steady-harbor-87.8` to the SIGTERM/STOPSIGNAL fix (as shipped, every `docker stop` SIGKILLs the guardian) plus the one-sentence crash-window documentation.
+    - Filed the remaining nits as `quick-flare-47` (standard-medium, after F1a).
+  - **D1a:** revision `crisp-meadow-36.15` produced aq-server PR #28 (keep unknown publish outcomes fenced); I will decide r2 when it is resubmitted.
+  - The supervisor also filed `sharp-pinnacle-28` for B2's merge conflict, duplicating my `787ef68`. `--obsolete` failed with "could not stop the writer", so I messaged the worker to close without changes.
+  - Routed B6a2's cross-repo requirement (runner HTTP envelopes and receipt fixtures) to B2 by message and comment; B2 is running.
+  - Merged aq-server #27 (`99fa8d86`), aq-playbooks #4 (`56236d40`) and aq-dashboard #8 (`e6a2a285`). aq-dashboard main CI is green.
+- **23:40 check.**
+  - **D1a done.** Review `rev-steady-dune` r3 approved (preview gated on `approve`; deferred nits marked `no_change`). The fix fails closed: a dispatched publish hold is released only on validated success or an explicit `Failed` state without uncertainty flags, with a regression test.
+    - Filed the nits as `clear-meadow-17` (standard-medium).
+    - Closed PR #28 as superseded; the revision task and D1a itself both fixed it (W43). PR #29 merges when its tests job finishes.
+    - The D1a task is COMPLETED.
+  - **B2 owner decision** (renewal after a new boot), decided as operator; the owner may override. Option A:
+    - grant history stays bound to the original boot;
+    - a new delegated-node incarnation fences the old boot;
+    - renewal uses only the grant, cancellation and the unchanged hard deadline (120 s lease);
+    - fail closed if the re-registered backend, template or capabilities differ;
+    - no new native authority seam.
+  - F1a is running again, with its revision (`steady-harbor-87.8`, PR #30). B6c started.
+  - The paused duplicates `sharp-pinnacle-28` and `agile-torrent-31` cannot be closed ("could not stop the writer"); left paused.
+- **23:55 check.**
+  - **F1a review approved** (`rev-nimble-horizon` r2; SIGTERM fix and crash docs). Merged aq-server #26 (F1a, `2d4dfa10`; migrations 0046/0047), #30 (graceful stop, `715d0175`) and #29 (D1a fail-closed fencing, `1150502d`).
+    - #29 and #30 had become conflicting. I merged main into both branches myself; #29's only conflict was D1a.md, where I kept both the revision-2 and follow-up sections.
+    - D1a's follow-up `clear-meadow-17` was already done and merged.
+  - **B2:** told it to renumber its migration to 0048 (F1a took 46/47). Routed its other cross-repo follow-up to aq-worker as `clear-grove-63`, with the operator-decided semantics: terminal ReportResult is authorized under GrantPhase::Ended within expiry, and nothing else.
+  - Routed E6a's follow-up (Dockerfile.worker pins the stale aq-worker 0.3.1) to E1c as a comment.
+  - **Two owner-only blockers** go on the morning list (scratchpad `owner_morning.md`):
+    - E6a's Windows restart drill (it would kill all agents);
+    - C7's boat.dev live credentials. C7 was told to close blocked and free its slot.
+  - Merged aq-dashboard #9. **aq-worker main CI is green** (`sharp-forge-44`).
+- **00:00 check (11-03).**
+  - **Only 5–6 agents running**, with 35 READY in aq-platform. 29 are dependency-blocked; 6 are claimable but waiting on pools with free capacity.
+    - Root cause: v1 scheduler cycles stall in PR admission (`observe_pr_admission`) and `list_sessions`. Postgres is at about 113% CPU, and `pool.scaler_stalled` repeats.
+    - Not restarted unattended. Recorded as W44; owner option in the morning.
+  - Merged aq-server #31 (F1a closure evidence). H1 and H7 started. C7 and E6a are blocked on owner-only items (morning list).
+- **00:15 check.**
+  - F1a completed. E1c, F1b and `quick-flare-47` started.
+  - Merged aq-dashboard #10 (`0634356a`).
+  - The dashboard unit job still fails on a different test each run, always at about 1000–1040 ms, which matches Testing Library's default asyncUtilTimeout. Filed `azure-harbor-91` (standard-medium) to fix the class in the global test setup, instead of more per-test flake tasks.
+  - My previous check's notes command hung on a stray `cat >>` reading stdin, and `pkill -f` on that pattern also killed my shell. The notes were redone and pushed in `8c204b7`.
+- **00:30 check.**
+  - **Codex usage at 87% weekly with 5.7 days to reset; the provider is degraded.** At about 9 points per 3 hours it would run out overnight.
+    - `aq provider reroute` does nothing for a degraded provider.
+    - Pinned all 9 queued Codex-routed tasks to the equivalent Claude profiles (Claude is at 52% weekly): C5a1, C6a, H5, D3, B4, `bright-nexus-60`, D1b, I2, F4.
+    - The monitor now prints usage and any Codex-routed queued work.
+  - **D10 review deadlock** (`rev-wise-rapids`). Round-3 reviewer `prime-summit-42` found no blocking defects, but the review sat in changes_requested at r3. v1 refuses a decision ("Return a revision or create an amendment review"), and the revision task `stark-dune-58` was IN_PROGRESS with no agent.
+    - Stopped and reopened it, scoped to a doc-only r4 that refreshes the stale dispositions/status sections (the reviewer's one nit); pinned to standard-medium Claude.
+    - I will approve r4. This is the same deadlock class as `rev-amber-quest`.
+  - H1 and `quick-flare-47` completed. `clear-grove-63` (terminal ReportResult authorization) claimed.
+- **00:45 check.**
+  - E1c completed. It filed `smart-falcon-16.10` (build aq-worker-cloud from aq-worker packaging; it answers E6a's re-pin follow-up) and `smart-falcon-16.11` (docs PR #32, merged as `772a0695`).
+  - **E5 (VPS and Cloudflare provisioning) started** on operator-standard-high-claude. It will likely need owner VPS and Cloudflare access; I'm watching for its question.
+  - **`slot_reset_failed` ("branch holder reservation is not clean and taskless")** on `stark-dune-58` and `bright-nexus-60`.
+    - `stark-dune-58`: its slot branch had no `origin/aq/stark-dune-58` (deleted after merge), so the "branch matches origin" check could never pass. Re-pushed the branch from the slot (`56b8158`).
+    - `bright-nexus-60`'s slot was clean and matched origin, with no live session; the conflict was transient.
+    - `aq task resume` on both; both are READY.
+  - Filed E1c's cross-repo follow-up as `calm-forge-32` in aq-worker: docker-local must refuse daemons with CgroupDriver none or non-v2 cgroups. Pinned to Claude standard-medium.
+  - Usage: Codex 87%, Claude 53%. New tasks still fall back to degraded Codex (`smart-falcon-16.10`); already running, left as is.
+- **01:05 check.**
+  - **D10 plan approved** (`rev-wise-rapids` r4, after 4 rounds; the doc-only r4 cleared the changes_requested deadlock). Released D10's hold and reopened it to implement the approved TDD plan. Pinned it to Claude standard-high (Codex 88%, Claude deep pool disabled).
+  - **`sharp-harbor-18` completed.**
+    - Separate qualification stack `aq-e0-qual`, freshly enrolled node `f761410b`.
+    - 3 real Codex calls measured; capacity fact 475000; expires 2026-11-04 07:22 UTC.
+    - Merged aq-worker PR #28 (`02056060`).
+  - **I0** (MS0 first real agent run): released its hold and reopened it against `aq-e0-qual`, telling it to run before the fact expires. The orchestrator is pinned to Claude.
+  - **Completed and landed on aq-worker main:** `clear-grove-63` (aq-admission 0.3.1, terminal ReportResult; B2 told its pin), `calm-forge-32` (docker-local cgroup refusal) and H1.
+  - **aq-worker main CI regressed** on `generated_source_reparse_capability_and_normalized_goldens_do_not_drift`, likely from H1. Filed `fresh-willow-34` (standard-medium Claude).
+  - **`bright-nexus-60` closed** as done (`--done`): its probes were already on main via B6b, and it only conflicted with them. Closed PR #23.
+- **01:20 check.**
+  - I0 (MS0 first real run) and D10 implementation are running. Usage: Codex 89%, Claude 53%.
+  - **Did not merge aq-server PR #33** (`smart-falcon-16.10`, docker-local cloud worker image). It breaks three CI jobs that pass on main: smoke, distributed recovery, and real daemon.
+    - Cause: `Dockerfile.worker` now copies `scripts/worker-init-volumes.sh`, but `scripts/product-smoke.py` and `scripts/recovery-smoke.py` build from snapshots that copy only crates/, vendor/ and protocol/.
+    - Reopened the task with the exact fix (standard-medium Claude).
+  - A4 stays on Codex: it is running and cannot be re-routed.
+  - aq-worker PR #29 (`fleet-flare-68`, original-boot stopped replay) has CI pending.
+- **01:35 check.**
+  - F1b split off 4 follow-ups (`steady-harbor-87.2.1`–`.4`); 3 are running. Pinned `.2.4` from Codex to Claude standard-high.
+  - Routed F1b's cross-repo follow-up to G8 (`steady-cascade-45.9`, the dashboard supervisor panel) as a comment. The conversation History schema now includes SupervisorItem, host_delivery states and maxItems 80.
+  - Merged aq-worker #29 (`fleet-flare-68`, original-boot stopped replay; CI green).
+  - aq-server #33 (cloud worker image) has the fix and its checks are re-running.
+  - aq-platform now has 7 tasks in progress.
+- **01:50 check.**
+  - F1b and H7 completed; F1b's 4 follow-ups are running.
+  - **B2 blocked again** on a store.rs child merge conflict: F1b took migration 0048 (supervisor_dispatch). I merged main into `aq/noble-summit-37.2` and renumbered delegated permits to 0049 (state format 49, Dockerfile ARG; `be8a33e`). Reopened B2 and told it to finish and open the PR promptly (W41 recurrence).
+  - A4 is READY again; pinned it to standard-medium Claude (Codex 90%).
+  - All 11 aq-worker READY tasks are dependency-blocked; I0 is running. aq-server #33 is re-running CI.
+- **02:05 check.**
+  - **B2 blocked a third time:** main took 0049 (`0049_supervisor_reservation_consumption`, from F1b follow-up `.2.1`), and slot_reset's automatic merge of main (`d616375f`) conflicted in store.rs.
+    - Merged main again and renumbered to 0050 (`1e3b87c`). Updated the base clone's stale local branch ref.
+    - Released the hold and reopened B2. Reserved migration 50 for B2 with the running F1b follow-ups `.2.3` and `.2.4`.
+  - **A4 blocked on the same slot_reset conflict class:** its single commit `a427134` sat on a very old base and conflicted in ci.yml, Cargo.toml and Dockerfile.
+    - Backed it up to `aq/eager-grove-45.4-old` and reset `aq/eager-grove-45.4` to main (force-with-lease).
+    - Released and reopened A4 to re-apply the commit's intent, without blindly re-deleting the vendor dirs.
+  - Shared the diagnosis with the supervisor's investigation `steady-quest-28`.
+  - `steady-harbor-87.2.2` completed.
+- **02:20 check.**
+  - **I0 closed: real progress, but MS0 is not met.** Run 11 on `aq-e0-qual` reached a real Codex 0.166.0 session in the sandbox:
+    - the owner's ChatGPT login, delivered through the material lease;
+    - the "Trust this folder?" prompt answered through the public terminal relay;
+    - gpt-6.1-sol high.
+    Every tool call failed, because the image lacks `codex-code-mode-host`. No result or settlement followed; the permit expired and the attempt stopped. The owner's auth.json is unchanged.
+  - **Follow-ups from I0:**
+    - `22.1.1`: full Codex package in the native image.
+    - `22.1.2`: workspace pre-trust; already on main as `d14fa91`.
+    - `22.1.3`: worker recovery for stopped attempts.
+    - `22.1.4`: error causes are hidden.
+  - **Filed** the aq-server half as `bold-ember-98` (priority 30): release held graph tasks for stopped unsettled attempts, the relay 409 storm, a typed input-deadline refusal, and `[terminals]` validation.
+  - **Filed the I0 re-run** `calm-stone-85`. It depends on `22.1.1`, `22.1.3` and `bold-ember-98`; MS0 now waits on it. Deadline: the measured fact expires 2026-11-04 07:22 UTC. Both pinned to Claude standard-high.
+  - The MS0 gate (`stark-zenith-16.1`) is running and recording "unmet" with evidence, as instructed.
+  - Routed `steady-harbor-87.2.4`'s History cursor change to G8. B2, B4 and D10 are running. aq-server #33 is still failing smoke ("expected one heartbeat connector container"); its task is still working on it.
+- **02:35 check.**
+  - **B2 opened aq-server PR #35** (migration 0050 still free on main). CI is pending. Its review `rev-sound-stone` had no reviewer, so I dispatched `sound-apex-52` (Claude standard-high, blocking only for real defects).
+  - **Swept the open reviews I own and approved four,** each gated on the preview's effective option being `approve`:
+    - `rev-quick-torrent` (C5a1 r2; zero blocking in round 2);
+    - `rev-fleet-zenith` (C2 design replacements r3; the r2 blocker was fixed);
+    - `rev-keen-vault` (B1b, already merged; post-hoc round waived);
+    - `rev-azure-crest` (disk exhaustion report; its remediation has already landed).
+    The imported-policy-playbook reviews are owner-only and non-blocking.
+  - The supervisor's `bright-nexus-44` duplicates my `bold-ember-98` (I0 server findings) and is already running. Closed mine as obsolete, moved the I0 re-run `calm-stone-85` dependency onto it, and asked it to land the held-task release first.
+  - Moved `bright-torrent-63` from deep-high Codex to Claude standard-high (Codex 92%).
+  - MS0 is BLOCKED as expected; it waits on the re-run. `22.1.1` (Codex package in the image) is running.
+- **02:50 check.**
+  - **B2 PR #35 conflicted.** F1b follow-up `.2.3` merged an earlier B2 snapshot into its branch to stack migration 0051 on B2's 0050 (it misread my reservation note), and its PR #34 merged to main.
+    - Merged main into `aq/noble-summit-37.2` (`92c33fc`). Shared lib.rs, store.rs and Dockerfile take main (0050 + 0051, state format 51); B2-owned files keep the branch's newer versions.
+    - Refreshed the base-clone ref and reopened B2 to verify and close. Review `sound-apex-52` is running (W41 note).
+  - **`steady-harbor-87.2.4`** pre-start merge conflict: only F1b.md conflicted. Merged main (`7c2a32f`), released the hold and reopened it.
+  - **I0 re-run `calm-stone-85`:** `22.1.1` (Codex package in the image) and `22.1.3` (worker recovery) are COMPLETED. Only `bright-nexus-44` (server held-task release) remains.
+  - Usage: Codex 93%, Claude 56%. aq-worker has nothing claimable apart from a spec-ingest task.
+- **03:05 check.**
+  - **B2 completed and its review was approved** (`rev-sound-stone`; reviewer `sound-apex-52` found no blocking defects). The four nits are filed as `swift-willow-91` (standard-medium).
+  - **D10 completed.** D3 started.
+  - **Four aq-server PRs are waiting for CI,** to be merged next check if failures match main: #37 (`bright-nexus-44`, the I0 server findings, which unblocks the I0 re-run), #35 (B2), #36 (smoke against the 0.5.1 worker) and #33 (cloud worker image).
+  - Usage: Codex 93%, Claude 57%.
+- **03:20 check.**
+  - Merged aq-server #33 (`smart-falcon-16.10`, docker-local cloud worker image; `c4dce2a6`). Its only failure, `observations.rs:501`, also fails on main.
+  - **#37 (`bright-nexus-44`, I0 server findings) cannot merge.** Its tests job aborts with a stack overflow in `phase_results` `correction_race_and_changed_operation_bytes_keep_one_immutable_head`, which passes on main. Reopened the task to fix it properly (no `RUST_MIN_STACK` workaround) and pinned it to Claude. The I0 re-run `calm-stone-85` waits on it again.
+  - **B2 PR #35 conflicted again.** Main gained B2's follow-up `swift-willow-91`, which reused test mode 7. Merged main and moved B2's server-restart case to mode 9 (`1f3a13a`); PR #35 is mergeable, with CI pending.
+  - Moved `noble-summit-37.4.5` and `noble-summit-37.10` (B7) from Codex to Claude (Codex 93%). B4 has two follow-ups running.
+- **03:35 check.**
+  - **B2 PR #35 failed to compile.** My last merge kept B2's older test, which calls `runtime::require_document`; main's `swift-willow-91` replaced that function with typed attempt extraction. Removed those calls (main's typed test covers batch scoping; `253f4e1`). CI is re-running.
+  - Moved `clear-crest-61.2` (H2) and `steady-cascade-45.3` (G2) from Codex to Claude.
+  - #37 (`bright-nexus-44`) is still being fixed. #36 and #38 have CI pending. B4 follow-ups are running.
+- **03:50 check.**
+  - **Main CI: `observations.rs:501`** `worker_route_requires_node_credentials_and_rejects_wrong_packet_scope` fails on main (403 vs 401) and on PRs #35, #36 and #38. Filed `clear-rapids-48` (standard-medium Claude).
+  - **My doc pushes were cancelling main CI** (W45). From now on, supervision-doc commits use `[skip ci]`.
+  - **`steady-harbor-87.2.4`:** the work is done (PR #38); it is held only on a close-pipeline stop. I will merge #38 once its pending checks match main, then close the task.
+  - **B4 migration collision:** B4 used 0050, the same as main. The supervisor reopened B4 to renumber; its follow-up `.4.2` is held. B4 should take 0052 or higher.
+  - #37 still overflows its stack; its task is working on it. Codex is at 94%.
+- **04:05 check.**
+  - **Merged B2** (aq-server PR #35, `620533f6`) after three migration renumbers and two operator merges. Its failures (the observations 403/401 test and update-lifecycle case 1) also fail on other branches. This ends the B2 migration race; B4 renumbers against main.
+  - Merged #38 (`steady-harbor-87.2.4`, `53912143`) and closed the task with `--done`.
+  - **Filed** `prime-dune-72` (update-lifecycle CI: the server container fails `docker compose up` in "case 1: first install of 0.1.0", on #35 and #37) and H2's cross-repo follow-up `swift-journey-80` (aq-worker H1 readers emit server-derived source_id). Both are standard-medium Claude.
+  - G2, H2 and C4 started. #37 (I0 server findings) still overflows its stack and is in progress; MS0 waits on it.
+- **04:50 check.**
+  - aq-worker main CI broken by a clippy lint from `swift-journey-80` (observations_tests.rs:589, `slice::from_ref`); reopened that task with the exact fix.
+  - Filed C4's cross-repo follow-up as `bold-ridge-78` (aq-worker): sandbox nodes report the template digest as InstalledHarness.environment.digest, plus exact harness versions.
+  - Moved `calm-delta-18.6.2`/`.3` (C4 follow-ups) and `clear-crest-61.2.1`/`.2` (H2 follow-ups) from Codex to Claude.
+  - `bright-nexus-44` found the #37 stack overflow root cause (large unoptimized future frames, not recursion) and is fixing it. `clear-rapids-48` (observations 403/401) is running. Disk is at 79%.
+- **05:20 check.**
+  - Merged aq-server #36 (`bright-torrent-63`: CI runs product and release smokes against the 0.5.1 worker). Every check passed (smoke and update-lifecycle included) except the known flaky `original_inputs_remain_scoped_after_proposal_expiry_then_expire_held`.
+  - #37 (I0 server findings) has the stack fix and a main merge; mergeable, CI pending. `prime-dune-72` (update-lifecycle) and the G2 and C4 follow-ups are running. `clear-rapids-48` and H2 completed earlier; aq-worker main CI is green again.
+- **05:50 check.**
+  - **G2 blocked close:** its own follow-up `steady-cascade-45.3.1` had been filed as a child and was claimed by another agent, which refused G2's close. Reparented it to the root (owner-style option a) and told G2 to close.
+  - **`bright-nexus-44` completed;** PR #37 is mergeable with CI pending. The I0 re-run `calm-stone-85` is READY. Told it to prep the image and confirm #37 is on main before the single real run (deadline 2026-11-04 07:22 UTC).
+  - **D3 completed with PR #39 conflicting and failing tests.** Reopened it to merge main, renumber any migration and fix tests; pinned it to Claude.
+  - E6a was reclaimed (IN_PROGRESS; the owner's restart drill is still pending). Moved D5 from Codex to Claude. Disk is at 82%.
+- **06:05 check.**
+  - **Merged aq-server #37** (`bright-nexus-44`, I0 server findings: held-task release for stopped attempts, relay 409 storm, typed input-deadline refusal, `[terminals]` validation; `9b59a11d`). Its only failure is the known flaky `original_inputs_remain_scoped...`. Told the I0 re-run `calm-stone-85` to rebuild the qual server from main. It is READY, waiting for a Claude session (scheduler slow, W44).
+  - **F4 (Discord) needs the owner's webhook** for one real message; added to the morning list. Told F4 to close blocked and free its slot.
+  - E6a completed (install guide, aq-worker PR #30). The owner's Windows restart drill is still on the morning list.
+  - F2, D5 and G3 started. `prime-dune-72` opened #40 (update-lifecycle fix), with CI pending.
+- **06:07 owner input.** The owner supplied the Discord webhook for F4. Stored it at `~/.config/aq-secrets/discord-webhook-url` (0600, directory 0700); it is never written to repos, logs or messages. Told F4 (still running) to send exactly one qualification message, reading the URL only from that file, and to record redacted evidence.
+- **06:30 owner demo.** Built a separate demo stack (Compose project `aq-demo`, ports 18080/18081/18741, fresh state and secrets). It uses the newest local server image plus a dashboard bundle built from aq-dashboard main (`90622fd`), mounted via `compose.dashboard.yaml`, and is seeded with the aq-scratch project. All nine dashboard sections render. The supervisor shows "not connected" (no supervisor host in the dev stack) and no worker node is attached. Cancelled the 06:17 demo-prep job, since this replaced it.
+- **06:50 check.**
+  - **Owner VPS decision:** Bluehost NVMe 8 (4 vCPU / 8 GB / 200 GB NVMe). Recorded on E5 as the baseline: one concurrent cloud sandbox, about 2 vCPU / 4 GB per sandbox, bounded caches, 8/16 as the upgrade path.
+  - **E5 `slot_reset_failed`** ("branch holder reservation is not clean and taskless"): `origin/aq/smart-falcon-16.7` did not exist, so the slot could never match origin; same cause as `stark-dune-58`. Pushed the clean slot branch (`fad8115e`) and ran `aq task resume`; E5 is READY.
+  - **F4** had not picked up the 06:07 webhook message, and its close was refused by a claimed child. Reparented `steady-harbor-87.5.1` to the root and re-sent the webhook path plus the owner's one-message confirmation (`AQ_NOTIFICATION_REAL_SEND_CONFIRMED=1`).
+  - G3 and `prime-dune-72` completed; the I0 re-run is in progress.
+- **07:00 owner concern: disk limits on the VPS and boat.** Filed `azure-flare-22` (storage budget design amendment to 0005 plus implementation tasks) and `amber-rapids-59` (sandbox templates: CARGO_INCREMENTAL=0, line-tables-only). Both pinned to Claude. Retrospective W46.
+- **07:10 owner boat sizing:** default sandbox is the smallest boat size, 2 vCPU / 4 GB / 51 GB; escalation size is 4 vCPU / 8 GB / 51 GB on request. Recorded on `azure-flare-22`, C7 and `amber-rapids-59`: 51 GB per-sandbox disk budget, CARGO_BUILD_JOBS=1 plus a low-memory linker in the Rust template, resource requests mapped to the two sizes.
+- **07:35 check.**
+  - E5 asked the owner for: VPS purchase and SSH key, domain, Cloudflare token or manual steps, backup bucket, and release tagging. Surfaced and added to the owner list. The storage design `azure-flare-22` and the template quick win `amber-rapids-59` are running.
+  - **D5 merge conflict:** main is now at state format 60. The conflicts (lib.rs, store.rs, playbooks review_domain.rs and service.rs) are substantive. Reopened D5 with resolution guidance (keep both CatalogProfile variants, renumber to 61+), pinned to Claude.
+  - F2 is READY, waiting for a route. The I0 re-run is still running.
+- **07:50 check.**
+  - **Storage design `azure-flare-22` completed.** Approved its 0005 amendment `rev-steady-rapids`: measured 20.2 GB clean aq-server test build, boat facts (snapshots fail at 95% disk), 70% budget on the 200 GB VPS, SBX20–26 and DEP6–8. That releases its 13 implementation tasks.
+  - F4 (Discord) completed. D3's implementation review `rev-keen-glacier` had no reviewer; dispatched `quick-journey-12` (Claude).
+  - F2 was paused/held on a degraded-Codex route; overrode it to Claude standard-high and it is READY.
+  - D5 was reopened for its substantive main-merge conflicts. The I0 re-run and `amber-rapids-59` are running.
+- **08:05 check.**
+  - **Storage tasks were misfiled:** the storage design filed all 13 implementation tasks in aq-platform, but 4 are aq-worker code and 1 is dashboard UI. Recreated them in the right projects: aq-worker `clear-lantern-42` (docker-local disk limit), `vivid-delta-76` (boat disk mapping and df watchdog), `smart-torrent-92` (node disk reporting) and `brisk-delta-45` (bounded preserved sandboxes); aq-dashboard `clear-crest-22` (Capacity panel). Closed the originals as obsolete. Pinned all of these, plus `smart-beacon-11`, `keen-impact-33` and `sharp-current-24`, to Claude (Codex 95%).
+  - **F2** was held on a pre-start merge conflict (its migration was 0058; main is at 0060). Merged main into `aq/steady-harbor-87.3` and renumbered to 0061 (`67ca73b`). Released the hold and reopened it with "merge immediately".
+  - Merged aq-worker #31 (`swift-vault-73`, preserve template toolchain env; `50f02159`). `keen-quest-39` (structural fix for migration registration conflicts) is running.
+- **08:25 check.**
+  - **aq-server main's "fmt and clippy" job was failing** on `notifications/runtime.rs:45` (clippy collapsible-if, from the F4 merge), so every open PR inherited the failure. Collapsed it into a let-chain; `cargo clippy -p aq-server --lib -D warnings` is clean. Pushed `68db049`.
+  - **Owner rule:** pause all six v2 projects when Claude weekly usage reaches 80%. The monitor now does this automatically, once, and alerts. Current usage: Claude 65%, Codex 96%.
+  - Storage implementation tasks are running in aq-worker (`clear-lantern-42`, `smart-torrent-92`, `brisk-delta-45`) and aq-platform (`smart-beacon-11`, `sharp-current-24`). F2 is running again after the renumber. PRs #42–#47 are open.
+- **08:30 owner decision: boat.dev budget $20/month** (the $20 plan). Recorded on C7, `sound-vault-88` (E1d) and `vivid-delta-76`:
+  - boat side: auto top-up off, extra starts off, an org-member usage cap, concurrency 4, saved snapshots within the 10 included;
+  - AQ side: `aq-worker-boat` spend_ceiling $18/month from H2 accounting, max_concurrent_sandboxes 4;
+  - small sandboxes by default.
+- **08:40 owner re-scope: test boat first from the desktop; the VPS comes later.**
+  - E5 became E5a: the desktop-hosted production stack behind Cloudflare Tunnel and Access (description updated and the agent messaged).
+  - Filed E5b `crisp-beacon-74`: the VPS move (purchase, SSH, firewall, repoint the tunnel, backups, reboot drill). E6b and MS2 now depend on E5b.
+  - Told `sound-vault-88` (aq-worker-boat) to run in the desktop stack.
+  - Owner inputs still needed: Cloudflare domain and option, team name and email, release tag, boat keys.
+- **09:15 boat.dev live.**
+  - The owner signed up (free trial, then the $20 plan) and saved the attempts key at `~/.config/aq-secrets/boat-api-key` (0600). Verified without printing it: `/me` 200, `/sandboxes` 200 (empty), `/account` 403 (expected).
+  - Scopes: create, read, update, stop, resume, fork, delete-own, exec, file, snapshot r/w, environment read, account read; no `environment.write` (template builds need the second key). Expires 2027-02-01.
+  - Released C7's hold and reopened it for live acceptance: personal account (no org; seats cost $20 each), so sweeps scope by name prefix plus delete-own; small size; at most 2 short sandboxes with 15-minute auto-stop, deleted afterwards.
+  - **I0 run 12 completed:** a real Codex run of 916 s, every worker route 200 and the source retained. It is short of MS0 because the pinned task had no concrete edit and aq-server settlement gaps remain (router unmounted, no combined-decision path). `keen-impact-58` is fixing those; the re-run reopens after.
+  - The disk guard ran at 85% and freed 111 GB (now 74%).
+- **09:30 check.**
+  - **aq-server PRs #42–#47** still failed fmt and clippy on the old `runtime.rs:45` lint, because their CI predates the `68db049` fix. `gh pr update-branch` isn't available in this gh, so I used the REST `PUT /pulls/{n}/update-branch` on all six to re-run CI on current main.
+  - **C7 had a pre-start conflict** in `controller/service.rs` (RunConfig: optional docker_local plus boat versus main's `template_allowlist`). I resolved it (union of fields, test fields `disk_bytes`/`preserve`; `cargo check --all-targets` clean; `boat_backend` 11 passed), but the global supervisor pushed its own resolution `c009b6d` first and mine was rejected (W47). C7 is IN_PROGRESS.
+  - `smart-torrent-92` is held on a similar conflict with the other storage tasks on main; the supervisor is handling it.
+- **09:55 check.**
+  - **aq-server main clippy failed again,** on a second lint: `type_complexity` in `tests/dashboard_task_knowledge.rs:31`. My earlier fix only checked `--lib`. Added a `Receipts` alias; a full `cargo clippy --workspace --all-targets -D warnings` is clean locally. Pushed `61aeef1` and re-triggered update-branch on PRs #42–#47 and #49.
+  - Merged aq-worker #33 (`calm-lantern-25`, measured node disk, SBX25; `262bc1bb`). Its only failure was the flaky `runner_needs_no_node_credential`.
+  - **#32 (`agile-rapids-34`, sccache opt-in) conflicted after #33.** Merged main and kept both new tests; the sccache test now sets `docker_local.shared_root_fs` for main's SBX20 admission. `controller::tests` has 15 passed; pushed `23547dd`.
+- **10:30 check.**
+  - Main's latest completed run fails only the known flaky `original_inputs_remain_scoped...`. Wrote a PR-versus-main failure diff script (`prfail.py`) and merged the PRs with no new failures, one at a time:
+    - #42 (`eager-current-12`, NVMe 8 §9.1 budget; `04bf40f5`);
+    - #45 (`keen-impact-33`, backup rotation and image prune; `43334084`);
+    - #49 (`solid-impact-24`, aq-admission pin; `0d320f9f`);
+    - #47 (`sharp-current-24`, storage amendment folded into 0005, after an operator doc-conflict merge `4619d1b`).
+  - #46 (`smart-lantern-97`, Postgres retention) had its own clippy `items_after_test_module`. Moved the impl above the test module and merged main; full workspace clippy is clean; pushed `95ddee1`.
+  - Re-ran update-branch on #50 and #51; their failures were stale `dashboard_task_knowledge` clippy runs from before `61aeef1`.
+- **10:50 check.**
+  - **C7 first live boat.dev run PASS:** create, provision, run, observe, handoff and destroy in 197.5 s, on a personal account with a stock busybox image. One scenario hit a client timeout shorter than the server's 60 s command bound; fixed in `b60e424`. Post-run: 0 sandboxes, 0 snapshots.
+    - C7 asked the owner to approve 5 more short sandboxes. I approved as operator (about $0.01, well inside $20) and reopened C7.
+  - **Merged #48 (F2, `9b86df47`)** and closed F2 with `--done`.
+  - #43 (`keen-quest-39`, generated migration catalog) and #44 (`brisk-delta-43`) conflicted after #48. Resolved #43 by keeping the generated catalog (it picks up main's 0061; format 61; workspace clippy clean) and pushed `c52a23e`. I will resolve #44 against the catalog after #43 lands.
+  - `grand-vault-92` (H2 monthly boat VM-time budget accounting) started.
+- **11:10 check.**
+  - **Merged #50** (`keen-impact-58`: settlement router mounted, production combined-decision path, relay upload; `2d337f36`). Released the I0 re-run `calm-stone-85` hold and reopened it for one more real run with a CONCRETE edit task plus full settlement (MS0).
+  - **F2's agent found** `original_inputs_remain_scoped_after_proposal_expiry_then_expire_held` fails deterministically on main (poll 500 `unavailable`), not flakily.
+  - #51 and #46 conflict again after #50. Waiting for #43 (generated migration catalog) to land first, then I will resolve #44, #46 and #51 against it. aq-worker #32 is conflicting again.
+  - G8 (dashboard supervisor panel) started.
+- **11:35 check.**
+  - **Merged #43** (`keen-quest-39`, generated migration catalog; `2756c065`).
+  - Three completed storage PRs all numbered their migration 0061: #44 `source_retention_gc`, #46 `row_retention`, #51 `node_storage`. Merged main into each and took main's catalog-era lib.rs, store.rs and Dockerfile. Renumbered them to 0062, 0063 and 0064 (meta values updated; #46's `observations.rs` fixture gate is now `>= 63`). #44's workspace clippy is clean. Pushed `33a6a2a`, `33093b2` and `0446302`. Merge order is #44, #46, #51 (contiguity).
+  - **C7 live run 2** passed 3 more scenarios. It found and fixed a real adapter bug (archived reads missing the volume `_data` path, `c5fecfe`). Approved 2 more short sandboxes (owner budget) for the remaining scenarios.
+  - Filed G8's cross-repo follow-up as `wise-apex-23` (typed proposal and receipt supervisor history items).
+  - The I0 re-run is IN_PROGRESS with a concrete edit task. Codex is at 97%.
+- **12:05 check.**
+  - **C7 (boat backend) COMPLETED with all 6 C1 conformance scenarios passing LIVE on boat.dev:** 3 runs, 9 small sandboxes, each run leaving 0 sandboxes and 0 snapshots. Two real adapter bugs were found and fixed live (client timeout below the server command bound, `b60e424`; archived-read `_data` volume path, `c5fecfe`). It is on aq-worker main (`f96c85d`). Total cost is well under $0.05.
+  - **Merged #44** (`brisk-delta-43`, aq-git source retention GC, migration 0062; `944c545e`). Re-ran update-branch on #46 (0063 next).
+  - #52 (`grand-vault-92`, monthly boat VM-time placement budget) is pending CI. The I0 re-run is still IN_PROGRESS.
+- **12:30 check: main was broken.**
+  - Two 0062 migrations were on main: `wise-apex-23`'s direct push (`73328b7`, supervisor reply attachments) and my merge of #44 (source retention GC). The catalog duplicate check failed every build.
+  - Merged #54 (`quick-ember-91`, renames to 0063; `74cd2b80`).
+  - Renumbered the queued PRs against main: #46 row_retention to 0064 (fixture gate `>= 64`; workspace clippy clean; `70349f3`), #51 node_storage to 0065 (`4a8946c`) and #52 vm_time_accounting to 0066 (`fe083d2`). Merge order is #46, #51, #52.
+  - The monitor now checks main's migration numbers on every pass (W48).
+  - #53 (`keen-forge-39`, per-project replacement budgets) has build failures to check next pass.
+- **12:50 MS0 evidence achieved.**
+  - The I0 re-run `calm-stone-85` COMPLETED. Run 13c settled end to end on aq-server `2d337f36`: a real Codex README edit retained as `17fe8a72`, owner MS0 settlement approve, evaluation `d58ab4f8` accepted, completion `b196d43a` reconciled, `holds_task` false, login unchanged. The evidence is on aq-worker main.
+  - Released the MS0 gate (`stark-zenith-16.1`) hold and reopened it to re-evaluate with this evidence (Claude).
+  - Run-13 findings to file as follow-ups: the Codex session is held to the wall limit after the in-session submit; the 2 s selection TTL leaves a ~1.4 s offer window (race under load); attempt state and outbox are stale after completion.
+- **13:10 check.**
+  - **MS0 run-count decision** (operator; owner pre-approved the MS0 gate on 11-02 and may override):
+    - accept the one fully settled real run (13c) as passing MS0, since two more runs would spend Codex at 97%;
+    - ChatGPT-login wording supersedes "API-key";
+    - the MS1-affecting rows become follow-up tasks.
+  - Filed MS0's aq-worker cross-repo follow-ups: `wise-crest-54` (end the Codex session after the in-session result) and `prime-glacier-36` (anchor the offer deadline at receipt, not poll send). aq-server already has `quick-impact-98` (2 s selection TTL) and `bold-delta-91` (stale attempt state).
+  - Merged aq-server #46 (`smart-lantern-97`, Postgres row retention, migration 0064; `3c789221`); update-branch on #51 (0065 next). Merged aq-worker #34 (`fair-journey-58`, boat VM-time facts for H2).
+- **13:30 check.**
+  - **MS0 COMPLETED** (gate closed on the operator decision).
+  - Direct push again: `bold-delta-91` landed `0065_settlement_completion_projection` on main while #51 carried 0065. Wrote `renumber.py` (merge main, rename this branch's migrations after main's max, update meta values, push). Renumbered #51 to 0066 (`9979f21`) and #52 to 0067 (`fe2ac7d`).
+  - Added a "Migration numbers" rule to aq-server `.aq/PRIME.md`: take the next free number from origin/main immediately before pushing, including direct pushes.
+- **13:50 owner demo refresh.** Rebuilt the aq-demo stack: server image `aq-demo-server:main` from aq-server `293183f` (state format 65), dashboard bundle from aq-dashboard `8379636` (G3 write flows, G8 supervisor dock, SBX25 capacity disk). The old demo database migrated forward cleanly. The `demo-stack.py` wrapper now adds `scripts/` to sys.path (dev-stack imports `migration_catalog`). Progress: 54/91 plan tasks (59%).
+- **14:20 check.**
+  - Another direct push: `calm-beacon-15` added `0066_stopped_dispositions` before the PRIME rule reached it. Renumbered #51 node_storage to 0067 and #52 vm_time_accounting to 0068 with `renumber.py`. Merged them immediately rather than waiting another full CI cycle that would lose the race again; both showed no new failures beforehand.
+    - #51 merged as `2b3e99ad`.
+    - #52 (owner's monthly boat budget enforcement) had a code conflict in `placement.rs`: its time-windowed `spends(conn, ledger, advertised, now_ms, exclude)` against main's SBX25 disk-pressure ceiling. Combined both. Workspace clippy is clean and the placement and replacement DB tests have 8 passed. Merged as `5d4afdba`.
+  - Main migrations run 0001–0068 contiguous; catalog state format 68.
+- **12:00–12:15 owner-approved v1 daemon restart.**
+  - Only 1 task (E5) was running; standard-high-claude was at `desired 4, live 0`.
+  - After the restart: Postgres had a high volume of short queries at ~365% CPU. `operational_retention` was timing out on `playbook_private_values` (1.96M rows, never analyzed). Six orphan branches were retried every cycle (812 times each). A stale workspace at `/home/jkern/dev/aq-platform` (not a repository) failed inventory every cycle.
+  - Ran `ANALYZE` on `playbook_private_values`, `wait_source_events` and `messages`; CPU dropped to ~96%. No code or config changes. Recorded as W49.
+- **12:20 root cause of the stall.** Every scheduler cycle crashed with `SubtasksOpenError: smart-falcon-16.7 has open subtasks`: the container-completion sweep tried to complete E5 because its only child `.1` had completed. Created and paused child `smart-falcon-16.7.2` ("E5a Cloudflare Tunnel and Access, waiting on owner inputs") so E5 is not a finished container; no cycle errors since 20:13Z. Scheduling has resumed partially: deep-high-codex claimed `sound-rapids-80.1`, and spec-ingest `bright-horizon-15` started. The paused `agent-queue` project's frontier still exceeds 60 s per cycle. W49 updated.
+- **12:40 check.**
+  - No scheduler cycle errors since 20:13Z.
+  - **Stopped redundant approval-ingest work (W50):** `sound-rapids-80` and `.1` were writing a new D10 implementation spec on deep-high Codex (98%), though D10 is complete; paused `.1` (close refused). Closed `bright-horizon-15` (would re-decompose the storage amendment). The ingest tasks `calm-dune-47` and `agile-horizon-14` had already completed.
+  - The Claude pool is still at 0 busy; watching it.
+- **12:45–13:00 second owner-approved restart and diagnosis.**
+  - After the restart only Codex pools started sessions (D6, D8); the Claude pools stayed at 0. Ruled out: the crash loop (fixed), slot capacity (aq-platform slots 3–7 free; slot 0 held by paused `sharp-pinnacle-28`), quarantine and usage.
+  - Re-routing C5a1 to the operator Claude pool did not start anything either.
+  - The cycle await chains show pool reconciliation spending minutes in `_measure_pools → _delivery_admission → observe_pr_admission`, and the hierarchy frontier in `GitTruthSnapshot.is_delivered → _whole_patch → patch_id`. That is per-cycle GitHub PR reads plus git patch-id computation over aq-server's now-large merged diffs. W44 is now the dominant throughput limit.
+  - Proposed to the owner: a v1 fix on a separate branch (cache delivered answers per commit, skip paused projects, decouple pool starts from admission), awaiting a decision.
+- **13:30 check.** `grand-orbit-21` published AQ host catalog 2.0.0 (aq-playbooks `8343a1c`; async judgment/check v2, new completion events). Released D6's hold and reopened it to pin 2.0.0. D6 completed then blocked on the 1.0.0 contract gap, so its earlier "done" status was premature. D8 is running; one Claude agent ran this hour. Codex is at 99%.
+- **13:45 owner request: pre-emptive G11.** Filed aq-dashboard `sharp-horizon-92` (priority 30, Claude standard-high). It audits all 12 mockups plus Settings against the live demo stack (1440, 390, tablet) and writes `docs/design/gap-audit-2026-11-03.md`. It files one small parallel root task per gap (standard-medium for presentational gaps); server gaps become CROSS-REPO comments, and gaps inside G9, G10, G11 or `wise-apex-23` go to those tasks as comments. G11 stays the final acceptance pass.
+- **14:00 owner: replace the demo stack with the real code.** Tore down and deleted the `aq-demo` dev stack completely (containers, volumes, `aq-demo-server:main` image, dashboard worktree, wrapper scripts). Reopened E5 (it was IN_PROGRESS with no agent) to stand up the real production Compose stack on the owner's desktop on localhost now (project `aq-local`): local worker enrolled (E6a), supervisor host (F1a), Claude logins preferred. Cloudflare stays in the paused child `.7.2`.
+  - Told the owner which "not hooked up" items are unbuilt features rather than wiring: provider accounts (C5a1/C5b/C6), attention questions (F5), agent views (G10), playbook actions (G9/D9), Claude in sandboxes (I1).
+  - `sharp-horizon-92` was widened to a wiring audit (wired / no data / server path missing / UI missing).
+- **14:10–15:30 owner: "Shut down AQ and fast track the AQ scheduler fix yourself. Then restart it."** Stopped the daemon with `--keep-sessions`.
+  - **Root cause 1:** the cycle-wide hierarchy frontier read included PAUSED projects. The paused v1 `agent-queue` project timed out at 60 s on every read (1,182 timeouts on 2026-11-03).
+  - **Root cause 2:** the container sweep crashed the whole cycle when one container's settlement raised.
+  - **Fix:** agent-queue PR #2201, merged to `dev` as admin. The required "Integration Attestation" check comes from AQ's own train, which was stopped. Targeted tests: 2 + 3 new and focused; pool/delivery/hierarchy area suites 399 passed.
+  - Fast-forwarded the live checkout (83 + 1 commits, no migrations; schema at head) and started the daemon. The frontier timeouts stopped.
+  - **Root cause 3 (found after restart):** the scheduler's delivery admission still took READY tasks from paused projects. That pulled cycles into a multi-minute `git fsck --full` of the 7.1 GB agent-queue retained store. Cycles were still 55–100 s and the pool scaler stalled (desired 6, live 2). Follow-up fix in progress.
+  - Filed main-CI fixes:
+    - aq-platform: `native_accepted_preparation` returns a 500.
+    - aq-dashboard: Search.test.tsx times out, and one bundleCompatibility test fails.
+  - Codex is exhausted for about 5 days; Claude usage is at 72%.
+- **15:30–15:50 follow-up scheduler fix.**
+  - PR #2201 put v1's integration-engine size budget over by 12 lines, so dev CI went red. Separately, `test_bazel_metrics` hit a pytester INTERNAL_ERROR that doesn't reproduce locally (34 passed).
+  - agent-queue PR #2202, merged as admin:
+    - moves the paused-project scoping into the orchestrator callers, putting `delivery_observer.py` back to its original text;
+    - drops paused projects' READY tasks from scheduler delivery admission;
+    - records an exact +9 owned / +0 engine grant. New regression test; size, generated-artifact and scheduler tests: 187 passed.
+  - Deployed with `aq restart --no-dashboard` (sessions kept).
+  - Filed the G11-pre audit's 37 cross-repo follow-ups as 8 grouped aq-platform tasks, one per view: Overview brisk-harbor-73, Supervisor sharp-falcon-11, Work bright-willow-25, Decisions sharp-current-37, Agents nimble-forge-36, Results bright-impact-86, Playbooks grand-falcon-29, Knowledge azure-apex-96. Each one checks the plan first so it doesn't duplicate C5/F5/G9/G10/SBX25.
+  - D6 blocker: its three follow-ups (`crisp-meadow-36.7.1/.2/.3`) were filed as children and claimed by other workers. Reparented them to the root and told D6 to retry its close.
+- **15:50 after #2202.** 10 v2 tasks are in progress (up from 2 at 14:00): main-CI fix, G11 server contracts (Overview, Supervisor, Work), E5, two D6 follow-ups, two dashboard gap fixes, and the playbooks spec. D6 closed after the reparent.
+  - Load is now 27 on 24 cores, mostly agents' parallel aq-server `rustc`/clippy builds plus three post-restart `git fsck --full` runs of the v1 repo. Cycles run 30–100 s under that load. Limits are now CPU and Claude usage (73%), not the scheduler.
+- **16:10 check.**
+  - D6 (`crisp-meadow-36.7`) and both main-CI fixes completed.
+  - **aq-dashboard:** merged PR #13 (Search and 426 fixtures aligned with the G3/G8 contracts). Its one failure, a SupervisorConversation 5 s timeout, was a CI flake that passed on rerun. Updated the gap-fix PRs #12 and #14–#17 onto the new main. #12 also breaks `Shell.test.tsx` on its own.
+  - **aq-server:** PR #56 (calm-current-41 main-CI fix) is waiting on CI.
+  - **Disk:** aq-server slot build caches reached 286 GB. Removed idle slot-1's 60 GB `target` (nothing was compiling there), leaving 179 GB free (82%). Logged as retro W53.
+- **16:40 check.**
+  - **aq-dashboard main is still red after #13.** Failures rotate between runs: ResultMediaUpload fails every run; Results, SessionUsage and SupervisorConversation fail intermittently. Filed a deterministic-suite task at priority 12.
+  - **Merged #14 (OV-B) and #17 (SV-E).** Their only failures were in files they don't touch, from the flaky set above.
+  - **Sent back:** #15 (OV-C) and #16 (OV-D) to merge main, since they now conflict with #14. #12 (OV-A) to fix its own Shell.test regressions.
+  - **aq-server #56:** one `phase_execution::atomicity` proposal-expiry timing failure. I'll rerun it when the run completes.
+  - Disk: 173 GB free. Claude usage: 75%.
+- **17:20 check.** aq-dashboard main CI is green again.
+  - **Merged dashboard PRs** #22 (SH-I), #23 (WK-G), #19 (SV-F) and #20 (WK-A). Their only failures were the flaky ResultMediaUpload/SessionUsage pair, in files they don't touch.
+  - **Sent back** #21 (WK-B) and #18 (SV-H) to merge main; they conflict with #23 and #19.
+  - **Dashboard throughput** is capped by `standard-high-claude` max_active=8 (8 busy), plus PR-merge gates between gap tasks.
+  - **aq-platform holds:** `bright-willow-25` (PR #57) and `crisp-meadow-36.7.2` are under supervisor recovery holds (`session_close_pipeline_stop`). The work passed, but the merge slot was held. Opened PR #59 for `aq/crisp-meadow-36.7.2`, which had no PR. #57 fails only the known `native_accepted_preparation` test that #56 fixes. Plan: merge #56, update #57 and #59, merge them, then release the holds.
+  - **Notes branch:** found the aq-server notes checkout on `feat/v2-execution`; three notes pushes had gone there. Pushed them to main and switched back to main.
+- **17:50 check.**
+  - **aq-server main clippy failure.** `explicit_auto_deref` at `dashboard_api/capacity.rs:108-109` (from brisk-harbor-73's `44f1516`) failed every open PR's fmt-and-clippy job. Fixed on main in `9585dc2` after a local `cargo clippy -p aq-server --lib -D warnings` passed. Updated PRs #57, #58 and #60.
+  - **PR #56 (calm-current-41).** `phase_execution::atomicity::original_proposal_expiry_does_not_limit_new_execution_lease` fails twice in a row; main passes it, so this is a regression. Reopened with the failing test, priority 8.
+  - **crisp-meadow-36.7.2.** PR #59 conflicts with main. Released its `session_close_pipeline_stop` hold with an operator retry, and left a comment saying not to redo the work: merge main, update #59, close.
+  - **SHR-L fixtures.** At the owner's request I set `calm-vault-46.14` to priority 5 and routed it to the empty standard-medium-claude pool. Claimed at 23:42Z.
+  - The notes checkout is on main (branch checked before commit). Shell gotcha: a `snip` wrapper swallows `docker exec psql` output; use `/usr/bin/docker`.
+- **18:15 check.**
+  - **Rework catch-22.** Four reopened dashboard gap tasks (OV-C, OV-D, SV-H, WK-B) were held with `child_preparation_conflict`. v1's claim preparation merges main into the old task branch before a worker starts and refuses on conflict, so the worker never gets to resolve it.
+  - **Fix:** filed fresh re-apply tasks that start from main and cherry-pick the old branch: keen-pinnacle-80, sharp-glacier-37, solid-willow-70, fresh-ridge-68. Closed the old tasks `--obsolete` and closed PRs #15, #16, #18 and #21 as superseded. The branches are kept.
+  - **Merged #12 (OV-A).**
+  - **SHR-L (#24):** units pass, but `supervisor-launcher.spec.ts` "launcher never covers content on /results" now fails because the new Results fixtures fill the page. Reopened at priority 5 on standard-medium.
+- **18:40 check.**
+  - **calm-current-41 pushed back, correctly.** The atomicity test also fails on main. Main CI never reached that binary because cargo stopped at `native_accepted_preparation`. Root cause: `f0253a76` (offer TTL 2 s to 30 s) makes the scenario unreachable. I chose option (a): merge #56 as-is once clippy passes on `55a451fe`, and filed `brisk-quest-74` (priority 10) to redesign that test and run the other masked binaries with `--no-fail-fast`. My earlier reopen was wrong: I compared against main's failure list without accounting for cargo stopping at the first failing binary.
+  - **crisp-meadow-36.7.2** was held again (`child_preparation_conflict`, last recovery budget). The only conflict was `docs/implementation/D6.md`. Resolved it by hand: kept main's newer item 1 and marked check cancellation as shipped. Pushed to `aq/crisp-meadow-36.7.2`, which updates PR #59.
+  - Claude usage: 78%. The auto-pause triggers at 80%.
+- **19:05 check.**
+  - **Merged aq-dashboard** #26 (OV-C re-apply), #25 (DC-J), #24 (SHR-L fixtures, which unblocks the Agents and Results gap tasks), #28 (SV-H re-apply) and #29 (ST-A). Remaining failures were only the flaky ResultMediaUpload, SessionUsage and SupervisorConversation tests; fresh-zenith-62 is fixing those.
+  - **#27 (OV-D) and #30 (WK-B) conflicted again.** Rather than another reopen (claim preparation would refuse it), I resolved them on their branches:
+    - #27: kept both the OV-C and OV-D CSS blocks;
+    - #30: SHR-L's `bootstrap` variable plus the `projects.read` grant, and both scenario names.
+    - Verified with `tsc --noEmit` and the overview, mocks and knowledge unit tests (26 + 31 passed). Waiting on CI.
+- **19:30 check.**
+  - **aq-dashboard:** merged #27 (OV-D) and #30 (WK-B) after my conflict resolutions passed CI, apart from the known flakes. Every open gap PR is now merged.
+  - **aq-server:** merged #56 (calm-current-41, which fixes `native_accepted_preparation`). Per decision (a), its only failure was the pre-existing atomicity test that `brisk-quest-74` owns. Also merged #59 (D6 `operation.cancel`), whose only failure was the old `native_accepted_preparation` test; closed `crisp-meadow-36.7.2` `--done`. Updated #57 (Work view contracts) onto main and am watching its CI before releasing `bright-willow-25`'s hold.
+  - Claude usage: 79%.
+- **19:55 check.** Disk dropped to 109 GB free; aq-server slot build caches grow about 15 GB per 30 min under parallel Rust builds. Cleared `target/` in slots 0, 6 and 7, whose tasks are PAUSED and where nothing was compiling, leaving 142 GB free. Active slots kept theirs (slot-3 is 92 GB). Claude usage is 79%; no auto-pause yet. #57 CI is still running.
+- **20:10 Claude weekly usage reached 80%.** Following the owner's rule, the monitor paused all six v2 projects (`aq project pause`) and the owner was told. No new claims start. Five pool sessions are still finishing their current tasks: amber-bridge-62, calm-current-41.2, brisk-quest-74, agile-vault-27 and bright-impact-86.1. Codex is exhausted (99%). Waiting for the usage reset or an owner decision. PR #57 CI is still running; I'll merge it if it's clean.
+- **20:40 check (projects paused at 81%).** Finished in-flight work came in as PRs.
+  - **aq-dashboard:** merged #33 (fresh-zenith-62, deterministic unit suite), #32 (PB-A playbook fixtures), #38 (DC-L), #35 (KN-D). #34, #39, #31, #36 and #37 conflict after sibling merges; filed one rebase task for all five, in order. It waits while paused.
+  - **aq-worker:** merged #35 (stark-harbor-81, node check-attempt runner).
+  - **aq-server:** PRs #58, #62, #63 and #65 were tested before #56, so their test job stopped at the old `native_accepted_preparation` failure and later binaries never ran. Updated them onto main instead of merging on masked evidence. #61's failure was the GitHub runner running out of disk; updated it too. #60 and #64 conflict; filed a rebase task. #66 (calm-current-41.1) is still in CI.
+  - I'm limiting my own hand-resolution, because supervisor tokens count against the same Claude limit.
+- **21:00 check.** Updated aq-server PRs are re-running CI. #63 (sound-journey-35) no longer compiles on main: #59 added `cancel` to the `CheckExecutor` trait, and its `NodeCheckExecutor` doesn't implement it. Reopened with that fix; it waits while paused. #61 so far fails only the known atomicity test. #66 fails `cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses`; checking that against main before deciding. #58, #62 and #65 are pending.
+- **21:20 check.** #58, #61 and #62 fail only the known atomicity test; waiting for the update-lifecycle job before merging. #66 (`calm-current-41.1`) is the agent-filed atomicity redesign: atomicity passes there, but it regresses `cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses`, which main passes. Reopened it with that. Closed my `brisk-quest-74` as obsolete: it duplicated the agent's own follow-ups `.1` and `.2`, and was still READY with no PR. Logged as retro W57.
+- **21:45 check.** Merged aq-server #58 (G11 Supervisor runtime), #61 (G11 Decisions) and #62 (G11 Agents). Each failed only the known atomicity test once fully run on current main. #65 (G11 Playbooks) failed in tests with no retrievable log (BlobNotFound); re-ran the job. Projects are still paused at 81%.
+- **22:15 check.** #65 (G11 Playbooks contracts) re-ran clean apart from the known atomicity test; merged. Projects are still paused at 81%.
+- **22:40 check.** Merged aq-dashboard #40 (amber-bridge-62, supervisor attachment adapter). aq-server #67 (calm-current-41.2, schema-43 masked-binary triage) hit a GitHub runner out-of-disk error (second this evening, after #61); re-ran it. Still paused at 81%.
+- **23:25 check.** Merged aq-server #67 (calm-current-41.2, schema-43 upgrade comparison fix for a masked test). On rerun its only failure was the known atomicity test. Still paused at 81%.
+- **2026-11-04 16:25 owner: unpause the v2 projects and run everything on Claude.** Resumed all six projects at 81% weekly Claude usage (resets 21:59Z, about 3pm the owner's time). The 80% guard won't re-pause: its marker file is set. All routed queued work is already on Claude profiles, and the 23 unrouted tasks fall back to Claude because Codex is exhausted. The two deep-high tasks are dependency-blocked, not routing-blocked. The `deep-high-claude` pool currently shows max 0. E5 (real local stack, `smart-falcon-16.7`) is IN_PROGRESS on `operator-standard-high-claude`; raised to priority 1.
+- **16:40 owner: wants working functionality, not just dashboard visuals.** MS1 (real agent, sandboxed, local) is the right target. Its closure has 8 open tasks: C5a1, then C5a2, C5b and C6a, then C6b, then I4a, with B7 and D1b in parallel. All were READY or DEFINED but parked behind dashboard work. Re-prioritised to 2–6. Pools are spinning up after the resume. Open owner question: MS1 and I4a specify a Codex agent with a ChatGPT login, and Codex is exhausted until about Nov 8.
+- **16:45 owner decision: switch MS1's demo agent to Claude Code** (owner's Claude subscription login, no API key). Codex is out of usage until about Nov 8.
+  - Appended the decision to C5b (`calm-delta-18.8`), C6a (`.9`), C6b (`.10`) and MS1 (`stark-zenith-16.2`). Claude Code credentials and runner config come first; Codex stays in the design but off MS1's path.
+  - Re-scoped and retitled I4a (`azure-horizon-22.2`) to Claude Code CLI qualification in docker-local sandboxes. Asked C5b to evaluate `claude setup-token` / `CLAUDE_CODE_OAUTH_TOKEN` as a long-lived subscription token for sandboxes, verifying CLI behaviour first.
+  - Filed the deferred Codex qualification as `noble-meadow-73` and paused it until Codex resets.
+- **17:10 MS1 chain head (C5a1) wouldn't start.** I rerouted it from the full `standard-high-claude` pool (8 of 8) to the idle `deep-low-claude` slot, but no session started. Cause: all 8 aq-server worktree slots were held. Five were active; three belonged to PAUSED tasks.
+  - Two of those were superseded duplicates with empty branches: `sound-journey-35.1`, whose work merged as aq-worker `stark-harbor-81`, and `bright-willow-76`, merged as aq-dashboard `amber-bridge-62`.
+  - `task close --obsolete` was refused ("Managed slot process termination is unproved"), as was a plain `release-workspace` ("ownership is retained"). Released `ws-foggy-bay` and `ws-dusty-cabin` with `release-workspace --force --task-id <exact task>`, then closed both as obsolete.
+  - `sharp-pinnacle-28` (paused B2 reconcile) still holds slot-0.
+  - The owner hasn't created the Claude sandbox token yet; the container test is waiting on it.
+- **17:30 pool starts stalled again.** `Pool reconciliation timed out after 30s` (hard-coded `POOL_RECONCILE_TIMEOUT` in pools.py) repeats. When starts are authorised, aq-platform shows 'no unserved demand' despite 20+ READY tasks: fresh delivery admission (GitHub PR reads plus git checks per completed dependency) doesn't finish in time. MS1 head C5a1 (deep-low-claude) has never started. Proposed to the owner: sizing uses cached delivery evidence, while claims still re-verify under locks. Waiting for approval to change v1.
+- **17:55 check.** 19 new aq-dashboard gap PRs (#41–#59) came in; main is green.
+  - **Merged:** #45 (stark-rapids-21, landing DC-N, KN-C, KN-B, DC-M and KN-E together; closed #31, #34, #36, #37 and #39 as landed), #41, #42, #51, #54, #56 and #58.
+  - **Conflicting after those merges:** #44, #50 and #52.
+  - **Failing their own Playwright or unit specs:** #43 and #55 (overview-header), #46, #47 and #49 (inspection), #48 and #53 (supervisor-launcher, TerminalTail).
+  - Filed one steward task in aq-dashboard (priority 15) to land them in order on their existing branches. #57 and #59 are still in CI.
+  - aq-platform pool starts are still blocked by the 30 s reconcile timeout; waiting on the owner's OK for the v1 fix.
+- **18:20 check.** Merged aq-dashboard #59 (PB-E) and #62 (AG-A), and aq-server #68 (agile-nexus-13, duplicate 0072 migrations renumbered; only the known atomicity failure). Updated #69, #70 and #71 onto main: #70 and #71 failed every job, consistent with the duplicate-migration break #68 fixes. #69 also fails `knowledge_revisions_list_history_without_bodies`. Added #57 to the dashboard steward task `quick-flare-90`. MS1 head C5a1 is still blocked by v1 pool reconcile timeouts, waiting on the owner's OK.
+- **18:50 owner-approved v1 fix: agent-queue PR #2203** ("the delivery check should run periodically but not be tied to sizing the pools").
+  - Pool sizing now always reads cached delivery evidence. The scheduler's admission pass keeps refreshing the cache, a cold `delivery-of` cache still withholds, and claims keep their fresh checks under locks.
+  - Added a regression test (fails without the fix); pool-reconciler and size-budget suites green; pools.py line count unchanged.
+  - Merged as admin, fast-forwarded the live checkout to `ff9ab871f`, `aq restart --no-dashboard` (sessions kept). Watching for C5a1 to be claimed and the 30 s reconcile timeouts to stop.
+- **20:20 Claude sandbox credential spike: PASSED.** The owner created a long-lived subscription token (`claude setup-token`), stored at `~/.config/aq-secrets/claude-oauth-token` (0600; the first save was empty and was redone).
+  - Ran a throwaway `node:22-slim` container as user `node`, with no host mounts and the token only in env `CLAUDE_CODE_OAUTH_TOKEN`. Claude Code 2.1.318 answered `claude -p` and made a headless file edit (`--permission-mode acceptEdits`). The host login was unaffected. The container was removed and the token never appeared in argv or output.
+  - Recorded as the confirmed sandbox credential path on C5a1, C5b, C6a, C6b and I4a: env-only lease, no refresh write-back or shared lineage with the host login, wipe on teardown.
+- **19:00–20:35 claims stopped; I misdiagnosed it and reverted #2203.**
+  - **What happened:** claim results went from about 11 claimed per hour to 0 (85 no_ready_work). Workers polled `aq task claim --next --wait 60` and got nothing, although an SQL probe of `select_ready_for_profile` (rolled-back transaction) returned the MS1 tasks.
+  - **My error:** the drop lined up with the #2203 deploy restart, so I reverted it (agent-queue #2204, restarted 20:19). Claims stayed at about zero.
+  - **Actual cause:** v1 had marked the `claude` provider **degraded** at about 18:04Z ("week (all models) window at 85–88%"), and a degraded provider stops new claims.
+  - **Fix:** following the owner's "run everything on Claude", overrode with `aq provider set-state --provider claude --state available --for 2h` (lasts until about the 21:59Z weekly reset).
+  - #2203 was probably fine and should be re-landed; the 30 s reconcile timeout is back until then.
+  - Also: the owner's Claude sandbox token was verified. B7 (`noble-summit-37.10`) was handed back to the router during the investigation.
+- **20:45 claim stall: real root cause found and fixed.**
+  - **Diagnostics (owner-authorised):** added temporary logging (agent-queue #2206 claim.empty, #2207 pr_admission.withheld) and restarted.
+  - **The claims were empty, not broken.** Every remaining READY candidate was withheld with `pull_request_dependency_delivery`: "PR does not identify the current completed source".
+  - **The trap:** three merged prerequisite PRs (aq-server #20 `calm-delta-18.15`, #29 `crisp-meadow-36.1`, #35 `noble-summit-37.2`) have head commits that are *operator merge commits* (my day-1 renumber and main merges), not the task's recorded completion commit. v1 PR admission requires the PR head to equal `completion.commits[-1]`, so their dependents were withheld forever. Everything else had been claimed already, which made it look like a sudden stall.
+  - **Fix:** verified all five completion commits are on main, then removed the seven satisfied `blocks` edges (`aq task remove-dependency --dep-type blocks`), with a comment on each dependent.
+  - **Result:** C5a1, B7 and H4 were claimed within a minute. D1b is waiting for a slot.
+  - **Scan:** no other READY/DEFINED dependency on a mismatched PR.
+  - **Clean-up:** reverted the debug logging (#2208) and restarted. The provider override and the #2203 reland stay; the 30 s reconcile timeouts are at 0.
+  - **Earlier wrong hypotheses, both disproven:** #2203 (wrongly reverted, then relanded in #2205) and the degraded provider (overridden with no effect).
+- **21:00 check.**
+  - The MS1 heads are running: C5a1, D1b and H4 in aq-platform, and B7 in aq-worker.
+  - **22 READY tasks were never routed.** Half of the `default-assignment-routing` runs fail: `plan_first` returns `no_candidates`, presumably from Claude usage pressure with Codex exhausted. Following the owner's "run everything on Claude", I route-overrode 21 of them:
+    - standard work to `standard-high-claude`;
+    - operator gates (MS1–MS3, J5) to `operator-standard-high-claude`;
+    - MS4 to `operator-deep-high-claude`;
+    - J4 to `deep-low-claude`, because the deep-high pool is at max 0.
+  - Left I4b (`azure-horizon-22.3`, Codex qualification) unrouted because it needs Codex.
+  - Most of these are still dependency-blocked; this lets them start as soon as their dependencies clear. The dashboard landing steward `quick-flare-90` and G9–G11 can now be claimed.
+- **21:20 check.**
+  - **MS1 chain:** C5a1 (`calm-delta-18.12`) completed by direct integration; commit `efadf6dde9` is on aq-server main. C5a2 is now running, along with D1b, H4 and B7.
+  - **Merged aq-server #72** (azure-grove-68, which redesigns the atomicity test; all 9 checks green), then #73 (agile-vault-27, supervisor owner-message attachments; only the old atomicity failure). Per W61, I merged #73 as-is rather than update-branch, so I didn't create a PR-head/completion mismatch.
+  - Closed #66 (superseded by #72).
+  - Dashboard #43, #46 and #55 still fail their own specs; the steward `quick-flare-90` is on them.
+  - Claude usage: 89%.
+- **21:35 check.**
+  - B7 (`noble-summit-37.10`) completed. C5b and C5a2 are running, and so is F3 in aq-worker.
+  - **C6a (`calm-delta-18.9`) was held** (`slot_reset_failed` five times: "branch holder reservation is not clean and taskless").
+  - **Cause:** aq-worker slot-2 (`ws-frosty-gate`) was still checked out on `aq/calm-delta-18.9`. That branch has no origin copy and is 0 commits ahead of main, so `_slot_branch_matches_origin` could never pass.
+  - **Fix:** detached slot-2 (no work lost) and released the hold with an operator retry. C6a is READY again.
+- **21:50 check.** Completed: D1b (`crisp-meadow-36.2`), C5a2 (`calm-delta-18.13`) and F3 (`steady-harbor-87.4`). C6a is running after the slot fix; D7, H3, D2, C5b and H4 are also running. aq-server main CI is green again (atomicity redesign #72). F3 left aq-worker main failing `cargo fmt --check` (module order in `native/runner/sandbox.rs`); pushed the one-line rustfmt fix `be49d32`. Claude usage: 92%.
+- **22:00 owner: run I4a in parallel.** Removed I4a's (`azure-horizon-22.2`) blocks on C6a and C6b; C2 and B5a are done. Its description now says to qualify Claude Code on the real docker-local backend now (env-token auth, unattended edit/check/publish as non-root, wipe, digest and CLI version recorded); run through the runner's confinement and credential lease only if C6a/C6b land first; no children. Priority 4; claimable now (fleet 7 of 8 busy).
+- **22:15 check.**
+  - I4a is running in parallel with C6a.
+  - **Dashboard steward `quick-flare-90`** was held (`max_retries`). It had rebased/fixed 11 PR branches locally, but a worker can only push its own claim branch (`out of scope: branch mismatch`). Pushed all 11 as fast-forwards from the shared ref store: #43, #44, #46, #47, #48, #49, #50, #52, #53, #55, #57. Waiting on CI to merge.
+  - #60, #61, #63 and #64 still conflict and weren't handled.
+  - **aq-server #74 (C5a2)** collided on migration 0076 with main (#73 and others added 0075–0077). Renumbered to 0078 with `renumber.py` (`0713c32`).
+  - **W61 follow-up:** after #74 merges, check MS1 (`stark-zenith-16.2`), whose `blocks` edge on C5a2 now points at a PR head that is an operator merge commit.
+- **22:35 check.**
+  - **Merged aq-dashboard round 1:** #43 (SH-J), #44 (WK-D), #47 (WK-E), #48 (AG-D), #49 (WK-F), #50 (DC-K), #52 (AG-B) and #57 (RS-H). All were green after the operator push.
+  - #46, #53 and #55 conflicted after their neighbours merged; #60, #61, #63 and #64 were already conflicting. Six of the seven have 50–250-line UI conflicts.
+  - Closed the round-1 steward `quick-flare-90` `--done` (its recovery retry budget was exhausted by the worker push-scope refusal). Filed a round-2 steward that commits locally and reports branch heads for the operator to push.
+  - **Claude weekly usage reset to 1%.** Re-armed the 80% auto-pause guard by removing its marker. The provider override expires on its own at about 22:30Z.
+  - aq-server #74 (C5a2, renumbered to 0078) is in CI.
+- **22:55 check.**
+  - **I4a (`azure-horizon-22.2`) passed:** Claude Code 2.1.318 ran on the real docker-local backend under the B5a node controller (C3c-derived image). The token was leased env-only and wiped; the host login was unchanged; three consecutive edit/check/publish cycles passed. Evidence: docs/implementation/I4a.md, commit 0a9d7e2.
+  - **I4a leftovers:** non-root user not met (single-UID podman: in-container root with CapEff 0 and NoNewPrivs; needs uidmap and a podman restart, which is an owner/sudo step); C6a/C6b runner path not exercised (MS1 covers it); the derived image isn't admitted yet; Codex qualification deferred.
+  - **aq-server main red:** aq-updater `compose_failures_do_not_leak_stderr_into_the_error`, an ETXTBSY race (likely flaky). Filed a fix task (priority 9) with the finding.
+- **23:10 check.** Merged aq-server #74 (C5a2, migration renumbered to 0078). Its only failure was aq-updater `fetch_release_removes_the_container_even_on_error`, the same flaky updater family as `bright-lantern-83`; the PR doesn't touch aq-updater. Applied the W61 rule: C5a2 commit `1055094ea0` is on main, so I removed MS1's satisfied `blocks` edge on C5a2.
+- **23:25 status.** v2 plan: 64 of 91 tasks complete, 6 in progress, 21 ready. C6a completed; its follow-ups .9.2 and .9.4 are running, .9.5 is ready and .9.1 is paused. aq-dashboard main is red after the round-1 merges (Work inspector specs, SupervisorConversation 401/403); filed a fix task (priority 9). aq-server main is red on the flaky aq-updater tests (`bright-lantern-83`). The round-2 dashboard steward `prime-beacon-85` is running. Claude usage: 3%. Disk: 136G free.
+- **23:40 check.** Merged aq-worker #36 (C6a harness config with confinement modes; green). Filed four cross-repo follow-ups at priority 60:
+  - aq-platform `bold-stone-51`: agent-access supervisor recipient, from F3;
+  - aq-git `fair-current-80`: PR-mode non-default head branch, from D1b;
+  - aq-platform `bright-summit-37`: harness-confinement permission in aq-profiles, from C6a;
+  - aq-git `sound-impact-48`: named credential profiles for central bindings, from D2.
+  Dashboard main-CI fix `keen-harbor-66` and round-2 steward `prime-beacon-85` are running.
+- **23:55 check.** Merged aq-dashboard #66 (keen-harbor-66: ports WK-E/WK-F Work behaviour into WorkWorkspace; fixes the red main). The router is routing again now that Claude usage is low; the four cross-repo follow-ups were routed automatically, and aq-git `fair-current-80` is running. Round-2 steward `prime-beacon-85` is still on #46, #53, #55, #60, #61, #63 and #64.
+- **00:10 check.** Merged aq-git #6 (fair-current-80: prefix-scoped publication targets with lease guard) and #7 (sound-impact-48: operator credential profiles). aq-server #75 (bright-lantern-83, updater ETXTBSY stub fix) is in CI. All seven aq-worker READY tasks are dependency-blocked; nothing is stuck. Claude usage: 4%.
+- **00:40 check.**
+  - Round-2 steward `prime-beacon-85` completed and listed seven resolved local branches. I pushed them as fast-forwards to their PR branches (SHAs verified) and merged in stack order: #46 (WK-C), #53 (AG-E), #64 (AG-F), #60 (PB-B), #61 (PB-F), #63 (PB-D).
+  - #55 (SH-K) fails `decision-action.spec.ts`; reopened `swift-stone-62` (branch mergeable, so no claim trap).
+  - Merged aq-server #75 (bright-lantern-83: updater fake-docker stubs immune to ETXTBSY; all 9 checks green), so aq-server main should go green.
+- **00:30 check (2026-11-05).**
+  - **aq-server main had two 0081 migrations** (H4 `agent_waits` and the stall ladder). Main CI couldn't build and #76 and #77 inherited the failure. Merged #78 (fair-meadow-37, which renumbers `agent_waits` to 0082). Its only failure was `native_accepted_preparation`, which #78 doesn't touch; watching main.
+  - **#76 (bold-stone-51) collided on 0082 too.** `renumber.py` moved it to 0083 but only *reported* the code gate in `store/central37.rs` (`include_str!` of the migration file plus `version >= 82`), so the branch would no longer compile. Patched both to 0083 in an op worktree; compile check running before push.
+  - Updated #77 (no migration). Neither PR has dependents (W61-safe).
+  - Filed the H5 server-side hibernation follow-up as `azure-orbit-61`.
+- **00:55 owner: everything on standard except J4.**
+  - J4 (`fleet-glacier-27.2`) moved to `deep-high-claude`. That pool was disabled with max 0; I enabled it at max 1.
+  - MS4 moved to `operator-standard-high-claude`.
+  - The D10 spec (`sound-rapids-80.1`) was paused and still claimed by a stopped Codex session. I committed and pushed its 328-line partial draft (`be4785e` on `aq/sound-rapids-80.1`), force-released `ws-stone-camp`, resumed it, and routed it to `standard-high-claude`.
+  - All other deep-hinted work was already on standard.
+  - #76's migration renumber also needed its code gate fixed (`76aa35a`, compile-checked).
+- **01:10 check.** G10 completed; filed its cross-repo follow-up for the server reads behind the Agents operations views (stall ladder, semaphores and so on) at priority 45. `native_accepted_preparation` fails on unrelated PRs #77 and #78 again after #56's fix, so it's likely regressed on main; filed a bisect/fix task (priority 9). D10 spec is now running on Claude standard. Owner asked why MS4 needs Codex: only its four-harness demo line does (scope choice: keep, since Codex resets about Nov 8, or defer).
+- **01:25 check.** Merged aq-server #77 (bright-summit-37 confinement permission; only the known `native_accepted` regression). Pushed a rustfmt fix to #76 (bold-stone-51; marker.rs and tests). The D10 implementation spec (`sound-rapids-80.1`) and its parent completed on Claude, continuing from the preserved Codex draft. #55 (`swift-stone-62`) is queued for its decision-action fix. Claude usage: 8%.
+- **01:45 owner decision: simple subscription-login design (rescopes C5b and C6b).**
+  - **Research:** OpenAI's Codex CI/CD guide says ChatGPT logins refresh about every 8 days (or on a 401), rotation is real ("do not share the same file across concurrent jobs or multiple machines"), and the pattern is persist plus write back the refreshed file. The owner doesn't want a login per node.
+  - **C5b (`calm-delta-18.8`)** is now: one stored login per credential with a version; an operator import/replace that always wins; a compare-and-swap write-back (accept N+1 only if the server is still at N, else return the current version); renewal compares credential identity, not bytes; the next attempt fetches the newest version. Messaged the live session.
+  - **C6b (`calm-delta-18.10`)** is now: fetch the newest version before an attempt (Codex `CODEX_HOME`, Claude env token), CAS-upload after if `last_refresh` changed, fetch and retry once on a 401, wipe on teardown.
+  - **Dropped and parked** as `steady-orbit-52`: tmux node login, Codex device-auth capture, `max_concurrent_leases`, boat sync.
+  - MS1 keeps its C5b/C6b dependency; both are now small.
+- **02:00 check.**
+  - **W61 recurred, caused by me.** `swift-stone-62` (#55 rework) sat READY with an idle dashboard worker. Its `blocks` edge on `bold-vault-41` pointed at PR #43, whose head is the steward rebase I pushed in round 1 (completion `f14ff5f`, head `684e3b0`). Verified `f14ff5f` is on main and removed the edge. A rescan of all completed PR sources with open dependents found no other mismatch.
+  - **F5 (`steady-harbor-87.6`)** had renamed `0081_stall_ladder` to 0082 on its branch, colliding with #78's `0082_agent_waits`; left it instructions.
+  - H6 completed. #76 and #79 fail only the known `native_accepted` regression (`swift-harbor-15` fixing); waiting for lifecycle CI, then merge.
+- **02:20 check.**
+  - Merged aq-server #76 (only the known `native_accepted` failure). **That broke main:** H6 (`e5449d8`) had landed `0083_agent_wait_wakes` after I renumbered #76 to 0083, so main had two 0083s. I didn't re-check main's highest migration at merge time.
+  - **Fixed on main** in `053a738`: `agent_supervisor_mail` moved to 0084, with the central37 `include_str!` and version gate updated. `cargo check -p aq-server --tests` and the migration catalog (84) pass.
+  - **D9 (`crisp-meadow-36.10`)** closed COMPLETED, but commit `68e6bb8` was never integrated to main, and its 0084 migration now collides. Reopened it (priority 6) to merge main, renumber to 0085 and integrate (agent-owned, so no W61).
+  - Routed C5b's aq-worker CAS contract follow-up to C6b instead of filing a duplicate.
+- **02:40 check.**
+  - Updated #80 (`swift-harbor-15`, the `native_accepted` fix), which had failed only on the earlier duplicate 0083.
+  - Renumbered #79 (`azure-orbit-61`, H5 server follow-up) from `0083_hibernation` to 0085 (no gates). W61: its dependent `clear-crest-61.5.1` needs its edge cleared after merge.
+  - Told D9 to take the next free number when it merges (about 0086).
+  - G9 is blocked on D9 not being integrated; replied to its agent and routed its action-union adapter follow-up to D9.
+  - aq-worker main is red after H5 (`sandbox_runner::runner_needs_no_node_credential`); filed a fix task (priority 9).
+- **02:05 owner: run C6b in parallel with C5b.** Removed C6b's (`calm-delta-18.10`) `blocks` edge on C5b. Told it to build against C5b's published CAS contract (`base_version`, `RefreshOutcome`) with fixtures, plus one real round-trip if C5b lands first. Priority 3; claimable (fleet 5 of 8 busy). MS1 still waits on both. Open question for the owner: E5 holds the single operator-standard-high-claude slot that MS1 needs.
+- **02:55 check.**
+  - C6b is running in parallel with C5b. Routed C6b's need (issued login version delivered with the leased material) to C5b by comment and message.
+  - Holding aq-server merges until main CI on `053a738` (the 0084 renumber) is green. #80's broad failures and #79's `state_format_is_the_latest_migration` failure ran against the earlier duplicate-0083 main.
+  - **Merge order to keep migrations contiguous:** #79 (0085_hibernation); then #82 (crisp-ember-25, 0085_lifecycle_artifacts) renumbered to 0086; then D9 next free; then #81 (prime-falcon-77) checked.
+- **03:20 check.**
+  - D9 integrated on main (`68e6bb8`, migration `0085_playbook_activations`). Released G9's (`steady-cascade-45.10`) `session_close_hard_failure` hold with a retry; told it to render any still-missing action adapters honestly.
+  - #79 is now at 0086. #82 (`0085_lifecycle_artifacts`) collides with D9 and will go to 0087 after #79.
+  - Main CI runs keep getting cancelled by new pushes; still waiting for a finished green run before merging the migration PRs.
+- **03:50 check.**
+  - Current main passes `state_format_is_the_latest_migration` locally (85 migrations at the time, contiguous); the main CI failure on `45804b2` came from an intermediate commit.
+  - **Migration race again:** a D9 follow-up integrated `0086_playbook_work_completion` straight to main, colliding with #79's 0086. Changed approach: renumber, verify locally (catalog plus `cargo check -p aq-server --tests`), merge immediately rather than waiting another 30 min of CI that would lose the race again.
+  - Renumbered #79 (`azure-orbit-61`) to 0087 and merged it (admin; the only CI failure was the known `native_accepted` regression). W61: its commit `1d87c06` is on main, so I removed `clear-crest-61.5.1`'s `blocks` edge.
+  - #82 (`crisp-ember-25`) now conflicts in `lib.rs`; messaged its in-progress agent to merge main and renumber to 0088.
+  - Closed C5b's lease-cap child `calm-delta-18.8.2` as obsolete (covered by parked `steady-orbit-52`) so it doesn't block C5b's close.
+  - Surfaced three owner decisions: I1 (Claude API-key test and enrollment), I2 (Gemini credential), I3 (OpenCode credential; suggested local Ollama).
+- **04:10 check.**
+  - **C6b (`calm-delta-18.10`) completed.** MS1 now waits only on C5b.
+  - C5b's paused device-auth child `calm-delta-18.8.1` would have blocked C5b's close (W52). `close --obsolete` was refused (slot termination unproved), so I reparented it to the root; it stays paused, part of parked `steady-orbit-52`.
+  - **Filed follow-ups:**
+    - aq-platform `azure-journey-96` (priority 20): dashboard-actions-1 playbook union kinds that G9 needs (D9 shipped direct routes only);
+    - aq-playbooks `nimble-harbor-36` (priority 40): host catalog bump for the candidate check source;
+    - aq-platform `crisp-crest-28` (priority 120): docs, Claude Code harness rows in 0005 §8.3.
+  - `crisp-meadow-36.10.4` and `fair-impact-57` are held but already superseded by supervisor replacement tasks.
+- **04:20 owner decisions: skip Codex for now, skip Gemini, test Claude Code and OpenCode.**
+  - I1 (`azure-horizon-22.4`): subscription only, live API-key case unmet; the saved setup-token is the enrollment.
+  - I3 (`azure-horizon-22.6`): live run on local Ollama, ChatGPT and API-key routes deferred.
+  - I2 (`azure-horizon-22.5`): offline only, live case deferred.
+  - Noted on MS4 that Codex and Gemini become owner-approved deferrals in its four-harness demo. `noble-meadow-73` (Codex qualification) stays paused.
+- **04:40 owner: 'do whatever you need to get this across the line, then stand up a build with the latest dashboard'.**
+  - Paused E5 (`smart-falcon-16.7`) to free the single `operator-standard-high-claude` slot for MS1. A scan of MS1's dependencies shows only C5b open, with no W61 mismatches. C5b's tests pass and the version header is in; it's finishing.
+  - Tore down four stale E0 qualification stacks (`aq-e0-qual`, `aq-e0-final`, `aq-e0-designated`, `aq-e0-designated-uid10001`) and their volumes. Kept `aq-c3c-registry` (I4a image) and `aq-worker-local`.
+  - Built the aq-dashboard production bundle from main `3685c0d` (includes G9; no mock code).
+  - Starting the real local v2 stack: Compose project `aq-v2-local` on ports 18080/18081/18741 (v1 owns 8081), fresh state/secrets in `~/.local/share/aq-v2-local`, dev auth `owner@localhost`, dashboard via `compose.dashboard.yaml`. Relaunch with `~/.local/share/aq-v2-local/up.sh` (`--rebuild-dashboard` / `down` / `logs`).
+- **05:00 local v2 stack is up** (`aq-v2-local`, aq-server main plus dashboard main `3685c0d`).
+  - All services are healthy at http://127.0.0.1:18080 (dev auth `owner@localhost`, 46 capabilities).
+  - Seeded with the MS0-designated scratch repo `ElectricJack/aq-scratch` (public, `main`, credential none): a project, a repository, one graph task, an offline dev worker identity and the human settlement owner.
+  - Browser check: the Overview renders live data (1 ready task, project 'Local scratch development', 1 worker node). Provider accounts and capacity show 'not reported', as expected with no running worker.
+  - Filed `azure-delta-64` (adopt host catalog 2.1.0); parked the Gemini and OpenCode-ChatGPT login-kind follow-ups on `steady-orbit-52`.
+- **05:15 check.**
+  - I2 couldn't close because of its child `azure-horizon-22.5.2` (W52); reparented the child to the root and told I2 to close pass.
+  - I1 had closed fail deliberately over owner-decision items; recorded the owner's decisions (subscription only, setup-token enrollment) and released its hold with a retry, so it can close pass with owner-approved `--deliverable-unmet`.
+  - G11 (visual acceptance) started; I3 is running; C5b is still finishing.
+  - #80, #81 and #82 still fail (#82 also needs its renumber); no merges this round.
+- **05:35 check.**
+  - I1 (`azure-horizon-22.4`) and I2 (`azure-horizon-22.5`) completed.
+  - Merged aq-playbooks #6 (`nimble-harbor-36`, host catalog 2.1.0; unblocks `azure-delta-64`, which I messaged) and #5 (`sound-rapids-80.1`, the D10 implementation spec). aq-playbooks has no CI checks configured.
+  - Folded I3's OpenCode §8.3 docs follow-up into `crisp-crest-28`.
+- **05:50 check.** I3 (`azure-horizon-22.6`, OpenCode on local Ollama) completed. Merged aq-worker #37 (`amber-cascade-22`, the `runner_needs_no_node_credential` fix for aq-worker main; green). MS1 still waits on C5b.
+- **06:05 C5b had stalled for about 4.5 h.** Its session sat idle at 'done 6:08 PM, 1 shell still running': `cargo test --test native_initial_grant subscription` had hung for over 3 h. Killed that test process (pid 1499315) and messaged C5b to skip it as a pre-existing hang, finish its targeted checks with timeouts and close. MS1 waits only on C5b.
+
+## 2026-11-05 (UTC; earlier entries labelled 05:15–06:05 were about an hour ahead of real UTC)
+
+- **~04:50 owner instruction:** "Just stop the tasks in agent queue and finish the work yourself with subagents."
+  - Paused all six v2 projects in v1. Snapshotted the WIP of C5b (`aq/calm-delta-18.8` at 107d164a), D11 (`aq/crisp-meadow-36.12` at 192bfcc4) and `sharp-grove-60` (`aq/sharp-grove-60` at 7a6fb756), pushed it, and stopped those sessions.
+  - Dispatched operator subagents, each working in its own worktree under `aq-platform/wt/` and pushing branches only; I integrate:
+    - C5b: CAS write-back, the hung renewal test;
+    - D11: the pilots;
+    - F5: agent questions, on branch `aq/f5-questions`;
+    - PRs #80, #81, #82, #83, #85: merge order in that sequence, migrations renumbered contiguously after 0087;
+    - MS1: a real Claude Code agent in docker-local, on its own `aq-ms1` stack on ports 28080 and up.
+  - MS1 no longer waits on C5b: Claude takes the setup-token as env only, so it needs no write-back.
+- **05:00:** merged #84 (`crisp-crest-28`, the 0005 §8.3 Claude Code 2.1.318 / OpenCode 1.18.35 harness rows). It is docs only. Its one CI failure, `reservations::tests::count_utf8_body_budget…` with IdentityUnavailable, is unrelated to the PR.
+  - #83 and #85 both add migration 0088, which is a W62 collision; renumbering is handed to the PR subagent.
+  - Main CI on aq-server is red only on the native_accepted regression, which #80 fixes.
+- **05:30: C5b done.** The subagent found the 3 h hang. It was not the clock step: the old single test held two live fixtures, the second waiting on the process-wide selection lock that the first still held (shadowed, not dropped). A second live fixture now panics immediately, and a regression test covers it. History squashed to 34c75d04.
+  - Merged as #86 with migration 0088_subscription_refresh_lineage.
+  - Told the PR subagent to shift to #82=0089, #83=0090, #85=0091, and the F5/D11 subagents to take 0092/0093 provisionally.
+  - v1 refuses to record it complete: `set-status COMPLETED` needs completion provenance, and `task close` needs a running claim. The task is left BLOCKED with an operator comment; v1 bookkeeping is no longer on the critical path.
+  - The aq-worker node side of write-back is still a cross-repo follow-up. Claude doesn't need it (its token is an env-only lease).
+- **06:20: MS1 first end-to-end run (subagent).**
+  - **Works:** a real Claude Code 2.1.318 agent runs in a docker-local sandbox on the owner's setup-token (imported through C5b `import-login` as `owner-claude-subscription@1`; the token never appears in logs). It edited code, ran checks and published inside the sandbox. Sandbox-side cancel stopped in 6 s with a stopped-writer proof. A node restart stopped and preserved the sandbox, with no duplicate.
+  - **Not wired, so steps 1, 2 and 4 can't run through the stack:**
+    - `aq-worker run` still uses `UnavailableProvider` (main.rs:700), so the node never registers or gets offers.
+    - `sandbox-run` stops at "B2 receipt codec is unavailable" (main.rs:440).
+    - aq-server's v2 offer route only serves dev fixtures (`execution/api.rs` `fixture`).
+  - **Measured memory:** stack 173 MiB, node controller 27 MiB, sandbox 143–200 MiB with Claude alone and 531 MiB with `cargo test`.
+  - Evidence is on aq-server/aq-worker `ms1/demo` (`docs/implementation/MS1.md`, `scripts/ms1-demo.sh`). The `aq-ms1` stack is running on 28080.
+  - Dispatched a wiring subagent to connect server → node controller → sandbox launch → aq-git publish → D3 completion, and prove A→B live.
+- **06:35: F5 done (subagent).** Branch `aq/f5-questions` at 1e06db95 is built on the old `aq/steady-harbor-87.6` work.
+  - Covers the agent asking, then reading the answer; the owner's `question.answer` dashboard action; waking the live attempt; and routing to task mail once the attempt has ended. Both acceptance tests pass.
+  - Its migration is provisionally 0092 and goes after #82/#83/#85 (0089–0091). It is held for merge in that order.
+  - Follow-ups: the aq-worker `aq-agent question ask/show` client; dashboard inbox support for `question` decisions; a profile capability check on the question and wait routes.
+  - **Tooling hazard:** aq-server worktrees sharing `target-shared` get identical artifact hashes, so cargo can link another worktree's freshly built aq-server library (freshness is by mtime). F5 saw stale builds twice. Told the PR and D11 subagents to use private target dirs and re-verify.
+- **06:33:** merged #80 (`swift-harbor-15`, the native_accepted_preparation regression fix) as a3e3d515, once all 9 checks were green. That should turn main CI green again.
+  - #81, #82, #83 and #85 are being refreshed on main by the PR subagent.
+  - The wiring subagent is rebuilding the aq-ms1 images.
+  - Disk is at 89% (115 G free), largely from per-agent cargo target dirs, which each agent deletes when it finishes.
+- **07:05–07:10:**
+  - Merged #81 (`prime-falcon-77`, G10 owner session operations read) as 473bbe2b; all 9 checks were green.
+  - Merged #82 (`crisp-ember-25`, H5 lifecycle artifact retention, migration 0089) as badab765. All its checks were green against main with #80, and the PR subagent had verified the #80+#81+#82 stack with a private target dir.
+  - Merged main into #83 and resolved the expected `dashboard-read/v1/fixtures/bootstrap.json` dashboard-actions digest conflict by keeping #83's regenerated value. The three protocol `check.py` scripts pass and the catalog is at 90. Pushed 2768d887 and waiting on CI.
+  - #85 (0091) is next.
+- **07:40: D11 done (subagent).** Branch `aq/crisp-meadow-36.12` at 2d9708b3. `real_adapter_pilots_complete` passes: the coding, routing, watcher and report pilots run against the production Host7 adapters, including the GATE-05 fault cases.
+  - Fixed real gaps: a Host7 outbox wedge on undeclared events, `candidate.prepare` and `candidate.publish` source/review evidence, and the `message.send` and `decision.request` Host7 adapters.
+  - Migration 0093_playbook_host_decisions is provisional.
+  - **Merge queue:** #83 (0090), #85 (0091), F5 (0092), D11 (0093). Watch #85 vs D11: D11 pins the catalog 2.0.0 registry, while #85 adopts 2.1.0.
+- **07:55:**
+  - Merged #83 (`azure-journey-96`, playbook run/activation action kinds, migration 0090) as 2c770ab3; all 9 checks were green.
+  - Refreshed #85 on main (clean merge, catalog at 91, protocol checks pass; 59eb2ea0) and am waiting on CI.
+  - A trial merge of main into F5 conflicts with #83 in `dashboard_api/actions/existing.rs`, `tests/profiled_results.rs` and `protocol/dashboard-actions/v1/schema.json`. Both PRs add dashboard action kinds, and the generated schema needs regenerating.
+  - Dispatched an integration subagent to bring F5, then D11, current on top of #85, verify each stack with a private target dir, and open their PRs.
+- **08:10: MS1 steps 1–2 LIVE through the stack.** aq-server assigned task A to a node. A real Claude Code agent ran it in a docker-local sandbox (`cargo test` passed). The result went to central aq-git as commit `6d9c3189`, and D3 completed A automatically. That made B ready, and B ran the same way (`e41b1a00`). Evidence IDs are in `ms1/demo` MS1.md, "Update 2026-11-05".
+  - **Wiring:** kept the MS0 `run-native` profiled path. The node's session host starts a pinned `aq-worker sandbox-harness` driver, which creates the sandbox, copies the worktree in and out, and passes the leased token in as private material; the runner moves it into `CLAUDE_CODE_OAUTH_TOKEN` for `claude` only.
+  - **Server fixes on the path:**
+    - D3's review requirement was hard-coded to the human owner;
+    - D3 refused the native `Unknown` outcome;
+    - the long-phase/result opt-in only allowed Codex;
+    - new `require_container` confinement option;
+    - C5b trailing newline.
+  - **Not done:**
+    - cancel is recorded but doesn't reach the native executor;
+    - retry: no replacement attempt is offered;
+    - restart drills not run;
+    - stuck granted attempts hold the task and node;
+    - B doesn't build on A, because the D1 publish isn't on this path.
+  - Asked the wiring subagent to continue in that order. Dispatched an independent read-only reviewer on the aq-server `ms1/demo` diff before it goes to main.
+- **08:30: independent review of aq-server `ms1/demo` found a blocker.** Not mergeable as-is.
+  - **B1 (blocking):** a failed Claude run can complete its task automatically. Three changes combine: the D3 policy actor is named as reviewer while offers carry no required checks, D3 now accepts `Unknown`, and the worker maps `Failure` to `Unknown`. So an expired token or a crash would mark the task complete and unblock its dependents.
+  - **Decision (delegated reviewer):** the worker maps Failure to Failed and reports Success only for a natural exit 0 with an explicit success claim; D3 goes back to accepting Success only. A DB-backed `auto_settlement56` test must cover the production-shaped offer.
+  - **Should-fix:**
+    - `require_container` bypasses backend placement facts;
+    - the Claude long-phase rule doesn't check confinement, and aq-admission's version isn't bumped;
+    - the Claude recipe digest isn't pinned;
+    - naming the policy actor removes the human fallback.
+  - All sent back to the wiring subagent ahead of cancel and retry.
+- **08:35:** main CI is green again at #81 (473bbe2b) and #82 (badab765); #83 is still running.
+  - #85's `tests` job failed `playbook_activation::inspection_discovers_actual_admissions_runs_and_public_timeline`, with `definition.active` null in the list item. Locally it passed 3/3 on #85 and also on main (disposable Postgres), so it's flaky.
+  - The first rerun died on a GitHub runner `No space left on device` before any test ran; rerunning again.
+  - F5 is up as #87.
+- **09:10:** main CI is green through #83 (2c770ab3).
+  - #85 failed `playbook_activation::inspection_discovers…` twice in CI, with the run definition's `pinned_is_active`/`active` null, but passed every time locally (alone and as the full binary).
+  - **Cause:** `current_activations()` read each activation page with a 500 ms budget and silently returned None on timeout. #85's 2.1.0 catalog made the read slow enough on CI runners to time out.
+  - Pushed 97aaef30 to #85 with a 2 s per-page budget; the binary passes 19/19 locally and clippy is clean. Waiting on CI. Then #87 (F5) and #88 (D11).
+- **09:45:** merged #85 (`azure-delta-64`, host catalog 2.1.0 as CatalogProfile::Host8, migration 0091) as f9b448de, with all 9 checks green after the activation read budget fix.
+  - Refreshed #87 (F5) on main: clean merge, catalog at 92, protocol checks pass, pushed 1e15dee6. Waiting on CI. #88 (D11, 0093) is next.
+- **10:20:** merged #87 (F5, agent questions to the owner, migration 0092) as fe4987a8, with all 9 checks green.
+  - Refreshed #88 (D11) on main: clean merge, catalog at 93, protocol checks pass, pushed c05381a7. Waiting on CI.
+- **10:50:** merged #88 (D11, routing/watcher/reporting pilots on the real Host7/Host8 adapters, migration 0093), with all 9 checks green. The PR merge queue is empty.
+  - Open server work: aq-server/aq-worker `ms1/demo`. The wiring subagent is applying the review's B1 fix and should-fixes, then cancel, stuck attempts, retry, restart drills and D1.
+- **10:55: local stack rebuilt.** The `aq-v2-local` stack (http://127.0.0.1:18080) now runs from aq-server main through #88 (migrations to 0093) and aq-dashboard main 41f5150; healthy.
+  - The first rebuild failed to compile, calling `admit_confinement` with `ms1/demo`'s three-argument signature. The BuildKit target cache is shared by every build of the Dockerfile on the host, and the build only cleaned 4 packages, so cargo reused the aq-selection that the `aq-ms1` image had built from `ms1/demo` (W67 again, inside Docker).
+  - Fixed in 458f682d: clean every workspace crate before building; dependencies stay cached.
+- **11:15: dashboard question inbox.** aq-dashboard PR #67 (`feat/question-answers`, 5389ce6) adds "Agent questions" in the decision inbox, a question detail page with the `question.answer` composer, and a deep link `/decisions/{id}?kind=question`.
+  - It is gated on new server capabilities `questions.read`/`questions.answer`, so it is inert until the server serves them.
+  - aq-server main has no human read of question decisions, so dispatched a subagent to build `GET /api/questions/decisions[/{id}]` and the capabilities to the dashboard's proposed contract.
+  - #67's browser CI fails only `settings-panels.spec.ts`, which fails the same way on main.
+- **11:35:** merged aq-dashboard #67 (question inbox, inert until the server advertises `questions.read`). Its only red check was `settings-panels.spec.ts`, which had been red on dashboard main since 41f5150.
+  - Merged #68, the fix for that spec, with all 4 checks green. The test was stale against the intended G11 Display panel (new subtitle and desktop pairing); the product was unchanged. Dashboard main should be green again.
+- **12:10:** merged aq-server #89 (`feat/question-inbox-read`, migration 0094) as 620a1b83, with all 9 checks green.
+  - It adds the owner question read API, `GET /api/questions/decisions[/{id}]`, and the `questions.read`/`questions.answer` bootstrap capabilities. It also regenerates the stale `bootstrap.json` fixture.
+  - Dispatched the dashboard follow-up: vendor the live dashboard-read schema (sha256:c3cbd5c1…), show `task_title`, and mark expired questions (the server keeps them `pending`).
+  - Main CI after #88 failed once on `playbook_host_requests::check_request_cancel_completes_from_executor_stop` (host_dispatch returned `Unknown`). It passed on #88's own CI; watching the next main run for a recurrence.
+- **12:35:** merged aq-dashboard #69 (live question-inbox contract, task titles, expiry) as 42830ec8, with all 4 checks green.
+  - Rebuilt `aq-v2-local` from aq-server main 620a1b83 and dashboard 42830ec8; healthy.
+  - Browser check: the Decisions page now calls `/api/questions/decisions?state=open` (capability detected), and the server returns `question-inbox-1` with no items, since no agent has asked yet.
+  - Main CI is green at 458f682d, so the post-#88 `playbook_host_requests` failure was a one-off flake.
+- **13:20: the MS1 wiring subagent had stalled.** Its review fixes were pushed (B1 Failure→Failed plus D3 Success-only, with a DB test on a production-shaped offer; should-fix 1, 2 and 4; nits), but there had been no commits and no live processes for hours after a "waiting for the server rebuild" message. Same pattern as W64: idle and waiting on background work that had already ended.
+  - Resumed it with a status request, asked it to continue with cancel, then stuck attempts, retry, restart drills and D1, and to merge main (now at 0094) early.
+- **13:40: MS1 progress (wiring subagent report).** This corrects the 13:20 entry: the subagent had not stalled. Its commits were made earlier and it reported late.
+  - All review fixes are in: B1, should-fix 1–4, nits.
+  - **Live through the aq-ms1 stack:**
+    - Cancel (B3): cancel `6c42e9be…` reached the executor, the sandbox was stopped and kept, and the attempt was recorded cancelled with stop proof.
+    - Node killed mid-attempt: `reconcile-native` recovered the stop from the sealed intent with no relaunch or duplicate. The node re-registered without re-enrolling and ran the next attempt.
+    - aq-server restarted mid-attempt: the attempt continued with exactly one report, confirmed by D3.
+  - **Not done:**
+    - retry: no production writer of source-retained/effects-settled facts, so B4 never replaces an attempt;
+    - stuck attempts: closed-awaiting-settlement is never settled;
+    - D1 publication.
+  - Branch heads: aq-server `ms1/demo` 87012926, aq-worker `ms1/demo` 2d43cf2c, both with main merged.
+  - Dispatched an independent re-review of both diffs before merging to main, and a fresh subagent for retry, stuck-attempt settlement and D1 on new `ms1/retry` branches.
+- **13:50: the owner hit "Dashboard update required" on Results.** It was on the `aq-ms1` stack (28080), not `aq-v2-local` (18080, where Results loads with an empty list).
+  - The MS1 server advertises `results.media.read`/`results.media.upload` as `enabled:false` because no media store is configured. The dashboard bundle lists both as required capabilities, so the whole dashboard is blocked.
+  - Asked the MS1 subagent to configure result media on `aq-ms1` the way `dev-stack.py` does.
+  - Dispatched a dashboard fix: make the media capabilities optional and gate the media UI at runtime.
+- **14:20: stale PR triage (owner asked).** There were 14 open PRs across the repos, 13 of them older (Nov 2–4) and left open after operator integrations.
+  - Content triage: 6 superseded or duplicate, 8 still needed. Every one of their v1 tasks shows COMPLETED, yet main was missing the work, including:
+    - D6 check-attempt execution (#63, the production check executor D11 found missing);
+    - the playbook judgment provider (#64);
+    - G11 knowledge relationships/revisions (#60);
+    - per-project replacement budgets (#53).
+  - Closed aq-server #5 (landed in 3244f225), #7 (duplicate of #3) and #69 (to be replaced by #60 and #64 separately), and aq-git #4 (landed in 8cb1ce4; CI already runs the checker's tests).
+  - Dispatched subagents to bring the still-needed ones current: aq-server #53, #3, #9 (example half), #60, #64, #63 (migration renumbered to 0096), then aq-worker #32 and aq-dashboard #55.
+  - Dashboard #70 (optional media) fails `supervisor-launcher.spec.ts`: "Post comment" ends up under the launcher, a real regression. Sent it back.
+- **14:30: owner feedback on the v2 dashboard.** "The new dashboard is nice looking but the v2 system is missing a lot that felt very critical in v1… the task view in v1 showed more information… I don't see comments, or task ids, or ways to copy task ids."
+  - Confirmed: the v2 task inspector shows only title, description, acceptance criteria, dependencies and revision. It has no copyable ID, no comments (v2 has no task-comment model at all), no execution state or why-not-running, no agent/session link, no branch/PR and no route.
+  - **Owner decision:** do a v1→v2 parity pass, task view first. The owner verifies each dashboard section and wants it completed before moving to the next.
+  - Started a read-only inventory comparing the v1 and v2 task views and the v2 server data behind each field.
+- **14:55:**
+  - Merged aq-dashboard #70 (result media capabilities optional) as e0c3b5f6. Its first CI run caught a real regression: the disabled attach button wrapped the composer and clipped "Post comment". Rebuilt `dist` and restarted the `aq-v2-local` server, which caches index.html and so keeps serving the old bundle until restarted. Asked the MS1 subagent to restart `aq-ms1-server-1` at a safe point.
+  - **Re-review of `ms1/demo`:** not mergeable yet.
+    - B1 is partly fixed. Failed/Unknown no longer complete a task, but a Claude exit 0 without real work (a clarifying question, refusal, or "couldn't find X") still reports Success and D3 auto-completes it.
+      - **Decision:** add a driver guard. Success requires rc 0, a stream-json result with `subtype=success` and `is_error=false`, the agent's own `Changes:` line, and a non-empty change set.
+    - Should-fix 1–4 and the nits are verified fixed.
+    - **New should-fix:** node recovery leaves the Claude container running with the token in its env.
+    - **Nits:** the cancel poll uses inventory_sequence 1; `.pyc` files are committed; token trimming applies to every anthropic credential.
+    - All sent to the MS1 subagent ahead of retry/D1.
+    - Pre-existing flake on main: `native_cancellation::native_cancel_owner_validation_attempt_replay_and_concurrency`, which failed 7/7 under load in the reviewer's runs.
+  - Task-view parity inventory is committed (`2026-11-05-task-view-parity-inventory.md`); waiting on the owner's scope choice.

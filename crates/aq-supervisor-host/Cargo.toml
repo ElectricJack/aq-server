@@ -1,0 +1,39 @@
+[package]
+name = "aq-supervisor-host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+aq-central-authority = { path = "../aq-central-authority" }
+aq-server = { path = "../aq-server" }
+aq-session-host.workspace = true
+aq-codex-mapper.workspace = true
+aq-responses-transport.workspace = true
+aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+libc = "0.2"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+aq-server = { path = "../aq-server", features = ["test-support"] }
+aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
+axum.workspace = true
+chrono.workspace = true
+http-body-util.workspace = true
+reqwest.workspace = true
+toml.workspace = true
+tower.workspace = true
+
+[[bin]]
+name = "aq-session-host"
+path = "src/helper.rs"

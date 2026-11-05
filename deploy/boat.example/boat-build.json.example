@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "role": "boat-template-build",
+  "build_org": "aq_template_builds",
+  "attempt_org": "aq_attempts",
+  "key_file": "/private/boat-build-key",
+  "builder_identity": "aq-template-builder",
+  "allowlist": "allowlist.json"
+}

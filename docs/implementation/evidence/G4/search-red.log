@@ -1,0 +1,24 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.11s
+     Running tests/dashboard_read.rs (target/debug/deps/dashboard_read-8e5b4124fb0bb9e7)
+
+running 1 test
+test search_validates_queries_and_returns_all_groups ... FAILED
+
+failures:
+
+---- search_validates_queries_and_returns_all_groups stdout ----
+
+thread 'search_validates_queries_and_returns_all_groups' (1633534) panicked at crates/aq-server/tests/dashboard_read.rs:346:5:
+assertion `left == right` failed: {"code":"not_found","message":"Resource not found","request_id":"cf105a09-adbd-49b6-8ca6-653293c2f56b","retryable":false}
+  left: 404
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    search_validates_queries_and_returns_all_groups
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 3.39s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_read`

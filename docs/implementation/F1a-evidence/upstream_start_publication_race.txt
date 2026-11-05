@@ -1,0 +1,64 @@
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+    Finished `test` profile [unoptimized] target(s) in 14.28s
+     Running unittests src/lib.rs (target/debug/deps/aq_supervisor_host-7beeaf644630517f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/helper.rs (target/debug/deps/aq_session_host-bd4c0f7086b49458)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/aq_supervisor_host-22c69894053399df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapter.rs (target/debug/deps/adapter-879eed4d5e4ba332)
+
+running 1 test
+test native_recipe_uses_scoped_route_stdin_and_no_provider_material ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/credentials.rs (target/debug/deps/credentials-9b851fd6cf0ea7d5)
+
+running 1 test
+test credential_reader_refuses_unsafe_files_and_rotation_without_disclosure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-fff4f918f6afc92d)
+
+running 11 tests
+test concurrent_start_has_one_guardian_and_cancel_prevents_revival ... ok
+test expired_supervisor_is_stopped_and_scratch_is_retained ... ok
+test lost_guardian_blocks_successor_and_retains_scratch ... ok
+test main_delivery_database_upgrades_without_losing_history ... ok
+test mismatched_host_plan_never_creates_a_writer ... ok
+test physical_renewal_requires_next_sequence_and_later_deadline ... ok
+test revocation_before_physical_start_refuses_and_stops_guardian ... ok
+test revoked_policy_stops_instead_of_readopting ... ok
+test successor_requires_stop_and_retains_prior_generation ... ok
+test supervisor_restart_resumes_without_duplicate_session ... ok
+test supervisor_session_starts_under_central_permit ... FAILED
+
+failures:
+
+---- supervisor_session_starts_under_central_permit stdout ----
+
+thread 'supervisor_session_starts_under_central_permit' (2535789) panicked at crates/aq-supervisor-host/tests/supervisor_session.rs:171:10:
+called `Result::unwrap()` on an `Err` value: session ended before startup: Some("startup failed: EOF while parsing a value at line 1 column 0")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    supervisor_session_starts_under_central_permit
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.73s
+
+error: test failed, to rerun pass `-p aq-supervisor-host --test supervisor_session`

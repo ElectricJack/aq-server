@@ -1,0 +1,138 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "See per-source search coverage",
+    "state": "partial"
+  },
+  "data": {
+    "groups": [
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "task"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "session"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "result"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "playbook"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "knowledge"
+      }
+    ],
+    "snapshot_id": "0d779033-0dbc-4f7e-ad73-defe5351626c",
+    "sources": [
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "task"
+        },
+        "project": null,
+        "source": "task",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "session"
+        },
+        "project": null,
+        "source": "session",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable_or_not_visible",
+          "state": "partial"
+        },
+        "observation": null,
+        "project": null,
+        "source": "result",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable_or_not_visible",
+          "state": "partial"
+        },
+        "observation": null,
+        "project": null,
+        "source": "playbook",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "knowledge"
+        },
+        "project": null,
+        "source": "knowledge",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      }
+    ]
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "637d3e85-64af-4c72-bcf4-0ba04cf19b9a",
+  "scope": {
+    "kind": "project",
+    "project_id": "6d13cceb-e105-4d83-ad70-fcd8d112cade"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

@@ -39,3 +39,10 @@ The crate returns proposed facts and projection changes; it does not implement
 persistence, central source registration, human permissions, transcript transfer
 or retention. Those are AQ22's remaining server work. All tests are synthetic
 accounting evidence and perform no network or provider calls.
+
+`vm_time` separately models Boat sandbox sizes, pinned hourly rate cards,
+running/confirmed-stop facts and half-open monthly budgets. It prices only the
+interval overlapping the requested month, using integer microunits and charging
+open intervals through the read time. The server owns UTC calendar boundaries,
+node authentication, persistence and placement refusal; see
+[monthly Boat accounting](../../docs/implementation/H2-monthly-boat-budget.md).

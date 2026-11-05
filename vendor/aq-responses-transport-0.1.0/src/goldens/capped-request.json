@@ -1,0 +1,1 @@
+{"client_metadata":{"a":"b"},"include":[],"input":[{"content":"literal startup","role":"user","type":"message"}],"max_output_tokens":100,"model":"offline-model","parallel_tool_calls":true,"reasoning":{"effort":"medium","summary":"auto"},"store":false,"stream":true,"text":{"verbosity":"low"},"tool_choice":"auto","tools":[]}

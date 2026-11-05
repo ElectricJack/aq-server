@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-7b9453c1da41bc70)
+
+running 1 test
+test quota_unknown_is_not_zero ... FAILED
+
+failures:
+
+---- quota_unknown_is_not_zero stdout ----
+
+thread 'quota_unknown_is_not_zero' (1451269) panicked at crates/aq-server/tests/dashboard_aggregation.rs:33:5:
+assertion `left == right` failed: {"code":"not_found","message":"Resource not found","request_id":"69c3266e-8a95-47ea-99de-b879da92c92e","retryable":false}
+  left: 404
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    quota_unknown_is_not_zero
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.81s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_aggregation`

@@ -1,0 +1,11 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.95s
+     Running tests/dashboard_search.rs (target/debug/deps/dashboard_search-2a33ed41f5a7341f)
+
+running 3 tests
+test search_session_cursor_refuses_revoked_acl_partition ... ok
+test search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound ... ok
+test search_session_visibility_uses_exact_current_acl_and_scope ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.00s
+

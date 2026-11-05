@@ -1,0 +1,101 @@
+   Compiling digest v0.10.7
+   Compiling num-traits v0.2.19
+   Compiling sha2 v0.10.9
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-session-protocol-0.1.0)
+   Compiling chrono v0.4.45
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling hmac v0.12.1
+   Compiling nix v0.29.0
+   Compiling sqlx-core v0.8.6
+   Compiling hkdf v0.12.4
+   Compiling atoi v2.0.0
+   Compiling md-5 v0.10.6
+   Compiling aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-terminal-relay-protocol)
+   Compiling sqlx-postgres v0.8.6
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-session-api)
+   Compiling sqlx v0.8.6
+   Compiling num-integer v0.1.47
+   Compiling aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling num-bigint v0.4.8
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-central-authority)
+   Compiling aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-lifecycle-api)
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-agent-api)
+   Compiling lazy_static v1.5.1
+   Compiling sharded-slab v0.1.7
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-profiles)
+   Compiling aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling simple_asn1 v0.6.4
+   Compiling aq-session-host v0.1.6 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-session-host-0.1.6)
+   Compiling aq-responses-transport v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-responses-transport-0.1.0)
+   Compiling aq-codex-mapper v0.1.1 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-codex-mapper-0.1.1)
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-admission)
+   Compiling tracing-subscriber v0.3.23
+   Compiling aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-release)
+   Compiling jsonwebtoken v9.3.1
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-selection)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-phase-terminal-protocol)
+   Compiling aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-playbook-host)
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-result-media)
+   Compiling aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-observation-api)
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-notifications)
+   Compiling aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-terminal-relay)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-accounting)
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-admission-0.2.0)
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-observation-admission)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-review-protocol)
+   Compiling aq-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-protocol-0.1.0)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-worker-protocol-0.2.0)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+error[E0432]: unresolved imports `aq_supervisor_host::Supervisor`, `aq_supervisor_host::PlanAuthority`
+ --> crates/aq-supervisor-host/tests/supervisor_session.rs:5:26
+  |
+5 | use aq_supervisor_host::{Supervisor, PlanAuthority};
+  |                          ^^^^^^^^^^  ^^^^^^^^^^^^^ no `PlanAuthority` in the root
+  |                          |
+  |                          no `Supervisor` in the root
+
+error[E0433]: cannot find `test_support` in `aq_server`
+  --> crates/aq-supervisor-host/tests/supervisor_session.rs:28:21
+   |
+28 |     _db: aq_server::test_support::TestDb,
+   |                     ^^^^^^^^^^^^ could not find `test_support` in `aq_server`
+   |
+note: found an item that was configured out
+  --> crates/aq-server/src/lib.rs:29:9
+   |
+28 | #[cfg(any(test, feature = "test-support"))]
+   |          -------------------------------- the item is gated here
+29 | pub mod test_support;
+   |         ^^^^^^^^^^^^
+
+error[E0433]: cannot find `test_support` in `aq_server`
+  --> crates/aq-supervisor-host/tests/supervisor_session.rs:37:27
+   |
+37 |         let db=aq_server::test_support::TestDb::create().await;
+   |                           ^^^^^^^^^^^^ could not find `test_support` in `aq_server`
+   |
+note: found an item that was configured out
+  --> crates/aq-server/src/lib.rs:29:9
+   |
+28 | #[cfg(any(test, feature = "test-support"))]
+   |          -------------------------------- the item is gated here
+29 | pub mod test_support;
+   |         ^^^^^^^^^^^^
+
+error[E0425]: cannot find function `clock` in crate `aq_supervisor_host`
+  --> crates/aq-supervisor-host/tests/supervisor_session.rs:48:37
+   |
+48 |         let now=aq_supervisor_host::clock().unwrap();
+   |                                     ^^^^^ not found in `aq_supervisor_host`
+
+error[E0425]: cannot find function `clock` in crate `aq_supervisor_host`
+   --> crates/aq-supervisor-host/tests/supervisor_session.rs:129:33
+    |
+129 |     let now=aq_supervisor_host::clock().unwrap();case.host.admitted_boot_ms=now.boot_ms;case.host.deadline_boot_ms=now.boot_ms+60_000;
+    |                                 ^^^^^ not found in `aq_supervisor_host`
+
+Some errors have detailed explanations: E0425, E0432, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aq-supervisor-host` (test "supervisor_session") due to 5 previous errors

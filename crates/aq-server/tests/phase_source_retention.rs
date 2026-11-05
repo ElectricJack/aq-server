@@ -12,11 +12,15 @@ mod frozen_fixture;
 #[path = "common/phase_refresh_terminal.rs"]
 mod refresh_fixture;
 mod frozen {
+    const PROFILE: aq_admission_sandbox::sandbox::PhaseProfile =
+        aq_admission_sandbox::sandbox::PhaseProfile::PhaseV2;
     use super::frozen_fixture as terminal;
     use aq_server::profiled_execution::phase_terminal as terminal_owner;
     include!("phase_source_retention/case.rs");
 }
 mod refresh {
+    const PROFILE: aq_admission_sandbox::sandbox::PhaseProfile =
+        aq_admission_sandbox::sandbox::PhaseProfile::PhaseRefreshV1;
     use super::refresh_fixture as terminal;
     use aq_server::profiled_execution::phase_refresh_terminal as terminal_owner;
     include!("phase_source_retention/case.rs");

@@ -1,13 +1,80 @@
 use super::*;
-#[derive(Serialize, Deserialize)]
+pub(crate) mod action;
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Create {
+pub(crate) struct Create {
     operation_id: Uuid,
     message_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
     expected_conversation_revision: String,
+    #[schemars(length(min = 1, max = 16384))]
     body: String,
-    context: Vec<Value>,
-    attachments: Vec<Value>,
+    #[schemars(length(max = 16))]
+    context: Vec<ContextRef>,
+    /// agile-vault-27: staged uploads pinned by id and content digest.
+    #[schemars(length(max = 4))]
+    attachments: Vec<super::attachments::AttachmentRef>,
+}
+pub(super) const MAX_CONTEXT_REFS: usize = 16;
+/// X5: a pinned reference to an AQ entity the owner attached to a message.
+/// The server checks shape only; the supervisor resolves refs under its own
+/// authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ContextRef {
+    #[serde(rename = "type")]
+    kind: ContextKind,
+    id: Uuid,
+    /// Required, nullable: an absent field is refused like the schema does.
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    #[serde(deserialize_with = "Option::deserialize")]
+    revision: Option<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ContextKind {
+    Project,
+    Task,
+    Result,
+    Review,
+    Knowledge,
+    Session,
+    PlaybookRun,
+}
+impl ContextRef {
+    fn valid(&self) -> bool {
+        !self.id.is_nil() && self.revision.as_deref().is_none_or(|r| positive(r).is_ok())
+    }
+    /// One stable line for the supervisor turn text.
+    pub(super) fn render(&self) -> String {
+        let kind = serde_json::to_value(self.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        match &self.revision {
+            Some(r) => format!("{kind} {} revision {r}", self.id),
+            None => format!("{kind} {}", self.id),
+        }
+    }
+}
+/// Decodes stored context refs, refusing anything the writer could not produce.
+pub(super) fn stored_context(raw: Option<Value>) -> Result<Vec<ContextRef>> {
+    let Some(raw) = raw else {
+        return Ok(vec![]);
+    };
+    let refs: Vec<ContextRef> = serde_json::from_value(raw).map_err(|_| unavailable())?;
+    if refs.is_empty() || !context_valid(&refs) {
+        return Err(unavailable());
+    }
+    Ok(refs)
+}
+fn context_valid(refs: &[ContextRef]) -> bool {
+    refs.len() <= MAX_CONTEXT_REFS
+        && refs.iter().all(ContextRef::valid)
+        && refs
+            .iter()
+            .enumerate()
+            .all(|(i, a)| refs[..i].iter().all(|b| (b.kind, b.id) != (a.kind, a.id)))
 }
 impl Create {
     fn parse(bytes: &[u8]) -> Result<Self> {
@@ -23,8 +90,8 @@ impl Create {
             || v.body.trim().is_empty()
             || v.body.len() > 16384
             || v.body.contains('\0')
-            || !v.context.is_empty()
-            || !v.attachments.is_empty()
+            || !context_valid(&v.context)
+            || !super::attachments::refs_valid(&v.attachments)
         {
             return Err(invalid());
         }
@@ -88,7 +155,11 @@ impl Receipt {
                 if r.cursor.is_none()
                     && matches!(
                         r.reason.as_deref(),
-                        Some("conversation_revision_changed" | "message_id_conflict")
+                        Some(
+                            "conversation_revision_changed"
+                                | "message_id_conflict"
+                                | "attachment_unavailable"
+                        )
                     ) => {}
             _ => return Err(unavailable()),
         }
@@ -111,12 +182,59 @@ pub(super) async fn enqueue(
     bytes: Bytes,
 ) -> Result<Response> {
     let request = Create::parse(&bytes)?;
+    let action = action::request(id, &request);
+    let mut registry = crate::dashboard_api::actions::Registry::default();
+    registry
+        .register(action::SendMessage(service.clone()))
+        .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    crate::dashboard_api::actions::submit_legacy(&state, &registry, &user, action)
+        .await
+        .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    let Json(receipt) = lookup(
+        Extension(service),
+        RequireOwner(user),
+        Path((id, request.operation_id)),
+    )
+    .await
+    .map_err(|error| match error {
+        AppError::NotFound(_) => {
+            AppError::IdentityUnavailable("supervisor enqueue operation is unresolved".into())
+        }
+        other => other,
+    })?;
+    if receipt.request_digest != request.request_digest()? {
+        return Err(conflict());
+    }
+    Ok(receipt.outcome())
+}
+/// Seed historical fixtures through the real mailbox writer without requiring
+/// the dashboard action journal introduced after their migration prefix.
+#[cfg(test)]
+pub(super) async fn enqueue_historical_fixture(
+    state: &AppState,
+    user: &User,
+    id: Uuid,
+    bytes: Bytes,
+) -> Result<Response> {
+    enqueue_domain(state, &Service::new(state), user, id, bytes)
+        .await
+        .map(Receipt::outcome)
+}
+
+async fn enqueue_domain(
+    state: &AppState,
+    service: &Service,
+    user: &User,
+    id: Uuid,
+    bytes: Bytes,
+) -> Result<Receipt> {
+    let request = Create::parse(&bytes)?;
     if id.is_nil() {
         return Err(invalid());
     }
-    let at = stamp(&state)?;
+    let at = stamp(state)?;
     let mut tx = service.tx().await?;
-    owner(&mut tx, &user).await?;
+    owner(&mut tx, user).await?;
     let conversation = definition(&mut tx, Some(id), true).await?;
     let sender = author(user.id);
     let sender_key = sender_key(&sender).map_err(|_| unavailable())?;
@@ -133,9 +251,17 @@ pub(super) async fn enqueue(
     {
         let receipt = Receipt::decode(old, user.id, id, request.operation_id)?;
         tx.commit().await.map_err(db)?;
-        return Ok(receipt.outcome());
+        return Ok(receipt);
     }
-    let reserved = i64::try_from(request.body.len() + 4096).map_err(|_| invalid())?;
+    // Attachment rows are locked here and bound only when the message lands;
+    // their bytes count against the conversation's retained capacity.
+    let at_ms = i64::try_from(at).map_err(|_| unavailable())?;
+    let attached =
+        super::attachments::claim(&mut tx, &request.attachments, user.id, id, at_ms).await?;
+    let reserved = i64::try_from(request.body.len() + 4096)
+        .ok()
+        .and_then(|n| n.checked_add(attached.unwrap_or(0)))
+        .ok_or_else(invalid)?;
     let row=sqlx::query("UPDATE global_supervisor_conversation SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton AND retained_operations<$2 AND retained_bytes<=$3-$1 RETURNING conversation_id")
   .bind(reserved).bind(MAX_OPERATIONS).bind(MAX_BYTES).fetch_optional(&mut *tx).await.map_err(db)?;
     if row.is_none() {
@@ -160,6 +286,8 @@ pub(super) async fn enqueue(
     };
     if result.conversation.revision != request.expected_conversation_revision {
         result.reason = Some("conversation_revision_changed".into());
+    } else if attached.is_none() {
+        result.reason = Some("attachment_unavailable".into());
     } else {
         let appended = append(
             &mut tx,
@@ -177,6 +305,15 @@ pub(super) async fn enqueue(
         .await;
         match appended {
             Ok(cursor) => {
+                if !request.context.is_empty() {
+                    sqlx::query("INSERT INTO global_supervisor_message_context(message_id,refs) VALUES($1,$2)")
+                        .bind(request.message_id)
+                        .bind(json!(request.context))
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db)?;
+                }
+                super::attachments::bind(&mut tx, &request.attachments, request.message_id).await?;
                 result.state = "queued".into();
                 result.cursor = Some(cursor.to_string());
             }
@@ -194,7 +331,7 @@ pub(super) async fn enqueue(
     .await
     .map_err(|_| unavailable())?;
     tx.commit().await.map_err(db)?;
-    Ok(result.outcome())
+    Ok(result)
 }
 pub(super) async fn lookup(
     Extension(service): Extension<Arc<Service>>,

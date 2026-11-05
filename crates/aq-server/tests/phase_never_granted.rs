@@ -1,6 +1,8 @@
 //! Actual SQL/nominal refresh owners; synthetic installation, no physical stop claim.
 mod common;
+// This shared fixture also builds Started/Stopped requests for terminal tests.
 #[path = "common/phase_refresh_terminal.rs"]
+#[allow(dead_code)] // This target intentionally uses only part of the shared fixture.
 mod terminal;
 use aq_server::profiled_execution::no_grant;
 use sqlx::Row;
@@ -60,4 +62,23 @@ async fn actual_refresh_issued_phase_grant_never_uses_absence_release() {
     let row=sqlx::query("SELECT holds_task,(SELECT count(*) FROM profiled_never_granted_closures WHERE attempt_id=a.attempt_id) AS closures FROM execution_attempts a WHERE attempt_id=$1").bind(attempt).fetch_one(&f.c.env.env.pool).await.unwrap();
     assert!(row.get::<bool, _>("holds_task"));
     assert_eq!(row.get::<i64, _>("closures"), 0);
+}
+
+#[tokio::test]
+async fn actual_refresh_cancellation_before_grant_uses_typed_absence_owner() {
+    let f = Box::pin(terminal::prepared_terminal()).await;
+    let attempt = f.prepared.original.binding.attempt_id;
+    let (status, receipt) = common::native_cancellation::cancel(
+        &f.c.env.env.state,
+        attempt,
+        uuid::Uuid::new_v4(),
+        "cancel accepted refresh",
+    )
+    .await;
+    assert_eq!(status, 200, "{receipt}");
+    assert_eq!(receipt["disposition"], "never_granted");
+    let (held,valid,reason,stop):(bool,bool,String,String)=sqlx::query_as("SELECT a.holds_task,profiled_never_granted_valid(a.attempt_id),c.reason,h.state#>>'{stop,kind}' FROM execution_attempts a JOIN profiled_never_granted_closures c USING(attempt_id) JOIN profiled_authority_hot h USING(attempt_id) WHERE attempt_id=$1").bind(attempt).fetch_one(&f.c.env.env.pool).await.unwrap();
+    assert!(!held && valid);
+    assert_eq!(reason, "cancelled");
+    assert_eq!(stop, "unknown");
 }

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-e15fbd1bfbdc1cec)
+
+running 1 test
+test old_snapshot_classifies_actual030_origin_even_without_visible032_grant ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.50s
+

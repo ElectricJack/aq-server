@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized] target(s) in 0.56s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-9787479e7a4a9a6c)
+
+running 12 tests
+test concurrent_start_has_one_guardian_and_cancel_prevents_revival ... ok
+test expired_supervisor_is_stopped_and_scratch_is_retained ... ok
+test lost_guardian_blocks_successor_and_retains_scratch ... ok
+test main_delivery_database_upgrades_without_losing_history ... ok
+test mismatched_host_plan_never_creates_a_writer ... ok
+test owner_message_reaches_supervisor_and_reply_is_recorded ... ok
+test physical_renewal_requires_next_sequence_and_later_deadline ... ok
+test revocation_before_physical_start_refuses_and_stops_guardian ... ok
+test revoked_policy_stops_instead_of_readopting ... ok
+test successor_requires_stop_and_retains_prior_generation ... ok
+test supervisor_restart_resumes_without_duplicate_session ... ok
+test supervisor_session_starts_under_central_permit ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.81s
+

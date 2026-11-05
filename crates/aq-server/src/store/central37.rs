@@ -13,21 +13,34 @@ pub(super) fn corrupt() -> StoreError {
         "central reservation storage/guards or retained proofs are inconsistent".into(),
     )
 }
-pub(super) fn function_body(name: &str) -> Result<&'static str> {
-    MIGRATION
-        .split_once(&format!("CREATE FUNCTION {name}("))
+pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
+    let latest = include_str!("../../migrations/0049_supervisor_reservation_consumption.sql");
+    // bold-stone-51: agent-sent supervisor mail extends the source proof.
+    let agent = include_str!("../../migrations/0084_agent_supervisor_mail.sql");
+    let source = if version >= 84 && agent.contains(&format!("FUNCTION {name}(")) {
+        agent
+    } else if version >= 49 && latest.contains(&format!("FUNCTION {name}(")) {
+        latest
+    } else {
+        MIGRATION
+    };
+    source
+        .split_once(&format!("FUNCTION {name}("))
         .and_then(|(_, tail)| tail.split_once("AS $$"))
         .and_then(|(_, tail)| tail.split_once("$$;"))
         .map(|(body, _)| body)
         .ok_or_else(corrupt)
 }
 
-pub(super) async fn central37_storage_guard(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    schema::validate(tx).await?;
-    data::validate(tx).await
+pub(super) async fn central37_storage_guard(
+    tx: &mut Transaction<'_, Postgres>,
+    version: u32,
+) -> Result<()> {
+    schema::validate(tx, version).await?;
+    data::validate(tx, version).await
 }
 
-async fn functions(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+async fn functions(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     for (name, args, returns, language, volatility) in [
         ("central_global_mailbox_key", "", "text", "sql", "s"),
         (
@@ -66,13 +79,35 @@ async fn functions(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
             "plpgsql",
             "v",
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        (version >= 49)
+            .then_some([
+                (
+                    "central_supervisor_turn_complete",
+                    "uuid",
+                    "boolean",
+                    "sql",
+                    "s",
+                ),
+                (
+                    "consume_central_supervisor_turn",
+                    "",
+                    "trigger",
+                    "plpgsql",
+                    "v",
+                ),
+            ])
+            .into_iter()
+            .flatten(),
+    ) {
         let row = sqlx::query("SELECT p.prosrc,l.lanname,p.provolatile::text,p.prokind::text,p.prosecdef,p.proretset,p.proisstrict,p.proparallel::text,p.proconfig,format_type(p.prorettype,NULL) AS returns FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1)")
             .bind(format!("{name}({args})")).fetch_optional(&mut **tx).await?;
         let Some(row) = row else {
             return Err(corrupt());
         };
-        if row.get::<String, _>("prosrc") != function_body(name)?
+        if row.get::<String, _>("prosrc") != function_body(name, version)?
             || row.get::<String, _>("lanname") != language
             || row.get::<String, _>("provolatile") != volatility
             || row.get::<String, _>("prokind") != "f"

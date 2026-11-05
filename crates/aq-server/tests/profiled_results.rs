@@ -1,6 +1,10 @@
 //! Disposable actual SQL owners; synthetic launch/host fixture, no provider run.
 //! Ordered migrations must create the ledger in the assembled daemon.
+#[path = "profiled_results/cancellation.rs"]
+mod cancellation;
 mod common;
+#[path = "profiled_results/notification_sources.rs"]
+mod notification_sources;
 use aq_admission::{
     execution_spec::ProfiledExecutionSpec,
     transport::{self, ResultReport},
@@ -32,6 +36,24 @@ async fn prepare_with_inputs(
     stop_now: bool,
     graph_profile: Option<serde_json::Value>,
     pilot: bool,
+) -> (Fixture, aq_admission::started::Request, ResultReport) {
+    Box::pin(prepare_with_policy(
+        pin,
+        stop_now,
+        graph_profile,
+        pilot,
+        None,
+    ))
+    .await
+}
+/// `policy_actor` makes the outcome policy-actor reviewed under that retained
+/// default-completion definition; the fixture's required check is preserved.
+async fn prepare_with_policy(
+    pin: bool,
+    stop_now: bool,
+    graph_profile: Option<serde_json::Value>,
+    pilot: bool,
+    policy_actor: Option<aq_server::profiled_execution::definitions::Definition>,
 ) -> (Fixture, aq_admission::started::Request, ResultReport) {
     let mut f = fixture().await;
     // Optional synthetic ledger-fixture profile is pinned BEFORE the launch is
@@ -149,6 +171,10 @@ async fn prepare_with_inputs(
         outcome.required_checks.clear();
         outcome.inputs = vec![spec.task_context.clone()];
     }
+    if let Some(definition) = &policy_actor {
+        outcome.review = outcome::ReviewRequirement::PolicyActor;
+        outcome.validation_policy = definition.artifact().clone();
+    }
     spec.outcome_artifact = outcome.artifact().unwrap();
     f.profiled.offer.manifest.bindings.outcome = spec.outcome_artifact.clone();
     f.profiled.offer.binding.launch_manifest_digest =
@@ -156,11 +182,16 @@ async fn prepare_with_inputs(
     f.profiled.offer.binding.execution_spec_digest = spec.artifact().unwrap().digest;
     outcome.validate_against(&spec).unwrap();
     let (mut f, start) = native_started::setup_fixture(f, true, true, Some(&spec)).await;
-    if pilot {
+    if pilot || policy_actor.is_some() {
         let mut config = (*f.state.config).clone();
         let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
         p.revision += 1;
-        p.definition_bodies.push(settlement_owner39::policy());
+        p.definition_bodies.extend(
+            pilot
+                .then(settlement_owner39::policy)
+                .into_iter()
+                .chain(policy_actor.clone()),
+        );
         config.profiled_execution = Some(Arc::new(p));
         f.state.config = Arc::new(config);
         aq_server::profiled_execution::policies::install(&f.state)
@@ -1033,7 +1064,18 @@ async fn review_env_options(
     profile: Option<serde_json::Value>,
     pilot: bool,
 ) -> ReviewEnv {
+    Box::pin(review_env_for_outcome(peer_count, profile, pilot, false)).await
+}
+async fn review_env_for_outcome(
+    peer_count: usize,
+    profile: Option<serde_json::Value>,
+    pilot: bool,
+    failed: bool,
+) -> ReviewEnv {
     let (mut f, _, mut report) = Box::pin(prepare_with_inputs(true, true, profile, pilot)).await;
+    if failed {
+        report.outcome = transport::ProcessOutcome::Failed;
+    }
     if pilot {
         report.outcome = transport::ProcessOutcome::Unknown;
     }
@@ -1198,6 +1240,8 @@ async fn review_env_options(
     f.state.source_retention = Some(Arc::new(
         aq_server::source_retention::Runtime::new(
             aq_server::source_retention::SourceRetentionConfig {
+                keep_per_task: 2,
+                max_age: 30 * 86400,
                 staging_root: directory.path().join("staging"),
                 git_root: directory.path().join("git"),
                 git_socket: socket,
@@ -1445,8 +1489,8 @@ async fn protected_engine_question_waits_for_real_owner_and_exact_completion_eve
         .await
         .unwrap();
     let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
-    assert_eq!(url.host_str(), Some("127.0.0.1"));
-    assert_eq!(url.port(), Some(55432));
+    // Disposable loopback test PostgreSQL only (scripts/test-db or CI's localhost).
+    assert!(matches!(url.host_str(), Some("127.0.0.1" | "localhost")));
     url.set_path(f.db.options().get_database().unwrap());
     let url = url.to_string();
     let driver = Driver::start(
@@ -1519,6 +1563,26 @@ async fn protected_engine_question_waits_for_real_owner_and_exact_completion_eve
     .fetch_one(&pool)
     .await
     .unwrap();
+    // G11 X33: the runs view names the pending decision and its review task.
+    let task: Uuid = sqlx::query_scalar("SELECT s.task_id FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) WHERE d.decision_id=$1")
+        .bind(decision)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let runs = driver
+        .inspect_runs(f.actor, Default::default())
+        .await
+        .unwrap();
+    let waiting = runs
+        .items
+        .iter()
+        .find(|item| item.id == run)
+        .and_then(|item| item.waiting.clone())
+        .expect("pending human decision view");
+    assert_eq!(waiting.kind, "decision");
+    assert_eq!(waiting.decision_id, decision);
+    assert_eq!(waiting.decision_state.as_deref(), Some("pending"));
+    assert_eq!(waiting.related_task_ids, vec![task]);
     let cancelled: Uuid = sqlx::query_scalar(
         "SELECT (receipt->>'handle')::uuid FROM playbook_effects WHERE run_id=$1",
     )
@@ -1556,6 +1620,12 @@ async fn protected_engine_question_waits_for_real_owner_and_exact_completion_eve
     service.revoke(f.actor, grant).await.unwrap();
     // Cancellation was copied by its earlier quantum; only the newly answered
     // question remains for this exact copy/engine-ACK loss boundary.
+    // An inert retained row from another producer deliberately shares the
+    // decision UUID. Its bytes are never delivered; this isolates the copy
+    // lookup's producer identity before the normal protected delivery proof.
+    let collision = sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,fanout_complete) SELECT namespace_id,generation,'aq.graph.operations@1',epoch,$1,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,'engine_accepted',true FROM playbook_outbox WHERE producer='aq.human.decisions@1' LIMIT 1")
+        .bind(decision).execute(&pool).await.unwrap();
+    assert_eq!(collision.rows_affected(), 1);
     assert_eq!(driver.test_collect_decision_events().await.unwrap(), 1);
     let event_first = driver.test_commit_event_without_aq_ack().await.unwrap();
     assert!(!event_first.duplicate);
@@ -1580,7 +1650,7 @@ async fn protected_engine_question_waits_for_real_owner_and_exact_completion_eve
             .unwrap();
     assert!(copied);
     let event: serde_json::Value =
-        sqlx::query_scalar("SELECT engine_receipt FROM playbook_outbox WHERE event_id=$1")
+        sqlx::query_scalar("SELECT engine_receipt FROM playbook_outbox WHERE producer='aq.human.decisions@1' AND event_id=$1")
             .bind(decision)
             .fetch_one(&pool)
             .await
@@ -1694,8 +1764,8 @@ async fn bounded_owner_quantum_expires_its_accepted_question_and_delivers_exact_
         .await
         .unwrap();
     let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
-    assert_eq!(url.host_str(), Some("127.0.0.1"));
-    assert_eq!(url.port(), Some(55432));
+    // Disposable loopback test PostgreSQL only (scripts/test-db or CI's localhost).
+    assert!(matches!(url.host_str(), Some("127.0.0.1" | "localhost")));
     url.set_path(f.db.options().get_database().unwrap());
     let driver = Driver::start(
         service.clone(),
@@ -1778,11 +1848,25 @@ async fn bounded_owner_quantum_expires_its_accepted_question_and_delivers_exact_
 mod human_results;
 #[path = "profiled_results/media_owner.rs"]
 mod media_owner;
+#[path = "profiled_results/results_feedback.rs"]
+mod results_feedback;
 #[path = "profiled_results/review_inbox.rs"]
 mod review_inbox;
 
 #[path = "profiled_results/media_http.rs"]
 mod media_http;
 
+#[path = "profiled_results/auto_settlement56.rs"]
+mod auto_settlement56;
+#[path = "profiled_results/operations.rs"]
+mod operations;
+#[path = "profiled_results/question_inbox.rs"]
+mod question_inbox;
+#[path = "profiled_results/questions.rs"]
+mod questions;
 #[path = "profiled_results/settlement_owner39.rs"]
 mod settlement_owner39;
+#[path = "profiled_results/waits.rs"]
+mod waits;
+#[path = "profiled_results/wakes.rs"]
+mod wakes;

@@ -210,6 +210,45 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
     )
     .await
     .unwrap();
+    // The human boundary must preserve the specific deadline rule rather than
+    // replacing it with the dashboard's generic invalid-request envelope.
+    let before = queue_snapshot(&f).await;
+    for expires_at_ms in [NOW, NOW + 2001] {
+        let invalid = service::Mutation::Input(aq_session_api::InputRequest {
+            terminal: r.terminal.clone(),
+            operation_id: Uuid::new_v4(),
+            lease_id: lease.lease_id,
+            expected_controller_generation: lease.generation,
+            expected_session_revision: 1,
+            expires_at_ms,
+            bytes: b"PRIVATE_INPUT_SENTINEL".to_vec(),
+        });
+        let response = aq_server::build_admin_router(f.state.clone())
+            .oneshot(
+                Request::post(format!(
+                    "/api/v1/terminals/{}/mutations",
+                    r.terminal.terminal_id
+                ))
+                .header("X-AQ-Request", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&invalid).unwrap()))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            response.headers()["aq-terminal-server-time-ms"],
+            NOW.to_string()
+        );
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["code"], "input_deadline", "{body}");
+        assert!(body["message"].as_str().unwrap().contains("2000"));
+        assert!(!body.to_string().contains("PRIVATE_INPUT_SENTINEL"));
+        assert_eq!(before, queue_snapshot(&f).await);
+    }
     service::mutate(
         &f.state,
         f.actor,
@@ -274,6 +313,32 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         "full poll still dispatches with unchanged zero-controller activity hint"
     );
     assert!(full.effects.iter().any(|e| matches!(e, Effect::Resize(_))));
+}
+
+#[tokio::test]
+async fn output_poll_progresses_during_control_poll_and_limits_each_lane() {
+    let (f, _dir, r) = Box::pin(setup()).await;
+    let subscription = watch(&f, &r, 15000).await;
+    let runtime = &f.state.config.terminals.as_ref().unwrap().runtime;
+    // Own the exact permit held by a sleeping control poll, without a real sleep.
+    let control = runtime.poll(f.node.node_id).unwrap();
+    let (status, body) = http(&f, &request(&r)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let envelope: Envelope = serde_json::from_value(body).unwrap();
+    assert!(
+        matches!(&envelope.effects[..], [Effect::Watch(w)] if w.subscription_id == subscription)
+    );
+    assert!(matches!(
+        runtime.poll(f.node.node_id),
+        Err(aq_server::error::AppError::Conflict(_))
+    ));
+    let output = runtime.output_poll(f.node.node_id).unwrap();
+    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::CONFLICT);
+    drop(control);
+    let control = runtime.poll(f.node.node_id).unwrap();
+    drop(output);
+    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::OK);
+    drop(control);
 }
 
 #[tokio::test]
@@ -366,4 +431,155 @@ async fn output_poll_refuses_non_output_modes_stale_credentials_boot_and_runtime
         terminal::peer::output_poll(&f.state, &node, &request(&r)).await,
         Err(aq_server::error::AppError::CredentialRevoked)
     ));
+}
+
+#[tokio::test]
+async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
+    use aq_session_protocol::{ArtifactRef, Digest, OutputFrame, OutputGap, Snapshot};
+    let (f, _dir, r) = Box::pin(setup()).await;
+    let bytes = b"unwatched output".to_vec();
+    let upload = PeerUpload {
+        version: 1,
+        capability: r.capability.clone(),
+        peer: r.peer.clone(),
+        exchange_id: Uuid::new_v4(),
+        cursor: 0,
+        receipts: vec![],
+        epoch_receipts: vec![],
+        resize_receipts: vec![],
+        fence_acks: vec![],
+        frames: vec![OutputFrame {
+            terminal: r.terminal.clone(),
+            sequence: 1,
+            byte_length: bytes.len() as u32,
+            digest: Digest::of(&bytes),
+            bytes: bytes.clone(),
+        }],
+        snapshots: vec![Snapshot {
+            terminal: r.terminal.clone(),
+            snapshot_id: Uuid::new_v4(),
+            capture_request_id: Uuid::new_v4(),
+            through_sequence: 0,
+            columns: 80,
+            rows: 24,
+            renderer: ArtifactRef {
+                id: Text::new("synthetic").unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: Digest::of(b"renderer"),
+            },
+            state: bytes.clone(),
+            digest: Digest::of(&bytes),
+        }],
+        gaps: vec![],
+    };
+    let router = aq_server::build_worker_router(f.state.clone());
+    let send = |body: &PeerUpload| {
+        Request::post("/v1/terminal-relay/upload")
+            .header("authorization", format!("Bearer {}", f.credential))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(body).unwrap()))
+            .unwrap()
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(send(&upload))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let mut stale = upload.clone();
+    stale.peer = Peer::Remote {
+        node_id: f.node.node_id,
+        boot_id: Uuid::new_v4(),
+    };
+    assert!(
+        router
+            .clone()
+            .oneshot(send(&stale))
+            .await
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    // A trailing upload after the last watch expires is equally disposable.
+    watch(&f, &r, 1000).await;
+    f.state
+        .config
+        .terminals
+        .as_ref()
+        .unwrap()
+        .runtime
+        .gap(
+            &r.peer,
+            &OutputGap {
+                terminal: r.terminal.clone(),
+                first_missing: 1,
+                last_missing: 1,
+            },
+            NOW + 1001,
+        )
+        .unwrap();
+    f.state
+        .config
+        .terminals
+        .as_ref()
+        .unwrap()
+        .runtime
+        .frame(&r.peer, upload.frames[0].clone(), NOW + 1001)
+        .unwrap();
+    f.state
+        .config
+        .terminals
+        .as_ref()
+        .unwrap()
+        .runtime
+        .snapshot(&r.peer, upload.snapshots[0].clone(), NOW + 1001)
+        .unwrap();
+    assert_eq!(
+        router.oneshot(send(&upload)).await.unwrap().status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn relay_internal_failures_have_safe_named_http_errors() {
+    let (f, _dir, r) = Box::pin(setup()).await;
+    // An actual failed persistence read, without sleeps or a real network peer.
+    sqlx::query("ALTER TABLE terminal_sessions RENAME TO unavailable_terminal_sessions")
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    let router = aq_server::build_worker_router(f.state.clone());
+    let poll = serde_json::to_value(request(&r)).unwrap();
+    let upload = serde_json::json!({
+        "version":1,"capability":r.capability,"peer":r.peer,"exchange_id":Uuid::new_v4(),"cursor":0,
+        "receipts":[],"epoch_receipts":[],"resize_receipts":[],"fence_acks":[],"frames":[],"snapshots":[],
+        "gaps":[{"terminal":r.terminal,"first_missing":1,"last_missing":1}]
+    });
+    for (path, body, code) in [
+        ("poll", poll.clone(), "terminal_poll_failed"),
+        ("output-poll", poll, "terminal_output_poll_failed"),
+        ("upload", upload, "terminal_upload_failed"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/terminal-relay/{path}"))
+                    .header("authorization", format!("Bearer {}", f.credential))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], code);
+        assert!(!String::from_utf8_lossy(&bytes).contains("unavailable_terminal_sessions"));
+    }
 }

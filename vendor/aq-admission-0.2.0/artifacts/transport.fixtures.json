@@ -1,0 +1,104 @@
+[
+  {
+    "body": {
+      "after_offer": null,
+      "available": {
+        "cpu_millis": 1000,
+        "disk_bytes": 1048576,
+        "memory_bytes": 1048576,
+        "slots": 1
+      },
+      "identity": {
+        "boot_id": "00000000-0000-0000-0000-00000000000c",
+        "node_id": "00000000-0000-0000-0000-00000000000b"
+      },
+      "inventory_sequence": 1,
+      "limit": 2,
+      "operation_id": "00000000-0000-0000-0000-00000000005b",
+      "schema_version": 1
+    },
+    "kind": "poll"
+  },
+  {
+    "body": {
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+        "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+        "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "offer_id": "00000000-0000-0000-0000-00000000000f",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "session_id": "00000000-0000-0000-0000-00000000000e"
+        }
+      },
+      "disposition": {
+        "grant_id": "00000000-0000-0000-0000-000000000049",
+        "kind": "stopped",
+        "stop_receipt_digest": "6c45cb72a36e63d522aa54ed8adbd7a29a989474f2f77e0458af8800564ef3cb"
+      },
+      "guardian_id": "00000000-0000-0000-0000-000000000046",
+      "journal": {
+        "digest": "63cce47c8b0cd9b7e835e86d004f754216b48886a45c4cc626fbd64c87ec0a60",
+        "kind": "recorded",
+        "revision": 2
+      },
+      "launch_id": "00000000-0000-0000-0000-000000000047",
+      "reason": "execution_expiry",
+      "schema_version": 1,
+      "stop_operation_id": "00000000-0000-0000-0000-000000000048"
+    },
+    "kind": "stop_evidence"
+  },
+  {
+    "body": {
+      "clock": {
+        "expires_at_ms": 2000,
+        "server_time_ms": 1000,
+        "valid_for_ms": 1000
+      },
+      "lease": {
+        "account_reference": "fixture-account",
+        "binding": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+          "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+          "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+          "offer_id": "00000000-0000-0000-0000-00000000000f",
+          "schema_version": 1,
+          "session": {
+            "assignment_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-00000000000d",
+            "boot_id": "00000000-0000-0000-0000-00000000000c",
+            "kind": "remote",
+            "node_id": "00000000-0000-0000-0000-00000000000b",
+            "session_id": "00000000-0000-0000-0000-00000000000e"
+          }
+        },
+        "credential_profile": {
+          "digest": "cadd9b19c2abc6f2cdcaadbf3bb3dffe057f84a7e1b6859dc536598388dbd867",
+          "id": "credential-profile",
+          "version": "1"
+        },
+        "credential_revision": 1,
+        "endpoint_reference": "fixture-endpoint",
+        "expires_at_ms": 2000,
+        "issued_at_ms": 1000,
+        "lease_id": "00000000-0000-0000-0000-000000000010",
+        "material_bytes": 13,
+        "material_digest": "2ee8f42267a3635138b7b04501b6a854349d168cdc4e2db23bf05b64e65371f7",
+        "provider": "fixture-provider",
+        "purpose": "model-authentication",
+        "schema_version": 1
+      }
+    },
+    "kind": "material_delivery"
+  }
+]

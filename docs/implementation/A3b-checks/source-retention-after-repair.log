@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 56s
+     Running tests/source_retention.rs (target/debug/deps/source_retention-ac041488706a5d20)
+
+running 1 test
+test selected_real_aq_git_import_survives_worker_volume_loss_and_base_download_is_scoped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.46s
+

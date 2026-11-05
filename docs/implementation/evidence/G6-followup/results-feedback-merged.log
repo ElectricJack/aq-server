@@ -1,0 +1,17 @@
+$ cargo test --locked --workspace --test profiled_results results_feedback
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 02s
+     Running tests/profiled_results.rs (target/debug/deps/profiled_results-efd1dfbb99408ca0)
+
+running 9 tests
+test results_feedback::capture_policy_is_pinned_and_waiver_is_exact ... ok
+test results_feedback::capture_counts_finalized_source_retention_and_keeps_revision_immutable ... ok
+test results_feedback::feedback_bounds_anchors_replies_cursors_and_exact_corrections ... ok
+test results_feedback::feedback_comments_replay_history_resolution_and_feeds ... ok
+test results_feedback::feedback_desired_follow_version_and_task_filters ... ok
+test results_feedback::feedback_retained_image_anchor_and_principal_fence ... ok
+test results_feedback::feedback_reload_keeps_exact_resolution_and_direct_principal_preference ... ok
+test results_feedback::media_upload_disabled_without_store_is_explicit ... ok
+test results_feedback::feedback_task_links_result_revision ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 32.27s

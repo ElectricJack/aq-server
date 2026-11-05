@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+error[E0432]: unresolved import `aq_server::delegated_permits::storage`
+   --> crates/aq-server/tests/delegated_permits.rs:154:9
+    |
+154 |     use aq_server::delegated_permits::storage;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `storage` in `delegated_permits`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `aq-server` (test "delegated_permits") due to 1 previous error

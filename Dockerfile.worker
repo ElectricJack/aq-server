@@ -1,19 +1,20 @@
 # BEGIN PINNED AQ-GIT BUILD STAGES
-# Standalone pinned source build, also usable as a stage in server/worker images.
+# Verified release executable and pinned Git runtime for all consumer images.
 FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS aq-git-build
 WORKDIR /src
 COPY vendor/aq-git-source.tar.gz /tmp/source.tar.gz
-RUN echo '8f6a2f8ce04361c3cabaff5de7274505e28a042235da18cc346086f47e4c6cd5  /tmp/source.tar.gz' | sha256sum -c - && tar -xzf /tmp/source.tar.gz -C /src
-RUN cargo build --locked --release -p aq-git-cli
+RUN echo 'f64891f03e2d28263cf3af20b38123935ae08d6917699becb9d77e76af2fd3c6  /tmp/source.tar.gz' | sha256sum -c -
+COPY vendor/aq-git-v0.2.0-linux-x86_64 /src/target/release/aq-git
+RUN echo '3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2  /src/target/release/aq-git' | sha256sum -c - && chmod 755 /src/target/release/aq-git
 FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS git-build
 RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev libcurl4-openssl-dev libexpat1-dev gettext zlib1g-dev && rm -rf /var/lib/apt/lists/*
-COPY vendor/aq-git-0.1.0/git-2.56.0.tar.xz /tmp/git.tar.xz
+COPY vendor/aq-git-0.2.0/git-2.56.0.tar.xz /tmp/git.tar.xz
 RUN echo '26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3  /tmp/git.tar.xz' | sha256sum -c - && mkdir /git && tar -xf /tmp/git.tar.xz -C /git --strip-components=1
 WORKDIR /git
 RUN make -j4 prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease all && make prefix=/opt/aq-git-runtime RUNTIME_PREFIX=YesPlease NO_TCLTK=YesPlease NO_GETTEXT=YesPlease install
 # END PINNED AQ-GIT BUILD STAGES
 
-FROM rust:1.96.1-bookworm AS build
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS build
 WORKDIR /candidate
 ARG AQ_SOURCE_REVISION
 ARG AQ_WORKER_ARCHIVE_SHA256
@@ -25,35 +26,65 @@ RUN sha256sum --check worker-candidate.sha256 \
     && mkdir /build && tar -xzf aq-worker-source.tar.gz -C /build
 WORKDIR /build
 ENV AQ_SOURCE_REVISION=${AQ_SOURCE_REVISION}
+# Production builds only the controller binary, without the synthetic-runtime
+# feature: the shipped image has no run-execution and no fixture agent.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=aq-worker-${AQ_WORKER_ARCHIVE_SHA256},sharing=locked,target=/build/target \
-    cargo build --locked --release --bins \
+    cargo build --locked --release -p aq-worker --bin aq-worker \
     && mkdir /out \
-    && cp target/release/aq-worker target/release/aq-fixture-agent /out/
+    && cp target/release/aq-worker /out/
 
-FROM debian:bookworm-slim AS worker
-ARG AQ_SOURCE_REVISION
-ARG AQ_VERSION=0.1.0
-ARG AQ_STATE_FORMAT=4
-ARG AQ_PROTOCOL_MAX=1
+# CI-only fixture: the historical synthetic execution harness. Never pushed.
+FROM build AS synthetic-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=aq-worker-${AQ_WORKER_ARCHIVE_SHA256},sharing=locked,target=/build/target \
+    cargo build --locked --release -p aq-worker --features synthetic-runtime --bin aq-worker --bin aq-fixture-agent \
+    && mkdir /out-synthetic \
+    && cp target/release/aq-worker target/release/aq-fixture-agent /out-synthetic/
+
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS worker-base
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 libexpat1 libssl3 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 aq && useradd --uid 10001 --gid aq --create-home --home-dir /home/aq aq \
-    && mkdir /config /state && chown 10001:10001 /config /state
-LABEL org.opencontainers.image.title="aq-worker" \
-      org.opencontainers.image.revision="${AQ_SOURCE_REVISION}" \
-      org.opencontainers.image.version="${AQ_VERSION}" \
-      io.agent-q.protocol-max="${AQ_PROTOCOL_MAX}" \
-      io.agent-q.state-format="${AQ_STATE_FORMAT}"
-COPY --from=build /out/aq-worker /out/aq-fixture-agent /usr/local/bin/
+    && mkdir -p /config /state /run/aq-sandbox /var/lib/aq-worker/leases \
+    && chown 10001:10001 /config /state /var/lib/aq-worker/leases
 COPY --from=aq-git-build /src/target/release/aq-git /usr/local/bin/aq-git
 COPY --from=git-build /opt/aq-git-runtime /opt/aq-git-runtime
 RUN ln -s /opt/aq-git-runtime/bin/git /usr/bin/git
 COPY vendor/git-candidate.json /usr/share/agent-q/git-candidate.json
 ENV PATH="/opt/aq-git-runtime/bin:${PATH}"
 COPY vendor/worker-candidate.json /usr/share/agent-q/worker-candidate.json
-ENV XDG_CONFIG_HOME=/config
+COPY --chmod=755 scripts/worker-init-volumes.sh /usr/local/bin/worker-init-volumes
+ENV XDG_CONFIG_HOME=/config HOME=/state LANG=C.UTF-8
 VOLUME /config /state
+WORKDIR /state
 USER 10001:10001
 ENTRYPOINT ["aq-worker"]
 CMD ["run"]
+
+FROM worker-base AS worker
+ARG AQ_SOURCE_REVISION
+ARG AQ_VERSION
+ARG AQ_STATE_FORMAT=4
+ARG AQ_PROTOCOL_MAX=1
+LABEL org.opencontainers.image.title="aq-worker" \
+      org.opencontainers.image.revision="${AQ_SOURCE_REVISION}" \
+      org.opencontainers.image.version="${AQ_VERSION}" \
+      io.agent-q.protocol-max="${AQ_PROTOCOL_MAX}" \
+      io.agent-q.state-format="${AQ_STATE_FORMAT}"
+COPY --from=build /out/aq-worker /usr/local/bin/
+
+# Synthetic-runtime fixture for execution and recovery smoke only: release and CI
+# build it locally beside the production image and never push it.
+FROM worker-base AS synthetic-runtime
+ARG AQ_SOURCE_REVISION
+ARG AQ_VERSION
+ARG AQ_STATE_FORMAT=4
+ARG AQ_PROTOCOL_MAX=1
+LABEL org.opencontainers.image.title="aq-worker-synthetic-runtime" \
+      org.opencontainers.image.revision="${AQ_SOURCE_REVISION}" \
+      org.opencontainers.image.version="${AQ_VERSION}" \
+      io.agent-q.protocol-max="${AQ_PROTOCOL_MAX}" \
+      io.agent-q.state-format="${AQ_STATE_FORMAT}" \
+      io.agent-q.fixture="synthetic-runtime"
+COPY --from=synthetic-build /out-synthetic/aq-worker /out-synthetic/aq-fixture-agent /usr/local/bin/

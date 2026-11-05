@@ -164,6 +164,7 @@ pub async fn record(
         1
     };
     let snapshot = CapabilitySnapshot {
+        backend_kind: None,
         target: ExecutionTarget::Worker {
             node_id: auth.id(),
             boot_id: request.identity.boot_id,

@@ -1,0 +1,339 @@
+{
+  "cases": [
+    {
+      "contract": "context.read",
+      "kind": "input",
+      "name": "valid finite view",
+      "valid": true,
+      "value": {
+        "page": 0,
+        "snapshot": "snapshot-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        },
+        "view": "work"
+      }
+    },
+    {
+      "contract": "context.read",
+      "kind": "input",
+      "name": "invalid arbitrary view",
+      "valid": false,
+      "value": {
+        "page": 0,
+        "snapshot": "snapshot-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        },
+        "view": "sql"
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "input",
+      "name": "valid decision",
+      "valid": true,
+      "value": {
+        "choices": [
+          "approve",
+          "reject"
+        ],
+        "expires_at_ms": 1000,
+        "question": "Approve?",
+        "responders": [
+          "alice"
+        ],
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "input",
+      "name": "invalid decision extra authority",
+      "valid": false,
+      "value": {
+        "approved": true,
+        "choices": [
+          "approve"
+        ],
+        "expires_at_ms": 1000,
+        "question": "Approve?",
+        "responders": [
+          "alice"
+        ],
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "accepted is admission",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "decision-1"
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "admission is not approval",
+      "outcome": "approved",
+      "valid": false,
+      "value": {
+        "handle": "decision-1"
+      }
+    },
+    {
+      "contract": "message.send",
+      "kind": "output",
+      "name": "queued message",
+      "outcome": "queued",
+      "valid": true,
+      "value": {
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "pending readback",
+      "outcome": "running",
+      "valid": true,
+      "value": {
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "decision readback",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "approved",
+        "output": {
+          "reference": "result-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "invalid untyped readback",
+      "outcome": "completed",
+      "valid": false,
+      "value": {
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.operation.updated",
+      "kind": "event",
+      "name": "work completion",
+      "valid": true,
+      "value": {
+        "outcome": "completed",
+        "output": {
+          "disposition": "accepted",
+          "reference": "result-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.decision.completed",
+      "kind": "event",
+      "name": "decision completion",
+      "valid": true,
+      "value": {
+        "outcome": "approved",
+        "output": {
+          "reference": "result-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.decision.completed",
+      "kind": "event",
+      "name": "invalid decision admission event",
+      "valid": false,
+      "value": {
+        "outcome": "accepted",
+        "output": {
+          "reference": "result-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.operation.updated",
+      "kind": "event",
+      "name": "invalid old operation payload",
+      "valid": false,
+      "value": {
+        "disposition": "queued",
+        "message_id": "message-1",
+        "operation_id": "operation-1"
+      }
+    },
+    {
+      "contract": "aq.work.changed",
+      "kind": "event",
+      "name": "aq.work.changed",
+      "valid": true,
+      "value": {
+        "outcome": "cancelled",
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.artifact.recorded",
+      "kind": "event",
+      "name": "aq.artifact.recorded",
+      "valid": true,
+      "value": {
+        "outcome": "recorded",
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.check.completed",
+      "kind": "event",
+      "name": "aq.check.completed",
+      "valid": true,
+      "value": {
+        "outcome": "failed",
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.integration.changed",
+      "kind": "event",
+      "name": "aq.integration.changed",
+      "valid": true,
+      "value": {
+        "outcome": "conflict",
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.signal.reported",
+      "kind": "event",
+      "name": "aq.signal.reported",
+      "valid": true,
+      "value": {
+        "outcome": "reported",
+        "reference": "result-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    }
+  ],
+  "replay_cases": [
+    {
+      "command": "message.send",
+      "conflicting_input": {
+        "body": "changed",
+        "identity": "message-1",
+        "recipient": "supervisor",
+        "visibility": "project"
+      },
+      "expected_outcome": "queued",
+      "input": {
+        "body": "hello",
+        "identity": "message-1",
+        "recipient": "supervisor",
+        "visibility": "project"
+      },
+      "operation": "message-replay"
+    },
+    {
+      "command": "decision.request",
+      "conflicting_input": {
+        "choices": [
+          "approve",
+          "reject"
+        ],
+        "expires_at_ms": 1000,
+        "question": "Different question?",
+        "responders": [
+          "alice"
+        ],
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "expected_handle": "decision-replay",
+      "input": {
+        "choices": [
+          "approve",
+          "reject"
+        ],
+        "expires_at_ms": 1000,
+        "question": "Approve?",
+        "responders": [
+          "alice"
+        ],
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "operation": "decision-replay"
+    }
+  ]
+}

@@ -6,6 +6,9 @@
 #![allow(clippy::duplicate_mod)]
 #[path = "phase_execution/current.rs"]
 mod current;
+#[path = "phase_execution/delegated_renewal.rs"]
+mod delegated_renewal;
+pub use delegated_renewal::renew_delegated;
 #[path = "phase_execution/facts.rs"]
 mod facts;
 #[path = "phase_execution/history.rs"]

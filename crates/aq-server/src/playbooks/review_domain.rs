@@ -9,17 +9,164 @@ use uuid::Uuid;
 pub enum CatalogProfile {
     Mail1,
     HumanReview2,
+    /// HumanReview2 plus the confirmed graph-operation event.
+    GraphEvents3,
+    /// GraphEvents3 plus confirmed reviewed-task settlement events.
+    SettlementEvents4,
+    /// D4 host catalog 1.0.0, vendored and fingerprint-pinned (D5), numbered 5 after the main-line event profiles 3 and 4.
+    Host5,
+    /// D8 findings and daily occurrences; old catalog profiles remain frozen.
+    Monitoring6,
+    /// D6: AQ host catalog 2.0.0 (supersedes 1.0.0), vendored and
+    /// fingerprint-pinned for a new namespace/generation, numbered 7 after the
+    /// main-line D8 profile 6. Adds the
+    /// asynchronous judgment.request.v2/check.request.v2 and operation.get.
+    /// D11 registers all twelve catalog commands (adds findings.reconcile,
+    /// message.send and decision.request).
+    Host7,
+    /// AQ host catalog 2.1.0 (supersedes 2.0.0), vendored and
+    /// fingerprint-pinned beside the untouched Host7 pin. Same capabilities as
+    /// Host7; candidate.prepare (2.1.0) outputs the prepared `source` OID that
+    /// policies bind check.request `source` to.
+    Host8,
+}
+pub const HOST8_VERSION: &str = "2.1.0";
+pub const HOST8_FINGERPRINT: &str =
+    "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716";
+fn host8_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../../vendor/aq-host-catalog-2.1.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.1.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST8_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST8_FINGERPRINT),
+                "vendored AQ host catalog 2.1.0 fingerprint"
+            );
+            registry
+        })
+        .clone()
+}
+pub const HOST7_VERSION: &str = "2.0.0";
+pub const HOST7_FINGERPRINT: &str =
+    "sha256:e2ce7dc8ff4b37538f8d27f175a4e365ff95cf14508ae7074beea04026b143db";
+pub const HOST7_CAPABILITIES: [&str; 12] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+    "operation.get",
+    "judgment.request.v2",
+    "check.request.v2",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
+];
+fn host7_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../../vendor/aq-host-catalog-2.0.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.0.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST7_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST7_FINGERPRINT),
+                "vendored AQ host catalog 2.0.0 fingerprint"
+            );
+            registry
+        })
+        .clone()
+}
+pub const HOST5_VERSION: &str = "1.0.0";
+pub const HOST5_FINGERPRINT: &str =
+    "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1";
+pub const HOST5_CAPABILITIES: [&str; 4] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+];
+fn host5_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../../vendor/aq-host-catalog-1.0.0/registry.json"
+            ))
+            .expect("vendored D4 host catalog parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST5_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST5_FINGERPRINT),
+                "vendored D4 host catalog fingerprint"
+            );
+            registry
+        })
+        .clone()
 }
 impl CatalogProfile {
     pub fn number(self) -> i16 {
         match self {
             Self::Mail1 => 1,
             Self::HumanReview2 => 2,
+            Self::GraphEvents3 => 3,
+            Self::SettlementEvents4 => 4,
+            Self::Host5 => 5,
+            Self::Monitoring6 => 6,
+            Self::Host7 => 7,
+            Self::Host8 => 8,
         }
     }
+    /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0): the
+    /// asynchronous judgment/check, integration and operation.get adapters.
+    pub fn is_host2(self) -> bool {
+        matches!(self, Self::Host7 | Self::Host8)
+    }
+    pub fn has_reviews(self) -> bool {
+        !matches!(
+            self,
+            Self::Mail1 | Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
+        )
+    }
     pub fn registry(self) -> Registry {
+        if self == Self::Monitoring6 {
+            let mut registry = host5_registry();
+            for event in [graph_operation_event(), task_completed_event()] {
+                registry.events.insert(event.name.clone(), event);
+            }
+            return registry;
+        }
+        if self == Self::Host5 {
+            return host5_registry();
+        }
+        if self == Self::Host7 {
+            return host7_registry();
+        }
+        if self == Self::Host8 {
+            return host8_registry();
+        }
         let mut registry = super::domain::registry();
-        if self == Self::HumanReview2 {
+        if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
+            let event = graph_operation_event();
+            registry.events.insert(event.name.clone(), event);
+        }
+        if self == Self::SettlementEvents4 {
+            let event = task_completed_event();
+            registry.events.insert(event.name.clone(), event);
+        }
+        if self.has_reviews() {
             let decision = decision_contract();
             let operation = operation_contract();
             let event = decision_event();
@@ -32,6 +179,32 @@ impl CatalogProfile {
     pub fn validate_scope(self, scope: &super::domain::GrantScope) -> Result<()> {
         if self == Self::Mail1 {
             return scope.validate();
+        }
+        if matches!(
+            self,
+            Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
+        ) {
+            let mut allowed: BTreeSet<String> = if self.is_host2() {
+                HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
+            } else {
+                HOST5_CAPABILITIES.iter().map(|c| c.to_string()).collect()
+            };
+            if self == Self::Monitoring6 {
+                allowed.insert("findings.reconcile".into());
+            }
+            if scope.workspace_id.is_nil()
+                || scope.project_id.is_nil()
+                || !scope.recipients.is_empty()
+                || scope.capabilities.is_empty()
+                || !scope.capabilities.is_subset(&allowed)
+                || aq_playbook_host::model::canonical_bytes(scope)
+                    .map_err(|_| Error::Invalid)?
+                    .len()
+                    > 32768
+            {
+                return Err(Error::Invalid);
+            }
+            return Ok(());
         }
         let mut base = scope.clone();
         base.capabilities = BTreeSet::from(["message.send".into()]);
@@ -221,6 +394,67 @@ pub fn operation_contract() -> CommandContract {
         sensitive_output_fields: BTreeSet::new(),
         max_payload_bytes: 65536,
         deadline_ms: 5000,
+    }
+}
+pub const GRAPH_PRODUCER: &str = "aq.graph.operations@1";
+pub const SETTLEMENT_PRODUCER: &str = "aq.task.settlement@1";
+/// The exact retained completion outbox body, keyed by completion operation.
+pub fn task_completed_event() -> EventContract {
+    let revision = || Schema::Integer {
+        minimum: 1,
+        maximum: i64::MAX,
+    };
+    EventContract {
+        name: "task.completed".into(),
+        version: "1".into(),
+        payload: object([
+            ("event_id", Schema::string(36)),
+            ("producer", fixed(SETTLEMENT_PRODUCER)),
+            ("event", fixed("task.completed")),
+            ("attempt_id", Schema::string(36)),
+            ("evaluation_operation_id", Schema::string(36)),
+            ("report", artifact()),
+            ("release_id", Schema::string(36)),
+            (
+                "receipt",
+                object([
+                    ("workspace_id", Schema::string(36)),
+                    ("task_id", Schema::string(36)),
+                    ("change_set_id", Schema::string(36)),
+                    ("version", revision()),
+                    ("content_revision", revision()),
+                    ("response_digest", Schema::string(64)),
+                ]),
+            ),
+        ]),
+        trusted_producers: BTreeSet::from([SETTLEMENT_PRODUCER.into()]),
+        scopes: BTreeSet::from(["project".into()]),
+        correlation_fields: BTreeSet::from(["operation".into()]),
+        subject_field: None,
+        revision_field: None,
+        max_payload_bytes: 8192,
+        retention_ms: 86400000,
+        sensitive_payload_fields: BTreeSet::new(),
+    }
+}
+/// One event per confirmed graph operation; `event_id` is the graph outbox id.
+pub fn graph_operation_event() -> EventContract {
+    EventContract {
+        name: "aq.graph.operation.confirmed".into(),
+        version: "1".into(),
+        payload: object([
+            ("operation_id", Schema::string(36)),
+            ("task_id", Schema::string(36)),
+            ("attempt_id", Schema::string(36)),
+        ]),
+        trusted_producers: BTreeSet::from([GRAPH_PRODUCER.into()]),
+        scopes: BTreeSet::from(["project".into()]),
+        correlation_fields: BTreeSet::from(["operation".into()]),
+        subject_field: None,
+        revision_field: None,
+        max_payload_bytes: 16384,
+        retention_ms: 86400000,
+        sensitive_payload_fields: BTreeSet::new(),
     }
 }
 pub fn decision_event() -> EventContract {

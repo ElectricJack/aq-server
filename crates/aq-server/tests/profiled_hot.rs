@@ -262,7 +262,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
     use aq_session_protocol::ProfiledGrant;
     use common::profiled::{NOW, artifact};
     use uuid::Uuid;
-    let mut f = fixture().await;
+    // Qualify the original hot/compatibility storage contract with its actual
+    // pre-settlement schema. Synthetic release records cannot satisfy owner39.
+    let mut f = aq_server::test_support::with_store_profile(27, fixture()).await;
     f.profiled.offer.manifest.terminal.input_enabled = false;
     f.profiled.offer.manifest.terminal.max_input_bytes = 64;
     f.profiled.offer.manifest.terminal.max_pending_input_bytes = 128;

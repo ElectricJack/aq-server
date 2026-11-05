@@ -1,0 +1,39 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 12s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-adfd6dc75a2a75d2)
+
+running 3 tests
+test delegated_runner_scope_is_rechecked_after_authentication ... ok
+test reconstructed_auth_fences_revocation_and_stale_boot ... ok
+test accept_issues_and_grant_atomically_upgrades_same_permit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.34s
+
+     Running tests/phase_refresh_terminal.rs (target/debug/deps/phase_refresh_terminal-1eff8c6bc841b605)
+
+running 7 tests
+test actual_refresh_started_stopped_http_records_exact_new_ack_envelopes_and_retains_task ... ok
+test duplicate_unknown_and_cross_profile_terminal_requests_never_mutate_authority ... ok
+test exact_refresh_prepare_http_uses_actual_current_store_and_its_own_qualification ... ok
+test expired_retired_runtime_still_cleans_up_with_exact_immutable_refresh_ack ... ok
+test new_history_lookup_survives_expiry_without_minting_local_or_delivery_authority ... ok
+test no_started_refresh_closure_revokes_permission_retains_holds_and_replays_exact_ack ... ok
+test refresh_route_activation_cannot_expose_an_actual_frozen_issuer_without_its_terminal_profile ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.86s
+
+     Running tests/phase_terminal_started.rs (target/debug/deps/phase_terminal_started-78abbdff2793a887)
+
+running 10 tests
+test actual_phase_started_records_original_ack_without_extending_grant_and_replays_after_expiry ... ok
+test changed_project_and_current_principal_cannot_gain_started_authority ... ok
+test clock_tests::server_clock_regression_before_receipt_stamp_cannot_precede_issuance ... ok
+test clock_tests::final_insert_expiry_and_backward_clock_each_roll_back_actual_started ... ok
+test exact_ack_survives_retired_launch_eligibility_but_new_start_does_not ... ok
+test expired_or_cancelled_current_authority_cannot_record_first_started ... ok
+test receipt_failure_rolls_back_journal_hot_and_allows_same_original_retry ... ok
+test retired_installed_policy_refuses_first_started_even_with_current_configuration ... ok
+test stale_authenticated_context_is_rechecked_before_any_started_mutation ... ok
+test wrong_outer_origin_or_inner_scope_refuses_without_partial_state ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.38s

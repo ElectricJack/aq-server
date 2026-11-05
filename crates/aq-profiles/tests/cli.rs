@@ -2,10 +2,17 @@ mod common;
 use common::*;
 use std::process::Command;
 fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_aq"))
+    Command::new(env!("CARGO_BIN_EXE_aq-profile"))
 }
 fn catalog() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/catalog")
+}
+#[test]
+fn profile_cli_uses_distinct_binary_name() {
+    let output = binary().arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("Usage: aq-profile <COMMAND>"), "{help}");
 }
 #[test]
 fn requested_aq_profile_commands_work_without_db_and_separate_selection_pending() {

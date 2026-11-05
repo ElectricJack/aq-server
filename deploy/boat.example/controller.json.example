@@ -1,0 +1,33 @@
+{
+  "state_dir": "/state/controller",
+  "node": {
+    "runtime": {"id": "aq-worker", "version": "REPLACE_WITH_C7_VERSION", "digest": "REPLACE_WITH_RUNTIME_DIGEST_HEX"},
+    "capabilities": [],
+    "features": [],
+    "templates": [],
+    "max_concurrent_sandboxes": 4,
+    "spend_ceiling": {"currency": "USD", "micros": 18000000},
+    "capacity": {"memory_bytes": 17179869184, "cpu_millis": 8000, "disk_bytes": 214748364800, "max_preparing": 1},
+    "recovery": {"orphan_grace_ms": 30000, "cancellation_grace_ms": 5000, "sweep_interval_ms": 1000, "deadline_margin_ms": 5000, "max_pending_results": 128}
+  },
+  "boat": {
+    "api_url": "https://boat.dev/api/v1",
+    "node_id": "REPLACE_WITH_DISTINCT_BOAT_ENROLLED_NODE_UUID",
+    "attempt_org": "aq_attempts",
+    "template_org": "aq_template_builds",
+    "journal_path": "/state/boat-mappings.json",
+    "key_file": "/run/aq-boat/api-key",
+    "templates": [
+      {
+        "image": "REPLACE_WITH_ALLOWLIST_IMAGE_REFERENCE_AT_DIGEST",
+        "digest": "sha256:REPLACE_WITH_ALLOWLIST_DIGEST_HEX",
+        "saved_snapshot": "REPLACE_WITH_SCANNED_SAVED_SNAPSHOT",
+        "snapshot_id": "REPLACE_WITH_IMMUTABLE_SNAPSHOT_ID",
+        "scan_policy": "aq-credential-scan-v1"
+      }
+    ],
+    "api_timeout_ms": 30000,
+    "poll_timeout_ms": 120000,
+    "poll_interval_ms": 500
+  }
+}

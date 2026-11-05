@@ -1,0 +1,446 @@
+[
+  {
+    "type": "Follow",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "following": true
+    }
+  },
+  {
+    "type": "Comment",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Fix the caption",
+      "anchor": {
+        "kind": "result"
+      },
+      "follow": true,
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "type": "Correction",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Corrected feedback"
+    }
+  },
+  {
+    "type": "Resolve",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "follow_up": {
+        "result_id": "00000000-0000-4000-8000-000000000002",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reason": "Checked the follow-up"
+    }
+  },
+  {
+    "type": "FeedbackDraft",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "thread_id": "00000000-0000-4000-8000-000000000003",
+      "comment_id": "00000000-0000-4000-8000-000000000004",
+      "comment_revision": "1",
+      "title": "Correct caption",
+      "description": "Use reviewed text",
+      "acceptance_criteria": "Matches feedback",
+      "project_id": "00000000-0000-4000-8000-000000000005",
+      "expected_project_revision": "1",
+      "parent_id": null,
+      "artifacts": []
+    }
+  },
+  {
+    "type": "FeedbackLink",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "thread_id": "00000000-0000-4000-8000-000000000003",
+      "comment_id": "00000000-0000-4000-8000-000000000004",
+      "comment_revision": "1",
+      "project_id": "00000000-0000-4000-8000-000000000005",
+      "artifacts": [],
+      "task_id": "00000000-0000-4000-8000-000000000006"
+    }
+  },
+  {
+    "type": "Waiver",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requirement_id": "desktop",
+      "policy_revision": "1",
+      "reason": "Owner decision"
+    }
+  },
+  {
+    "type": "CapturePolicy",
+    "value": {
+      "revision": "1",
+      "requirements": [
+        {
+          "id": "desktop",
+          "policy_revision": "1",
+          "kind": "image",
+          "scenario": "results",
+          "steps": [
+            "Open Results"
+          ],
+          "viewport": {
+            "width_css": 1280,
+            "height_css": 800,
+            "dpr_milli": 1000
+          },
+          "environment": "test",
+          "count": 1,
+          "required": true,
+          "applicability": "Results changed",
+          "gate_binding": "completion"
+        }
+      ]
+    }
+  },
+  {
+    "type": "Comment",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Fix the caption",
+      "anchor": {
+        "kind": "image_region",
+        "artifact_id": "00000000-0000-4000-8000-000000000007",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "x": 0.1,
+        "y": 0.1,
+        "width": 0.2,
+        "height": 0.2
+      },
+      "follow": true,
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "type": "Comment",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Fix the caption",
+      "anchor": {
+        "kind": "video_range",
+        "artifact_id": "00000000-0000-4000-8000-000000000007",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "start_ms": 1000,
+        "end_ms": 2500
+      },
+      "follow": true,
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "type": "Detail",
+    "value": {
+      "result": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "version": "1",
+        "project_id": "00000000-0000-4000-8000-000000000005",
+        "task_id": "00000000-0000-4000-8000-000000000006",
+        "current_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "revision": {
+        "report_id": "00000000-0000-4000-8000-000000000002",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt_id": "00000000-0000-4000-8000-000000000008",
+        "source": {
+          "repository_id": "00000000-0000-4000-8000-000000000009",
+          "base": {
+            "format": "sha1",
+            "hex": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        "summary": "completed",
+        "submitted_at_ms": 1000000,
+        "parent_results": [],
+        "capture_policy": {
+          "revision": "1",
+          "requirements": [
+            {
+              "id": "desktop",
+              "policy_revision": "1",
+              "kind": "image",
+              "scenario": "results",
+              "steps": [
+                "Open Results"
+              ],
+              "viewport": {
+                "width_css": 1280,
+                "height_css": 800,
+                "dpr_milli": 1000
+              },
+              "environment": "test",
+              "count": 1,
+              "required": true,
+              "applicability": "Results changed",
+              "gate_binding": "completion"
+            }
+          ]
+        },
+        "artifacts": [],
+        "check_refs": [],
+        "evidence_refs": [],
+        "addressed_feedback": []
+      },
+      "assessment": {
+        "version": "1",
+        "result_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": {
+          "satisfied": false,
+          "requirements": [
+            {
+              "requirement_id": "desktop",
+              "policy_revision": "1",
+              "required": true,
+              "state": "missing",
+              "artifact_ids": [],
+              "waiver_id": null
+            }
+          ]
+        },
+        "artifacts": [],
+        "acceptance": "unreviewed",
+        "observed_at_ms": 1000000,
+        "unresolved_review": false
+      }
+    }
+  },
+  {
+    "name": "exact-resolution-detail",
+    "type": "Detail",
+    "value": {
+      "result": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "version": "1",
+        "project_id": "00000000-0000-4000-8000-000000000005",
+        "task_id": "00000000-0000-4000-8000-000000000006",
+        "current_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "directly_following": false
+      },
+      "revision": {
+        "report_id": "00000000-0000-4000-8000-000000000002",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt_id": "00000000-0000-4000-8000-000000000008",
+        "source": {
+          "repository_id": "00000000-0000-4000-8000-000000000009",
+          "base": {
+            "format": "sha1",
+            "hex": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        "summary": "completed",
+        "submitted_at_ms": 1000000,
+        "parent_results": [],
+        "capture_policy": {
+          "revision": "1",
+          "requirements": [
+            {
+              "id": "desktop",
+              "policy_revision": "1",
+              "kind": "image",
+              "scenario": "results",
+              "steps": [
+                "Open Results"
+              ],
+              "viewport": {
+                "width_css": 1280,
+                "height_css": 800,
+                "dpr_milli": 1000
+              },
+              "environment": "test",
+              "count": 1,
+              "required": true,
+              "applicability": "Results changed",
+              "gate_binding": "completion"
+            }
+          ]
+        },
+        "artifacts": [],
+        "check_refs": [],
+        "evidence_refs": [],
+        "addressed_feedback": [
+          "00000000-0000-4000-8000-000000000003"
+        ]
+      },
+      "assessment": {
+        "version": "1",
+        "result_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": {
+          "satisfied": false,
+          "requirements": [
+            {
+              "requirement_id": "desktop",
+              "policy_revision": "1",
+              "required": true,
+              "state": "missing",
+              "artifact_ids": [],
+              "waiver_id": null
+            }
+          ]
+        },
+        "artifacts": [],
+        "acceptance": "unreviewed",
+        "observed_at_ms": 1000000,
+        "unresolved_review": false
+      },
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      }
+    }
+  },
+  {
+    "name": "links-survive-comment-correction",
+    "type": "CommentsPage",
+    "value": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "resolved",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": {
+            "resolved_by": "00000000-0000-4000-8000-000000000010",
+            "reason": "Checked exact follow-up",
+            "follow_up": {
+              "result_id": "00000000-0000-4000-8000-000000000002",
+              "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "follow_up_report_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "name": "link-does-not-submit-or-resolve",
+    "type": "CommentsPage",
+    "value": {
+      "feedback_read_version": "results-feedback-1.1",
+      "follow_up_submission": {
+        "state": "unsupported"
+      },
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "position": "1",
+          "revision": "2",
+          "thread_id": "00000000-0000-4000-8000-000000000003",
+          "thread_version": "2",
+          "thread_state": "open",
+          "body": "Corrected feedback",
+          "author_id": "00000000-0000-4000-8000-000000000010",
+          "created_at_ms": 1000000,
+          "anchor": {
+            "kind": "result"
+          },
+          "history": [
+            {
+              "revision": "1",
+              "body": "Fix caption",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000000
+            },
+            {
+              "revision": "2",
+              "body": "Corrected feedback",
+              "author_id": "00000000-0000-4000-8000-000000000010",
+              "recorded_at_ms": 1000001
+            }
+          ],
+          "feedback_links": [
+            {
+              "operation_id": "00000000-0000-4000-8000-000000000001",
+              "project_id": "00000000-0000-4000-8000-000000000005",
+              "task_id": "00000000-0000-4000-8000-000000000006",
+              "origin": {
+                "result_id": "00000000-0000-4000-8000-000000000002",
+                "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "thread_id": "00000000-0000-4000-8000-000000000003",
+                "comment_id": "00000000-0000-4000-8000-000000000004",
+                "comment_revision": "1",
+                "artifacts": [
+                  {
+                    "artifact_id": "00000000-0000-4000-8000-000000000007",
+                    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                ]
+              }
+            }
+          ],
+          "resolution": null
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+]

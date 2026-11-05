@@ -107,6 +107,7 @@ pub enum ReservationOnly {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReservationState {
+    Consumed,
     AwaitingPreparedPlan,
     CancelledBeforePlan,
 }

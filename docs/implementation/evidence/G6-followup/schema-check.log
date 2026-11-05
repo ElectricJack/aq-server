@@ -1,0 +1,4 @@
+$ cargo run --locked -p aq-server --example results_feedback_contract -- --check
+    Blocking waiting for file lock on build directory
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.97s
+     Running `target/debug/examples/results_feedback_contract --check`

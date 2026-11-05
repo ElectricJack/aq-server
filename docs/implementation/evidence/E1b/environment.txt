@@ -1,0 +1,20 @@
+$ uname -a
+Linux DESKTOP-EB8UOME 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+$ rustc --version
+rustc 1.96.1 (31fca3adb 2026-06-26)
+$ cargo --version
+cargo 1.96.1 (356927216 2026-06-26)
+$ python3 --version
+Python 3.12.3
+$ docker version --format {{.Server.Version}}
+29.3.1
+$ git rev-parse HEAD
+15c27f8185bd84898198aeff54c27490f146ca15
+$ git rev-parse origin/main
+ff56fbba36a0bb0e8a42769cf8e2db66a1cfecf9
+
+Final merged verification source: 840230374596d01eb2435427694b22b795eca812
+Final upstream merged: ed027c42112bed58569ed035803389d98012686f
+Exact workspace command passed on 15c27f8185bd84898198aeff54c27490f146ca15; same named test rerun in dashboard area suite after final merge.
+Final documentation-only upstream merge: b31053c532a6dbd9ec494046b0dbe7b991524dbd
+Final upstream: e74a45e0844b76e3ab402a60f220f3a90eca0beb

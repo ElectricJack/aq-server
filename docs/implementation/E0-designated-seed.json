@@ -1,0 +1,97 @@
+{
+  "admin_url": "http://127.0.0.1:32838",
+  "compose_project": "aq-e0-final",
+  "graph_task_verified": true,
+  "graph_url": "http://127.0.0.1:32837",
+  "health": {
+    "aq-git": "healthy",
+    "aq-graph": "healthy",
+    "postgres": "healthy",
+    "server": "healthy"
+  },
+  "images": {
+    "aq-git": "94a3d9adea2cf2f693cde66e8c0b58dd9d9cd3a2b47eced78545092dbefdb638",
+    "aq-graph": "807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be",
+    "postgres": "99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+    "server": "94a3d9adea2cf2f693cde66e8c0b58dd9d9cd3a2b47eced78545092dbefdb638"
+  },
+  "private_directory_ownership": [
+    "10001:10001:700",
+    "10001:10001:700",
+    "10001:10001:700"
+  ],
+  "project_revision": 1,
+  "readiness": {
+    "database": "ok",
+    "dependencies": {
+      "aq_git": "ready",
+      "graph": "ready"
+    },
+    "status": "ready"
+  },
+  "repository": {
+    "allow_file_transport": false,
+    "allowed_refs": [
+      "refs/heads/main"
+    ],
+    "allowed_targets": [
+      "refs/heads/main"
+    ],
+    "binding_generation": 1,
+    "credential_profile": null,
+    "feature_profile": null,
+    "identity": "e0-development",
+    "mode": "central",
+    "object_format": "sha1",
+    "remote_url": "https://github.com/ElectricJack/aq-scratch.git",
+    "repository_id": "e0000000-0000-4000-8000-000000000003"
+  },
+  "runtime_users": {
+    "aq-git": "10001",
+    "server": "10001"
+  },
+  "seed": {
+    "designation": {
+      "base_branch": "main",
+      "credential_ref": "none",
+      "local_fixture": false,
+      "url": "https://github.com/ElectricJack/aq-scratch.git"
+    },
+    "node_id": "806c44f7-0e2a-4094-b976-687e4e54aedf",
+    "project_id": "e0000000-0000-4000-8000-000000000002",
+    "repository_id": "e0000000-0000-4000-8000-000000000003",
+    "task_id": "e0000000-0000-4000-8000-000000000004",
+    "workspace_id": "e0000000-0000-4000-8000-000000000001"
+  },
+  "source_base": {
+    "base": {
+      "algorithm": "sha1",
+      "hex": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+    },
+    "observation_id": "e0000000-0000-4000-8000-000000000009",
+    "retention": {
+      "binding_generation": 1,
+      "dependencies": [],
+      "generation": 3,
+      "id": "e0000000-0000-4000-8000-000000000011",
+      "refs": [
+        {
+          "name": "refs/aq-git/checkpoints/e0000000-0000-4000-8000-000000000011",
+          "oid": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+        }
+      ],
+      "release_operation": null,
+      "release_reason": null,
+      "repository_id": "e0000000-0000-4000-8000-000000000003",
+      "resource": "checkpoint",
+      "state": "active",
+      "version": 1
+    },
+    "retention_handle": "e0000000-0000-4000-8000-000000000011",
+    "workspace_retired": true
+  },
+  "source_revision": "8f6c49fd91850b924524494e26c5c17d14072796",
+  "state_root": "/home/jkern/.local/state/aq-platform-e0-final",
+  "worker_count": 1,
+  "worker_url": "http://127.0.0.1:32839"
+}

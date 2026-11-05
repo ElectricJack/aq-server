@@ -1,0 +1,33 @@
+{
+  "receipts": {
+    "finished": null,
+    "result": null,
+    "schema_version": 1,
+    "source": {
+      "artifact_digest": "6330ad4c8e4c9ffd030de4f9ee0830c02f01cd6d157c3fe0e1dc12a6cd8c8b16",
+      "attempt": {
+        "attempt_id": "f78b24f3-05aa-5d07-9730-54f74aa72299",
+        "launch_id": "6e6abfff-9c48-4146-b647-44f216ffb921",
+        "manifest_digest": "680cceb4edb48b5a50b053bad6510f2ceaff7de0163a975cb52a9997b15b9fb6"
+      },
+      "receipt_id": "ce9a667f-3560-4187-a046-6a2edde490f2"
+    }
+  },
+  "status": {
+    "bundle_offset": 591,
+    "manifest_offset": 620,
+    "receipt": {
+      "binding_generation": 1,
+      "manifest_digest": "6330ad4c8e4c9ffd030de4f9ee0830c02f01cd6d157c3fe0e1dc12a6cd8c8b16",
+      "receipt_id": "ce9a667f-3560-4187-a046-6a2edde490f2",
+      "repository_id": "00000000-0000-0000-0000-000000000002",
+      "retention_handle": "fe0a79da-15f2-4573-a590-235809456aad",
+      "source": {
+        "algorithm": "sha1",
+        "hex": "ab86b564cd602c057d24444e494ce8d33b1740f8"
+      },
+      "transfer_id": "463a3ad5-2cb2-4c3c-8905-ae6c8a105d46"
+    },
+    "transfer_id": "463a3ad5-2cb2-4c3c-8905-ae6c8a105d46"
+  }
+}

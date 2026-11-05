@@ -217,3 +217,5 @@ async fn changed_private_material_and_revoked_agent_scope_cannot_extend_a_permit
 
 #[path = "renewal/races.rs"]
 mod races;
+#[path = "renewal/subscription.rs"]
+mod subscription;

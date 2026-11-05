@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on build directory
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12m 07s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-4f89422fbe2e836c)
+
+running 1 test
+test dashboard_assets::release_tests::schema_two_checks_required_contracts_capabilities_and_provenance ... FAILED
+
+failures:
+
+---- dashboard_assets::release_tests::schema_two_checks_required_contracts_capabilities_and_provenance stdout ----
+
+thread 'dashboard_assets::release_tests::schema_two_checks_required_contracts_capabilities_and_provenance' (2371928) panicked at crates/aq-server/src/dashboard_assets.rs:550:9:
+assertion failed: DashboardAssets::load(root.path()).is_ok()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    dashboard_assets::release_tests::schema_two_checks_required_contracts_capabilities_and_provenance
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p aq-server --lib`

@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running tests/phase_results.rs (target/debug/deps/phase_results-f84dd70510a4a7d6)
+
+running 1 test
+test frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin ... 
+thread 'frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin' (2117265) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"conflict","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 409
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 27 filtered out; finished in 2.45s
+
+error: test failed, to rerun pass `-p aq-server --test phase_results`

@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
-    name = "aq",
+    name = "aq-profile",
     about = "AQ profile catalog inspection (no daemon required)"
 )]
 struct Cli {
@@ -90,7 +90,7 @@ fn main() {
         Ok(true) => {}
         Ok(false) => std::process::exit(3),
         Err(e) => {
-            eprintln!("aq profile: {e}");
+            eprintln!("aq-profile: {e}");
             std::process::exit(2);
         }
     }

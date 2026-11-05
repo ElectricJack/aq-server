@@ -600,6 +600,7 @@
     },
     "ReservationState": {
       "enum": [
+        "consumed",
         "awaiting_prepared_plan",
         "cancelled_before_plan"
       ],

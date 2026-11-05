@@ -248,7 +248,13 @@ async fn status(
 ) -> Result<Response, Error> {
     version(&headers)?;
     let Path(attempt) = path.map_err(|_| AppError::BadRequest("invalid source attempt".into()))?;
-    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::FetchPreparationMaterial,
+        Some(attempt),
+    )
+    .await?;
     let binding = candidate(&state, &auth, attempt).await?;
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     let before = locked(&state, &mut tx, &auth, &binding).await?;
@@ -308,7 +314,13 @@ async fn chunk(
         "bundle" => crate::source_retention::profiled_base::Member::Bundle,
         _ => return Err(AppError::BadRequest("unknown source member".into()).into()),
     };
-    let auth = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let auth = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::FetchPreparationMaterial,
+        Some(attempt),
+    )
+    .await?;
     let binding = candidate(&state, &auth, attempt).await?;
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     let before = locked(&state, &mut tx, &auth, &binding).await?;

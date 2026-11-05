@@ -1,0 +1,8 @@
+Command: cargo test --locked --workspace feedback_task_links_result_revision --test profiled_results
+    Finished `test` profile [unoptimized] target(s) in 1.08s
+     Running tests/profiled_results.rs (/tmp/aq-b3-slot2-target/debug/deps/profiled_results-e7642b5c70027987)
+
+running 1 test
+test results_feedback::feedback_task_links_result_revision ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 9.53s

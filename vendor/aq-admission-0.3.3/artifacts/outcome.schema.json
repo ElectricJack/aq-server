@@ -1,0 +1,245 @@
+{
+  "$comment": "UTF8 JSON and canonical bytes <=65536. Byte bounds, distinct IDs and exact spec linkage are enforced by typed validation; schema alone conveys no authority. Review and checks are requirements, not evidence.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "Criterion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "text": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Label": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ObjectFormat": {
+      "enum": [
+        "sha1",
+        "sha256"
+      ],
+      "type": "string"
+    },
+    "ObjectId": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "OutcomeKind": {
+      "enum": [
+        "source_change_reviewed"
+      ],
+      "type": "string"
+    },
+    "RequiredCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "validator": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "id",
+        "validator"
+      ],
+      "type": "object"
+    },
+    "ReviewRequirement": {
+      "enum": [
+        "human_owner",
+        "policy_actor"
+      ],
+      "type": "string"
+    },
+    "SourceAnchor": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "base": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "binding_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id",
+        "binding_generation",
+        "base",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "TaskRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "content_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "task_id",
+        "version",
+        "content_revision"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "$ref": "#/$defs/Criterion"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "kind": {
+      "$ref": "#/$defs/OutcomeKind"
+    },
+    "project_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "project_revision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "required_checks": {
+      "items": {
+        "$ref": "#/$defs/RequiredCheck"
+      },
+      "maxItems": 32,
+      "type": "array"
+    },
+    "review": {
+      "$ref": "#/$defs/ReviewRequirement"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceAnchor"
+    },
+    "task": {
+      "$ref": "#/$defs/TaskRevision"
+    },
+    "task_context": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "task_observation": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "validation_policy": {
+      "$ref": "#/$defs/ArtifactRef"
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "project_id",
+    "project_revision",
+    "task",
+    "source",
+    "task_observation",
+    "task_context",
+    "inputs",
+    "acceptance_criteria",
+    "validation_policy",
+    "review",
+    "required_checks"
+  ],
+  "title": "ExpectedOutcomeDefinition",
+  "type": "object"
+}

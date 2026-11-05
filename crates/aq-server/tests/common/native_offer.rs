@@ -133,7 +133,6 @@ pub async fn setup() -> Case {
         .await
         .unwrap(),
     ));
-    env.env.state.clock = Arc::new(chrono::Utc::now);
     let policy_body = "Synthetic owner policy: scoped read and mandatory review.";
     env.env.body["allowed_agent_profiles"] = json!(["reviewer@2"]);
     env.env.body["policy"] = json!({"identity":"native-test-policy","revision":"1","digest":Digest::of(policy_body.as_bytes())});
@@ -171,7 +170,7 @@ pub async fn setup() -> Case {
     ];
     let harness = &env.input.node.harnesses[0];
     let credential = &env.input.credentials[0];
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = (env.env.state.clock)().timestamp_millis() as u64;
     let count = art("native-test-counting", "Synthetic counting bound");
     let capacity = art("native-test-capacity", "Synthetic capacity bound");
     let fact = Qualification {
@@ -260,6 +259,7 @@ pub async fn setup() -> Case {
                 },
             },
             retention_handle: handle,
+            placement: None,
         }],
         context_qualifications: vec![fact],
         definition_bodies: definitions,
@@ -327,6 +327,8 @@ pub async fn setup() -> Case {
     env.env.state.source_retention = Some(Arc::new(
         aq_server::source_retention::Runtime::new(
             aq_server::source_retention::SourceRetentionConfig {
+                keep_per_task: 2,
+                max_age: 30 * 86400,
                 git_root: git,
                 git_socket: socket,
                 staging_root: env.env._dir.path().join("native-staging"),

@@ -19,6 +19,17 @@ pub struct ResolveRequest {
     pub lineage: TaskLineage,
     pub project: FrozenProjectBinding,
     pub compositions: Vec<PreparedComposition>,
+    /// Owner-assessed failed-predecessor replacement (B4). Absent for a first
+    /// attempt; legacy history without it stays conservatively unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<ReplacementBudget>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplacementBudget {
+    pub attempts_started: u32,
+    pub elapsed_ms: u64,
+    pub evidence: ReplacementEvidence,
 }
 fn artifact(id: &str) -> ArtifactRef {
     ArtifactRef {
@@ -77,7 +88,7 @@ pub async fn resolve_for_project_policy(
 async fn resolve_with_principal(
     state: &AppState,
     subject: principal::Principal,
-    request: ResolveRequest,
+    mut request: ResolveRequest,
 ) -> Result<Decision> {
     if request.operation_id.is_nil()
         || request.lineage.task_id.is_nil()
@@ -136,7 +147,56 @@ async fn resolve_with_principal(
     let observations = relevant(observations, &credentials, node_id);
     let time = now(state)?;
     let count = attempts(state, &request.lineage).await?;
+    let replacement = match request.replacement.take() {
+        Some(r)
+            if r.attempts_started == count.started
+                && r.attempts_started > 0
+                && r.evidence.lineage == request.lineage =>
+        {
+            Some(r)
+        }
+        Some(_) => return Err(bad("replacement budget does not match lineage history")),
+        None => None,
+    };
+    let placement = crate::profiled_execution::placement::facts(
+        state,
+        node_id,
+        &request.project.project.binding.catalog_digest,
+        request.lineage.project_id,
+        &request.project.environment,
+        time,
+    )
+    .await?;
     let ceiling = &request.project.project.binding.ceilings;
+    // H2: lineage spend from the observation ledger. Retries and wakes share
+    // the lineage, so spend accumulates. A cost limit without hard enforcement
+    // is a soft ceiling and records a policy event. The ledger is never a hard
+    // budget provider, so hard requirements stay refused (0004 §2.2).
+    let soft = match (
+        ceiling.cost_limit_microunits,
+        &ceiling.currency,
+        ceiling.require_hard_cost_enforcement,
+    ) {
+        (Some(limit_microunits), Some(currency), false) => {
+            Some(crate::observations::budget::SoftCeiling {
+                limit_microunits,
+                currency: currency.clone(),
+            })
+        }
+        _ => None,
+    };
+    let ledger = match aq_admission::transport::task_lineage_id(
+        request.lineage.project_id,
+        request.lineage.workspace_id,
+        request.lineage.task_id,
+    ) {
+        Ok(lineage) => crate::observations::budget::lineage(state, lineage, soft.as_ref())
+            .await
+            .ok()
+            .flatten()
+            .map(|budget| budget.snapshot()),
+        Err(_) => None,
+    };
     let input = SelectionInputs {
         project: ProjectSnapshot {
             lineage: request.lineage.clone(),
@@ -179,31 +239,48 @@ async fn resolve_with_principal(
         registry_revision: sqlx::query_scalar::<_, i64>(
             "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
         )
-        .fetch_one(&state.store.pool)
+        .fetch_optional(&state.store.pool)
         .await
-        .map_err(db)? as u64,
+        .map_err(db)?
+        .ok_or_else(|| conflict("intelligence registry has not been installed"))?
+            as u64,
         // Legacy attempts are counted conservatively. No latest stop/retention/
         // reconciliation or provider ledger authority is invented for them.
         budget: BudgetSnapshot {
             lineage: request.lineage,
             revision: count.budget_revision(),
             attempts_started: count.started,
-            last_attempt_id: None,
-            elapsed_ms: if count.started == 0 { Some(0) } else { None },
-            spent_microunits: None,
-            currency: None,
-            accounting: AccountingCompleteness::Unavailable,
-            accounting_source: artifact("aq.accounting.unavailable"),
+            last_attempt_id: replacement
+                .as_ref()
+                .map(|r| r.evidence.predecessor_attempt_id),
+            elapsed_ms: match &replacement {
+                Some(r) => Some(r.elapsed_ms),
+                None if count.started == 0 => Some(0),
+                None => None,
+            },
+            spent_microunits: ledger.as_ref().and_then(|l| l.spent_microunits),
+            currency: ledger.as_ref().and_then(|l| l.currency.clone()),
+            accounting: ledger
+                .as_ref()
+                .map_or(AccountingCompleteness::Unavailable, |l| l.accounting),
+            accounting_source: ledger.as_ref().map_or_else(
+                || artifact("aq.accounting.unavailable"),
+                |l| l.accounting_source.clone(),
+            ),
             hard_budget_provider: None,
             observed_at_ms: time,
-            expires_at_ms: time.checked_add(2000).ok_or(AppError::Internal)?,
+            expires_at_ms: time
+                .checked_add(OFFER_SELECTION_TTL_MS)
+                .ok_or(AppError::Internal)?,
         },
-        replacement: None,
+        replacement: replacement.map(|r| r.evidence),
         estimates: vec![],
         compositions: request.compositions,
         now_ms: time,
+        placement,
     };
-    let outcome = select(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
+    let outcome =
+        select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
     let decision = Decision {
         decision_id: Uuid::new_v4(),
         project: request.project,
@@ -263,7 +340,7 @@ pub async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
 ) -> Result<()> {
-    fence_retained_decision(state, tx, decision, false).await
+    fence_retained_decision(state, tx, decision, None).await
 }
 /// Only the current locked, never-granted native reservation may be discounted
 /// when comparing its original pre-offer decision. No durable count is changed.
@@ -364,13 +441,13 @@ async fn fence_owned_attempt(
         }
         _ => {}
     }
-    fence_retained_decision(state, tx, decision, true).await
+    fence_retained_decision(state, tx, decision, Some(binding.attempt_id)).await
 }
 async fn fence_retained_decision(
     state: &AppState,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
-    owned_attempt: bool,
+    owned_attempt: Option<Uuid>,
 ) -> Result<()> {
     let stored: Value = sqlx::query_scalar(
         "SELECT decision FROM intelligence_decisions WHERE decision_id=$1 FOR SHARE",
@@ -399,7 +476,17 @@ async fn fence_retained_decision(
     if decision.outcome.resolved.is_none() {
         return Err(conflict("decision has no eligible selection"));
     }
-    fence_snapshot(state, tx, decision, owned_attempt).await?;
+    fence_snapshot(state, tx, decision, owned_attempt.is_some()).await?;
+    // C4 placement is re-derived here, not only at selection: a node that
+    // reached a ceiling or lost its template since selection is refused.
+    crate::profiled_execution::placement::fence_locked(
+        state,
+        tx,
+        decision,
+        owned_attempt,
+        now(state)?,
+    )
+    .await?;
     principal::fence(state, tx, decision).await?;
     check_time(state, decision)
 }

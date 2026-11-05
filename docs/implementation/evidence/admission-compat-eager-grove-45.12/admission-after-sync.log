@@ -1,0 +1,261 @@
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-admission)
+    Finished `test` profile [unoptimized] target(s) in 36.87s
+     Running unittests src/lib.rs (target/debug/deps/aq_admission-575f44f7478c4a10)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/common.rs (target/debug/deps/common-65659bbb5c81cff8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (target/debug/deps/contracts-15000f2d229f67f7)
+
+running 7 tests
+test material_bytes_and_receipts_are_exact_attempt_binding_not_presence_claims ... ok
+test artifact_requires_real_matching_bytes_and_current_retention_metadata ... ok
+test mutations_reject_unknown_duplicate_nil_unbounded_and_wrong_versions ... ok
+test retained_role_and_byte_coverage_validates_against_resealed_public_offer ... ok
+test published_schema_and_fixtures_drift_test_packaged_artifacts ... ok
+test shipped_shared_offer_uses_exact_existing_launch_binding_bridge ... ok
+test source_requires_explicit_safe_ref_or_matching_immutable_object_and_freshness ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/control.rs (target/debug/deps/control-c9b9728c5ce18a5e)
+
+running 10 tests
+test immutable_six_receipts_have_fresh_nonce_clocks_without_retiming_history ... ok
+test initial_revision_cannot_change_expiry_and_new_revision_extends_only_live_prior_permit ... ok
+test frozen_six_source_and_publication_bytes_match_the_exact_archived_baseline ... ok
+test material_receipt_time_is_server_watermark_not_unqualified_worker_wall_clock ... ok
+test native_poll_refuses_scope_duplicate_cancellation_and_requested_limit_overflow ... ok
+test mismatched_original_owner_material_and_historical_clocks_never_get_positive_delivery ... ok
+test reconciliation_is_readonly_complete_scoped_and_cannot_hide_unknown_attempts ... ok
+test renewal_outlives_delivery_lease_only_for_exact_same_grant_owner_and_hard_deadline ... ok
+test typed_decode_rejects_nil_versions_scope_unknown_duplicates_and_oversized_bodies ... ok
+test published_control_fixtures_schema_and_independent_hashes_do_not_drift ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/control_common.rs (target/debug/deps/control_common-834834a7571e1c71)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/execution_spec.rs (target/debug/deps/execution_spec-ab6e46f214514455)
+
+running 3 tests
+test publication_is_independent_and_decode_rejects_caller_secret_unknown_duplicate_fields ... ok
+test spec_observation_context_and_canonical_bytes_must_all_be_retained ... ok
+test typed_worker_artifact_is_digest_bound_without_a_manifest_cycle ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/granted_closure.rs (target/debug/deps/granted_closure-47cb153b62c71ecd)
+
+running 5 tests
+test actual_host_optional_shape_does_not_weaken_the_post_started_contract ... ok
+test serialization_is_not_original_owner_or_current_authority ... ok
+test frozen_017_source_and_artifacts_are_preserved ... ok
+test strict_decode_rejects_duplicates_floats_oversize_and_release_semantics ... ok
+test synthetic_fixtures_schemas_and_independent_vectors_do_not_drift ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/granted_closure_common.rs (target/debug/deps/granted_closure_common-19ea5834a8423ab6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/outcome.rs (target/debug/deps/outcome-757243837fb663d4)
+
+running 6 tests
+test changed_review_requirements_change_the_pinned_definition ... ok
+test fixture_matches_independent_python_canonical_vectors_and_public_schema ... ok
+test byte_limit_covers_canonical_definition_and_raw_input ... ok
+test requirements_have_unique_ids_and_preserve_nonempty_bounded_text ... ok
+test unknown_policy_shapes_and_approval_shortcuts_cannot_decode ... ok
+test resealing_does_not_allow_different_task_source_or_context ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/placement.rs (target/debug/deps/placement-bb3c5b19f23010f4)
+
+running 5 tests
+test bounded_project_round_robin_preserves_priority_then_advances_cursor ... ok
+test oversized_head_does_not_hide_later_fit_and_resources_are_reserved_in_proposal ... ok
+test stale_boot_capacity_candidate_and_duplicate_subjects_never_become_authority ... ok
+test stable_ties_and_snapshot_bounds_are_explicit ... ok
+test warmth_is_only_after_eligibility_and_cold_nodes_can_prepare ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/preparation_refresh.rs (target/debug/deps/preparation_refresh-8d635c01fba8c3c5)
+
+running 14 tests
+test actual_fact_revision_is_the_current_registry_and_not_a_restamped_original ... ok
+test actual_original_accepted_and_credential_associations_cannot_be_rehashed_away ... ok
+test canonical_signed64_registry_revisions_and_exact_owner_configuration_are_required ... ok
+test all_known_registry_floors_reject_rollback_even_above_the_original_revision ... ok
+test explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour ... ok
+test long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract ... ok
+test fresh_profile_never_extends_original_accepted_or_replayed_execution_deadlines ... ok
+test normative_schema_contract_and_facts_are_exact_and_never_claim_owner_authentication ... ok
+test principal_inventory_context_and_private_backing_pins_remain_mandatory ... ok
+test profile_negotiation_is_exact_from_proposal_and_never_upgrades_old_history ... ok
+test real_typed_refresh_chain_preserves_selected_pins_and_independent_phase_clocks ... ok
+test strict_new_wire_refuses_unknown_duplicate_oversized_or_wrong_family_documents ... ok
+test unavailable_cooldown_unknown_and_expired_facts_still_refuse_initial_execution ... ok
+test unrelated_observation_revision_advances_do_not_reselect_or_invalidate_configuration ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.43s
+
+     Running tests/preparation_refresh_common.rs (target/debug/deps/preparation_refresh_common-54c21918a803c992)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/preparation_v2.rs (target/debug/deps/preparation_v2-a1595af782020ead)
+
+running 16 tests
+test acceptance_cannot_change_hold_request_or_retime_expired_proposal ... ok
+test accepted_phase_requires_explicit_new_worker_duration_bound ... ok
+test cold_preparation_and_execution_are_distinct_immutable_phases ... ok
+test changed_current_choice_context_source_and_unknown_facts_deny_initial_confirmation ... ok
+test exact_contract_and_complete_unique_features_are_mandatory ... ok
+test exact_qualified_018_source_and_artifacts_are_preserved ... ok
+test exact_unique_artifacts_and_linked_transfer_roles_refuse_substitution ... ok
+test generated_artifacts_and_independent_canonical_vectors_match ... ok
+test grant_issuance_must_be_inside_phase_and_current_budget ... ok
+test historical_receipt_does_not_become_live_from_expired_delivery ... ok
+test independent_execution_replay_never_extends_or_revives_old_sample ... ok
+test mandatory_owner_fact_set_hash_and_lifetime_are_bounded ... ok
+test original_artifact_retention_caps_accepted_preparation ... ok
+test serialization_and_decode_are_bounded_and_unknown_fields_refuse ... ok
+test structural_claims_are_not_authenticated_owner_truth ... ok
+test v2_decoder_never_falls_back_to_legacy_or_different_schema ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+     Running tests/preparation_v2_baseline.rs (target/debug/deps/preparation_v2_baseline-7a58c7a9fb020c18)
+
+running 1 test
+test untouched_019_phase_wire_schema_pins_clocks_and_errors_stay_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/preparation_v2_common.rs (target/debug/deps/preparation_v2_common-15269bba7e9fb860)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/result_record.rs (target/debug/deps/result_record-a22f60997cf97607)
+
+running 3 tests
+test no_stop_unknown_fields_duplicate_ids_and_byte_overflow_refuse ... ok
+test changed_report_and_foreign_owner_reference_never_reuse_ack ... ok
+test recorded_ack_matches_independent_vectors_without_acceptance_authority ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/scoped_presence.rs (target/debug/deps/scoped_presence-fac1e4ed2d0f6a11)
+
+running 9 tests
+test actual_private_record_hash_links_exact_historical_installation_without_retrieval_extension ... ok
+test changed_private_binding_and_cross_boot_lease_receipt_refuse ... ok
+test inventory_has_only_explicit_provisionability_and_bounds_distinct_profiles ... ok
+test network_delay_cannot_turn_old_issuance_into_new_observation_age ... ok
+test decoders_reject_unknown_duplicate_fields_protocol_and_raw_size ... ok
+test positive_requires_live_local_permit_and_later_private_read_but_negative_never_grants ... ok
+test published_schemas_fixtures_and_private_record_have_independent_drift_checks ... ok
+test receipt_replay_pins_original_observation_and_scope_without_fresh_authority ... ok
+test references_are_bounded_by_actual_utf8_bytes_not_only_characters ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/scoped_presence_common.rs (target/debug/deps/scoped_presence_common-9ca549b0df135279)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/spec_common.rs (target/debug/deps/spec_common-2241938164948f9a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/started.rs (target/debug/deps/started-60f1cb809174cd6c)
+
+running 3 tests
+test public_artifacts_and_independent_python_canonical_vectors_match ... ok
+test receipt_is_exact_historical_ack_and_strict_boundaries_refuse_unsupported_input ... ok
+test started_identity_is_original_owner_bound_not_a_renewal_or_physical_stop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/started_common.rs (target/debug/deps/started_common-b780a5b68d7b9539)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/startup.rs (target/debug/deps/startup-7b0f28ed76908fbb)
+
+running 6 tests
+test byte_for_byte_native_payload_retains_constituents_without_duplicate_delivery ... ok
+test independently_hashed_published_payload_descriptor_and_schema_do_not_drift ... ok
+test one_launch_cannot_pin_two_alternative_native_startup_descriptors ... ok
+test missing_reordered_duplicate_or_extra_startup_inputs_refuse ... ok
+test span_witness_checks_actual_constituent_bytes_and_descriptor_is_launch_bound ... ok
+test overhead_overflow_payload_alias_unretained_and_unknown_fields_refuse ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/startup_common.rs (target/debug/deps/startup_common-5b09eaa6ae3ad7da)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stopped.rs (target/debug/deps/stopped-a3f6f7c614f873a8)
+
+running 4 tests
+test acknowledgement_is_historical_and_bound_to_the_original_request ... ok
+test expired_stop_is_valid_but_unknown_or_digest_only_is_not_proof ... ok
+test public_schema_and_independent_canonical_vectors_match ... ok
+test exact_physical_owner_cannot_be_substituted_or_regressed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/task_lineage.rs (target/debug/deps/task_lineage-46932b1ecbc9bf0b)
+
+running 2 tests
+test independent_python_raw_uuid_vectors_are_stable ... ok
+test namespace_cannot_be_reset_by_attempt_and_nil_scope_refuses ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transport.rs (target/debug/deps/transport-5938e71d4da081c2)
+
+running 4 tests
+test exact_stop_replay_is_immutable_and_journal_order_is_launch_scoped ... ok
+test roundtrip_budget_is_charged_and_replay_cannot_restart_ttl ... ok
+test stop_journal_requires_durable_closed_reservation_and_unknown_never_releases ... ok
+test published_transport_replays_and_mutations_reject_duplicate_unknown_and_scope ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests aq_admission
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

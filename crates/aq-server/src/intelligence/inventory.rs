@@ -17,6 +17,9 @@ pub struct InventoryReport {
     pub ttl_ms: u64,
     pub qualifications: Vec<ArtifactRef>,
     pub credentials: Vec<InstalledCredential>,
+    /// SBX25 measured disk accounting; absent from older nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<crate::node_storage::StorageReport>,
 }
 pub(super) async fn report(
     State(state): State<AppState>,
@@ -34,6 +37,9 @@ pub(super) async fn report(
         || request.credentials.len() > 32
     {
         return Err(bad("invalid inventory identity/bounds"));
+    }
+    if let Some(storage) = &request.storage {
+        storage.validate()?;
     }
     let payload = aq_selection::digest(&request).map_err(|_| bad("inventory digest"))?;
     // Observe private material outside SQL locks. Only a server-configured
@@ -89,6 +95,7 @@ pub(super) async fn report(
                     &delivery,
                     observed,
                     observed_expires,
+                    None,
                 )
             }),
         )
@@ -234,6 +241,7 @@ pub(super) async fn report(
         }
     }
     let snapshot = CapabilitySnapshot {
+        backend_kind: None,
         material_delivery: delivery.clone(),
         target: ExecutionTarget::Worker {
             node_id: node.id,
@@ -265,6 +273,10 @@ pub(super) async fn report(
         &value,
     )
     .await?;
+    if let Some(storage) = &request.storage {
+        crate::node_storage::record(&mut tx, &node.id.to_string(), Some(node.id), storage, time)
+            .await?;
+    }
     sqlx::query("INSERT INTO execution_receipts(node_id,operation_id,kind,payload_digest,response) VALUES($1,$2,'intelligence_inventory',$3,$4)").bind(node.id).bind(request.operation_id).bind(payload.as_str()).bind(&value).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(Json(value))

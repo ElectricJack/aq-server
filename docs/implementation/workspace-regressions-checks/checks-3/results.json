@@ -1,0 +1,69 @@
+{
+  "scope": "checks",
+  "source": "28a065027e969b37527b39991cacbbd787c2cf77",
+  "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "harness_sha256": "60bb1930951487bc2507b37e960174ef32338afe8faf7cc29d6cb7e9df352b44",
+  "resource_controls": {
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_TEST_THREADS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "graph_sha256": null,
+  "expected_regressions": [
+    "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+    "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+    "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+    "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+    "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+    "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+    "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+    "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+    "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+    "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+    "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+    "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+    "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+    "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+    "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+    "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+    "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+    "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+    "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses"
+  ],
+  "runs": [
+    {
+      "case": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 18.69,
+      "log": "00-format.txt",
+      "test_results": [],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 479.51,
+      "log": "01-clippy.txt",
+      "test_results": [],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": []
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 06s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-ad6eda1217fd8196)
+
+running 17 tests
+test agent_access::messaging::global::reply::tests::supervisor_credential_scopes_are_required_for_each_operation ... ok
+test agent_access::messaging::global::reply::tests::supervisor_credential_upgrade_revokes_preexisting_inactive_tokens ... ok
+test agent_access::messaging::global::reply::tests::supervisor_reply_rechecks_lifecycle_and_token_inside_write ... ok
+test agent_access::messaging::global::reply::tests::supervisor_write_authentication_holds_lifecycle_and_credential_locks ... ok
+test agent_access::messaging::global::reply::tests::supervisor_credentials_revoke_on_stop_loss_and_expiry ... ok
+test agent_access::messaging::global::reservations::tests::closed_commands_reject_fake_execution_fields_duplicates_and_fractional_revisions ... ok
+test agent_access::messaging::global::reservations::tests::actual_mail_reservation_recovers_replays_and_cancels_without_runtime ... ok
+test agent_access::messaging::global::reservations::tests::concurrent_admission_cas_and_cross_kind_operation_identity_do_not_double_claim ... ok
+test agent_access::messaging::global::reservations::tests::current_owner_full_identity_and_role_are_required_for_every_read_and_mutation ... ok
+test agent_access::messaging::global::reservations::tests::count_utf8_body_budget_partial_scans_and_head_integrity_are_truthful ... ok
+test agent_access::messaging::global::reservations::tests::identity_and_policy_changes_while_lock_waiting_refuse_before_admission ... ok
+test agent_access::messaging::global::reservations::tests::immutable_original_global_rows_and_receipts_preserve_remote_behavior ... ok
+test agent_access::messaging::global::reservations::tests::normative_documents_decode_and_bind_exact_reservation_request_and_batch ... ok
+test agent_access::messaging::global::reservations::tests::protected_control_bytes_allow_cancel_after_ordinary_byte_capacity_exhausts ... ok
+test agent_access::messaging::global::reservations::tests::sql_requires_exact_original_reserve_and_cancel_operation_views ... ok
+test agent_access::messaging::global::reservations::tests::versioned_schema_is_frozen_and_runtime_not_advertised ... ok
+test agent_access::messaging::global::reservations::tests::last_operation_slot_preserves_exact_cancellation_but_no_other_writer ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 205 filtered out; finished in 13.11s
+

@@ -29,6 +29,7 @@ pub(crate) type DeliveryCheck<'a> =
 pub(crate) type CostCheck<'a> =
     dyn Fn(&InstalledHarness, Option<&CandidateEstimate>) -> CandidateResult + 'a;
 pub(crate) struct CoreInputs<'a> {
+    pub backend_kind: Option<BackendKind>,
     pub target: ObservationTarget,
     pub installation: CoreInstallation<'a>,
     pub credentials: &'a [AuthorizedCredential],
@@ -37,6 +38,7 @@ pub(crate) struct CoreInputs<'a> {
     pub compositions: &'a [CoreComposition<'a>],
     pub ceilings: &'a ResourceCeilings,
     pub allowed_environments: &'a [String],
+    pub placement: Option<&'a Placement>,
     pub now_ms: u64,
     pub global: Option<&'static str>,
     pub environment_denied: &'static str,
@@ -304,6 +306,13 @@ pub(crate) fn evaluate(
                                     input.installation_stale,
                                 ));
                             }
+                            if let Some(placement) = input.placement {
+                                crate::placement::check(placement, harness)?;
+                            }
+                            crate::placement::admit_confinement(
+                                input.placement,
+                                &execution.confinement,
+                            )?;
                             let credential = credential.ok_or((
                                 CandidateState::MissingCredentials,
                                 "credential_profile_unregistered",
@@ -314,6 +323,11 @@ pub(crate) fn evaluate(
                                     "credential_profile_disabled",
                                 ));
                             }
+                            credential_backend_policy(
+                                &credential.allowed_backends,
+                                input.backend_kind,
+                            )
+                            .map_err(|reason| (CandidateState::PolicyDenied, reason))?;
                             if !credential.provisionable {
                                 return Err((
                                     CandidateState::MissingCredentials,

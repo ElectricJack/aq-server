@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-e15fbd1bfbdc1cec)
+
+running 1 test
+test collision_rolls_back33_without_changing_actual32_history ... 
+thread 'collision_rolls_back33_without_changing_actual32_history' (2236235) panicked at crates/aq-server/tests/common/phase_execution_core.rs:259:10:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    collision_rolls_back33_without_changing_actual32_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.54s
+
+error: test failed, to rerun pass `-p aq-server --test schema33_phase_terminal`

@@ -1,0 +1,6 @@
+$ /home/jkern/dev/agent-queue2/.venv/bin/python protocol/dashboard-actions/v1/check.py
+Traceback (most recent call last):
+  File "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/protocol/dashboard-actions/v1/check.py", line 87, in <module>
+    assert contract['digest'] == 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

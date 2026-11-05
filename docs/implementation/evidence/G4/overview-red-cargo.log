@@ -1,0 +1,22 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.61s
+     Running tests/profiled_results.rs (target/debug/deps/profiled_results-034af8115d6d8c27)
+
+running 1 test
+test review_inbox::overview_attention_lists_waiting_decision_and_failed_task ... FAILED
+
+failures:
+
+---- review_inbox::overview_attention_lists_waiting_decision_and_failed_task stdout ----
+
+thread 'review_inbox::overview_attention_lists_waiting_decision_and_failed_task' (1531348) panicked at crates/aq-server/tests/profiled_results/review_inbox.rs:321:5:
+{"api_version":"dashboard-read-1","coverage":{"reason":"Task readiness, decisions, and result summaries are not connected yet","state":"partial"},"data":{"attention":[],"counts":{"needs_you":{"accuracy":"unknown","value":null},"ready":{"accuracy":"unknown","value":null},"recovering":{"accuracy":"unknown","value":null},"running":{"accuracy":"unknown","value":null}},"in_motion":[{"last_progress_at":null,"next_constraint":{"explanation":"Task constraints are not connected yet","kind":"unknown"},"project":{"id":"00000000-0000-0000-0000-000000000001","label":"Synthetic authority fixture"},"running":{"accuracy":"unknown","value":null}}],"recent_outcomes":[]},"observation":{"coverage":"partial","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"aq_dashboard_read"},"pending_operations":[],"request_id":"385c5719-f00a-473c-9b49-c5a8c53be8d0","scope":{"kind":"all_authorized"},"server_time":"1970-01-01T00:16:40.000Z"}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    review_inbox::overview_attention_lists_waiting_decision_and_failed_task
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 60 filtered out; finished in 1.75s
+
+error: test failed, to rerun pass `-p aq-server --test profiled_results`

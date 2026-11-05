@@ -1,4 +1,5 @@
 //! Typed human task creation. The journal is immutable intent, never task truth.
+pub(crate) mod action;
 mod dispatch;
 mod journal;
 use super::*;
@@ -13,20 +14,39 @@ fn hash(bytes: &[u8]) -> String {
 fn db(_: sqlx::Error) -> AppError {
     unavailable()
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Create {
-    operation_id: Uuid,
-    expected_project_revision: String,
-    title: String,
-    body: String,
-    acceptance_criteria: String,
-    labels: Vec<String>,
-    task_state: TaskState,
+pub(crate) struct Create {
+    pub(in crate::agent_access::human) operation_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub(in crate::agent_access::human) expected_project_revision: String,
+    #[schemars(length(min = 1, max = 512))]
+    pub(in crate::agent_access::human) title: String,
+    #[schemars(length(max = 32768))]
+    pub(in crate::agent_access::human) body: String,
+    #[schemars(length(max = 8192))]
+    pub(in crate::agent_access::human) acceptance_criteria: String,
+    #[schemars(length(max = 16))]
+    pub(in crate::agent_access::human) labels: Vec<String>,
+    pub(in crate::agent_access::human) task_state: TaskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::agent_access::human) parent_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 300))]
+    pub(in crate::agent_access::human) priority: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub(in crate::agent_access::human) profile_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub(in crate::agent_access::human) intelligence_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub(in crate::agent_access::human) task_type: Option<String>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum TaskState {
+pub(in crate::agent_access::human) enum TaskState {
     Draft,
     Active,
 }
@@ -39,6 +59,12 @@ impl Create {
             serde_json::from_slice(bytes).map_err(|_| invalid())?;
         let v: Self = serde_json::from_value(raw).map_err(|_| invalid())?;
         if v.operation_id.is_nil()
+            || v.parent_id
+                .is_some_and(|p| p.is_nil() || p == v.operation_id)
+            || !super::enqueue::hints_valid(
+                v.priority,
+                [&v.profile_hint, &v.intelligence_hint, &v.task_type],
+            )
             || v.revision().is_err()
             || v.title.trim().is_empty()
             || v.title.chars().count() > 512
@@ -235,31 +261,98 @@ pub(super) async fn create(
     bytes: Bytes,
 ) -> Result<Response> {
     let request = Create::parse(&bytes)?;
-    if project.is_nil() {
-        return Err(invalid());
-    }
     if let Some(old) = journal::load(&r, request.operation_id).await? {
         journal::owns(&old, &actor)?;
         if old.project != project || old.request != bytes.as_ref() {
             return Err(conflict());
         }
-        return outcome(dispatch::run(&state, &r, &actor, old.id).await?);
     }
-    let a = access(&state, &r, actor.clone(), project).await?;
-    let rt = runtime(&state)?;
+    let adapter = action::TaskCreate {
+        runtime: r.clone(),
+        original: Some(bytes.clone()),
+    };
+    let action = action::request(project, &request);
+    let mut registry = crate::dashboard_api::actions::Registry::default();
+    registry
+        .register(adapter)
+        .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    crate::dashboard_api::actions::submit_legacy(&state, &registry, &actor, action)
+        .await
+        .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    let op = journal::load(&r, request.operation_id)
+        .await?
+        .ok_or_else(unavailable)?;
+    outcome(journal::status(&state, &r, &actor, &op).await?)
+}
+/// Parent authority includes project membership, even for a shared workspace.
+async fn authorize_parent(
+    state: &AppState,
+    r: &ReadRuntime,
+    actor: &User,
+    project: Uuid,
+    parent: Uuid,
+) -> Result<()> {
+    let a = access(state, r, actor.clone(), project).await?;
+    let node = super::graph_actions::current(
+        runtime(state)?,
+        a.record.binding.graph_workspace_id,
+        parent,
+        "task",
+    )
+    .await?;
+    if node["metadata"]["aq:project_id"] != json!(project) {
+        return Err(AppError::Forbidden(
+            "parent belongs to another project".into(),
+        ));
+    }
+    Ok(())
+}
+async fn create_domain(
+    state: &AppState,
+    r: &ReadRuntime,
+    actor: &User,
+    project: Uuid,
+    bytes: Bytes,
+) -> Result<Status> {
+    let request = Create::parse(&bytes)?;
+    if project.is_nil() {
+        return Err(invalid());
+    }
+    if let Some(old) = journal::load(r, request.operation_id).await? {
+        journal::owns(&old, actor)?;
+        if old.project != project || old.request != bytes.as_ref() {
+            return Err(conflict());
+        }
+        return journal::status(state, r, actor, &old).await;
+    }
+    let a = access(state, r, actor.clone(), project).await?;
+    let rt = runtime(state)?;
     let service =
         super::super::mutations::service_identity(rt, a.record.binding.graph_workspace_id)
             .map_err(|_| unavailable())?;
-    let payload = json!({"idempotency_key":format!("aq-human-task-create:{}",request.operation_id),"reason":format!("AQ human task create {}",request.operation_id),"operations":[{"op":"create_node","id":request.operation_id,"kind":"task","title":request.title,"body":request.body,"acceptance_criteria":request.acceptance_criteria,"labels":request.labels,"task_state":request.task_state,"metadata":{"aq:human_actor_id":actor.id,"aq:human_operation_id":request.operation_id,"aq:project_id":project}}]});
+    if let Some(parent) = request.parent_id {
+        authorize_parent(state, r, actor, project, parent).await?;
+    }
+    let mut payload = json!({"idempotency_key":format!("aq-human-task-create:{}",request.operation_id),"reason":format!("AQ human task create {}",request.operation_id),"operations":[{"op":"create_node","id":request.operation_id,"kind":"task","title":request.title,"body":request.body,"acceptance_criteria":request.acceptance_criteria,"labels":request.labels,"task_state":request.task_state,"metadata":{"aq:human_actor_id":actor.id,"aq:human_operation_id":request.operation_id,"aq:project_id":project}}]});
+    super::enqueue::metadata(
+        &mut payload["operations"][0]["metadata"],
+        request.priority,
+        &request.profile_hint,
+        &request.intelligence_hint,
+        &request.task_type,
+    );
+    if let Some(parent) = request.parent_id {
+        payload["operations"].as_array_mut().ok_or_else(unavailable)?.push(json!({"op":"add_edge","id":Uuid::from_bytes(sha2::Sha256::digest([request.operation_id.as_bytes().as_slice(),b"feedback-parent"].concat())[..16].try_into().map_err(|_|unavailable())?),"source":parent,"target":request.operation_id,"edge_type":"parent-child","description":"Feedback draft parent","source_revision":null,"target_revision":null}));
+    }
     if !contract::upstream_valid("MutationRequest", &payload) {
         return Err(unavailable());
     }
     let payload = super::super::canonical(&payload).map_err(|_| unavailable())?;
     journal::admit(
-        &state, &r, &actor, &a.record, &request, &bytes, &payload, &service,
+        state, r, actor, &a.record, &request, &bytes, &payload, &service,
     )
     .await?;
-    outcome(dispatch::run(&state, &r, &actor, request.operation_id).await?)
+    dispatch::run(state, r, actor, request.operation_id).await
 }
 pub(super) async fn lookup(
     State(state): State<AppState>,

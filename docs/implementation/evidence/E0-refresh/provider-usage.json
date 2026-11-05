@@ -1,0 +1,20 @@
+{
+  "api_version": "dashboard-read-1",
+  "request_id": "860f6b57-bbe2-4e1b-8104-bf7120e2a02c",
+  "server_time": "2026-11-03T05:21:50.887Z",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "data": [],
+  "observation": {
+    "observed_at": "2026-11-03T05:21:50.887Z",
+    "fresh_until": "2026-11-03T05:21:55.887Z",
+    "source": "aq_dashboard_read",
+    "quality": "reported",
+    "coverage": "complete"
+  },
+  "pending_operations": [],
+  "coverage": {
+    "state": "complete"
+  }
+}

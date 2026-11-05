@@ -1,0 +1,45 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+error[E0609]: no field `hard_deadline_ms` on type `aq_admission::preparation_v2::ExecutionReceipt`
+   --> crates/aq-server/tests/phase_source_retention/case.rs:164:38
+    |
+164 |             hard_deadline_ms: issued.hard_deadline_ms,
+    |                                      ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `schema_version`, `negotiation`, `operation_id`, `request_digest`, `accepted_receipt_digest` ... and 5 others
+
+error[E0609]: no field `r` on type `common::native_offer::Case`
+   --> crates/aq-server/tests/phase_source_retention/case.rs:171:72
+    |
+171 |                 node: serde_json::from_value(serde_json::to_value(&f.c.r.identity).unwrap()).unwrap(),
+    |                                                                        ^ unknown field
+    |
+    = note: available fields are: `env`, `request`, `mode`, `controlled_clock`, `observation_entered`, `observation_resume`
+
+error[E0609]: no field `hard_deadline_ms` on type `aq_admission::preparation_v2::ExecutionReceipt`
+   --> crates/aq-server/tests/phase_source_retention/case.rs:175:78
+    |
+175 |             expires_at_ms:issued.grant.expires_at_ms,hard_deadline_ms:issued.hard_deadline_ms,
+    |                                                                              ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `schema_version`, `negotiation`, `operation_id`, `request_digest`, `accepted_receipt_digest` ... and 5 others
+
+error[E0609]: no field `hard_deadline_ms` on type `aq_admission::preparation_refresh_v1::ExecutionReceipt`
+   --> crates/aq-server/tests/phase_source_retention/case.rs:164:38
+    |
+164 |             hard_deadline_ms: issued.hard_deadline_ms,
+    |                                      ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `schema_version`, `negotiation`, `operation_id`, `request_digest`, `accepted_receipt_digest` ... and 5 others
+
+error[E0609]: no field `hard_deadline_ms` on type `aq_admission::preparation_refresh_v1::ExecutionReceipt`
+   --> crates/aq-server/tests/phase_source_retention/case.rs:175:78
+    |
+175 |             expires_at_ms:issued.grant.expires_at_ms,hard_deadline_ms:issued.hard_deadline_ms,
+    |                                                                              ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `schema_version`, `negotiation`, `operation_id`, `request_digest`, `accepted_receipt_digest` ... and 5 others
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `aq-server` (test "phase_source_retention") due to 5 previous errors
+
+Owned test session 3317807; remaining processes: []

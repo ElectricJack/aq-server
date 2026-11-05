@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/profiled_results.rs (target/debug/deps/profiled_results-034af8115d6d8c27)
+
+running 3 tests
+test review_inbox::overview_running_and_recovering_use_started_and_stopped_owners ... ok
+test review_inbox::overview_attention_lists_waiting_decision_and_failed_task ... ok
+test settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 3.84s
+

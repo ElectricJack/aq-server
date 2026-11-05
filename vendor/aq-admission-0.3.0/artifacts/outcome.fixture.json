@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "kind": "source_change_reviewed",
+  "project_id": "00000000-0000-0000-0000-000000000001",
+  "project_revision": 1,
+  "task": {
+    "content_revision": 1,
+    "task_id": "00000000-0000-0000-0000-000000000001",
+    "version": 1,
+    "workspace_id": "00000000-0000-0000-0000-000000000001"
+  },
+  "source": {
+    "repository_id": "00000000-0000-0000-0000-000000000029",
+    "binding_generation": 1,
+    "base": {
+      "format": "sha1",
+      "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "artifact": {
+      "digest": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+      "id": "source",
+      "version": "1"
+    }
+  },
+  "task_observation": {
+    "digest": "4c86c85a24c2857c94a7b8e8f80e59a7b6dad8355289f7b11742c7a409cc8521",
+    "id": "task-observation",
+    "version": "1"
+  },
+  "task_context": {
+    "digest": "e9da65cf9299b9ab67fb58536af00693cc83d079bc700e4ae3aeb97257b6004e",
+    "id": "task-context",
+    "version": "1"
+  },
+  "inputs": [
+    {
+      "id": "authorized-input-snapshot",
+      "version": "1",
+      "digest": "f06b48df6eee2cda6e8fb9f50d577459a12d79a2c47fdc349896c37c694f91f6"
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "task-acceptance",
+      "text": "Implement the authorized task requirements.\nPreserve Unicode: 雪."
+    }
+  ],
+  "validation_policy": {
+    "id": "aq.reviewed-source-policy",
+    "version": "1",
+    "digest": "5ba11d9b248b582be77f5c9e941ffe5db5643e013498f2519974f9565409cb64"
+  },
+  "review": "human_owner",
+  "required_checks": [
+    {
+      "id": "project-tests",
+      "validator": {
+        "id": "aq.qualified-test-runner",
+        "version": "1",
+        "digest": "6701b73159cd72eadea35e880a457517c6d5eeb542486951bae02626ca0980c9"
+      }
+    }
+  ]
+}

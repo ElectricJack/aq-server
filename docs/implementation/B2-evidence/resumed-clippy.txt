@@ -1,0 +1,100 @@
+    Checking const-oid v0.9.6
+    Checking libm v0.2.16
+    Checking digest v0.10.7
+    Checking sha2 v0.10.9
+    Checking aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-session-protocol-0.1.0)
+    Checking num-traits v0.2.19
+    Checking bitflags v2.13.2
+    Checking chrono v0.4.45
+    Checking aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-lifecycle-protocol-0.1.0)
+    Checking num-integer v0.1.47
+    Checking base64ct v1.8.3
+    Checking spin v0.9.9
+    Checking lazy_static v1.5.1
+    Checking pem-rfc7468 v0.7.0
+    Checking aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+    Checking nix v0.29.0
+    Checking der v0.7.10
+    Checking aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-session-api)
+    Checking hmac v0.12.1
+    Checking sqlx-core v0.8.6
+    Checking hkdf v0.12.4
+    Checking spki v0.7.3
+    Checking aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+    Checking aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-lifecycle-api)
+    Checking tower-http v0.6.11
+    Checking num-bigint v0.4.8
+    Checking aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-agent-api)
+    Checking atoi v2.0.0
+    Checking md-5 v0.10.6
+    Checking aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-profiles)
+    Checking sqlx-postgres v0.8.6
+    Checking simple_asn1 v0.6.4
+    Checking png v0.18.1 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/png-0.18.1-aq1)
+    Checking reqwest v0.12.28
+    Checking aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+    Checking pkcs8 v0.10.2
+    Checking aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-admission)
+    Checking sharded-slab v0.1.7
+    Checking num-iter v0.1.46
+    Checking aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-terminal-relay-protocol)
+    Checking linux-raw-sys v0.12.1
+    Checking tracing-subscriber v0.3.23
+    Checking rustix v1.1.6
+    Checking aq-release v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-release)
+    Checking jsonwebtoken v9.3.1
+    Checking aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-terminal-relay)
+    Checking num-bigint-dig v0.8.6
+    Checking aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-playbook-host)
+    Checking aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-phase-terminal-protocol)
+    Checking pkcs1 v0.7.5
+    Checking aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-notifications)
+    Checking aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-result-media)
+    Checking sqlx v0.8.6
+    Checking aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-selection)
+    Checking aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-observation-api)
+    Checking aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-observation-admission)
+    Checking aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-accounting)
+    Checking aq-admission v0.3.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-admission-0.3.0)
+    Checking aq-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-protocol-0.1.0)
+    Checking aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-central-authority)
+    Checking aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-review-protocol)
+    Checking aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-worker-protocol-0.2.0)
+    Checking signature v2.2.0
+    Checking fastrand v2.5.0
+    Checking tempfile v3.27.0
+    Checking rsa v0.9.10
+    Checking aq-playbooks-compiler v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler)
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/aq-server/src/terminal/runtime.rs:100:12
+    |
+100 |     polls: Mutex<BTreeMap<(Uuid, Option<Uuid>), Weak<PollState>>>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this `if` statement can be collapsed
+   --> crates/aq-server/src/terminal/runtime.rs:323:17
+    |
+323 | /                 if *owner == node {
+324 | |                     if let Some(state) = value.upgrade() {
+325 | |                         state.wake.notify_one();
+326 | |                     }
+327 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+323 ~                 if *owner == node
+324 ~                     && let Some(state) = value.upgrade() {
+325 |                         state.wake.notify_one();
+326 ~                     }
+    |
+
+error: could not compile `aq-server` (lib) due to 2 previous errors

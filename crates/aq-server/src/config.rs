@@ -9,8 +9,16 @@ const SUPPORTED_FORMAT_VERSION: u32 = 1;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(
+        default,
+        deserialize_with = "crate::delegated_permits::config::deserialize"
+    )]
+    pub delegated_permits: Option<std::sync::Arc<crate::delegated_permits::CredentialKey>>,
     #[serde(default, deserialize_with = "crate::playbooks::config::deserialize")]
     pub playbooks: Option<std::sync::Arc<crate::playbooks::config::Loaded>>,
+    /// Standalone human review/settlement owner, independent of the policy engine.
+    #[serde(default, deserialize_with = "crate::reviews::deserialize_config")]
+    pub reviews: Option<std::sync::Arc<crate::protected_storage::Keyring>>,
     #[serde(default, deserialize_with = "crate::terminal::config::deserialize")]
     pub terminals: Option<std::sync::Arc<crate::terminal::config::Loaded>>,
     #[serde(
@@ -29,6 +37,9 @@ pub struct Config {
     )]
     pub profiled_execution:
         Option<std::sync::Arc<crate::profiled_execution::config::ProfiledConfig>>,
+    /// C3b environment template allowlist (C4); absent means no sandbox pins.
+    #[serde(default, deserialize_with = "crate::templates::deserialize")]
+    pub templates: Option<std::sync::Arc<crate::templates::Allowlist>>,
     pub format_version: u32,
     pub environment: Environment,
     pub server: ServerConfig,
@@ -47,8 +58,14 @@ pub struct Config {
     pub agent_access: Option<crate::agent_access::AgentAccessConfig>,
     #[serde(default)]
     pub source_retention: Option<crate::source_retention::SourceRetentionConfig>,
+    /// D2 repository onboarding: GitHub API base and vault-held Git credential profiles.
+    #[serde(default)]
+    pub onboarding: Option<crate::repository_onboarding::OnboardingConfig>,
     #[serde(default)]
     pub result_media: Option<crate::result_media::config::MediaConfig>,
+    /// Explicit mappings to protected Codex OAuth files; never a browser credential.
+    #[serde(default)]
+    pub provider_quota: Vec<crate::dashboard_api::quota::CodexSource>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -213,6 +230,33 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
     {
         return invalid("updates.spool_dir", "must be an absolute path".into());
     }
+    if c.provider_quota.len() > 32 {
+        return invalid("provider_quota", "at most 32 quota sources".into());
+    }
+    if c.terminals.is_none()
+        && c.profiled_execution
+            .as_ref()
+            .is_some_and(|policy| policy.projects.iter().any(|project| project.enabled))
+    {
+        return invalid("terminals", "required when profiled_execution has enabled projects; configure terminal protection keys before starting the server".into());
+    }
+    let mut quota_accounts = std::collections::BTreeSet::new();
+    for source in &c.provider_quota {
+        if !source.validate()
+            || !quota_accounts.insert((&source.provider_id, &source.account_ref))
+            || !c.intelligence.as_ref().is_some_and(|inventory| {
+                inventory.credentials.iter().any(|account| {
+                    account.provider == source.provider_id
+                        && account.account_reference == source.account_ref
+                })
+            })
+        {
+            return invalid(
+                "provider_quota",
+                "invalid, duplicate, or unconfigured quota account".into(),
+            );
+        }
+    }
     c.projects.validate().map_err(|e| ("projects".into(), e))?;
     if let Some(settings) = &c.result_media {
         settings
@@ -291,9 +335,12 @@ mod tests {
 
     fn cfg(env: Environment, dev: bool) -> Config {
         Config {
+            delegated_permits: None,
             playbooks: None,
+            reviews: None,
             notifications: None,
             profiled_execution: None,
+            templates: None,
             format_version: 1,
             environment: env,
             server: ServerConfig {
@@ -322,9 +369,11 @@ mod tests {
             agent_access: None,
             source_retention: None,
             result_media: None,
+            onboarding: None,
             terminals: None,
 
             intelligence: None,
+            provider_quota: vec![],
         }
     }
 

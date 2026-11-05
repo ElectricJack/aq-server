@@ -1,17 +1,12 @@
 //! Router-local bounded read cursors. Tokens authenticate membership; ACL is
 //! independently rechecked on every page. Restart forgets snapshots safely.
+use super::cursor::{Binding, CursorCodec, CursorError};
 use super::{Error, Result, contract::*};
-use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce,
-    aead::{Aead, Payload},
-};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 pub const MEMBERS: usize = 256;
 pub const PAGE: u16 = 25;
 pub const MAX_PAGE: u16 = 100;
@@ -21,6 +16,7 @@ pub const TTL: u64 = 30000;
 pub enum Resource {
     Sessions,
     Projects,
+    Search,
 }
 #[derive(Clone, Debug)]
 pub struct Snapshot {
@@ -30,32 +26,22 @@ pub struct Snapshot {
     pub scope: Scope,
     pub resource: Resource,
     pub ids: Vec<Uuid>,
+    pub filters: serde_json::Value,
+    pub search: Option<super::search::SnapshotData>,
     pub truncated: bool,
     pub expires: u64,
     pub created: u64,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Cursor {
-    snapshot: Uuid,
-    actor: Uuid,
-    partition: String,
-    scope: Scope,
-    resource: Resource,
-    offset: u16,
-    limit: u16,
-    expires: u64,
-}
 pub struct Runtime {
+    pub reviews: Option<std::sync::Arc<crate::reviews::Service>>,
     pub pool: PgPool,
     pub gate: Semaphore,
-    key: Zeroizing<[u8; 32]>,
+    pub quota: super::quota::Collector,
+    codec: CursorCodec,
     snapshots: Mutex<BTreeMap<Uuid, Snapshot>>,
 }
 impl Runtime {
     pub fn new(state: &crate::AppState) -> Self {
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
         let options = state
             .store
             .pool
@@ -69,12 +55,19 @@ impl Runtime {
                 .acquire_timeout(Duration::from_millis(500))
                 .connect_lazy_with(options),
             gate: Semaphore::new(4),
-            key: Zeroizing::new(key),
+            reviews: None,
+            quota: super::quota::Collector::new(),
+            codec: CursorCodec::default(),
             snapshots: Mutex::new(BTreeMap::new()),
         }
     }
     pub fn insert(&self, mut snapshot: Snapshot, now: u64) -> Result<Snapshot> {
-        if snapshot.ids.len() > MEMBERS {
+        if snapshot.ids.len() > MEMBERS
+            || snapshot
+                .search
+                .as_ref()
+                .is_some_and(|s| s.hits.len() > MEMBERS)
+        {
             return Err(Error::Unavailable);
         }
         let mut all = self.snapshots.lock().map_err(|_| Error::Unavailable)?;
@@ -96,36 +89,44 @@ impl Runtime {
         all.insert(snapshot.id, snapshot.clone());
         Ok(snapshot)
     }
-    pub fn next(&self, s: &Snapshot, offset: usize, limit: u16) -> Result<String> {
-        let cursor = Cursor {
-            snapshot: s.id,
-            actor: s.actor,
-            partition: s.partition.clone(),
-            scope: s.scope.clone(),
-            resource: s.resource,
-            offset: offset.try_into().map_err(|_| Error::Invalid)?,
-            limit,
-            expires: s.expires,
-        };
-        let bytes = serde_json::to_vec(&cursor).map_err(|_| Error::Unavailable)?;
-        if bytes.len() > 1024 {
-            return Err(Error::Unavailable);
+    fn binding(
+        actor: Uuid,
+        partition: &str,
+        scope: &Scope,
+        resource: Resource,
+        limit: u16,
+        filters: &serde_json::Value,
+    ) -> Binding {
+        Binding {
+            principal: actor,
+            authorization_partition: partition.into(),
+            scope: serde_json::json!(scope),
+            filters: filters.clone(),
+            sort: "snapshot_membership,id".into(),
+            page_size: limit,
+            resource: format!("{resource:?}"),
         }
-        let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let cipher = ChaCha20Poly1305::new((&*self.key).into());
-        let encrypted = cipher
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: &bytes,
-                    aad: b"aq.dashboard-read-1.cursor",
-                },
+    }
+    pub fn next(&self, s: &Snapshot, offset: usize, limit: u16) -> Result<String> {
+        if offset > s.search.as_ref().map_or(s.ids.len(), |s| s.hits.len()) {
+            return Err(Error::Invalid);
+        }
+        self.codec
+            .encode(
+                &Self::binding(
+                    s.actor,
+                    &s.partition,
+                    &s.scope,
+                    s.resource,
+                    limit,
+                    &s.filters,
+                ),
+                &s.id.to_string(),
+                &offset.to_string(),
+                s.created,
+                s.expires,
             )
-            .map_err(|_| Error::Unavailable)?;
-        let mut token = nonce.to_vec();
-        token.extend(encrypted);
-        Ok(hex::encode(token))
+            .map_err(|_| Error::Unavailable)
     }
     pub fn resume(
         &self,
@@ -136,31 +137,42 @@ impl Runtime {
         limit: u16,
         now: u64,
     ) -> Result<(Snapshot, usize)> {
-        let (scope, resource) = target;
-        if token.len() > 4096 || token.len() < 56 {
-            return Err(Error::Restart);
-        }
-        let token = hex::decode(token).map_err(|_| Error::Restart)?;
-        let cipher = ChaCha20Poly1305::new((&*self.key).into());
-        let bytes = cipher
-            .decrypt(
-                Nonce::from_slice(&token[..12]),
-                Payload {
-                    msg: &token[12..],
-                    aad: b"aq.dashboard-read-1.cursor",
-                },
+        self.resume_filtered(
+            token,
+            actor,
+            partition,
+            (target.0, target.1, &serde_json::json!({})),
+            limit,
+            now,
+        )
+    }
+    pub fn resume_filtered(
+        &self,
+        token: &str,
+        actor: Uuid,
+        partition: &str,
+        target: (&Scope, Resource, &serde_json::Value),
+        limit: u16,
+        now: u64,
+    ) -> Result<(Snapshot, usize)> {
+        let (scope, resource, filters) = target;
+        let c = self
+            .codec
+            .decode(
+                token,
+                &Self::binding(actor, partition, scope, resource, limit, filters),
+                now,
             )
-            .map_err(|_| Error::Restart)?;
-        let c: Cursor = serde_json::from_slice(&bytes).map_err(|_| Error::Restart)?;
-        if c.actor != actor || c.partition != partition {
-            return Err(Error::AuthorizationChanged);
-        }
-        if &c.scope != scope || c.resource != resource || c.limit != limit || c.expires <= now {
-            return Err(Error::Restart);
-        }
+            .map_err(|error| match error {
+                CursorError::AuthorizationChanged => Error::AuthorizationChanged,
+                CursorError::RestartRequired => Error::Restart,
+                CursorError::Unavailable => Error::Unavailable,
+            })?;
+        let snapshot = c.snapshot.parse::<Uuid>().map_err(|_| Error::Restart)?;
+        let offset = c.position.parse::<usize>().map_err(|_| Error::Restart)?;
         let all = self.snapshots.lock().map_err(|_| Error::Unavailable)?;
         let s = all
-            .get(&c.snapshot)
+            .get(&snapshot)
             .filter(|s| s.expires > now)
             .ok_or(Error::Restart)?;
         if s.actor != actor
@@ -168,11 +180,12 @@ impl Runtime {
             || &s.scope != scope
             || s.resource != resource
             || s.expires != c.expires
-            || c.offset as usize > s.ids.len()
+            || &s.filters != filters
+            || offset > s.search.as_ref().map_or(s.ids.len(), |s| s.hits.len())
         {
             return Err(Error::Restart);
         }
-        Ok((s.clone(), c.offset as usize))
+        Ok((s.clone(), offset))
     }
 }
 #[cfg(test)]
@@ -184,7 +197,9 @@ mod tests {
                 .connect_lazy("postgres://localhost/unused")
                 .unwrap(),
             gate: Semaphore::new(4),
-            key: Zeroizing::new([7; 32]),
+            reviews: None,
+            quota: super::super::quota::Collector::new(),
+            codec: CursorCodec::default(),
             snapshots: Mutex::new(BTreeMap::new()),
         }
     }
@@ -196,6 +211,8 @@ mod tests {
             scope: Scope::AllAuthorized,
             resource: Resource::Sessions,
             ids: vec![Uuid::new_v4(); 3],
+            filters: serde_json::json!({}),
+            search: None,
             truncated: false,
             expires: now + TTL,
             created: now,
@@ -257,7 +274,7 @@ mod tests {
             );
         }
         let mut restarted = runtime();
-        restarted.key = Zeroizing::new([8; 32]);
+        restarted.codec = CursorCodec::default();
         assert!(
             restarted
                 .resume(

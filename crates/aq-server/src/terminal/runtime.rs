@@ -61,6 +61,7 @@ struct Buffers {
 }
 struct PollState {
     slot: Arc<Semaphore>,
+    output_slot: Arc<Semaphore>,
     wake: Notify,
     #[cfg(feature = "test-support")]
     waiting: std::sync::atomic::AtomicBool,
@@ -68,36 +69,46 @@ struct PollState {
 pub struct Poll {
     state: Arc<PollState>,
     _permit: OwnedSemaphorePermit,
+    #[cfg(feature = "test-support")]
+    output: bool,
 }
 impl Poll {
     pub async fn wait(&self, hold: u32) {
         #[cfg(feature = "test-support")]
-        self.state
-            .waiting
-            .store(true, std::sync::atomic::Ordering::Release);
+        if !self.output {
+            self.state
+                .waiting
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(hold as u64),
             self.state.wake.notified(),
         )
         .await;
         #[cfg(feature = "test-support")]
-        self.state
-            .waiting
-            .store(false, std::sync::atomic::Ordering::Release);
+        if !self.output {
+            self.state
+                .waiting
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
     }
 }
 impl Drop for Poll {
     fn drop(&mut self) {
         #[cfg(feature = "test-support")]
-        self.state
-            .waiting
-            .store(false, std::sync::atomic::Ordering::Release);
+        if !self.output {
+            self.state
+                .waiting
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
     }
 }
+type Polls = BTreeMap<(Uuid, Option<Uuid>), Weak<PollState>>;
+
 #[derive(Default)]
 pub struct Runtime {
     buffers: Mutex<Buffers>,
-    polls: Mutex<BTreeMap<Uuid, Weak<PollState>>>,
+    polls: Mutex<Polls>,
 }
 fn fail() -> AppError {
     AppError::Internal
@@ -172,11 +183,17 @@ impl Runtime {
         now: u64,
     ) -> Result<Option<OutputGap>, AppError> {
         let mut b = self.buffers.lock().map_err(|_| fail())?;
-        let node = b
-            .items
-            .get(&frame.terminal.terminal_id)
-            .ok_or_else(|| AppError::Conflict("watch snapshot resynchronization required".into()))?
-            .node;
+        // Output is disposable. A worker may finish an upload after its watch
+        // expired (or before anyone watches). Authority is checked by upload_in;
+        // absence of a replay consumer must not cause an endless upload retry.
+        let Some(buffer) = b.items.get(&frame.terminal.terminal_id) else {
+            return Ok(None);
+        };
+        if now >= buffer.until {
+            b.items.remove(&frame.terminal.terminal_id);
+            return Ok(None);
+        }
+        let node = buffer.node;
         let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
         let entry = b
             .items
@@ -225,11 +242,14 @@ impl Runtime {
         now: u64,
     ) -> Result<(), AppError> {
         let mut b = self.buffers.lock().map_err(|_| fail())?;
-        let node = b
-            .items
-            .get(&snapshot.terminal.terminal_id)
-            .ok_or_else(|| AppError::Conflict("watch snapshot resynchronization required".into()))?
-            .node;
+        let Some(buffer) = b.items.get(&snapshot.terminal.terminal_id) else {
+            return Ok(());
+        };
+        if now >= buffer.until {
+            b.items.remove(&snapshot.terminal.terminal_id);
+            return Ok(());
+        }
+        let node = buffer.node;
         let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
         let entry = b
             .items
@@ -266,6 +286,13 @@ impl Runtime {
         now: u64,
     ) -> Result<(), AppError> {
         let mut b = self.buffers.lock().map_err(|_| fail())?;
+        if b.items
+            .get(&gap.terminal.terminal_id)
+            .is_some_and(|entry| now >= entry.until)
+        {
+            b.items.remove(&gap.terminal.terminal_id);
+            return Ok(());
+        }
         if let Some(entry) = b.items.get_mut(&gap.terminal.terminal_id) {
             entry
                 .ring
@@ -275,9 +302,22 @@ impl Runtime {
         Ok(())
     }
     pub fn poll(&self, node: Uuid) -> Result<Poll, AppError> {
+        self.poll_channel(node, None)
+    }
+    pub fn output_poll(&self, node: Uuid) -> Result<Poll, AppError> {
+        self.output_poll_channel(node, None)
+    }
+    pub fn output_poll_channel(&self, node: Uuid, attempt: Option<Uuid>) -> Result<Poll, AppError> {
+        self.poll_lane(node, attempt, true)
+    }
+    pub fn poll_channel(&self, node: Uuid, attempt: Option<Uuid>) -> Result<Poll, AppError> {
+        self.poll_lane(node, attempt, false)
+    }
+    fn poll_lane(&self, node: Uuid, attempt: Option<Uuid>, output: bool) -> Result<Poll, AppError> {
+        let key = (node, attempt);
         let mut polls = self.polls.lock().map_err(|_| fail())?;
         polls.retain(|_, v| v.strong_count() > 0);
-        let state = match polls.get(&node).and_then(Weak::upgrade) {
+        let state = match polls.get(&key).and_then(Weak::upgrade) {
             Some(v) => v,
             None => {
                 if polls.len() >= 32 {
@@ -287,22 +327,33 @@ impl Runtime {
                 }
                 let v = Arc::new(PollState {
                     slot: Arc::new(Semaphore::new(1)),
+                    output_slot: Arc::new(Semaphore::new(1)),
                     wake: Notify::new(),
                     #[cfg(feature = "test-support")]
                     waiting: Default::default(),
                 });
-                polls.insert(node, Arc::downgrade(&v));
+                polls.insert(key, Arc::downgrade(&v));
                 v
             }
         };
-        let permit = state
-            .slot
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| AppError::Conflict("one terminal poll per node".into()))?;
+        // Control may long-poll while output delivery progresses independently.
+        // Each lane admits one request, under the shared node/attempt channel cap.
+        let slot = if output {
+            &state.output_slot
+        } else {
+            &state.slot
+        };
+        let permit = slot.clone().try_acquire_owned().map_err(|_| {
+            AppError::Conflict(format!(
+                "one terminal {} poll per channel",
+                if output { "output" } else { "control" }
+            ))
+        })?;
         Ok(Poll {
             state,
             _permit: permit,
+            #[cfg(feature = "test-support")]
+            output,
         })
     }
     #[cfg(feature = "test-support")]
@@ -310,14 +361,18 @@ impl Runtime {
         self.polls
             .lock()
             .ok()
-            .and_then(|p| p.get(&node).and_then(Weak::upgrade))
+            .and_then(|p| p.get(&(node, None)).and_then(Weak::upgrade))
             .is_some_and(|p| p.waiting.load(std::sync::atomic::Ordering::Acquire))
     }
     pub fn wake(&self, node: Uuid) {
-        if let Ok(polls) = self.polls.lock()
-            && let Some(state) = polls.get(&node).and_then(Weak::upgrade)
-        {
-            state.wake.notify_one();
+        if let Ok(polls) = self.polls.lock() {
+            for ((owner, _), value) in polls.iter() {
+                if *owner == node
+                    && let Some(state) = value.upgrade()
+                {
+                    state.wake.notify_one();
+                }
+            }
         }
     }
 }
@@ -388,5 +443,79 @@ pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<
                 match maintenance(&state,cursor).await {Ok(next)=>cursor=next,Err(AppError::IdentityUnavailable(_))=>break,Err(_)=>tracing::warn!("terminal maintenance unavailable")}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poll_lanes_share_the_node_cap_and_release_on_drop() {
+        let runtime = Runtime::default();
+        let nodes: Vec<_> = (0..33).map(|_| Uuid::new_v4()).collect();
+        let mut controls: Vec<_> = nodes[..32]
+            .iter()
+            .map(|id| runtime.poll(*id).unwrap())
+            .collect();
+        let mut outputs: Vec<_> = nodes[..32]
+            .iter()
+            .map(|id| runtime.output_poll(*id).unwrap())
+            .collect();
+        assert!(matches!(runtime.poll(nodes[0]), Err(AppError::Conflict(_))));
+        assert!(matches!(
+            runtime.output_poll(nodes[0]),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            runtime.output_poll(nodes[32]),
+            Err(AppError::IdentityUnavailable(_))
+        ));
+        drop(controls.pop());
+        // An output permit alone still owns that node's capacity.
+        assert!(runtime.poll(nodes[32]).is_err());
+        drop(outputs.pop());
+        let _next = runtime.poll(nodes[32]).unwrap();
+        let _next_output = runtime.output_poll(nodes[32]).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod delegated_poll_tests {
+    use super::*;
+    #[tokio::test]
+    async fn delegated_polls_are_exclusive_per_attempt_and_share_node_wakeup() {
+        let runtime = Runtime::default();
+        let node = Uuid::new_v4();
+        let attempt = Uuid::new_v4();
+        let first = runtime.poll_channel(node, Some(attempt)).unwrap();
+        let second = runtime.poll_channel(node, Some(Uuid::new_v4())).unwrap();
+        let output = runtime.output_poll_channel(node, Some(attempt)).unwrap();
+        assert!(runtime.output_poll_channel(node, Some(attempt)).is_err());
+        assert!(runtime.poll_channel(node, Some(attempt)).is_err());
+        assert!(runtime.poll(node).is_ok());
+        assert!(runtime.output_poll(node).is_ok());
+        runtime.wake(node);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            first.state.wake.notified(),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            second.state.wake.notified(),
+        )
+        .await
+        .unwrap();
+        // Both live channels retain their own exclusive slots after a wake.
+        assert_eq!(first.state.slot.available_permits(), 0);
+        assert_eq!(second.state.slot.available_permits(), 0);
+        assert_eq!(output.state.output_slot.available_permits(), 0);
+        drop(first);
+        assert!(runtime.poll_channel(node, Some(attempt)).is_ok());
+        assert!(runtime.output_poll_channel(node, Some(attempt)).is_err());
+        drop(output);
+        assert!(runtime.output_poll_channel(node, Some(attempt)).is_ok());
     }
 }

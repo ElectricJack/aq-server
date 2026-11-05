@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/schema43_cancellation.rs (target/debug/deps/schema43_cancellation-9cc7e346aa2c6223)
+
+running 1 test
+test cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.20s
+

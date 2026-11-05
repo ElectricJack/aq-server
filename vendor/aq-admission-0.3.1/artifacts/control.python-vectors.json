@@ -1,0 +1,13 @@
+{
+  "provenance": "Python hashlib SHA256 over json.dumps sort_keys=True compact UTF8",
+  "reply_sha256": [
+    "a839127716b6a0cfce29c96b57f3a2db7f759be7ba9ce73d6b7341e380e4de2b",
+    "5a847637150cd92f70ed4aebe3b2158be986ddf316ce448ea5e721290010eef2",
+    "84280ba26c33252fbd938cd6f291b92e10dc4fd3d991d768a9cf20265e1b30ee",
+    "37e0ca0c67744c108fa09592227506f5042ecf4723c29b30a287204f6fb34137",
+    "1680a87c6d28604c772854f45d8d6cae9c626de81ef23c8de28c4615db3f56d9",
+    "b5c15daa1f678ad25c9418b3f463603ec4c63eb7837c63375a08b750b861ffdf"
+  ],
+  "original_preparation_sha256": "4fe6e8e0ead943ceab0d1dca39214c2992c7805989e747572d27b8dc8eff2dce",
+  "original_initial_grant_sha256": "d80efb1b7ab34b11f3a3d39a50f7bdecb8ad266b8e790ddee729120e634229b4"
+}

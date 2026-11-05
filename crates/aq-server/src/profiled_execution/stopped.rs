@@ -190,6 +190,7 @@ pub async fn record(
     {
         return Err(AppError::Internal);
     }
+    super::cancellation::settle_stopped_locked(&mut tx, binding.attempt_id, now).await?;
     tx.commit().await.map_err(db)?;
     Ok(receipt)
 }

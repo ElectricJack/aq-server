@@ -1,5 +1,6 @@
 //! Bounded observation routes mounted on the separate machine and human listeners.
-//! Worker bearer credentials only; no source/policy registration on this surface.
+//! Worker bearer credentials only. The batch route enrolls only catalog-derived
+//! sources for the caller's own attempts; workers never supply source policy.
 use super::*;
 use crate::{admin_api::ApiJson, authz::CurrentUser, error::AppError};
 use axum::{
@@ -13,8 +14,21 @@ pub fn routes(mut state: AppState) -> Router<AppState> {
     state.store = state.store.observation_view();
     Router::new()
         .route("/v1/worker/observations/batch", post(batch))
+        .route("/v1/worker/observations/vm-time", post(vm_time))
         .layer(DefaultBodyLimit::max(MAX_BATCH_BYTES))
         .with_state(state)
+}
+async fn vm_time(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(fact): ApiJson<aq_accounting::vm_time::Fact>,
+) -> std::result::Result<([(header::HeaderName, &'static str); 1], Json<Value>), AppError> {
+    let node = crate::worker_api::authenticate_context(&state, &headers).await?;
+    super::vm_time::record(&state, &node, &fact).await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"recorded": true})),
+    ))
 }
 /// Transport ownership only, not source catalog enrollment or execution authority.
 pub fn transport_routes(mut state: AppState) -> Router<AppState> {
@@ -139,7 +153,37 @@ async fn batch(
     headers: HeaderMap,
     ApiJson(packet): ApiJson<Packet>,
 ) -> std::result::Result<([(header::HeaderName, &'static str); 1], Json<Receipt>), AppError> {
-    let node = crate::worker_api::authenticate_context(&state, &headers).await?;
+    let node = crate::delegated_permits::runtime::authenticate_runner(
+        &state,
+        &headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::Observe,
+        None,
+    )
+    .await?;
+    let Message::Batch(batch) = &packet.body.message else {
+        return Err(crate::delegated_permits::runtime::refused());
+    };
+    crate::delegated_permits::runtime::require_attempts(
+        &node,
+        batch
+            .events
+            .iter()
+            .map(|event| event.body.binding.attempt_id),
+    )?;
+    for event in &batch.events {
+        crate::delegated_permits::runtime::require_session(&node, &event.body.binding.session)?;
+    }
+    // Production attempt path: enroll each attempt's trusted catalog source
+    // (idempotent) before ingest. Uncovered or refused attempts are left to
+    // ingest, which refuses events without an admitted source.
+    let attempts: std::collections::BTreeSet<Uuid> = batch
+        .events
+        .iter()
+        .map(|event| event.body.binding.attempt_id)
+        .collect();
+    for attempt in attempts {
+        let _ = catalog::register_attempt(&state, attempt, Some(node.id())).await;
+    }
     let receipt = ingest_authenticated(&state, &node, &packet).await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)))
 }

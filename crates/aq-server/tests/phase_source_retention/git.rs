@@ -70,6 +70,8 @@ impl Actual {
         c.env.env.state.source_retention = Some(Arc::new(
             aq_server::source_retention::Runtime::new(
                 aq_server::source_retention::SourceRetentionConfig {
+                    keep_per_task: 2,
+                    max_age: 30 * 86400,
                     git_root: central.root.clone(),
                     git_socket: central.socket.clone(),
                     staging_root: parent.join("retention-staging"),

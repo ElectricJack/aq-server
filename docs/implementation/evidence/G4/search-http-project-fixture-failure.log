@@ -1,0 +1,24 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running tests/dashboard_search.rs (target/debug/deps/dashboard_search-2a33ed41f5a7341f)
+
+running 3 tests
+test search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound ... FAILED
+test search_session_cursor_refuses_revoked_acl_partition ... ok
+test search_session_visibility_uses_exact_current_acl_and_scope ... ok
+
+failures:
+
+---- search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound stdout ----
+
+thread 'search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound' (1685706) panicked at crates/aq-server/tests/dashboard_search.rs:108:82:
+called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: "23502", message: "null value in column \"validated_at_ms\" of relation \"project_execution_bindings\" violates not-null constraint", detail: Some("Failing row contains (b102dca0-7832-4609-a06d-115710f3a747, 1, {\"name\": \"Synthetic authority fixture\", \"policy\": {\"digest\": \"f0..., null, null)."), hint: None, position: None, where: None, schema: Some("public"), table: Some("project_execution_bindings"), column: Some("validated_at_ms"), data_type: None, constraint: None, file: Some("execMain.c"), line: Some(2022), routine: Some("ExecConstraints") })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_search`

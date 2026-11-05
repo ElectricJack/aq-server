@@ -1,0 +1,210 @@
+{
+  "api_version": "dashboard-read-1",
+  "request_id": "7292e5d4-e1ae-46f6-9f50-2ad3191ee911",
+  "server_time": "2026-11-03T05:21:50.181Z",
+  "scope": {
+    "kind": "project",
+    "project_id": "e0000000-0000-4000-8000-000000000002"
+  },
+  "data": {
+    "counts": {
+      "running": {
+        "value": 0,
+        "accuracy": "exact"
+      },
+      "ready": {
+        "value": 1,
+        "accuracy": "exact"
+      },
+      "needs_you": {
+        "value": null,
+        "accuracy": "unknown"
+      },
+      "recovering": {
+        "value": 0,
+        "accuracy": "exact"
+      }
+    },
+    "attention": [],
+    "in_motion": [
+      {
+        "project": {
+          "id": "e0000000-0000-4000-8000-000000000002",
+          "label": "Local scratch development"
+        },
+        "running": {
+          "value": 0,
+          "accuracy": "exact"
+        },
+        "next_constraint": null,
+        "last_progress_at": null
+      }
+    ],
+    "recent_outcomes": [],
+    "sources": [
+      {
+        "source": "questions",
+        "project": null,
+        "observation": null,
+        "coverage": {
+          "state": "unknown",
+          "reason": "question_owner_not_mounted"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "blocked_tasks",
+        "project": null,
+        "observation": null,
+        "coverage": {
+          "state": "unknown",
+          "reason": "blocked_task_owner_not_mounted"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "attempts",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.114Z",
+          "fresh_until": "2026-11-03T05:21:55.114Z",
+          "source": "attempts",
+          "quality": "reported",
+          "coverage": "complete"
+        },
+        "coverage": {
+          "state": "complete"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "workers",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.114Z",
+          "fresh_until": "2026-11-03T05:21:55.114Z",
+          "source": "workers",
+          "quality": "reported",
+          "coverage": "partial"
+        },
+        "coverage": {
+          "state": "partial",
+          "reason": "association_from_retained_attempts"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "graph_ready",
+        "project": {
+          "id": "e0000000-0000-4000-8000-000000000002",
+          "label": "Local scratch development"
+        },
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.156Z",
+          "fresh_until": "2026-11-03T05:22:20.106Z",
+          "source": "graph_ready",
+          "quality": "reported",
+          "coverage": "complete"
+        },
+        "coverage": {
+          "state": "complete"
+        },
+        "total": {
+          "value": 1,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "reviews",
+        "project": null,
+        "observation": null,
+        "coverage": {
+          "state": "unknown",
+          "reason": "owner_unavailable"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "results",
+        "project": {
+          "id": "e0000000-0000-4000-8000-000000000002",
+          "label": "Local scratch development"
+        },
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.116Z",
+          "fresh_until": "2026-11-03T05:21:55.116Z",
+          "source": "results",
+          "quality": "reported",
+          "coverage": "partial"
+        },
+        "coverage": {
+          "state": "partial",
+          "reason": "recorded_native_results_only"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      },
+      {
+        "source": "settlement",
+        "project": null,
+        "observation": null,
+        "coverage": {
+          "state": "unknown",
+          "reason": "review_owner_not_mounted"
+        },
+        "total": {
+          "value": null,
+          "accuracy": "unknown"
+        }
+      },
+      {
+        "source": "operations",
+        "project": null,
+        "observation": {
+          "observed_at": "2026-11-03T05:21:50.114Z",
+          "fresh_until": "2026-11-03T05:21:55.114Z",
+          "source": "operations",
+          "quality": "reported",
+          "coverage": "partial"
+        },
+        "coverage": {
+          "state": "partial",
+          "reason": "dashboard_journal_only"
+        },
+        "total": {
+          "value": 0,
+          "accuracy": "exact"
+        }
+      }
+    ]
+  },
+  "observation": {
+    "observed_at": "2026-11-03T05:21:50.181Z",
+    "fresh_until": "2026-11-03T05:21:55.181Z",
+    "source": "aq_dashboard_read",
+    "quality": "reported",
+    "coverage": "partial"
+  },
+  "pending_operations": [],
+  "coverage": {
+    "state": "partial",
+    "reason": "See per-source coverage; unavailable owners do not contribute zero"
+  }
+}

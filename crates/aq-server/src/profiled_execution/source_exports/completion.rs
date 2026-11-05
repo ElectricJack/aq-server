@@ -192,6 +192,9 @@ pub struct LinkedExport {
     manifest: TransferManifest,
 }
 impl LinkedExport {
+    pub(crate) fn into_parts(self) -> (ReservedExport, VerifiedExport) {
+        (self.token, self.fact)
+    }
     pub fn token(&self) -> &ReservedExport {
         &self.token
     }

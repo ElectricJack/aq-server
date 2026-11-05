@@ -59,8 +59,31 @@ fn bad(msg: &str) -> AppError {
 pub struct AuthenticatedNode {
     node: Node,
     verifier: zeroize::Zeroizing<String>,
+    delegated: Option<crate::delegated_permits::runtime::Authentication>,
+    pub(crate) issuance: Option<aq_admission_sandbox::sandbox::PermitIssuanceRequest>,
+    pub(crate) upgrade: Option<aq_admission_sandbox::sandbox::PermitUpgradeRequest>,
 }
 impl AuthenticatedNode {
+    pub(crate) fn from_delegated(
+        node: Node,
+        evidence: crate::delegated_permits::runtime::Authentication,
+    ) -> Self {
+        Self {
+            node,
+            verifier: zeroize::Zeroizing::new(String::new()),
+            delegated: Some(evidence),
+            issuance: None,
+            upgrade: None,
+        }
+    }
+    pub fn delegated(&self) -> Option<&crate::delegated_permits::runtime::Authentication> {
+        self.delegated.as_ref()
+    }
+    pub fn permitted_attempt(&self) -> Option<uuid::Uuid> {
+        self.delegated
+            .as_ref()
+            .map(|a| a.current.record.binding.attempt_id)
+    }
     pub fn id(&self) -> uuid::Uuid {
         self.node.id
     }
@@ -97,7 +120,13 @@ pub async fn authenticate_context(
     if node.revoked_at.is_some() {
         return Err(AppError::CredentialRevoked);
     }
-    Ok(AuthenticatedNode { node, verifier })
+    Ok(AuthenticatedNode {
+        node,
+        verifier,
+        delegated: None,
+        issuance: None,
+        upgrade: None,
+    })
 }
 /// Lock and recheck the exact credential and current revocation. Caller-owned
 /// service/owner locks precede this node lock; attempt/session locks follow it.
@@ -107,6 +136,9 @@ pub async fn lock_current_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &AuthenticatedNode,
 ) -> Result<uuid::Uuid, AppError> {
+    if let Some(delegate) = &context.delegated {
+        return crate::delegated_permits::runtime::lock_authenticated(tx, delegate).await;
+    }
     let current: Option<uuid::Uuid> = sqlx::query_scalar(
         "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR UPDATE",
     )

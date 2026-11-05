@@ -1,0 +1,2 @@
+$ /home/jkern/dev/agent-queue2/.venv/bin/python protocol/dashboard-actions/v1/check.py
+3 requests, 5 dispositions, 10 errors, cursor, replay, invalid and compatibility fixtures passed

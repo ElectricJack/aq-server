@@ -439,15 +439,13 @@ async fn no_started_refresh_closure_revokes_permission_retains_holds_and_replays
 async fn refresh_route_activation_cannot_expose_an_actual_frozen_issuer_without_its_terminal_profile()
  {
     use aq_admission::preparation_v2 as frozen;
-    let mut f = Box::pin(frozen_fixture::prepared_with_config(
+    let f = Box::pin(frozen_fixture::prepared_with_config(
         true,
         refresh_only_terminal_for_frozen_case,
     ))
     .await;
-    // Controlled clock applies only to the fixture's actual initial acceptance.
-    // The public-dispatch and underlying old issuer checks below use real time.
-    f.c.env.env.state.clock = std::sync::Arc::new(chrono::Utc::now);
-    f.c.controlled_clock = None;
+    // Route gating and the eligible library issuer share the synthetic fixture's
+    // controlled clock, including its health and Graph observations.
     let nonce = Uuid::new_v4();
     let response = aq_server::build_worker_router(f.c.env.env.state.clone())
         .oneshot(

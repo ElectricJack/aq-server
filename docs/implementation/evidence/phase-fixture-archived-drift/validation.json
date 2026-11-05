@@ -1,0 +1,69 @@
+{
+  "source_commit": "d2a0285171fdbd4ab1afeb9ba640393a950b472c",
+  "toolchain": {
+    "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+    "cargo": "cargo 1.96.1 (356927216 2026-06-26)"
+  },
+  "resource_controls": {
+    "build_jobs": 2,
+    "test_threads_cap": 2,
+    "successful_phase_retry_test_threads": 1,
+    "target_directory": "slot-local target/",
+    "database": "existing disposable agent-q-test-db on localhost:55432; fixtures create/drop isolated databases"
+  },
+  "runs": [
+    {
+      "command": "CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_TARGET_DIR=\"$PWD/target\" CARGO_INCREMENTAL=0 cargo test --locked -p aq-admission --all-targets",
+      "log": "docs/implementation/evidence/phase-fixture-archived-drift/admission-test.log",
+      "sha256": "19985d9cdf40d1a22f2f9e8cecf833cf89e38a2bd6511bba032401218695493f",
+      "result": "pass",
+      "successful_test_count": 99
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_TARGET_DIR=\"$PWD/target\" CARGO_INCREMENTAL=0 cargo clippy --locked -p aq-admission --all-targets -- -D warnings",
+      "log": "docs/implementation/evidence/phase-fixture-archived-drift/admission-clippy.log",
+      "sha256": "560e5cf42614a4c7c77adf7c51aa21a96f977b40db9e0f6a43319271430f9805",
+      "result": "pass",
+      "successful_test_count": 0
+    },
+    {
+      "command": "DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_TARGET_DIR=\"$PWD/target\" CARGO_INCREMENTAL=0 cargo test --locked -p aq-server --test phase_never_granted --test phase_refresh_terminal",
+      "log": "docs/implementation/evidence/phase-fixture-archived-drift/phase-test.log",
+      "sha256": "4f51965b5b5b59062f161db3bf90d389d777fe65a5c388d8c6f63e47b985f741",
+      "result": "fail: unchanged fixture native Poll returned HTTP409 at common/phase_execution_core.rs:155; phase_refresh_terminal target was not reached",
+      "successful_test_count": 0
+    },
+    {
+      "command": "DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_TARGET_DIR=\"$PWD/target\" CARGO_INCREMENTAL=0 cargo test --locked -p aq-server --test phase_never_granted --test phase_refresh_terminal -- --test-threads=1",
+      "log": "docs/implementation/evidence/phase-fixture-archived-drift/phase-test-serial.log",
+      "sha256": "a68abb42b71d80f4672bc6f01b85b8da2079bd3fb2b0914e9f411dd4d1133261",
+      "result": "pass",
+      "successful_test_count": 9
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_TARGET_DIR=\"$PWD/target\" CARGO_INCREMENTAL=0 cargo clippy --locked -p aq-server --test phase_never_granted -- -D dead_code",
+      "log": "docs/implementation/evidence/phase-fixture-archived-drift/phase-clippy.log",
+      "sha256": "adade75bf2dfea9465b3c8d54e830a3806dd477fdf9130d5e777550a6fdeb591",
+      "result": "pass: no dead_code warnings; known unrelated no_grant.rs:112 unnecessary_unwrap remains visible"
+    }
+  ],
+  "other_checks": [
+    {
+      "command": "rustfmt --edition 2024 --config skip_children=true --check crates/aq-admission/src/lib.rs crates/aq-admission/src/transport.rs crates/aq-admission/src/delivery_clock_interactive.rs crates/aq-admission/tests/preparation_refresh.rs crates/aq-server/tests/phase_never_granted.rs",
+      "result": "pass"
+    },
+    {
+      "command": "git diff --exit-code 7a10417^ -- crates/aq-admission/src/transport.rs",
+      "result": "pass: exact archived source bytes restored"
+    },
+    {
+      "command": "git diff --check",
+      "result": "pass"
+    }
+  ],
+  "limits": [
+    "No whole-workspace Clippy rerun: known unrelated no_grant.rs unnecessary_unwrap belongs to sibling eager-grove-45.11. Focused phase Clippy denies dead_code; strict admission Clippy denies all warnings.",
+    "Initial two-thread phase run failed during fixture native Poll before grant/terminal assertions; serial retry passed all nine tests without source, assertion or timestamp changes. Concurrency sensitivity is suspected, not proven.",
+    "No physical host, provider, kernel stop or deployment qualification claimed."
+  ]
+}

@@ -9,12 +9,13 @@ use axum::{
 use tower::ServiceExt;
 
 fn app(c: &Case) -> Router {
-    let reviews = aq_server::reviews::Service::new(c.env.f.state.clone(), c.env.keys.clone());
-    aq_server::build_admin_router_with_policy_owners(
-        c.env.f.state.clone(),
-        None,
-        Some(Arc::new(reviews)),
-    )
+    let mut state = c.env.f.state.clone();
+    let mut config = (*state.config).clone();
+    config.reviews = Some(c.env.keys.clone());
+    assert!(config.playbooks.is_none());
+    state.config = Arc::new(config);
+    // Exercise the ordinary production builder, without a policy runtime.
+    aq_server::build_admin_router(state)
 }
 fn request(method: &str, path: &str, body: Value, email: &str) -> Request<Body> {
     let mut request = Request::builder()
@@ -49,32 +50,63 @@ async fn pending(c: &Case) -> aq_review_protocol::DecisionRequest {
         .await
         .unwrap()
         .unwrap();
-    let prepared = c
-        .env
-        .service
-        .prepare_combined_as(
-            &actor,
-            c.env.report.report_id,
-            c.env.operation,
-            external(c.env.report.binding.attempt_id),
-        )
+    let router = app(c);
+    let prepared = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/reviews/combined/prepare",
+            json!({"report_id":c.env.report.report_id,"source_operation_id":c.env.operation,
+            "external":external(c.env.report.binding.attempt_id)}),
+            "owner@localhost",
+        ))
         .await
         .unwrap();
+    assert_eq!(prepared.status(), StatusCode::OK);
+    let subject: aq_server::reviews::combined::CombinedSubject =
+        serde_json::from_value(value(prepared).await).unwrap();
     let decision = aq_review_protocol::DecisionRequest {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
         decision_id: Uuid::new_v4(),
-        subject: prepared.subject().artifact().unwrap(),
+        subject: subject.artifact().unwrap(),
         eligible_owners: vec![actor.id],
         eligibility_project_revision: 1,
-        review_policy: prepared.subject().code.validation_policy.clone(),
+        review_policy: subject.code.validation_policy.clone(),
         expires_at_ms: NOW + 30000,
     };
-    c.env
-        .service
-        .admit_combined(actor.id, &prepared, &decision)
-        .await
-        .unwrap();
+    let body = json!({"report_id":c.env.report.report_id,"source_operation_id":c.env.operation,
+        "external":external(c.env.report.binding.attempt_id),"decision":decision});
+    let mut wrong = body.clone();
+    wrong["decision"]["subject"]["digest"] = json!(Digest::of(b"forged admission"));
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/reviews/combined",
+                wrong,
+                "owner@localhost",
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    for _ in 0..2 {
+        let admitted = router
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/reviews/combined",
+                body.clone(),
+                "owner@localhost",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(admitted.status(), StatusCode::OK);
+        assert_eq!(value(admitted).await, json!(decision));
+    }
     decision
 }
 fn finish(c: &Case) {
@@ -361,6 +393,8 @@ async fn combined_http_optional_mount_owner_origin_and_closed_body_guards() {
     let router = app(&c);
     let decision = c.request.decision_id;
     let paths = [
+        ("POST", "/api/reviews/combined".into()),
+        ("POST", "/api/reviews/combined/prepare".into()),
         ("GET", format!("/api/reviews/combined/{decision}")),
         ("POST", format!("/api/reviews/combined/{decision}/resolve")),
         ("POST", "/api/settlement/evaluations".into()),
@@ -425,13 +459,13 @@ async fn combined_http_optional_mount_owner_origin_and_closed_body_guards() {
     assert_eq!(
         router
             .clone()
-            .oneshot(request("GET", &paths[0].1, Value::Null, ""))
+            .oneshot(request("GET", &paths[2].1, Value::Null, ""))
             .await
             .unwrap()
             .status(),
         StatusCode::UNAUTHORIZED
     );
-    let resolve = &paths[1].1;
+    let resolve = &paths[3].1;
     let mut missing = request("POST", resolve, json!({}), "owner@localhost");
     missing.headers_mut().remove("x-aq-request");
     assert_eq!(
@@ -695,6 +729,7 @@ async fn settlement_http_pending_review_refuses_without_effect_then_same_intent_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let response = router
+        .clone()
         .oneshot(request(
             "POST",
             "/api/settlement/evaluations",
@@ -718,5 +753,24 @@ async fn settlement_http_pending_review_refuses_without_effect_then_same_intent_
         held,
         "evaluation alone neither dispatches Graph nor releases the task"
     );
+    let completion = receipt["completion_operation_id"].as_str().unwrap();
+    let path = format!("/api/settlement/completions/{completion}/reconcile");
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(request("POST", &path, json!({}), &c.actor.email))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(value(response).await["state"], "confirmed");
+    }
+    assert_eq!(c.writes.load(Ordering::SeqCst), 1);
+    let held: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(c.env.report.binding.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!held, "confirmed completion releases the task exactly once");
     finish(&c);
 }

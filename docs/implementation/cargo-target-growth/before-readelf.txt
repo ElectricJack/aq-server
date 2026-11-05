@@ -1,0 +1,53 @@
+There are 44 section headers, starting at offset 0x20699678:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .interp           PROGBITS        00000000000002e0 0002e0 00001c 00   A  0   0  1
+  [ 2] .note.ABI-tag     NOTE            00000000000002fc 0002fc 000020 00   A  0   0  4
+  [ 3] .note.gnu.build-id NOTE            000000000000031c 00031c 000024 00   A  0   0  4
+  [ 4] .dynsym           DYNSYM          0000000000000340 000340 0010b0 18   A  8   1  8
+  [ 5] .gnu.version      VERSYM          00000000000013f0 0013f0 000164 02   A  4   0  2
+  [ 6] .gnu.version_r    VERNEED         0000000000001554 001554 000200 00   A  8   4  4
+  [ 7] .gnu.hash         GNU_HASH        0000000000001758 001758 00001c 00   A  4   0  8
+  [ 8] .dynstr           STRTAB          0000000000001774 001774 0009c3 00   A  0   0  1
+  [ 9] .rela.dyn         RELA            0000000000002138 002138 5d1e60 18   A  4   0  8
+  [10] .rela.plt         RELA            00000000005d3f98 5d3f98 000090 18  AI  4  27  8
+  [11] .rodata           PROGBITS        00000000005d5000 5d5000 306f00 00 AMS  0   0 4096
+  [12] .debug_gdb_scripts PROGBITS        00000000008dbf00 8dbf00 000022 01 AMS  0   0  1
+  [13] .gcc_except_table PROGBITS        00000000008dbf24 8dbf24 423ec0 00   A  0   0  4
+  [14] .eh_frame_hdr     PROGBITS        0000000000cffde4 cffde4 1b2744 00   A  0   0  4
+  [15] .eh_frame         PROGBITS        0000000000eb2528 eb2528 5ee40c 00   A  0   0  8
+  [16] .text             PROGBITS        00000000014a1940 14a0940 43e3860 00  AX  0   0 64
+  [17] .init             PROGBITS        00000000058851a0 58841a0 00001b 00  AX  0   0  4
+  [18] .fini             PROGBITS        00000000058851bc 58841bc 00000d 00  AX  0   0  4
+  [19] .plt              PROGBITS        00000000058851d0 58841d0 000070 00  AX  0   0 16
+  [20] .tdata            PROGBITS        0000000005886240 5884240 0000a8 00 WAT  0   0  8
+  [21] .tbss             NOBITS          00000000058862e8 58842e8 000158 00 WAT  0   0  8
+  [22] .fini_array       FINI_ARRAY      00000000058862e8 58842e8 000008 08  WA  0   0  8
+  [23] .init_array       INIT_ARRAY      00000000058862f0 58842f0 000010 00 WAo  0   0  8
+  [24] .data.rel.ro      PROGBITS        0000000005886300 5884300 15e758 00  WA  0   0  8
+  [25] .dynamic          DYNAMIC         00000000059e4a58 59e2a58 0001e0 10  WA  8   0  8
+  [26] .got              PROGBITS        00000000059e4c38 59e2c38 1700e0 00  WA  0   0  8
+  [27] .got.plt          PROGBITS        0000000005b54d18 5b52d18 000048 00  WA  0   0  8
+  [28] .relro_padding    NOBITS          0000000005b54d60 5b52d60 0002a0 00  WA  0   0  1
+  [29] .tm_clone_table   PROGBITS        0000000005b55d60 5b52d60 000000 00  WA  0   0  8
+  [30] .data             PROGBITS        0000000005b55d60 5b52d60 001c48 00  WA  0   0  8
+  [31] .bss              NOBITS          0000000005b579a8 5b549a8 0001e0 00  WA  0   0  8
+  [32] .comment          PROGBITS        0000000000000000 5b549a8 0000b8 01  MS  0   0  1
+  [33] .debug_abbrev     PROGBITS        0000000000000000 5b54a60 1ef318 00      0   0  1
+  [34] .debug_info       PROGBITS        0000000000000000 5d43d78 b9e8f6c 00      0   0  1
+  [35] .debug_aranges    PROGBITS        0000000000000000 1172ccf0 533e70 00      0   0 16
+  [36] .debug_ranges     PROGBITS        0000000000000000 11c60b60 1893330 00      0   0  1
+  [37] .debug_str        PROGBITS        0000000000000000 134f3e90 84bdc93 01  MS  0   0  1
+  [38] .debug_line       PROGBITS        0000000000000000 1b9b1b23 2461c5e 00      0   0  1
+  [39] .debug_loc        PROGBITS        0000000000000000 1de13781 66db06 00      0   0  1
+  [40] .debug_macro      PROGBITS        0000000000000000 1e481287 00a04d 00      0   0  1
+  [41] .symtab           SYMTAB          0000000000000000 1e48b2d8 741d98 18     43 126701  8
+  [42] .shstrtab         STRTAB          0000000000000000 1ebcd070 0001cc 00      0   0  1
+  [43] .strtab           STRTAB          0000000000000000 1ebcd23c 1acc435 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)

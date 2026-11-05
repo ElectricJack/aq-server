@@ -1,0 +1,104 @@
+{
+  "report": {
+    "schema_version": 1,
+    "operation_id": "00000000-0000-0000-0000-000000000092",
+    "identity": {
+      "node_id": "00000000-0000-0000-0000-00000000000b",
+      "boot_id": "00000000-0000-0000-0000-00000000000c"
+    },
+    "binding": {
+      "assignment_generation": 1,
+      "attempt_id": "00000000-0000-0000-0000-00000000000d",
+      "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+      "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+      "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+      "offer_id": "00000000-0000-0000-0000-00000000000f",
+      "schema_version": 1,
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "boot_id": "00000000-0000-0000-0000-00000000000c",
+        "kind": "remote",
+        "node_id": "00000000-0000-0000-0000-00000000000b",
+        "session_id": "00000000-0000-0000-0000-00000000000e"
+      }
+    },
+    "report_id": "00000000-0000-0000-0000-000000000093",
+    "supersedes": null,
+    "outcome": "success",
+    "stop": {
+      "schema_version": 1,
+      "binding": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+        "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+        "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "offer_id": "00000000-0000-0000-0000-00000000000f",
+        "schema_version": 1,
+        "session": {
+          "assignment_generation": 1,
+          "attempt_id": "00000000-0000-0000-0000-00000000000d",
+          "boot_id": "00000000-0000-0000-0000-00000000000c",
+          "kind": "remote",
+          "node_id": "00000000-0000-0000-0000-00000000000b",
+          "session_id": "00000000-0000-0000-0000-00000000000e"
+        }
+      },
+      "guardian_id": "00000000-0000-0000-0000-000000000046",
+      "launch_id": "00000000-0000-0000-0000-000000000047",
+      "stop_operation_id": "00000000-0000-0000-0000-000000000091",
+      "journal": {
+        "kind": "recorded",
+        "revision": 4,
+        "digest": "8c8fe68f8ad29a7606fb92d5663badff46bda5e5ac428a57a4a976f1be58fea5"
+      },
+      "disposition": {
+        "kind": "stopped",
+        "grant_id": "00000000-0000-0000-0000-000000000049",
+        "stop_receipt_digest": "e1ea10c4d9f211fd869c3d68276ad4f0bf9ba88bd170f40fc658c39b32299278"
+      },
+      "reason": "execution_expiry"
+    },
+    "source_receipt_ids": [
+      "00000000-0000-0000-0000-000000000094"
+    ],
+    "pending_effect_ids": [],
+    "conclusion": "Worker claims task complete; review is still required. 雪"
+  },
+  "receipt": {
+    "schema_version": 1,
+    "operation_id": "00000000-0000-0000-0000-000000000092",
+    "report_id": "00000000-0000-0000-0000-000000000093",
+    "binding": {
+      "assignment_generation": 1,
+      "attempt_id": "00000000-0000-0000-0000-00000000000d",
+      "execution_spec_digest": "d4f02eaafd1a9e9de7d10972ca8e47fa7a985825c3c9c1e249c72683cb3e4f19",
+      "graph_access_profile_digest": "500a5c069088d9dfadc8c60c3d8c16bb3caebc05b0eb1bf1c443b65c96943ae8",
+      "launch_manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+      "offer_id": "00000000-0000-0000-0000-00000000000f",
+      "schema_version": 1,
+      "session": {
+        "assignment_generation": 1,
+        "attempt_id": "00000000-0000-0000-0000-00000000000d",
+        "boot_id": "00000000-0000-0000-0000-00000000000c",
+        "kind": "remote",
+        "node_id": "00000000-0000-0000-0000-00000000000b",
+        "session_id": "00000000-0000-0000-0000-00000000000e"
+      }
+    },
+    "report_digest": "86397282da962b8238bfa370e1509f784029137f222edd7c4f7427719398ad67",
+    "expected_outcome": {
+      "id": "aq.expected-outcome",
+      "version": "1",
+      "digest": "84a714741b53e360f9c16c60936e5996bb5a578cc33b0f75936cb93eb21dbfd2"
+    },
+    "stopped_receipt": {
+      "id": "aq.native-stopped/00000000-0000-0000-0000-00000000000d",
+      "version": "1",
+      "digest": "9c8752892919ff6521cfa17a6613be667c08d25132fe7530ade4ff5ce184cbca"
+    },
+    "recorded_at_ms": 1000000,
+    "disposition": "recorded"
+  }
+}

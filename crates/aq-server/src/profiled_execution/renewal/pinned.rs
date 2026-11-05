@@ -62,21 +62,14 @@ pub async fn load_locked(
     if auth.id() != request.identity.node_id {
         return Err(invalid());
     }
-    let runtime =
-        registration::current_runtime_locked(state, tx, auth.id(), request.identity.boot_id)
-            .await?;
+    registration::admitted_runtime_locked(tx, auth.id(), request.identity.boot_id).await?;
     let view = authority::load_locked(state, tx, &request.binding.session, Policy::IdentityOnly)
         .await
         .map_err(AppError::from)?;
     if view.kind != Kind::ProfiledV1
-        || !view.holds_task
-        || view.status != Status::Granted
-        || view.revoked
-        || view.cancellation_id.is_some()
-        || view.stopped
         || view.grant_id != Some(request.grant_id)
         || view.identity.node_id != auth.id()
-        || view.identity.boot_id != runtime.boot_id
+        || view.identity.boot_id != request.identity.boot_id
     {
         return Err(invalid());
     }
@@ -98,11 +91,22 @@ pub async fn load_locked(
         || owner.reservation_id != request.reservation_id
         || current.grant_id != request.grant_id
         || current.binding != request.binding
+    {
+        return Err(invalid());
+    }
+    if hot.cancellation_id.is_some() {
+        return Err(AppError::ExecutionCancelled);
+    }
+    if !view.holds_task
+        || view.status != Status::Granted
+        || view.revoked
+        || view.stopped
         || time >= current.expires_at_ms
         || hot.execution_deadline_ms.is_none_or(|d| time >= d)
     {
         return Err(invalid());
     }
+    registration::current_runtime_locked(state, tx, auth.id(), request.identity.boot_id).await?;
     let agent = sqlx::query("SELECT binding,profile,context,revoked,node_id FROM agent_launch_bindings WHERE attempt_id=$1 FOR SHARE")
         .bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
     let graph = serde_json::to_value(view.graph.as_ref().ok_or_else(invalid)?)

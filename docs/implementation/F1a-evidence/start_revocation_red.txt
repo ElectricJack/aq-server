@@ -1,0 +1,23 @@
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+    Finished `test` profile [unoptimized] target(s) in 6.87s
+     Running tests/supervisor_session.rs (target/debug/deps/supervisor_session-fff4f918f6afc92d)
+
+running 1 test
+test revocation_before_physical_start_refuses_and_stops_guardian ... FAILED
+
+failures:
+
+---- revocation_before_physical_start_refuses_and_stops_guardian stdout ----
+
+thread 'revocation_before_physical_start_refuses_and_stops_guardian' (2515848) panicked at crates/aq-supervisor-host/tests/supervisor_session.rs:543:5:
+assertion failed: host.start(case.central.clone(), case.host.clone(),
+            b"supervisor startup\n".to_vec(), 30_000).await.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    revocation_before_physical_start_refuses_and_stops_guardian
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.04s
+
+error: test failed, to rerun pass `-p aq-supervisor-host --test supervisor_session`

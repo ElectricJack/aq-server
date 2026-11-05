@@ -1,0 +1,77 @@
+{
+  "awaiting": {
+    "delivery": null,
+    "reply": {
+      "binding": {
+        "attempt_id": "37970a1f-f7d2-593f-b87b-03a44187b6ab",
+        "channel_id": "d4e5c63b-6266-47d5-a225-7378c29f0792",
+        "grant_generation": 1,
+        "node": {
+          "boot_id": "f94cc3e0-9b2d-4da5-9870-1f7d302d047e",
+          "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+        },
+        "sandbox_id": "baac929b-08cc-4c7e-bb74-a7aa1535ab77"
+      },
+      "kind": "awaiting_node_readoption",
+      "operation_id": "7bd876af-d797-41ea-ac49-364de58643d1"
+    },
+    "revision": 2,
+    "schema_version": 1
+  },
+  "request": {
+    "current": {
+      "boot_id": "8028a155-88f9-4826-8c52-353f3f99d85c",
+      "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+    },
+    "operation_id": "f1f5ee47-1779-4c12-8405-e40df73a085a",
+    "previous": {
+      "boot_id": "f94cc3e0-9b2d-4da5-9870-1f7d302d047e",
+      "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+    },
+    "sandboxes": [
+      {
+        "attempt_id": "37970a1f-f7d2-593f-b87b-03a44187b6ab",
+        "grant_generation": 1,
+        "permit_id": "899e26af-9867-4b52-8865-eaa9f44fdc0f",
+        "sandbox_id": "baac929b-08cc-4c7e-bb74-a7aa1535ab77"
+      }
+    ],
+    "schema_version": 1
+  },
+  "response": {
+    "current": {
+      "boot_id": "8028a155-88f9-4826-8c52-353f3f99d85c",
+      "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+    },
+    "operation_id": "f1f5ee47-1779-4c12-8405-e40df73a085a",
+    "previous": {
+      "boot_id": "f94cc3e0-9b2d-4da5-9870-1f7d302d047e",
+      "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+    },
+    "results": [
+      {
+        "kind": "rebound",
+        "permit": {
+          "binding": {
+            "attempt_id": "37970a1f-f7d2-593f-b87b-03a44187b6ab",
+            "channel_id": "d4e5c63b-6266-47d5-a225-7378c29f0792",
+            "grant_generation": 1,
+            "node": {
+              "boot_id": "8028a155-88f9-4826-8c52-353f3f99d85c",
+              "node_id": "c07948e2-ac70-4b63-81e8-c5e327a042c9"
+            },
+            "sandbox_id": "baac929b-08cc-4c7e-bb74-a7aa1535ab77"
+          },
+          "credential": "aqp_o4pqR-p3oRXZNnp3XSC7_oRwf34pojEcJAqOQ9V7NiE",
+          "expires_at_ms": 1793697384323,
+          "hard_deadline_ms": 1793697434323,
+          "issued_at_ms": 1793697374323,
+          "permit_id": "899e26af-9867-4b52-8865-eaa9f44fdc0f",
+          "schema_version": 1,
+          "scope": "execution"
+        }
+      }
+    ],
+    "schema_version": 1
+  }
+}

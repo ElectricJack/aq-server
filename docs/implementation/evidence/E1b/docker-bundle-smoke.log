@@ -1,0 +1,43 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile:
+#1 transferring dockerfile: 618B 0.0s done
+#1 DONE 0.2s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context:
+#3 transferring context: 2B done
+#3 DONE 0.1s
+
+#4 [1/4] FROM docker.io/library/debian:bookworm-slim
+#4 CACHED
+
+#5 [internal] load build context
+#5 transferring context: 304.81kB 0.0s done
+#5 DONE 0.1s
+
+#6 [2/4] COPY vendor/aq-dashboard-v0.1.0.tar.gz /tmp/dashboard.tar.gz
+#6 DONE 0.2s
+
+#7 [3/4] RUN echo '162f2cd29e7123570f4568df68ff2ffffa1c97417c1f51369fcd55b1c7bd2465  /tmp/dashboard.tar.gz' | sha256sum -c -     && mkdir -p /usr/share/agent-q/dashboard     && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard     && rm /tmp/dashboard.tar.gz
+#7 0.372 /tmp/dashboard.tar.gz: OK
+#7 DONE 0.6s
+
+#8 [4/4] COPY vendor/dashboard-candidate.json /usr/share/agent-q/dashboard-candidate.json
+#8 DONE 0.3s
+
+#9 exporting to image
+#9 exporting layers
+#9 exporting layers 0.3s done
+#9 writing image sha256:2d39e5b4cf5dcdcaa52dec5d8246a464d98ce8727bdbcb6b574a6a054e835502 0.0s done
+#9 naming to docker.io/library/aqv2-e1b-dashboard-pin:smart-falcon-16.3 0.0s done
+#9 DONE 0.5s
+f1eefcaafe25426f84b53ea306efed0110e8629f49a09e7e67fcff5b7f3580da  /usr/share/agent-q/dashboard/dashboard-manifest.json
+sha256:2d39e5b4cf5dcdcaa52dec5d8246a464d98ce8727bdbcb6b574a6a054e835502 ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard"] 10001:10001
+Untagged: aqv2-e1b-dashboard-pin:smart-falcon-16.3
+Deleted: sha256:2d39e5b4cf5dcdcaa52dec5d8246a464d98ce8727bdbcb6b574a6a054e835502
+PASS: actual production dashboard COPY/RUN/ENV fragment verified and readable by UID 10001 in a read-only container; complete server image was not built.

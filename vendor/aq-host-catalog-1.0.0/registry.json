@@ -1,0 +1,3131 @@
+{
+  "commands": {
+    "candidate.prepare": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "candidate.prepare"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "base": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "sources": {
+            "items": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "max_items": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "base",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "candidate.prepare",
+      "outcomes": {
+        "conflict": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "prepared": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "candidate.publish": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "candidate.publish"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "candidate": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "destination": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "evidence": {
+            "items": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "max_items": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate",
+          "destination",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "candidate.publish",
+      "outcomes": {
+        "conflict": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "published": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "reconcilable",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "check.request": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "check.request"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "execution_context": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "suite": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "compatibility",
+              "documentation",
+              "integration",
+              "unit"
+            ]
+          }
+        },
+        "required": [
+          "execution_context",
+          "subject",
+          "suite"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "check.request",
+      "outcomes": {
+        "failed": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "infrastructure_failure": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "passed": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "context.read": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "context.read"
+      ],
+      "deadline_ms": 60000,
+      "effect": "observation",
+      "input": {
+        "properties": {
+          "page": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "snapshot": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "evidence",
+              "execution_options",
+              "health_observations",
+              "project",
+              "work"
+            ]
+          }
+        },
+        "required": [
+          "page",
+          "snapshot",
+          "subject",
+          "view"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "context.read",
+      "outcomes": {
+        "expired": {
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "expires_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_page": {
+              "inner": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "nullable"
+            },
+            "observed_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "snapshot": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "visibility": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "complete",
+            "expires_at_ms",
+            "next_page",
+            "observed_at_ms",
+            "reference",
+            "snapshot",
+            "subject",
+            "visibility"
+          ],
+          "type": "object"
+        },
+        "incomplete": {
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "expires_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_page": {
+              "inner": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "nullable"
+            },
+            "observed_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "snapshot": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "visibility": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "complete",
+            "expires_at_ms",
+            "next_page",
+            "observed_at_ms",
+            "reference",
+            "snapshot",
+            "subject",
+            "visibility"
+          ],
+          "type": "object"
+        },
+        "observed": {
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "expires_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_page": {
+              "inner": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "nullable"
+            },
+            "observed_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "snapshot": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "visibility": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "complete",
+            "expires_at_ms",
+            "next_page",
+            "observed_at_ms",
+            "reference",
+            "snapshot",
+            "subject",
+            "visibility"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "expires_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_page": {
+              "inner": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "nullable"
+            },
+            "observed_at_ms": {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "snapshot": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "visibility": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "complete",
+            "expires_at_ms",
+            "next_page",
+            "observed_at_ms",
+            "reference",
+            "snapshot",
+            "subject",
+            "visibility"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "observation",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "decision.request": {
+      "asynchronous": {
+        "completion": {
+          "properties": {
+            "outcome": {
+              "max_length": 128,
+              "type": "string",
+              "values": [
+                "approved",
+                "cancelled",
+                "expired",
+                "refused",
+                "rejected"
+              ]
+            },
+            "output": {
+              "properties": {
+                "reference": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "subject": {
+                  "properties": {
+                    "id": {
+                      "max_length": 4096,
+                      "type": "string",
+                      "values": []
+                    },
+                    "revision": {
+                      "maximum": 9223372036854775807,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "reference",
+                "subject"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "outcome",
+            "output"
+          ],
+          "type": "object"
+        },
+        "completion_event": "aq.decision.completed",
+        "correlation_field": "operation",
+        "reconciliation_command": "operation.get"
+      },
+      "cancellation": true,
+      "capabilities": [
+        "decision.request"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "choices": {
+            "items": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "max_items": 100,
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "question": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "responders": {
+            "items": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "max_items": 100,
+            "type": "array"
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "choices",
+          "expires_at_ms",
+          "question",
+          "responders",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "decision.request",
+      "outcomes": {
+        "accepted": {
+          "properties": {
+            "handle": {
+              "max_length": 1024,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
+        "approved": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "cancelled": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "expired": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "rejected": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "findings.reconcile": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "findings.reconcile"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "evaluation": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "findings": {
+            "items": {
+              "properties": {
+                "evidence": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "expected_revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "key": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                }
+              },
+              "required": [
+                "evidence",
+                "expected_revision",
+                "key"
+              ],
+              "type": "object"
+            },
+            "max_items": 100,
+            "type": "array"
+          },
+          "observation": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "partition": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "reminder_ms": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "evaluation",
+          "findings",
+          "observation",
+          "partition",
+          "reminder_ms"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "findings.reconcile",
+      "outcomes": {
+        "conflict": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "reconciled": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "judgment.request": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "judgment.request"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "choices": {
+            "items": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "max_items": 100,
+            "type": "array"
+          },
+          "context": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "question": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "choices",
+          "context",
+          "question",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "judgment.request",
+      "outcomes": {
+        "assessed": {
+          "properties": {
+            "choice": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "choice",
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "message.send": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "message.send"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "body": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "identity": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "recipient": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "visibility": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          }
+        },
+        "required": [
+          "body",
+          "identity",
+          "recipient",
+          "visibility"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "message.send",
+      "outcomes": {
+        "queued": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "operation.cancel": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "operation.cancel"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "handle": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "operation.cancel",
+      "outcomes": {
+        "accepted": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "cancelled": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "indeterminate": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "too_late": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "operation.get": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "operation.get"
+      ],
+      "deadline_ms": 60000,
+      "effect": "observation",
+      "input": {
+        "properties": {
+          "handle": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "operation.get",
+      "outcomes": {
+        "cancelled": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "completed": {
+          "type": "union",
+          "variants": [
+            {
+              "properties": {
+                "outcome": {
+                  "max_length": 128,
+                  "type": "string",
+                  "values": [
+                    "completed",
+                    "refused"
+                  ]
+                },
+                "output": {
+                  "properties": {
+                    "disposition": {
+                      "max_length": 128,
+                      "type": "string",
+                      "values": [
+                        "accepted",
+                        "changes_requested",
+                        "failed"
+                      ]
+                    },
+                    "reference": {
+                      "max_length": 4096,
+                      "type": "string",
+                      "values": []
+                    },
+                    "subject": {
+                      "properties": {
+                        "id": {
+                          "max_length": 4096,
+                          "type": "string",
+                          "values": []
+                        },
+                        "revision": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "revision"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "disposition",
+                    "reference",
+                    "subject"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "outcome",
+                "output"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "outcome": {
+                  "max_length": 128,
+                  "type": "string",
+                  "values": [
+                    "approved",
+                    "cancelled",
+                    "expired",
+                    "refused",
+                    "rejected"
+                  ]
+                },
+                "output": {
+                  "properties": {
+                    "reference": {
+                      "max_length": 4096,
+                      "type": "string",
+                      "values": []
+                    },
+                    "subject": {
+                      "properties": {
+                        "id": {
+                          "max_length": 4096,
+                          "type": "string",
+                          "values": []
+                        },
+                        "revision": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "revision"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "reference",
+                    "subject"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "outcome",
+                "output"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "failed": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "indeterminate": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "running": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [],
+      "recovery": "observation",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "work.change": {
+      "asynchronous": null,
+      "cancellation": false,
+      "capabilities": [
+        "work.change"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "hold_id": {
+            "inner": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "type": "nullable"
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "value": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "variant": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "dependencies",
+              "execution_constraints",
+              "hold",
+              "priority",
+              "release_hold",
+              "requirements"
+            ]
+          }
+        },
+        "required": [
+          "hold_id",
+          "subject",
+          "value",
+          "variant"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "work.change",
+      "outcomes": {
+        "changed": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "conflict": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [
+        "reference",
+        "subject"
+      ],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    },
+    "work.ensure": {
+      "asynchronous": {
+        "completion": {
+          "properties": {
+            "outcome": {
+              "max_length": 128,
+              "type": "string",
+              "values": [
+                "completed",
+                "refused"
+              ]
+            },
+            "output": {
+              "properties": {
+                "disposition": {
+                  "max_length": 128,
+                  "type": "string",
+                  "values": [
+                    "accepted",
+                    "changes_requested",
+                    "failed"
+                  ]
+                },
+                "reference": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "subject": {
+                  "properties": {
+                    "id": {
+                      "max_length": 4096,
+                      "type": "string",
+                      "values": []
+                    },
+                    "revision": {
+                      "maximum": 9223372036854775807,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "disposition",
+                "reference",
+                "subject"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "outcome",
+            "output"
+          ],
+          "type": "object"
+        },
+        "completion_event": "aq.operation.updated",
+        "correlation_field": "operation",
+        "reconciliation_command": "operation.get"
+      },
+      "cancellation": true,
+      "capabilities": [
+        "work.ensure"
+      ],
+      "deadline_ms": 60000,
+      "effect": "mutation",
+      "input": {
+        "properties": {
+          "context": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "kind": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "fidelity_review",
+              "implementation",
+              "investigation",
+              "onboarding",
+              "planning",
+              "repair",
+              "review",
+              "spec_ingestion",
+              "supervisor_authoring"
+            ]
+          },
+          "lifetime": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "independent",
+              "owned"
+            ]
+          },
+          "logical_key": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "visibility": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          }
+        },
+        "required": [
+          "context",
+          "kind",
+          "lifetime",
+          "logical_key",
+          "subject",
+          "visibility"
+        ],
+        "type": "object"
+      },
+      "max_payload_bytes": 65536,
+      "name": "work.ensure",
+      "outcomes": {
+        "accepted": {
+          "properties": {
+            "handle": {
+              "max_length": 1024,
+              "type": "string",
+              "values": []
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
+        "completed": {
+          "properties": {
+            "disposition": {
+              "max_length": 128,
+              "type": "string",
+              "values": [
+                "accepted",
+                "changes_requested",
+                "failed"
+              ]
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "disposition",
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "ensured": {
+          "properties": {
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "refused": {
+          "properties": {
+            "disposition": {
+              "max_length": 128,
+              "type": "string",
+              "values": [
+                "accepted",
+                "changes_requested",
+                "failed"
+              ]
+            },
+            "reference": {
+              "max_length": 4096,
+              "type": "string",
+              "values": []
+            },
+            "subject": {
+              "properties": {
+                "id": {
+                  "max_length": 4096,
+                  "type": "string",
+                  "values": []
+                },
+                "revision": {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "disposition",
+            "reference",
+            "subject"
+          ],
+          "type": "object"
+        }
+      },
+      "public_result_fields": [],
+      "recovery": "keyed_idempotent",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_input_fields": [],
+      "sensitive_output_fields": [],
+      "version": "1.0.0"
+    }
+  },
+  "events": {
+    "aq.artifact.recorded": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.artifact.recorded",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "recorded"
+            ]
+          },
+          "reference": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "reference",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.check.completed": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.check.completed",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "failed",
+              "infrastructure_failure",
+              "passed",
+              "refused"
+            ]
+          },
+          "reference": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "reference",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.decision.completed": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.decision.completed",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "approved",
+              "cancelled",
+              "expired",
+              "refused",
+              "rejected"
+            ]
+          },
+          "output": {
+            "properties": {
+              "reference": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "subject": {
+                "properties": {
+                  "id": {
+                    "max_length": 4096,
+                    "type": "string",
+                    "values": []
+                  },
+                  "revision": {
+                    "maximum": 9223372036854775807,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "reference",
+              "subject"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "output"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "output.subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "output.subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.integration.changed": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.integration.changed",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "conflict",
+              "prepared",
+              "published",
+              "refused"
+            ]
+          },
+          "reference": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "reference",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.operation.updated": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.operation.updated",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "completed",
+              "refused"
+            ]
+          },
+          "output": {
+            "properties": {
+              "disposition": {
+                "max_length": 128,
+                "type": "string",
+                "values": [
+                  "accepted",
+                  "changes_requested",
+                  "failed"
+                ]
+              },
+              "reference": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "subject": {
+                "properties": {
+                  "id": {
+                    "max_length": 4096,
+                    "type": "string",
+                    "values": []
+                  },
+                  "revision": {
+                    "maximum": 9223372036854775807,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "disposition",
+              "reference",
+              "subject"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "output"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "output.subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "output.subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.signal.reported": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.signal.reported",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "reported"
+            ]
+          },
+          "reference": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "reference",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    },
+    "aq.work.changed": {
+      "correlation_fields": [
+        "operation"
+      ],
+      "max_payload_bytes": 65536,
+      "name": "aq.work.changed",
+      "payload": {
+        "properties": {
+          "outcome": {
+            "max_length": 128,
+            "type": "string",
+            "values": [
+              "cancelled",
+              "changed",
+              "completed",
+              "ensured"
+            ]
+          },
+          "reference": {
+            "max_length": 4096,
+            "type": "string",
+            "values": []
+          },
+          "subject": {
+            "properties": {
+              "id": {
+                "max_length": 4096,
+                "type": "string",
+                "values": []
+              },
+              "revision": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "reference",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "retention_ms": 86400000,
+      "revision_field": "subject.revision",
+      "scopes": [
+        "project"
+      ],
+      "sensitive_payload_fields": [],
+      "subject_field": "subject.id",
+      "trusted_producers": [
+        "aq.host.bridge@1"
+      ],
+      "version": "1.0.0"
+    }
+  }
+}

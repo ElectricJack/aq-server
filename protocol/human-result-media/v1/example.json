@@ -24,7 +24,9 @@
     "max_dimension": 4096,
     "max_result_artifacts": 8,
     "upload_ttl_ms": 1800000,
-    "retention_ms": 604800000
+    "retention_ms": 604800000,
+    "max_clip_bytes": 4194304,
+    "max_clip_duration_ms": 60000
   },
   "items": [
     {

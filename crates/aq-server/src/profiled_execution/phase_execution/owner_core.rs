@@ -1,4 +1,4 @@
-use crate::{AppState, error::AppError};
+use crate::{AppState, error::AppError, profiled_execution::on_heap};
 use aq_admission::{ArtifactRef, Digest};
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
@@ -135,20 +135,20 @@ async fn prepare_inner(
     use uuid::Uuid;
     let mut tx = begin(state).await?;
     require_schema(&mut tx).await?;
-    if let Some(reply) = replay_locked(state, &mut tx, auth, request, nonce).await? {
+    if let Some(reply) = on_heap(|| replay_locked(state, &mut tx, auth, request, nonce)).await? {
         tx.commit().await.map_err(db)?;
         return Ok(PreparationOutcome::Replay(Box::new(reply)));
     }
-    let before = pinned::load_locked(state, &mut tx, auth, request).await?;
+    let before = on_heap(|| pinned::load_locked(state, &mut tx, auth, request)).await?;
     tx.commit().await.map_err(db)?;
-    let observed = observations::collect(state, &before.input).await?;
+    let observed = on_heap(|| observations::collect(state, &before.input)).await?;
     let mut tx = begin(state).await?;
     require_schema(&mut tx).await?;
-    if let Some(reply) = replay_locked(state, &mut tx, auth, request, nonce).await? {
+    if let Some(reply) = on_heap(|| replay_locked(state, &mut tx, auth, request, nonce)).await? {
         tx.commit().await.map_err(db)?;
         return Ok(PreparationOutcome::Replay(Box::new(reply)));
     }
-    let mut after = pinned::load_locked(state, &mut tx, auth, request).await?;
+    let mut after = on_heap(|| pinned::load_locked(state, &mut tx, auth, request)).await?;
     if !same(&before.history.proposal, &after.history.proposal)?
         || !same(&before.history.request, &after.history.request)?
         || !same(&before.history.receipt, &after.history.receipt)?
@@ -170,20 +170,16 @@ async fn prepare_inner(
     {
         return Err(refused());
     }
-    crate::project_bindings::fence_for_offer(state, &mut tx, &observed.binding).await?;
-    let current = current::fence_locked(
-        state,
-        &mut tx,
-        &current::Input {
-            proposal: &after.history.proposal,
-            selection: &after.input.selection,
-            decision: &after.input.decision,
-            policy: &after.policy,
-            material: &after.input.material,
-            registry_at_preflight: &before.registry_at_load,
-        },
-    )
-    .await?;
+    on_heap(|| crate::project_bindings::fence_for_offer(state, &mut tx, &observed.binding)).await?;
+    let fence_input = current::Input {
+        proposal: &after.history.proposal,
+        selection: &after.input.selection,
+        decision: &after.input.decision,
+        policy: &after.policy,
+        material: &after.input.material,
+        registry_at_preflight: &before.registry_at_load,
+    };
+    let current = on_heap(|| current::fence_locked(state, &mut tx, &fence_input)).await?;
     sqlx::query(
         "SELECT pg_advisory_xact_lock(hashtextextended('aq-native-preparation-quota-v1',0))",
     )
@@ -192,7 +188,8 @@ async fn prepare_inner(
     .map_err(db)?;
     // A genuinely unissued lineage, not an absent accounting row interpreted as zero.
     let counts =
-        super::no_grant::attempt_counts_locked(&mut tx, after.input.spec.task.task_id).await?;
+        on_heap(|| super::no_grant::attempt_counts_locked(&mut tx, after.input.spec.task.task_id))
+            .await?;
     if counts.started != 1 || after.hot.grant.is_some() || after.hot.execution_deadline_ms.is_some()
     {
         return Err(refused());
@@ -241,12 +238,14 @@ async fn prepare_inner(
         .hot
         .validate_against(&request.original.binding)
         .map_err(|_| refused())?;
-    super::initial_grant::retain_installation_locked(
-        &mut tx,
-        &after.input.material,
-        &request.original.materials[0],
-        issued,
-    )
+    on_heap(|| {
+        super::initial_grant::retain_installation_locked(
+            &mut tx,
+            &after.input.material,
+            &request.original.materials[0],
+            issued,
+        )
+    })
     .await?;
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(request.original.binding.attempt_id)
@@ -303,7 +302,7 @@ async fn prepare_inner(
         return Err(refused());
     }
     let incoming = (qbytes.len() + rbytes.len() + pbytes.len()) as u64;
-    let quota = super::preparation::retained_quota_locked(&mut tx, auth.id()).await?;
+    let quota = on_heap(|| super::preparation::retained_quota_locked(&mut tx, auth.id())).await?;
     if u64::try_from(quota.2)
         .ok()
         .and_then(|b| b.checked_add(incoming))
@@ -361,6 +360,16 @@ async fn prepare_inner(
     {
         return Err(refused());
     }
+    on_heap(|| {
+        crate::delegated_permits::handoff::upgrade_locked(
+            state,
+            &mut tx,
+            auth,
+            request,
+            &reply.receipt,
+        )
+    })
+    .await?;
     tx.commit().await.map_err(|_| {
         AppError::UpdatesUnavailable(
             "phase execution commit outcome unknown; preserve the exact operation intent".into(),
@@ -393,8 +402,10 @@ async fn replay_locked(
     use sqlx::Row;
     use uuid::Uuid;
     crate::worker_api::lock_current_node(tx, auth).await?;
-    let view = authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
-        .await?;
+    let view = on_heap(|| {
+        authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
+    })
+    .await?;
     if view.identity.node_id != auth.id()
         || view.identity.boot_id != q.original.identity.boot_id
         || view.offer_id != q.original.binding.offer_id
@@ -403,7 +414,7 @@ async fn replay_locked(
     {
         return Err(refused());
     }
-    super::closure::ensure_launch_open_locked(tx, &q.original.binding).await?;
+    on_heap(|| super::closure::ensure_launch_open_locked(tx, &q.original.binding)).await?;
     let rows=sqlx::query("SELECT attempt_id,operation_id,grant_id FROM profiled_phase_execution_grants WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) ORDER BY attempt_id LIMIT 2 FOR SHARE").bind(q.original.binding.attempt_id).bind(auth.id()).bind(q.original.operation_id).fetch_all(&mut **tx).await.map_err(db)?;
     if rows.is_empty() {
         let collision:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2) OR EXISTS(SELECT 1 FROM profiled_v2_accepts WHERE node_id=$1 AND operation_id=$2)").bind(auth.id()).bind(q.original.operation_id).fetch_one(&mut **tx).await.map_err(db)?;
@@ -418,28 +429,33 @@ async fn replay_locked(
     {
         return Err(refused());
     }
-    let original =
+    let original = on_heap(|| {
         history::load_optional_locked(tx, auth.id(), &q.original.binding, rows[0].get("grant_id"))
-            .await?
-            .ok_or_else(refused)?;
+    })
+    .await?
+    .ok_or_else(refused)?;
     if !same(&original.request, q)? || !same(&original.installation, &q.original.materials[0])? {
         return Err(refused());
     }
-    let runtime = super::registration::current_runtime_locked(
-        state,
-        tx,
-        auth.id(),
-        q.original.identity.boot_id,
-    )
+    let runtime = on_heap(|| {
+        super::registration::current_runtime_locked(
+            state,
+            tx,
+            auth.id(),
+            q.original.identity.boot_id,
+        )
+    })
     .await?;
     if policy::current(state, &original.accepted, &runtime)? != original.provenance.qualification {
         return Err(refused());
     }
-    let current_registration =
+    let current_registration = on_heap(|| {
         super::registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id)
-            .await?;
+    })
+    .await?;
     let registered =
-        super::closure::history::load_locked(tx, original.provenance.registration_id).await?;
+        on_heap(|| super::closure::history::load_locked(tx, original.provenance.registration_id))
+            .await?;
     if current_registration.semantic_digest != registered.metadata.semantic_digest
         || current_registration.request.identity != q.original.identity
     {
@@ -471,12 +487,14 @@ async fn replay_locked(
     {
         return Err(refused());
     }
-    let replay_registry = validate_registry_replay(state, tx, &original).await?;
-    crate::intelligence::resolver::fence_preparation_input_principal(
-        state,
-        tx,
-        q.original.binding.attempt_id,
-    )
+    let replay_registry = on_heap(|| validate_registry_replay(state, tx, &original)).await?;
+    on_heap(|| {
+        crate::intelligence::resolver::fence_preparation_input_principal(
+            state,
+            tx,
+            q.original.binding.attempt_id,
+        )
+    })
     .await?;
     let raw: serde_json::Value = sqlx::query_scalar(
         "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
@@ -532,7 +550,12 @@ async fn replay_locked(
             nonce,
         )
         .map_err(|_| refused())?;
-    let preflight = replay_preflight(state, tx, auth, q, &original, &replay_registry).await?;
+    on_heap(|| {
+        crate::delegated_permits::handoff::upgrade_locked(state, tx, auth, q, &original.receipt)
+    })
+    .await?;
+    let preflight =
+        on_heap(|| replay_preflight(state, tx, auth, q, &original, &replay_registry)).await?;
     Ok(Some(ReplayCandidate {
         reply,
         history: original,

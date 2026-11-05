@@ -1,0 +1,102 @@
+{
+  "reason": "exact owned Git foreground processes after failed fixture drain; roots preserved",
+  "before": [
+    {
+      "pid": 3319682,
+      "state": "S",
+      "parent": 2324,
+      "group": 3319682,
+      "session": 3319344,
+      "start": 5758026
+    },
+    {
+      "pid": 3319683,
+      "state": "S",
+      "parent": 3319682,
+      "group": 3319682,
+      "session": 3319344,
+      "start": 5758030
+    },
+    {
+      "pid": 3319748,
+      "state": "Z",
+      "parent": 3319682,
+      "group": 3319748,
+      "session": 3319748,
+      "start": 5758070
+    },
+    {
+      "pid": 3319833,
+      "state": "S",
+      "parent": 2324,
+      "group": 3319833,
+      "session": 3319344,
+      "start": 5758152
+    },
+    {
+      "pid": 3319835,
+      "state": "S",
+      "parent": 3319833,
+      "group": 3319833,
+      "session": 3319344,
+      "start": 5758156
+    },
+    {
+      "pid": 3319893,
+      "state": "Z",
+      "parent": 3319833,
+      "group": 3319893,
+      "session": 3319893,
+      "start": 5758192
+    },
+    {
+      "pid": 3320174,
+      "state": "S",
+      "parent": 2324,
+      "group": 3320174,
+      "session": 3319344,
+      "start": 5758794
+    },
+    {
+      "pid": 3320182,
+      "state": "S",
+      "parent": 3320174,
+      "group": 3320174,
+      "session": 3319344,
+      "start": 5758799
+    },
+    {
+      "pid": 3320239,
+      "state": "Z",
+      "parent": 3320174,
+      "group": 3320239,
+      "session": 3320239,
+      "start": 5758845
+    },
+    {
+      "pid": 3320347,
+      "state": "S",
+      "parent": 2324,
+      "group": 3320347,
+      "session": 3319344,
+      "start": 5758967
+    },
+    {
+      "pid": 3320352,
+      "state": "S",
+      "parent": 3320347,
+      "group": 3320347,
+      "session": 3319344,
+      "start": 5758971
+    },
+    {
+      "pid": 3320423,
+      "state": "Z",
+      "parent": 3320347,
+      "group": 3320423,
+      "session": 3320423,
+      "start": 5759012
+    }
+  ],
+  "after": []
+}

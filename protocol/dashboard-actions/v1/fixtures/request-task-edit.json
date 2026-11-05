@@ -1,0 +1,21 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000201",
+  "kind": "task.edit",
+  "subject": {
+    "type": "task",
+    "id": "00000000-0000-4000-8000-000000000020",
+    "revision": "4"
+  },
+  "expected_versions": {
+    "task": "4"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000201",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "4",
+    "title": "Write launch notes v2",
+    "labels": [
+      "docs"
+    ]
+  }
+}

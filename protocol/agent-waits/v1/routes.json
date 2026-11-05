@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "credential": "per-attempt machine credential (Authorization: Bearer); node_id and attempt_id are taken from the authenticated binding",
+  "request_schema": "crates/aq-lifecycle-api/artifacts/request.schema.json",
+  "response_schema": "crates/aq-lifecycle-api/artifacts/response.schema.json",
+  "routes": [
+    {"method": "POST", "path": "/v1/agent/waits/register", "command": "register_wait", "capability": "aq.lifecycle-api.wait", "fixture": "register_task_wait"},
+    {"method": "POST", "path": "/v1/agent/waits/inspect", "command": "inspect", "capability": "aq.lifecycle-api.inspect", "fixture": "inspect_wait"},
+    {"method": "POST", "path": "/v1/agent/waits/ack", "command": "continuation_ack", "capability": "aq.lifecycle-api.continuation-ack", "fixture": "ack_continuation"}
+  ],
+  "owner_routes": [
+    {"method": "GET", "path": "/api/waits", "query": ["project_id"], "auth": "owner"},
+    {"method": "GET", "path": "/api/waits/{wait_id}", "auth": "owner"}
+  ],
+  "supported_source_kinds": ["message", "task", "dependency", "human_decision"]
+}

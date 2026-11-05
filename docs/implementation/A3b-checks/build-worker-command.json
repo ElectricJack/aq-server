@@ -1,0 +1,1 @@
+["docker", "build", "--progress=plain", "-f", "Dockerfile.worker", "--build-arg", "AQ_SOURCE_REVISION=3fb2bcb2f63f73838ddd97e44580fe721a539bdd", "--build-arg", "AQ_WORKER_ARCHIVE_SHA256=ed33076d62d37884cab04f1206d1fda3dd5e06181ddb1ccdebec58fda789b535", "--build-arg", "AQ_VERSION=0.3.1", "-t", "aq-worker-a3b:0.2.0", "."]

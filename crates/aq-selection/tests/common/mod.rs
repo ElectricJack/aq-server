@@ -199,6 +199,7 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
             enabled: true,
             provisionable: true,
             material_owner: None,
+            allowed_backends: aq_selection::default_allowed_backends(),
         })
         .collect();
     let models = vec![
@@ -216,6 +217,7 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
         },
     ];
     let node = CapabilitySnapshot {
+        backend_kind: None,
         material_delivery: None,
         target: target.clone(),
         revision: 1,
@@ -330,6 +332,7 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
         estimates: vec![],
         compositions: vec![composition],
         now_ms: 2000,
+        placement: None,
     };
     (catalog, input)
 }
@@ -348,6 +351,26 @@ pub fn change_policy(
         composition.composition.catalog_digest = updated.digest().into();
         composition.composition.intelligence_profile = updated
             .source("intelligence", &input.project.intelligence_profile)
+            .unwrap();
+        composition.digest = aq_selection::digest(&composition.composition).unwrap();
+    }
+    updated
+}
+pub fn change_confinement(
+    catalog: &ValidatedCatalog,
+    confinement: ExecutionConfinement,
+    input: &mut SelectionInputs,
+) -> ValidatedCatalog {
+    let mut definitions = catalog.artifact().catalog.clone();
+    definitions.execution[0].confinement = confinement;
+    let updated =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest =
+        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
+    for composition in &mut input.compositions {
+        composition.composition.catalog_digest = updated.digest().into();
+        composition.composition.execution_profile = updated
+            .source("execution", &input.project.execution_profile)
             .unwrap();
         composition.digest = aq_selection::digest(&composition.composition).unwrap();
     }

@@ -61,6 +61,12 @@ impl Webhook {
         {
             return Err(Error::Invalid);
         }
+        // Discord hands out the unversioned `/api/webhooks/<id>/<token>` form;
+        // pin it to the API version this transport speaks.
+        if let Some(rest) = url.path().strip_prefix("/api/webhooks/") {
+            let pinned = format!("/api/v10/webhooks/{rest}");
+            url.set_path(&pinned);
+        }
         let parts: Vec<_> = url.path().split('/').collect();
         if parts.len() != 6
             || parts[..4] != ["", "api", "v10", "webhooks"]

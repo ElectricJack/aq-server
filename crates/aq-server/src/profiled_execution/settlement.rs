@@ -6,7 +6,10 @@ pub(crate) mod applicability;
 pub mod effects;
 pub mod eligibility;
 
+mod automatic;
 mod completion;
+mod default_policy;
 mod owner;
+pub use automatic::{AutoDisposition, AutoSettlement, settle_after_record};
 pub use completion::{CompletionReceipt, CompletionStatus};
 pub use owner::{EvaluateRequest, EvaluationDisposition, EvaluationReceipt, Service};

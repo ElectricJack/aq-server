@@ -8,9 +8,13 @@ The fixture uses actual daemon offer/Accept/material/Grant/receipt owners and ex
 
 Commands:
 
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
+
 ```sh
-CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test native_initial_grant --test scoped_presence_inventory --test schema28_closure --test schema29_presence --test schema30_preparation --test schema31_presence_barrier
-CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=2 cargo test -p aq-server --all-features --locked --offline --test native_initial_grant --test scoped_presence_inventory --test schema28_closure --test schema29_presence --test schema30_preparation --test schema31_presence_barrier
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
 cargo fmt --package aq-server --check
 ```
 

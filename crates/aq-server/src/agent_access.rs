@@ -6,7 +6,10 @@ pub(crate) mod messaging;
 pub use messaging::global as supervisor_conversation;
 mod mutations;
 pub(crate) mod native_binding;
+pub mod questions;
 pub mod scheduling;
+pub mod waits;
+pub mod wakes;
 use crate::{
     AppState,
     authz::RequireOwner,
@@ -51,6 +54,27 @@ pub(crate) async fn settlement_post(
 }
 pub(crate) fn settlement_response_valid(raw: &Value) -> bool {
     contract::upstream_valid("MutationResult", raw)
+}
+pub(crate) fn settlement_request_valid(body: &Value) -> bool {
+    contract::upstream_valid("MutationRequest", body)
+}
+/// Typed node read for the playbook host adapters (D5). The id is a UUID, so
+/// no caller-chosen route or query is ever forwarded.
+pub(crate) async fn settlement_node(
+    rt: &Runtime,
+    workspace: Uuid,
+    id: Uuid,
+) -> std::result::Result<Option<Value>, crate::error::AppError> {
+    match rt
+        .get(&format!("/v1/workspaces/{workspace}/nodes/{id}"), &[])
+        .await
+    {
+        Ok(raw) if raw["id"] == json!(id) => Ok(Some(raw)),
+        Err(Error("not_found")) => Ok(None),
+        _ => Err(crate::error::AppError::UpdatesUnavailable(
+            "Graph node read unavailable".into(),
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -222,7 +246,9 @@ impl Error {
             "internal" => StatusCode::INTERNAL_SERVER_ERROR,
             "overloaded" => StatusCode::SERVICE_UNAVAILABLE,
             "response_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
-            "stale_generation" | "id_conflict" => StatusCode::CONFLICT,
+            "stale_generation" | "id_conflict" | "stale_revision" | "wait_conflict" => {
+                StatusCode::CONFLICT
+            }
             _ => StatusCode::BAD_REQUEST,
         };
         response(
@@ -295,6 +321,8 @@ pub fn admin_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(messaging::admin_routes())
         .merge(mutations::admin_routes())
+        .merge(waits::routes::admin_routes())
+        .merge(questions::inbox::admin_routes())
         .route("/api/agent-access/provision", post(provision))
         .with_state(state.clone())
         .merge(
@@ -308,6 +336,8 @@ pub fn machine_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .merge(messaging::machine_routes())
         .merge(mutations::machine_routes())
+        .merge(waits::routes::machine_routes())
+        .merge(questions::machine_routes())
         .route("/v1/agent/context", get(context))
         .route("/v1/agent/graph/read", post(read))
         .with_state(state.clone())

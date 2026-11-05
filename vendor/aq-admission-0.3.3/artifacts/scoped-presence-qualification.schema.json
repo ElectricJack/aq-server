@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string",
+      "x-utf8-byte-limit": 64
+    },
+    "InventorySemantics": {
+      "enum": [
+        "provisionable_only_and_scoped_presence_v1"
+      ],
+      "type": "string"
+    },
+    "ObservationProtocol": {
+      "enum": [
+        "grant_issuance_bounded_boottime_v1"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "aq.scoped-material-presence.v1"
+      ],
+      "type": "string"
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-byte-limit": 512
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "adapter_qualification": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "inventory_semantics": {
+      "$ref": "#/$defs/InventorySemantics"
+    },
+    "maximum_age_ms": {
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 1000,
+      "type": "integer"
+    },
+    "maximum_ttl_ms": {
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 1000,
+      "type": "integer"
+    },
+    "observation_protocol": {
+      "$ref": "#/$defs/ObservationProtocol"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "runtime": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "runtime_qualification": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "schema_version": {
+      "const": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "protocol",
+    "runtime",
+    "runtime_qualification",
+    "adapter",
+    "adapter_qualification",
+    "inventory_semantics",
+    "observation_protocol",
+    "maximum_age_ms",
+    "maximum_ttl_ms"
+  ],
+  "title": "Qualification",
+  "type": "object",
+  "x-max-document-bytes": 8192,
+  "x-relational-validation-required": true
+}

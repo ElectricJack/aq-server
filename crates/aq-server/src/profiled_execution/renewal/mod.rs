@@ -26,4 +26,5 @@ pub(crate) use health::{
     Evidence as HealthEvidence, State as HealthState, Subject as HealthSubject,
     evaluate as evaluate_health,
 };
+pub(crate) use private_read::verify as verify_continuing_material_backing;
 pub(crate) use private_read::{Fingerprint, verify_phase as verify_phase_material_backing};

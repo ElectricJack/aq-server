@@ -1,0 +1,23 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 24s
+     Running tests/dashboard_search.rs (target/debug/deps/dashboard_search-2a33ed41f5a7341f)
+
+running 2 tests
+test search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound ... FAILED
+test search_session_visibility_uses_exact_current_acl_and_scope ... ok
+
+failures:
+
+---- search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound stdout ----
+
+thread 'search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound' (1656242) panicked at crates/aq-server/tests/dashboard_search.rs:100:10:
+called `Result::unwrap()` on an `Err` value: invalid graph service credential
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.29s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_search`

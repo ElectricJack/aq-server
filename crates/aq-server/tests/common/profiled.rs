@@ -264,18 +264,24 @@ pub fn state_from_selection(
 }
 pub async fn insert(f: &Fixture) -> Uuid {
     let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
-    insert_spec(f, spec, false, false).await
+    insert_spec(f, spec, false, false, None).await
+}
+/// Like `insert`, with the native offer clock recorded on the launch so the
+/// lineage history used by failed-attempt replacement is known.
+pub async fn insert_offered(f: &Fixture, offered_at_ms: u64) -> Uuid {
+    let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
+    insert_spec(f, spec, false, false, Some(offered_at_ms)).await
 }
 pub async fn insert_typed(
     f: &Fixture,
     spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
 ) -> Uuid {
     spec.validate_against(&f.profiled.offer).unwrap();
-    insert_spec(f, json!(spec), false, false).await
+    insert_spec(f, json!(spec), false, false, None).await
 }
 pub async fn insert_sibling(f: &Fixture) -> Uuid {
     let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
-    insert_spec(f, spec, true, false).await
+    insert_spec(f, spec, true, false, None).await
 }
 pub async fn insert_with_retained_decision(
     f: &Fixture,
@@ -289,13 +295,14 @@ pub async fn insert_with_retained_decision(
             .await
             .unwrap();
     assert_eq!(old["outcome"]["resolved"], json!(f.selection));
-    insert_spec(f, json!(spec), false, true).await
+    insert_spec(f, json!(spec), false, true, None).await
 }
 async fn insert_spec(
     f: &Fixture,
     spec: Value,
     reuse_project: bool,
     retained_decision: bool,
+    offered_at_ms: Option<u64>,
 ) -> Uuid {
     let now = if retained_decision {
         f.time.load(Ordering::SeqCst) as u64
@@ -373,7 +380,11 @@ async fn insert_spec(
     observation.validate().unwrap();
     let source_observation = Uuid::new_v4();
     sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,$3,$4,$5)").bind(source_observation).bind(f.selection.lineage.project_id).bind(json!(observation)).bind(now as i64).bind((now+30_000) as i64).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO profiled_launches(attempt_id,decision_id,source_observation_id,launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest,graph_task_observation,source_binding,offer_expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)").bind(binding.attempt_id).bind(f.decision).bind(source_observation).bind(json!(binding)).bind(json!(p.offer.manifest)).bind(binding.launch_manifest_digest.as_str()).bind(spec).bind(binding.execution_spec_digest.as_str()).bind(json!({"kind":"synthetic-readiness-observation","task_id":f.selection.lineage.task_id,"version":1,"content_revision":1,"observed_at_ms":now,"expires_at_ms":now+30_000})).bind(json!(p.source)).bind((now+30_000) as i64).execute(&pool).await.unwrap();
+    let mut observation = json!({"kind":"synthetic-readiness-observation","task_id":f.selection.lineage.task_id,"version":1,"content_revision":1,"observed_at_ms":now,"expires_at_ms":now+30_000});
+    if let Some(ms) = offered_at_ms {
+        observation["native_offer"] = json!({"offered":{"clock":{"server_time_ms":ms}}});
+    }
+    sqlx::query("INSERT INTO profiled_launches(attempt_id,decision_id,source_observation_id,launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest,graph_task_observation,source_binding,offer_expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)").bind(binding.attempt_id).bind(f.decision).bind(source_observation).bind(json!(binding)).bind(json!(p.offer.manifest)).bind(binding.launch_manifest_digest.as_str()).bind(spec).bind(binding.execution_spec_digest.as_str()).bind(observation).bind(json!(p.source)).bind((now+30_000) as i64).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO intelligence_attempt_selections(attempt_id,selection_digest,selection) VALUES($1,$2,$3)").bind(binding.attempt_id).bind(aq_selection::digest(&f.selection).unwrap().as_str()).bind(json!(f.selection)).execute(&pool).await.unwrap();
     binding.attempt_id
 }

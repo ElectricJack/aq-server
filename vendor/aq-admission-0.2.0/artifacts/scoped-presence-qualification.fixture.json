@@ -1,0 +1,28 @@
+{
+  "adapter": {
+    "digest": "6f760ba146f03ff0a799901d095e1509fa6565bca036bd7affed71e176b54545",
+    "id": "fixture-presence-adapter",
+    "version": "1"
+  },
+  "adapter_qualification": {
+    "digest": "e6e65115b490b2230193d90531d1325a37a86c80556b9017e08bb5b07c341349",
+    "id": "fixture-presence-adapter-evidence",
+    "version": "1"
+  },
+  "inventory_semantics": "provisionable_only_and_scoped_presence_v1",
+  "maximum_age_ms": 30000,
+  "maximum_ttl_ms": 30000,
+  "observation_protocol": "grant_issuance_bounded_boottime_v1",
+  "protocol": "aq.scoped-material-presence.v1",
+  "runtime": {
+    "digest": "8ca1dbdf9a94a5bec8cddda37f8dcce6ad179da7e25e899cc80226a44672f047",
+    "id": "fixture-runtime",
+    "version": "1"
+  },
+  "runtime_qualification": {
+    "digest": "d7349ff668312670482b68b310221abdeb6261e6ec72ae2ebcf49fbc751bf793",
+    "id": "fixture-runtime-qualification",
+    "version": "1"
+  },
+  "schema_version": 1
+}

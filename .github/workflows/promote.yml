@@ -24,7 +24,7 @@ concurrency:
 env:
   RELEASE_REPO: ghcr.io/electricjack/agent-q-release
   COSIGN_RELEASE: v3.1.3
-  COSIGN_IDENTITY_REGEXP: '^https://github\.com/ElectricJack/agent-q/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+  COSIGN_IDENTITY_REGEXP: '^https://github\.com/ElectricJack/aq-server/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
   COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:

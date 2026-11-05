@@ -1,0 +1,53 @@
+   Compiling subtle v2.6.1
+   Compiling digest v0.10.7
+   Compiling rustls v0.23.46
+   Compiling sha2 v0.10.9
+   Compiling aq-session-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-session-protocol-0.1.0)
+   Compiling aq-lifecycle-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-lifecycle-protocol-0.1.0)
+   Compiling aq-playbooks-model v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-model)
+   Compiling universal-hash v0.5.1
+   Compiling poly1305 v0.8.0
+   Compiling tokio-rustls v0.26.6
+   Compiling aq-session-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-session-api)
+   Compiling hmac v0.12.1
+   Compiling hkdf v0.12.4
+   Compiling hyper-rustls v0.27.10
+   Compiling aq-playbooks-runner v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-runner)
+   Compiling chacha20poly1305 v0.10.1
+   Compiling aq-lifecycle-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-lifecycle-api)
+   Compiling sqlx-core v0.8.6
+   Compiling aq-agent-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-agent-api)
+   Compiling md-5 v0.10.6
+   Compiling aq-profiles v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-profiles)
+   Compiling sqlx-postgres v0.8.6
+   Compiling aq-playbooks-postgres v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-postgres)
+   Compiling reqwest v0.12.28
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-admission)
+   Compiling aq-terminal-relay-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-terminal-relay-protocol)
+   Compiling aq-terminal-relay v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-terminal-relay)
+   Compiling aq-notifications v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-notifications)
+   Compiling sqlx v0.8.6
+   Compiling aq-playbook-host v0.1.3 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-playbook-host)
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-selection)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-phase-terminal-protocol)
+   Compiling aq-observation-api v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-observation-api)
+   Compiling aq-accounting v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-accounting)
+   Compiling aq-observation-admission v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-observation-admission)
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-admission-0.2.0)
+   Compiling aq-review-protocol v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-review-protocol)
+   Compiling aq-central-authority v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-central-authority)
+   Compiling aq-result-media v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-result-media)
+   Compiling aq-worker-protocol v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-worker-protocol-0.2.0)
+   Compiling signature v2.2.0
+   Compiling rsa v0.9.10
+   Compiling aq-playbooks-compiler v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+error[E0432]: unresolved import `aq_server::delegated_permits::storage`
+   --> crates/aq-server/tests/delegated_permits.rs:154:9
+    |
+154 |     use aq_server::delegated_permits::storage;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `storage` in `delegated_permits`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `aq-server` (test "delegated_permits") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

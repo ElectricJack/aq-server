@@ -1,0 +1,14 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 23s
+     Running tests/delegated_permits.rs (target/debug/deps/delegated_permits-36ed151b4cd96990)
+
+running 6 tests
+test delegated_credentials_replay_without_persisting_token_and_fail_closed_on_key_change ... ok
+test delegated_revocation_and_corrupt_storage_cannot_recreate_authority ... ok
+test delegated_storage_refuses_disabled_guards_and_truncation ... ok
+test delegated_storage_cancellation_and_concurrent_replay ... ok
+test permit_scope_refuses_foreign_attempt_and_expired_use ... ok
+test delegated_storage_replays_rolls_back_and_survives_reconnect ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.58s
+

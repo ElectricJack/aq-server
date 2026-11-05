@@ -185,6 +185,7 @@ pub fn project(
             currency: None,
             require_hard_cost_enforcement: false,
         },
+        publication: None,
     })
 }
 #[derive(Clone, Serialize)]
@@ -642,6 +643,7 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
             priority: 0,
             source: SourceSelection::Immutable { object: input.base },
             retention_handle: input.retention,
+            placement: None,
         }],
         context_qualifications: vec![context_fact],
         definition_bodies: defs,
@@ -723,8 +725,12 @@ impl Prepared {
             "actual node/protected credential path"
         );
         let registry = IntelligenceConfig {
+            accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
+                kind: Default::default(),
+                allowed_backends: aq_selection::default_allowed_backends(),
                 credential: aq_selection::AuthorizedCredential {
                     profile: self.credential.clone(),
                     provider: "openai".into(),
@@ -734,6 +740,7 @@ impl Prepared {
                     enabled: true,
                     provisionable: false,
                     material_owner: None,
+                    allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![node],
                 secret_file: Some(secret_file),

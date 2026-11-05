@@ -1,7 +1,0 @@
-     Locking 110 packages to latest Rust 1.96.1 compatible versions
-   Compiling aq-playbooks-model v0.1.0 (/tmp/pb-keyed-old-4nbvamej/old/crates/aq-playbooks-model)
-   Compiling aq-playbooks-runner v0.1.0 (/tmp/pb-keyed-old-4nbvamej/old/crates/aq-playbooks-runner)
-   Compiling aq-playbooks-postgres v0.1.0 (/tmp/pb-keyed-old-4nbvamej/old/crates/aq-playbooks-postgres)
-   Compiling pb-old-writer-probe v0.0.0 (/tmp/pb-keyed-old-4nbvamej/probe)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.83s
-{"cold_old_constructor": "refused", "new_receipt": {"accepted_at_ms": 1, "activation_revision": 1, "catalog_revision": 1, "key": "retained-key", "request_digest": "sha256:b53c5e054215396dd9ad415a7c95f029d8647706a9d414168919a872a81676e6", "run_id": "run-0000000000000001"}, "old_archive_sha256": "ad516d7cc5f5bded424aa364f7185db2049a1ac21b15b767c279e906ce829c9e", "old_lock_sha256": "4ee1126222ca1dcf392f8dfed548dc22d6959c69e763900f0c77d798e5535cb0", "old_source_revision": "42f944996eafad5af07d9ec1c72d3e3f2630c03b", "result": "passed", "warm_old_connection": "refused"}

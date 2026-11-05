@@ -33,7 +33,7 @@ async fn settlement39_registered_upgrade_old_reader_and_critical_drift() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    migrate_known(&pool, MIGRATIONS, 39).await.unwrap();
+    migrate_known(&pool, &MIGRATIONS[..39], 39).await.unwrap();
     assert_eq!(
         before,
         sqlx::query_scalar::<_, serde_json::Value>(

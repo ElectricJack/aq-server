@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "tag": "v0.1.0",
+  "version": "0.1.0",
+  "source_revision": "4bfc637176d28d5748d2ba0a733a21ef95081a90",
+  "asset_url": "https://github.com/ElectricJack/aq-dashboard/releases/download/v0.1.0/aq-dashboard-v0.1.0.tar.gz",
+  "archive_sha256": "162f2cd29e7123570f4568df68ff2ffffa1c97417c1f51369fcd55b1c7bd2465",
+  "dashboard_digest": "sha256:f1eefcaafe25426f84b53ea306efed0110e8629f49a09e7e67fcff5b7f3580da",
+  "manifest_schema_version": 2
+}

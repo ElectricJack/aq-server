@@ -1,0 +1,180 @@
+{
+  "passed": true,
+  "bundle_manifest_sha256": "sha256:a7e84e5f0af4887afb4c3b5557daaab32d8adff46385d1692117aa7c5c3f1be0",
+  "overview_sources": [
+    {
+      "source": "questions",
+      "project": null,
+      "observation": null,
+      "coverage": {
+        "state": "unknown",
+        "reason": "question_owner_not_mounted"
+      },
+      "total": {
+        "value": null,
+        "accuracy": "unknown"
+      }
+    },
+    {
+      "source": "blocked_tasks",
+      "project": null,
+      "observation": null,
+      "coverage": {
+        "state": "unknown",
+        "reason": "blocked_task_owner_not_mounted"
+      },
+      "total": {
+        "value": null,
+        "accuracy": "unknown"
+      }
+    },
+    {
+      "source": "attempts",
+      "project": null,
+      "observation": {
+        "observed_at": "2026-11-03T05:21:53.399Z",
+        "fresh_until": "2026-11-03T05:21:58.399Z",
+        "source": "attempts",
+        "quality": "reported",
+        "coverage": "complete"
+      },
+      "coverage": {
+        "state": "complete"
+      },
+      "total": {
+        "value": 0,
+        "accuracy": "exact"
+      }
+    },
+    {
+      "source": "workers",
+      "project": null,
+      "observation": {
+        "observed_at": "2026-11-03T05:21:53.399Z",
+        "fresh_until": "2026-11-03T05:21:58.399Z",
+        "source": "workers",
+        "quality": "reported",
+        "coverage": "partial"
+      },
+      "coverage": {
+        "state": "partial",
+        "reason": "association_from_retained_attempts"
+      },
+      "total": {
+        "value": 0,
+        "accuracy": "exact"
+      }
+    },
+    {
+      "source": "graph_ready",
+      "project": {
+        "id": "e0000000-0000-4000-8000-000000000002",
+        "label": "Local scratch development"
+      },
+      "observation": {
+        "observed_at": "2026-11-03T05:21:53.402Z",
+        "fresh_until": "2026-11-03T05:22:23.397Z",
+        "source": "graph_ready",
+        "quality": "reported",
+        "coverage": "complete"
+      },
+      "coverage": {
+        "state": "complete"
+      },
+      "total": {
+        "value": 1,
+        "accuracy": "exact"
+      }
+    },
+    {
+      "source": "reviews",
+      "project": null,
+      "observation": null,
+      "coverage": {
+        "state": "unknown",
+        "reason": "owner_unavailable"
+      },
+      "total": {
+        "value": null,
+        "accuracy": "unknown"
+      }
+    },
+    {
+      "source": "results",
+      "project": {
+        "id": "e0000000-0000-4000-8000-000000000002",
+        "label": "Local scratch development"
+      },
+      "observation": {
+        "observed_at": "2026-11-03T05:21:53.399Z",
+        "fresh_until": "2026-11-03T05:21:58.399Z",
+        "source": "results",
+        "quality": "reported",
+        "coverage": "partial"
+      },
+      "coverage": {
+        "state": "partial",
+        "reason": "recorded_native_results_only"
+      },
+      "total": {
+        "value": 0,
+        "accuracy": "exact"
+      }
+    },
+    {
+      "source": "settlement",
+      "project": null,
+      "observation": null,
+      "coverage": {
+        "state": "unknown",
+        "reason": "review_owner_not_mounted"
+      },
+      "total": {
+        "value": null,
+        "accuracy": "unknown"
+      }
+    },
+    {
+      "source": "operations",
+      "project": null,
+      "observation": {
+        "observed_at": "2026-11-03T05:21:53.400Z",
+        "fresh_until": "2026-11-03T05:21:58.400Z",
+        "source": "operations",
+        "quality": "reported",
+        "coverage": "partial"
+      },
+      "coverage": {
+        "state": "partial",
+        "reason": "dashboard_journal_only"
+      },
+      "total": {
+        "value": 0,
+        "accuracy": "exact"
+      }
+    }
+  ],
+  "quota_coverage": {
+    "state": "complete"
+  },
+  "search_snapshot_id": "8bc53b7f-9ad3-49fc-a8a3-4dafc0ace95f",
+  "browser_interception": false,
+  "origin": "http://127.0.0.1:4196",
+  "project_id": "e0000000-0000-4000-8000-000000000002",
+  "task_id": "e0000000-0000-4000-8000-000000000004",
+  "contract": "human-overview-tasks-1",
+  "coverage": "complete",
+  "count_accuracy": "complete_observation",
+  "task_counts": {
+    "draft": 0,
+    "active": 1,
+    "completed": 0,
+    "canceled": 0
+  },
+  "served_product": {
+    "version": "0.1.0",
+    "dashboard_digest": null
+  },
+  "elapsed_ms": 4398,
+  "note": "Actual bounded recorded-task contribution and core layout; no running/readiness/capacity/quota inference."
+}

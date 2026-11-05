@@ -1,0 +1,168 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "See per-source coverage; unavailable owners do not contribute zero",
+    "state": "partial"
+  },
+  "data": {
+    "attention": [],
+    "counts": {
+      "needs_you": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "ready": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "recovering": {
+        "accuracy": "unknown",
+        "value": null
+      },
+      "running": {
+        "accuracy": "unknown",
+        "value": null
+      }
+    },
+    "in_motion": [],
+    "recent_outcomes": [],
+    "sources": [
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "questions",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "blocked_tasks",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "attempts",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "workers",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "graph_ready",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "source": "reviews",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Synthetic authority fixture"
+        },
+        "source": "results",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "settlement",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable",
+          "state": "unknown"
+        },
+        "observation": null,
+        "project": null,
+        "source": "operations",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      }
+    ]
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "6b473d63-1e23-49ec-bf8b-15803412a0b7",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

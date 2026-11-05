@@ -1,0 +1,230 @@
+[
+  {
+    "test": "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/native_accepted_preparation.rs:342:5",
+      "body": "assertion failed: aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state,\n            q.original.identity.node_id,\n            q.original.acceptance.binding.attempt_id).await.is_err()"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/native_accepted_preparation.rs:342:5",
+      "body": "assertion failed: aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state,\n            q.original.identity.node_id,\n            q.original.acceptance.binding.attempt_id).await.is_err()"
+    }
+  },
+  {
+    "test": "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/profiled_hot.rs:451:260",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"P0001\", message: \"qualified settlement release owner required\", detail: None, hint: None, position: None, where: Some(\"PL/pgSQL function settlement_release_guard() line 4 at RAISE\"), schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"pl_exec.c\"), line: Some(3897), routine: Some(\"exec_stmt_raise\") })"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/profiled_hot.rs:451:260",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"P0001\", message: \"qualified settlement release owner required\", detail: None, hint: None, position: None, where: Some(\"PL/pgSQL function settlement_release_guard() line 4 at RAISE\"), schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"pl_exec.c\"), line: Some(3897), routine: Some(\"exec_stmt_raise\") })"
+    }
+  },
+  {
+    "test": "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/schema30_preparation.rs:124:10",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"2BP01\", message: \"cannot drop table profiled_v2_accepts because other objects depend on it\", detail: Some(\"constraint profiled_phase_execution_grants_attempt_id_fkey on table profiled_phase_execution_grants depends on table profiled_v2_accepts\"), hint: Some(\"Use DROP ... CASCADE to drop the dependent objects too.\"), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"dependency.c\"), line: Some(1148), routine: Some(\"reportDependentObjects\") })"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/schema30_preparation.rs:124:10",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"2BP01\", message: \"cannot drop table profiled_v2_accepts because other objects depend on it\", detail: Some(\"constraint profiled_phase_execution_grants_attempt_id_fkey on table profiled_phase_execution_grants depends on table profiled_v2_accepts\"), hint: Some(\"Use DROP ... CASCADE to drop the dependent objects too.\"), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"dependency.c\"), line: Some(1148), routine: Some(\"reportDependentObjects\") })"
+    }
+  },
+  {
+    "test": "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/schema32_phase_execution.rs:136:10",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"2BP01\", message: \"cannot drop table profiled_phase_execution_grants because other objects depend on it\", detail: Some(\"constraint profiled_phase_terminal_capacity_attempt_id_fkey on table profiled_phase_terminal_capacity depends on table profiled_phase_execution_grants\\nconstraint profiled_launch_closures_phase_origin_fk on table profiled_launch_closures depends on table profiled_phase_execution_grants\\nconstraint profiled_result_execution_origin_fk on table profiled_result_reports depends on table profiled_phase_execution_grants\"), hint: Some(\"Use DROP ... CASCADE to drop the dependent objects too.\"), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"dependency.c\"), line: Some(1148), routine: Some(\"reportDependentObjects\") })"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/schema32_phase_execution.rs:136:10",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"2BP01\", message: \"cannot drop table profiled_phase_execution_grants because other objects depend on it\", detail: Some(\"constraint profiled_phase_terminal_capacity_attempt_id_fkey on table profiled_phase_terminal_capacity depends on table profiled_phase_execution_grants\\nconstraint profiled_launch_closures_phase_origin_fk on table profiled_launch_closures depends on table profiled_phase_execution_grants\\nconstraint profiled_result_execution_origin_fk on table profiled_result_reports depends on table profiled_phase_execution_grants\"), hint: Some(\"Use DROP ... CASCADE to drop the dependent objects too.\"), position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"dependency.c\"), line: Some(1148), routine: Some(\"reportDependentObjects\") })"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/common/phase_execution_core.rs:155:5",
+      "body": "assertion `left == right` failed: {\"body\":{\"code\":\"unavailable\",\"operation_id\":null,\"schema_version\":1},\"kind\":\"failure\"}\n  left: 500\n right: 200"
+    }
+  },
+  {
+    "test": "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/schema33_phase_terminal/ordered.rs:104:50",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"42704\", message: \"trigger \\\"profiled_phase_unqualified_release_guard\\\" for table \\\"profiled_verified_releases\\\" does not exist\", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"trigger.c\"), line: Some(1835), routine: Some(\"EnableDisableTrigger\") })"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/schema33_phase_terminal/ordered.rs:104:50",
+      "body": "called `Result::unwrap()` on an `Err` value: Database(PgDatabaseError { severity: Error, code: \"42704\", message: \"trigger \\\"profiled_phase_unqualified_release_guard\\\" for table \\\"profiled_verified_releases\\\" does not exist\", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some(\"trigger.c\"), line: Some(1835), routine: Some(\"EnableDisableTrigger\") })"
+    }
+  },
+  {
+    "test": "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/schema43_cancellation.rs:63:5",
+      "body": "assertion failed: matches!(test_support::migrate_profile(&pool, 42).await,\n    Err(StoreError::IncompatibleState { found: 43, supported: 42 }))"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/schema43_cancellation.rs:63:5",
+      "body": "assertion failed: matches!(test_support::migrate_profile(&pool, 42).await,\n    Err(StoreError::IncompatibleState { found: 43, supported: 42 }))"
+    }
+  },
+  {
+    "test": "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+    "identical_panic": true,
+    "branch": {
+      "location": "crates/aq-server/tests/schema43_cancellation.rs:24:5",
+      "body": "assertion failed: matches!(test_support::migrate_profile(&pool, 41).await,\n    Err(StoreError::IncompatibleState { found: 43, supported: 41 }))"
+    },
+    "main": {
+      "location": "crates/aq-server/tests/schema43_cancellation.rs:24:5",
+      "body": "assertion failed: matches!(test_support::migrate_profile(&pool, 41).await,\n    Err(StoreError::IncompatibleState { found: 43, supported: 41 }))"
+    }
+  }
+]

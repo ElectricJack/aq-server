@@ -1,0 +1,25 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000002",
+  "kind": "decision.resolve",
+  "subject": {
+    "type": "decision",
+    "id": "00000000-0000-4000-8000-000000000020",
+    "revision": "1"
+  },
+  "expected_versions": {
+    "decision": "1"
+  },
+  "payload": {
+    "schema_version": 1,
+    "operation_id": "00000000-0000-4000-8000-000000000002",
+    "decision_id": "00000000-0000-4000-8000-000000000020",
+    "expected_decision_revision": 1,
+    "choice": "approve",
+    "comment": "Exact source reviewed",
+    "expected_subject": {
+      "id": "aq.review-subject/00000000-0000-4000-8000-000000000040",
+      "version": "1",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

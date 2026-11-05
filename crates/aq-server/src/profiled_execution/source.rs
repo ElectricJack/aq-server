@@ -70,6 +70,35 @@ pub async fn observe(
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
 ) -> Result<Observation, AppError> {
+    observe_source(state, project, policy, None).await
+}
+
+/// A replacement observes the predecessor's exact retained commit and handle.
+/// It does not resolve the configured moving ref again or mint another export.
+pub async fn observe_retained(
+    state: &AppState,
+    project: &FrozenProjectBinding,
+    policy: &ProjectPolicyRecord,
+    retained: &super::source_exports::Request,
+) -> Result<Observation, AppError> {
+    retained.validate().map_err(|_| refused())?;
+    let binding = &project.project.binding;
+    if retained.project_id != binding.project_id
+        || retained.project_revision != project.project.revision
+        || retained.repository_id != binding.repository_id
+        || retained.binding_generation != binding.repository_binding_generation
+    {
+        return Err(refused());
+    }
+    observe_source(state, project, policy, Some(retained)).await
+}
+
+async fn observe_source(
+    state: &AppState,
+    project: &FrozenProjectBinding,
+    policy: &ProjectPolicyRecord,
+    retained: Option<&super::source_exports::Request>,
+) -> Result<Observation, AppError> {
     static READS: OnceLock<Semaphore> = OnceLock::new();
     let _permit = READS
         .get_or_init(|| Semaphore::new(4))
@@ -102,7 +131,19 @@ pub async fn observe(
         return Err(refused());
     }
     let mut evidence = BTreeMap::new();
-    let object = match &policy.source {
+    let selection = retained.map_or_else(
+        || policy.source.clone(),
+        |request| SourceSelection::Immutable {
+            object: ObjectId {
+                format: ObjectFormat::Sha1,
+                hex: request.base.hex.clone(),
+            },
+        },
+    );
+    // The export transfer is the retained byte owner. The checkpoint handle
+    // originally used to create it may have since been released.
+    let retention_handle = retained.map_or(policy.retention_handle, |r| r.operation_id);
+    let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
         SourceSelection::NamedRef { reference } => {
             let response = read(
@@ -153,12 +194,12 @@ pub async fn observe(
         binding.repository_id,
         binding.repository_binding_generation,
         "retention.inspect",
-        json!({"handle_id":policy.retention_handle,"limit":1}),
+        json!({"handle_id":retention_handle,"limit":1}),
     )
     .await?;
     verify_retention(
         &retained,
-        policy.retention_handle,
+        retention_handle,
         binding.repository_id,
         binding.repository_binding_generation,
         &object,
@@ -175,13 +216,13 @@ pub async fn observe(
         repository_id: binding.repository_id,
         repository_binding_generation: binding.repository_binding_generation,
         policy: policy.artifact().map_err(|_| refused())?,
-        selection: policy.source.clone(),
+        selection,
         resolved_object: object,
         observed_at_ms: observed,
         expires_at_ms: observed + 30000,
     };
     admission.validate().map_err(|_| refused())?;
-    let mut body = json!({"schema_version":1,"admission":admission,"retention_handle":policy.retention_handle,"evidence":evidence});
+    let mut body = json!({"schema_version":1,"admission":admission,"retention_handle":retention_handle,"evidence":evidence});
     body.sort_all_objects();
     let bytes = serde_json::to_vec(&body).map_err(|_| AppError::Internal)?;
     if bytes.len() > 1_048_576 {
@@ -199,7 +240,7 @@ pub async fn observe(
     };
     Ok(Observation {
         admission,
-        retention_handle: policy.retention_handle,
+        retention_handle,
         artifact,
         bytes,
     })

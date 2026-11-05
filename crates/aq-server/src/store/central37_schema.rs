@@ -2,13 +2,13 @@
 use super::{Result, corrupt, functions};
 use sqlx::{Postgres, Row, Transaction};
 
-pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    functions(tx).await?;
+pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
+    functions(tx, version).await?;
     columns(tx).await?;
-    triggers(tx).await?;
+    triggers(tx, version).await?;
     keys(tx).await?;
     indexes(tx).await?;
-    checks(tx).await
+    checks(tx, version).await
 }
 
 async fn columns(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
@@ -94,7 +94,7 @@ async fn columns(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     Ok(())
 }
 
-async fn triggers(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+async fn triggers(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     for (table, name, kind, function, deferred) in [
         (
             "mailbox_messages",
@@ -208,7 +208,29 @@ async fn triggers(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
             "check_central_reservation_consistency",
             true,
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        (version >= 49)
+            .then_some([
+                (
+                    "central_supervisor_replies",
+                    "central_supervisor_reply_consumption",
+                    5,
+                    "consume_central_supervisor_turn",
+                    false,
+                ),
+                (
+                    "central_session_generations",
+                    "central_supervisor_delivery_consumption",
+                    21,
+                    "consume_central_supervisor_turn",
+                    false,
+                ),
+            ])
+            .into_iter()
+            .flatten(),
+    ) {
         let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass($1) AND tgname=$2 AND tgtype=$3 AND tgfoid=to_regprocedure($4) AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgdeferrable=$5 AND tginitdeferred=$5 AND (tgconstraint<>0)=$5 AND tgnargs=0 AND tgqual IS NULL AND tgoldtable IS NULL AND tgnewtable IS NULL)")
             .bind(table).bind(name).bind(kind as i16).bind(format!("{function}()"))
             .bind(deferred).fetch_one(&mut **tx).await?;
@@ -318,7 +340,7 @@ async fn indexes(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     Ok(())
 }
 
-async fn checks(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+async fn checks(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     // Full canonical CHECK definitions are pinned by the disposable fresh37
     // qualification, including casts and boolean grouping, not name-only probes.
     let count:i64=sqlx::query_scalar("SELECT count(*) FROM pg_constraint WHERE conrelid=ANY(ARRAY['central_supervisor_actors'::regclass,'central_supervisor_reservations'::regclass,'central_supervisor_mail_members'::regclass,'central_supervisor_operations'::regclass]) AND contype='c'")
@@ -327,6 +349,17 @@ async fn checks(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
         return Err(corrupt());
     }
     for (table, name, expression) in CHECKS {
+        let updated;
+        let expression: &str = if version >= 49
+            && *name == "central_supervisor_reservations_state_check"
+        {
+            "(state = ANY (ARRAY['awaiting_prepared_plan'::text, 'cancelled_before_plan'::text, 'consumed'::text]))"
+        } else if version >= 49 && *name == "central_supervisor_reservations_check2" {
+            updated = expression.replace(" OR ((state = 'cancelled_before_plan'::text)", " OR ((state = 'consumed'::text) AND (revision = 2) AND (cancel_operation_id IS NULL) AND (cancel_actor_revision IS NULL)) OR ((state = 'cancelled_before_plan'::text)");
+            &updated
+        } else {
+            expression
+        };
         let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass($1) AND contype='c' AND convalidated AND NOT condeferrable AND conname=$2 AND pg_get_expr(conbin,conrelid)=$3)")
             .bind(table).bind(name).bind(expression).fetch_one(&mut **tx).await?;
         if !valid {

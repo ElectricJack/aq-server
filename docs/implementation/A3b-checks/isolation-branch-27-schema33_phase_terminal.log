@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/schema33_phase_terminal.rs (target/debug/deps/schema33_phase_terminal-16b6bd5d0ff418d2)
+
+running 1 test
+test ordered::actual32_open_owner_history_survives_registered33_upgrade ... 
+thread 'ordered::actual32_open_owner_history_survives_registered33_upgrade' (2120147) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"unavailable","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 500
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    ordered::actual32_open_owner_history_survives_registered33_upgrade
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.62s
+
+error: test failed, to rerun pass `-p aq-server --test schema33_phase_terminal`

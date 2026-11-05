@@ -1,0 +1,8 @@
+#[inline(never)]
+fn workspace_frame() {
+    println!("{}", std::backtrace::Backtrace::force_capture());
+}
+
+fn main() {
+    workspace_frame();
+}

@@ -1,0 +1,18 @@
+Command: cargo test --locked --workspace --test profiled_results results_feedback::
+   Compiling aq-admission v0.1.11 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/crates/aq-admission)
+   Compiling aq-phase-terminal-protocol v0.1.2 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/crates/aq-phase-terminal-protocol)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-2/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2m 33s
+     Running tests/profiled_results.rs (/tmp/aq-b3-slot2-target/debug/deps/profiled_results-e7642b5c70027987)
+
+running 8 tests
+test results_feedback::capture_policy_is_pinned_and_waiver_is_exact ... ok
+test results_feedback::capture_counts_finalized_source_retention_and_keeps_revision_immutable ... ok
+test results_feedback::feedback_bounds_anchors_replies_cursors_and_exact_corrections ... ok
+test results_feedback::feedback_comments_replay_history_resolution_and_feeds ... ok
+test results_feedback::feedback_desired_follow_version_and_task_filters ... ok
+test results_feedback::feedback_retained_image_anchor_and_principal_fence ... ok
+test results_feedback::media_upload_disabled_without_store_is_explicit ... ok
+test results_feedback::feedback_task_links_result_revision ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 11.86s

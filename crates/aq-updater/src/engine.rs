@@ -246,6 +246,87 @@ fn dumps(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// The updater will not start a backup (DEP8): the backup filesystem (the
+/// root filesystem in the standard layout) has less free space than the
+/// newest backup plus 10%.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "not enough free space to start the backup in {}: {free} bytes free, {need} needed (the newest backup, {newest} bytes, plus 10%); free some space and retry",
+    dir.display()
+)]
+pub struct InsufficientBackupSpace {
+    pub dir: PathBuf,
+    pub free: u64,
+    pub newest: u64,
+    pub need: u64,
+}
+
+/// Free bytes a backup needs: the newest backup's size plus 10%, rounded up.
+pub fn backup_space_needed(newest: u64) -> u64 {
+    newest.saturating_add(newest.div_ceil(10))
+}
+
+/// Refuse to start a backup in `dir` when `free` is below the newest
+/// backup's size (`newest`) plus 10%.
+pub fn check_backup_space(
+    dir: &Path,
+    free: u64,
+    newest: u64,
+) -> Result<(), InsufficientBackupSpace> {
+    let need = backup_space_needed(newest);
+    if free < need {
+        return Err(InsufficientBackupSpace {
+            dir: dir.to_path_buf(),
+            free,
+            newest,
+            need,
+        });
+    }
+    Ok(())
+}
+
+/// Repository part of a digest reference (`host/path@sha256:…` → `host/path`).
+pub fn image_repository(image: &str) -> Option<&str> {
+    image.split_once('@').map(|(repo, _)| repo)
+}
+
+/// Images to remove (DEP7c): every image in `present` that is not in `keep`
+/// (the current and previous release's images). `present` lists only the
+/// repositories of the kept images, so nothing else is selected.
+pub fn images_to_prune(present: &[String], keep: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = present
+        .iter()
+        .filter(|p| !keep.contains(p))
+        .cloned()
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Remove release images other than `keep`, in the repositories of `keep`.
+/// Best effort: failures are logged and never change an update's outcome.
+async fn prune_release_images<R: Runtime>(runtime: &R, keep: Vec<String>) {
+    let mut repos: Vec<&str> = keep.iter().filter_map(|i| image_repository(i)).collect();
+    repos.sort_unstable();
+    repos.dedup();
+    for repo in repos {
+        let present = match runtime.list_images(repo).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(repository = repo, error = %e, "cannot list images to prune");
+                continue;
+            }
+        };
+        for image in images_to_prune(&present, &keep) {
+            match runtime.remove_image(&image).await {
+                Ok(()) => tracing::info!(image = %image, "pruned old release image"),
+                Err(e) => tracing::warn!(image = %image, error = %e, "cannot prune image"),
+            }
+        }
+    }
+}
+
 fn last_backup_size(dir: &Path) -> u64 {
     dumps(dir)
         .first()
@@ -989,6 +1070,22 @@ impl<R: Runtime, V: ReleaseVerifier> Engine<R, V> {
             }
         }
 
+        // Free-space precheck (DEP8), after the pull has used its space and
+        // before anything stops: the dump needs the newest backup's size
+        // plus 10%.
+        match rt(self.runtime.free_bytes(&dir).await)? {
+            Ok(free) => {
+                if let Err(e) = check_backup_space(&dir, free, last_backup_size(&dir)) {
+                    return self
+                        .conclude(self.op_entry(&cur, Outcome::Refused, e.to_string()), false);
+                }
+            }
+            Err(e) => {
+                let detail = format!("cannot check free space in {}: {e}", dir.display());
+                return self.conclude(self.op_entry(&cur, Outcome::Refused, detail), false);
+            }
+        }
+
         // Maintenance.
         self.set_step(&mut cur, Step::Maintenance)?;
         if let Err(e) = rt(self.maintenance.enter())? {
@@ -1087,7 +1184,20 @@ impl<R: Runtime, V: ReleaseVerifier> Engine<R, V> {
             started_at: cur.started_at,
             finished_at: Utc::now(),
         };
-        self.conclude(entry, true)
+        let out = self.conclude(entry, true)?;
+        // Image prune (DEP7c): keep only the current and previous release.
+        prune_release_images(&self.runtime, self.release_images()).await;
+        Ok(out)
+    }
+
+    /// Images of the active and previous release: what image pruning keeps.
+    fn release_images(&self) -> Vec<String> {
+        let s = self.journal.state();
+        s.active
+            .iter()
+            .chain(s.previous.iter())
+            .flat_map(|m| [m.images.server.clone(), m.images.worker.clone()])
+            .collect()
     }
 
     // ----------------------------------------------------- failure, rollback

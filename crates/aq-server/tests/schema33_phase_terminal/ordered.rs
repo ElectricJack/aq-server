@@ -41,8 +41,10 @@ async fn current33_missing_mandatory_objects_refuses_reopen_without_repair() {
             "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_unqualified_result_guard' AND tgrelid='profiled_result_reports'::regclass AND tgenabled='D')",
         ),
         (
-            "ALTER TABLE profiled_verified_releases DISABLE TRIGGER profiled_phase_unqualified_release_guard",
-            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_unqualified_release_guard' AND tgrelid='profiled_verified_releases'::regclass AND tgenabled='D')",
+            // Migration39 replaces the unqualified guard with the stricter
+            // settlement owner. Corrupt the actual current mandatory guard.
+            "ALTER TABLE profiled_verified_releases DISABLE TRIGGER profiled_phase_qualified_release_guard",
+            "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_qualified_release_guard' AND tgrelid='profiled_verified_releases'::regclass AND tgenabled='D')",
         ),
         (
             "ALTER TABLE profiled_started_receipts DISABLE TRIGGER profiled_phase_terminal_origin_guard",

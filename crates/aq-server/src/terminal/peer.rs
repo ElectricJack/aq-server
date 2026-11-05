@@ -22,7 +22,13 @@ pub async fn authenticate(
     state: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Result<AuthenticatedNode> {
-    crate::worker_api::authenticate_context(state, headers).await
+    crate::delegated_permits::runtime::authenticate_runner(
+        state,
+        headers,
+        aq_admission_sandbox::sandbox::RunnerOperation::Terminal,
+        None,
+    )
+    .await
 }
 pub(super) async fn current_peer(
     state: &AppState,
@@ -91,6 +97,7 @@ async fn upload_in(
         .chain(r.snapshots.iter().map(|x| &x.terminal))
         .chain(r.gaps.iter().map(|x| &x.terminal))
     {
+        crate::delegated_permits::runtime::require_session(node, &t.session)?;
         if let Some(old) = terminals.insert(t.terminal_id, t.clone())
             && old != *t
         {
@@ -233,11 +240,13 @@ pub async fn poll(
         .map_err(|_| AppError::BadRequest("invalid terminal poll".into()))?;
     let state = state.terminal_view();
     let config = configured(&state)?;
-    let slot = config.runtime.poll(node.id())?;
+    let slot = config
+        .runtime
+        .poll_channel(node.id(), node.permitted_attempt())?;
     if r.hold_ms > 0 {
         let mut tx = super::persistence::begin(&state).await?;
         current_peer(&state, &mut tx, node, &r.peer).await?;
-        let work:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM terminal_subscriptions w JOIN terminal_sessions s ON s.terminal_id=w.terminal_id WHERE w.node_id=$1 AND s.boot_id=$3 AND w.expires_at_ms>$2) OR EXISTS(SELECT 1 FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$3 AND o.kind='fence' AND o.controller_generation=s.controller_generation AND(o.expires_at_ms>$2 OR(o.expires_at_ms IS NULL AND NOT o.acknowledged)))").bind(node.id()).bind(dbtime(now(&state))?).bind(remote_boot(&r.peer)?).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
+        let work:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM terminal_subscriptions w JOIN terminal_sessions s ON s.terminal_id=w.terminal_id WHERE w.node_id=$1 AND s.boot_id=$3 AND ($4::uuid IS NULL OR s.attempt_id=$4) AND w.expires_at_ms>$2) OR EXISTS(SELECT 1 FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$3 AND ($4::uuid IS NULL OR s.attempt_id=$4) AND o.kind='fence' AND o.controller_generation=s.controller_generation AND(o.expires_at_ms>$2 OR(o.expires_at_ms IS NULL AND NOT o.acknowledged)))").bind(node.id()).bind(dbtime(now(&state))?).bind(remote_boot(&r.peer)?).bind(node.permitted_attempt()).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
         tx.commit().await.map_err(|_| AppError::Internal)?;
         if !work {
             return Err(AppError::Conflict(
@@ -269,7 +278,9 @@ pub async fn output_poll(
     }
     let state = state.terminal_view();
     let config = configured(&state)?;
-    let _slot = config.runtime.poll(node.id())?;
+    let _slot = config
+        .runtime
+        .output_poll_channel(node.id(), node.permitted_attempt())?;
     poll_once(&state, node, r, PollMode::Output).await
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -291,10 +302,10 @@ async fn poll_once(
     // cannot consume an output page or advance its transport watermark.
     let query = match mode {
         PollMode::Full => {
-            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND o.outbox_id>$2 AND o.kind NOT IN('input','epoch_input') AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
+            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND ($5::uuid IS NULL OR s.attempt_id=$5) AND o.outbox_id>$2 AND o.kind NOT IN('input','epoch_input') AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
         }
         PollMode::Output => {
-            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND o.outbox_id>$2 AND o.kind='watch' AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
+            "SELECT o.outbox_id,s.identity::text FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$4 AND ($5::uuid IS NULL OR s.attempt_id=$5) AND o.outbox_id>$2 AND o.kind='watch' AND NOT o.claimed AND NOT o.acknowledged AND(o.expires_at_ms IS NULL OR o.expires_at_ms>$3) ORDER BY o.outbox_id LIMIT 64"
         }
     };
     let rows = sqlx::query(query)
@@ -302,6 +313,7 @@ async fn poll_once(
         .bind(dbtime(r.cursor)?)
         .bind(dbtime(now(state))?)
         .bind(remote_boot(&r.peer)?)
+        .bind(node.permitted_attempt())
         .fetch_all(&mut *initial)
         .await
         .map_err(|_| AppError::Internal)?;
@@ -321,6 +333,7 @@ async fn poll_once(
     initial.commit().await.map_err(|_| AppError::Internal)?;
     let mut effects = vec![];
     for (t, ids) in grouped.values() {
+        crate::delegated_permits::runtime::require_session(node, &t.session)?;
         let mut tx = super::persistence::begin(state).await?;
         current_peer(state, &mut tx, node, &r.peer).await?;
         let view =
@@ -513,7 +526,7 @@ async fn dispatch_next(
     node: &AuthenticatedNode,
     r: &draft::RelayPoll,
 ) -> Result<Option<draft::Effect>> {
-    let rows=sqlx::query("SELECT identity::text,operation_id,principal_id FROM (SELECT DISTINCT ON(s.terminal_id) s.identity,s.terminal_id,i.operation_id,i.principal_id,i.updated_at_ms,i.admission_revision FROM terminal_input_receipts i JOIN terminal_sessions s ON s.terminal_id=i.terminal_id WHERE s.node_id=$1 AND s.boot_id=$3 AND ((NOT i.dispatched AND i.disposition='queued' AND NOT EXISTS(SELECT 1 FROM terminal_input_receipts h WHERE h.terminal_id=s.terminal_id AND h.dispatched AND h.disposition IN('queued','received','injecting') AND h.deadline_ms>$2)) OR(i.dispatched AND i.disposition IN('queued','received','injecting') AND i.deadline_ms<=$2)) ORDER BY s.terminal_id,i.updated_at_ms,i.admission_revision) candidates ORDER BY updated_at_ms,terminal_id LIMIT 8").bind(node.id()).bind(dbtime(now(state))?).bind(remote_boot(&r.peer)?).fetch_all(&state.store.pool).await.map_err(|_|AppError::Internal)?;
+    let rows=sqlx::query("SELECT identity::text,operation_id,principal_id FROM (SELECT DISTINCT ON(s.terminal_id) s.identity,s.terminal_id,i.operation_id,i.principal_id,i.updated_at_ms,i.admission_revision FROM terminal_input_receipts i JOIN terminal_sessions s ON s.terminal_id=i.terminal_id WHERE s.node_id=$1 AND s.boot_id=$3 AND ($4::uuid IS NULL OR s.attempt_id=$4) AND ((NOT i.dispatched AND i.disposition='queued' AND NOT EXISTS(SELECT 1 FROM terminal_input_receipts h WHERE h.terminal_id=s.terminal_id AND h.dispatched AND h.disposition IN('queued','received','injecting') AND h.deadline_ms>$2)) OR(i.dispatched AND i.disposition IN('queued','received','injecting') AND i.deadline_ms<=$2)) ORDER BY s.terminal_id,i.updated_at_ms,i.admission_revision) candidates ORDER BY updated_at_ms,terminal_id LIMIT 8").bind(node.id()).bind(dbtime(now(state))?).bind(remote_boot(&r.peer)?).bind(node.permitted_attempt()).fetch_all(&state.store.pool).await.map_err(|_|AppError::Internal)?;
     for row in rows {
         if let Some(effect) = dispatch_candidate(state, node, r, row).await? {
             return Ok(Some(effect));
@@ -530,6 +543,7 @@ async fn dispatch_candidate(
     use sqlx::Row;
     let t: TerminalIdentity =
         serde_json::from_str(row.get::<&str, _>(0)).map_err(|_| AppError::Internal)?;
+    crate::delegated_permits::runtime::require_session(node, &t.session)?;
     let id: Uuid = row.get(1);
     let principal: Uuid = row.get(2);
     let mut tx = super::persistence::begin(state).await?;

@@ -267,6 +267,13 @@ pub async fn accept(
     let registry = state.config.intelligence.clone().ok_or_else(refused)?;
     let selection = before.selection.clone();
     let binding = request.acceptance.binding.clone();
+    let head = super::login_refresh::newest_source(
+        &state.store.pool,
+        &registry,
+        &selection.choice.credential_profile,
+        selection.credential_revision,
+    )
+    .await?;
     static READS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
         std::sync::OnceLock::new();
     let permit = READS
@@ -278,7 +285,16 @@ pub async fn accept(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            material::issue_for_selection(&registry, &selection, &binding, lease_id, issued, expiry)
+            material::issue_for_selection_from(
+                &registry,
+                &selection,
+                &binding,
+                lease_id,
+                issued,
+                expiry,
+                None,
+                head.as_ref(),
+            )
         }),
     )
     .await

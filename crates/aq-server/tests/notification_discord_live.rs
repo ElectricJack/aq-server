@@ -27,16 +27,19 @@ async fn explicitly_authorized_discord_transport_receipt() {
         .send(
             endpoint,
             &aq_notifications::Payload {
-                content: "Agent Q notification transport qualification (explicit opt-in).".into(),
+                content: "AQ attention: F4 automatic notification live qualification (explicit opt-in, one message).".into(),
             },
         )
         .await
         .unwrap();
-    assert!(
-        matches!(
-            outcome.outcome,
-            aq_notifications::TransportOutcome::Accepted { .. }
-        ),
-        "transport acceptance not established; do not automatically repeat an uncertain send"
+    let aq_notifications::TransportOutcome::Accepted { message_id } = outcome.outcome else {
+        panic!(
+            "transport acceptance not established; do not automatically repeat an uncertain send"
+        );
+    };
+    // Redacted receipt: provider message ID and acceptance time only, never the URL.
+    println!(
+        "receipt discord_message_id={message_id} accepted_at={}",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     );
 }

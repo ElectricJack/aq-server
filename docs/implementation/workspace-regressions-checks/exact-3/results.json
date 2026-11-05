@@ -1,0 +1,584 @@
+{
+  "scope": "exact",
+  "source": "a860d3e03a6c114eaad5f32e5726f46f46fddcaf",
+  "diff_sha256": "fc75483e6cc5235824b6c4d9fb08bba6c7833fe39fd34d03683a36f8ef4d5622",
+  "harness_sha256": "d974d1026fe0b988eebe06afe6bd01369d941ddd00c8742739d1eebf15d1356e",
+  "resource_controls": {
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_TEST_THREADS": "1"
+  },
+  "graph_sha256": "da79578f79181b8f9c4e2ecb393a04d441a6eb5fcd952c976bef436199c93f21",
+  "expected_regressions": [
+    "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+    "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+    "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+    "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+    "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+    "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+    "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+    "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+    "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+    "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+    "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+    "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+    "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+    "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+    "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+    "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+    "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+    "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+    "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses"
+  ],
+  "runs": [
+    {
+      "case": "compile",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--no-run",
+        "--test",
+        "native_accepted_preparation",
+        "--test",
+        "phase_execution_transport",
+        "--test",
+        "phase_terminal_closure",
+        "--test",
+        "profiled_hot",
+        "--test",
+        "schema30_preparation",
+        "--test",
+        "schema32_phase_execution",
+        "--test",
+        "schema33_phase_terminal",
+        "--test",
+        "schema43_cancellation"
+      ],
+      "exit_code": 0,
+      "seconds": 21.516,
+      "log": "00-compile.txt",
+      "test_results": [],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_accepted_preparation",
+        "original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 8.341,
+      "log": "01-native_accepted_preparation.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 6.72s"
+      ],
+      "regression_outcomes": {
+        "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_execution_transport",
+        "genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 5.47,
+      "log": "02-phase_execution_transport.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.47s"
+      ],
+      "regression_outcomes": {
+        "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 6.646,
+      "log": "03-phase_terminal_closure.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.80s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity"
+      ]
+    },
+    {
+      "case": "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 5.255,
+      "log": "04-phase_terminal_closure.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.57s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started"
+      ]
+    },
+    {
+      "case": "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 5.388,
+      "log": "05-phase_terminal_closure.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.64s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held"
+      ]
+    },
+    {
+      "case": "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 5.536,
+      "log": "06-phase_terminal_closure.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.68s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority"
+      ]
+    },
+    {
+      "case": "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "profiled_hot",
+        "actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 1.869,
+      "log": "07-profiled_hot.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.20s"
+      ],
+      "regression_outcomes": {
+        "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema30_preparation",
+        "current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.163,
+      "log": "08-schema30_preparation.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.46s"
+      ],
+      "regression_outcomes": {
+        "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema32_phase_execution",
+        "current32_missing_execution_history_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.478,
+      "log": "09-schema32_phase_execution.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.79s"
+      ],
+      "regression_outcomes": {
+        "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 8.084,
+      "log": "10-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 7.00s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "actual_grant_cannot_commit_without_reserved_terminal_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 6.033,
+      "log": "11-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.29s"
+      ],
+      "regression_outcomes": {
+        "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 5.324,
+      "log": "12-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.61s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "collision_rolls_back33_without_changing_actual32_history",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 4.295,
+      "log": "13-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 3.74s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 5.225,
+      "log": "14-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.64s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "ordered::actual32_open_owner_history_survives_registered33_upgrade",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 6.883,
+      "log": "15-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 6.03s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "relational_only_over_budget_backfill_rolls_back_entire_migration",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "seconds": 6.157,
+      "log": "16-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.48s"
+      ],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration"
+      ]
+    },
+    {
+      "case": "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 27.764,
+      "log": "17-schema33_phase_terminal.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 27.10s"
+      ],
+      "regression_outcomes": {
+        "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema43_cancellation",
+        "cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 3.875,
+      "log": "18-schema43_cancellation.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.97s"
+      ],
+      "regression_outcomes": {
+        "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses": "ok"
+      },
+      "missing_or_failed_regressions": []
+    },
+    {
+      "case": "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema43_cancellation",
+        "cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 3.117,
+      "log": "19-schema43_cancellation.txt",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.43s"
+      ],
+      "regression_outcomes": {
+        "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses": "ok"
+      },
+      "missing_or_failed_regressions": []
+    }
+  ],
+  "database_endpoint": {
+    "host": "127.0.0.1",
+    "port": 20533
+  }
+}

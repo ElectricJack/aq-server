@@ -405,3 +405,81 @@ async fn inert_development_startup_and_quanta_create_no_work_or_delivery() {
     assert_eq!(inbox["items"], json!([]));
     runtime.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashboard_search_loaded_definition_uses_true_name_and_source_digest() {
+    let mut s = setup().await;
+    let original: Artifact =
+        serde_json::from_slice(&std::fs::read(&s.artifact_path).unwrap()).unwrap();
+    let mut content = original.content;
+    content.playbook.purpose = "example public purpose".into();
+    let artifact = Artifact::seal(content).unwrap();
+    private(&s.artifact_path, serde_json::to_vec(&artifact).unwrap());
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let runtime = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router_with_playbooks(
+        s.f.state.clone(),
+        Some(runtime.driver.clone()),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/search?q=example&types=playbook")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let group = body["data"]["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["type"] == "playbook")
+        .unwrap();
+    assert_eq!(group["hits"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(group["hits"][0]["ref"]["id"], artifact.content.playbook.id);
+    assert_eq!(
+        group["hits"][0]["ref"]["revision"],
+        artifact.content.source.digest
+    );
+    assert_eq!(group["hits"][0]["excerpt"], "example public purpose");
+    assert!(
+        body["data"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["source"] == "playbook"
+                && s["coverage"]["reason"] == "loaded_startup_definitions_only")
+    );
+    let response = app
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/search?q=example&types=playbook&scope=project:{}",
+                Uuid::new_v4()
+            ))
+            .header("x-aq-dev-email", "owner@localhost")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(
+        body["data"]["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|g| g["hits"].as_array().unwrap().is_empty())
+    );
+    runtime.shutdown().await.unwrap();
+}

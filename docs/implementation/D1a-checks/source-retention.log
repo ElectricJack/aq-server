@@ -1,0 +1,27 @@
+$ cargo test --locked -p aq-server --test source_retention
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 47s
+     Running tests/source_retention.rs (target/debug/deps/source_retention-c3f887eae28f7ae0)
+
+running 18 tests
+test credential_rotation_after_observed_node_wait_cannot_create_transfer_and_new_key_replays ... ok
+test credential_rotation_during_import_keeps_uncertain_intent_and_current_key_recovers_same_op ... ok
+test delivery::candidate_from_retained_source_publishes_once_real_git ... ignored, qualification requires retained aq-git and Git 2.56.0 executables
+test delivery::candidate_from_retained_source_publishes_once ... ok
+test delivery::delivery_candidate_retries_frozen_request_after_lost_reply ... ok
+test delivery::delivery_protocol_bounds_and_conflict_results ... ok
+test delivery::delivery_rejects_unretained_sources ... ok
+test delivery::delivery_replay_conflict_and_unknown_publish_are_fenced ... ok
+test delivery::delivery_indeterminate_receipts_and_lost_replies_keep_destination_held ... ok
+test invalid_pre_dispatch_manifest_is_rejected_without_leaking_quota ... ok
+test exact_replay_offsets_scope_and_upload_is_not_retention ... ok
+test late_attempt_retains_only_verified_receipt_and_releases_transport_budget ... ok
+test pending_import_retries_same_operation_and_rejects_incompatible_receipt ... ok
+test runtime_rejects_symlink_before_changing_target_permissions ... ok
+test selected_real_aq_git_import_survives_worker_volume_loss_and_base_download_is_scoped ... ignored, qualification requires immutable aq-git and bookworm Git2.56.0 binaries
+test released_attempt_refuses_new_intents_but_preserves_owned_transfer_recovery ... ok
+test slow_import_does_not_hold_attempt_or_node_locks_and_control_status_progresses ... ok
+test stale_upload_cleanup_and_limits_preserve_unknown_imports ... ok
+
+test result: ok. 16 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 16.14s
+

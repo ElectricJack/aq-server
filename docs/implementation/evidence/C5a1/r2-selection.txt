@@ -1,0 +1,89 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 0 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/c5a1/test_cargo.py -n 1 -s
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 1/1 worker
+1 worker [1 item]
+
+   Compiling aq-selection v0.1.4 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4/crates/aq-selection)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.39s
+     Running unittests src/lib.rs (target/debug/deps/aq_selection-c35c4e0e40904a1c)
+
+running 1 test
+test credential_policy::tests::backend_kind_all_is_exhaustive_and_canonical ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/central.rs (target/debug/deps/central-2bd0a186394cd005)
+
+running 15 tests
+test accounting_or_monetary_requirements_never_become_zero_or_task_budget ... ok
+test account_endpoint_revision_scope_cannot_make_foreign_observations_authorize ... ok
+test actual_central_compile_select_verify_has_exact_native_pins_and_no_execution_authority ... ok
+test actual_required_native_capability_is_not_inferred_from_model_or_qualification ... ok
+test actual_schema_and_normative_vectors_are_frozen ... ok
+test central_selection_cannot_bypass_restricted_unknown_backend ... ok
+test closed_decode_rejects_unknown_and_duplicate_fields_without_a_dynamic_map ... ok
+test actual_intelligence_cost_policies_cannot_be_overridden_by_turn_permission ... ok
+test exact_rendered_startup_length_counts_separator_bytes ... ok
+test fallback_and_input_reordering_share_existing_selector_semantics ... ok
+test forged_snapshot_and_original_artifact_bytes_refuse_even_after_rehash ... ok
+test each_real_policy_domain_is_independent_and_cannot_override_another ... ok
+test full_environment_pin_not_friendly_name_and_native_reasoning_output_are_required ... ok
+test worker_feedback_and_worker_preparation_cannot_qualify_central ... ok
+test original_deadline_registry_installation_and_credential_expiry_do_not_retime ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+     Running tests/selection.rs (target/debug/deps/selection-9f0a4ea9e38f39a6)
+
+running 26 tests
+test classified_worker_failure_is_bound_to_exact_sealed_choice_and_current_boot ... ok
+test arbitrary_node_delivery_claims_cannot_manufacture_keys_owner_identity_or_current_boot ... ok
+test cold_node_selects_only_explicit_owned_preparation_and_preserves_material_provenance ... ok
+test credential_backend_snapshot_validation_and_legacy_defaults ... ok
+test credential_backend_denial_obeys_explicit_fallback_policy ... ok
+test explicit_fallback_and_cooldown_do_not_implicitly_downgrade ... ok
+test credential_restricted_backend_is_ineligible ... ok
+test fallback_unsupported_is_explicit_and_provider_specific_reasoning_remains_native ... ok
+test graph_policy_refuses_uncovered_mixed_context_and_wrong_owner_scope_before_selection ... ok
+test independent_matching_source_cannot_clear_another_sources_live_restriction ... ok
+test installed_credential_and_central_authorization_are_independent ... ok
+test installed_only_v010_snapshots_and_decisions_roundtrip_byte_semantics_unchanged ... ok
+test ledger_unknown_is_not_zero_and_hard_cost_requires_qualified_provider_and_adapter ... ok
+test lineage_retry_cost_and_replacement_budgets_cannot_reset_on_fallback ... ok
+test missing_policy_old_catalog_is_explicitly_ineligible_and_snapshots_are_bound ... ok
+test native_policy_binding_does_not_allow_rehashed_instruction_or_permission_forgery ... ok
+test observations_scope_account_endpoint_model_node_and_credential_revision_exactly ... ok
+test project_environment_allowlist_cannot_be_widened_by_installed_qualified_adapter ... ok
+test source_sequence_precedes_wall_clock_when_history_contains_clock_correction ... ok
+test published_human_selection_preserves_exact_provenance_and_refuses_changed_decisions ... ok
+test stable_order_chooses_exact_native_configuration_without_equating_reasoning_controls ... ok
+test two_models_on_one_harness_share_acyclic_policy_but_resolve_distinct_actual_profiles ... ok
+test stale_node_and_unsupported_native_settings_never_become_unknown_availability_attempts ... ok
+test unknown_availability_can_only_allow_bounded_attempt_with_present_credentials ... ok
+test worker_failure_cannot_claim_account_wide_availability_or_survive_boot_reuse ... ok
+test unknown_cost_never_bypasses_known_exhaustion_or_incompatible_currency ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/task_baseline.rs (target/debug/deps/task_baseline-9584298b3c93e97f)
+
+running 1 test
+test task_selection_wire_errors_match_untouched_013 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+   Doc-tests aq_selection
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+.
+============================== 1 passed in 7.67s ===============================

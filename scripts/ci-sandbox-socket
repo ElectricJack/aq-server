@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# CI only: give the hosted runner the dedicated rootless sandbox daemon that
+# aq-worker 0.5.1's docker-local backend requires (rootless, socket owned by the
+# worker UID, cgroup v2 with a real driver). It is a rootless Podman API socket
+# under the runner user's systemd session, never the runner's main Docker socket.
+# Exports XDG_RUNTIME_DIR and AQ_SANDBOX_SOCKET to later steps via $GITHUB_ENV.
+set -euo pipefail
+
+user=$(id -un)
+uid=$(id -u)
+runtime=/run/user/$uid
+
+# Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor.
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+fi
+for map in /etc/subuid /etc/subgid; do
+  grep -q "^$user:" "$map" || echo "$user:100000:65536" | sudo tee -a "$map" >/dev/null
+done
+
+# A lingering user manager provides /run/user/$uid, the user D-Bus and the
+# systemd cgroup delegation the backend insists on.
+sudo loginctl enable-linger "$user"
+for _ in $(seq 60); do
+  [ -S "$runtime/bus" ] && break
+  sleep 1
+done
+[ -S "$runtime/bus" ] || { echo "user systemd session did not start" >&2; exit 1; }
+export XDG_RUNTIME_DIR=$runtime DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus
+
+podman system migrate
+install -d -m 0700 "$runtime/aq-sandbox"
+socket=$runtime/aq-sandbox/podman.sock
+systemd-run --user --unit aq-sandbox-podman --collect \
+  podman system service --time=0 "unix://$socket"
+for _ in $(seq 60); do
+  [ -S "$socket" ] && break
+  sleep 1
+done
+[ -S "$socket" ] || { journalctl --user -u aq-sandbox-podman --no-pager >&2 || true; exit 1; }
+
+curl -fsS --unix-socket "$socket" http://d/v1.41/info | python3 -c '
+import json, sys
+info = json.load(sys.stdin)
+print("sandbox daemon:", info.get("ServerVersion"), info.get("CgroupDriver"), info.get("CgroupVersion"),
+      info.get("SecurityOptions"))
+assert "name=rootless" in info.get("SecurityOptions", []), "not rootless"
+assert info.get("CgroupDriver") == "systemd" and str(info.get("CgroupVersion")) == "2", "no systemd cgroup v2"
+'
+
+if [ -n "${GITHUB_ENV:-}" ]; then
+  {
+    echo "XDG_RUNTIME_DIR=$runtime"
+    echo "AQ_SANDBOX_SOCKET=$socket"
+  } >>"$GITHUB_ENV"
+fi

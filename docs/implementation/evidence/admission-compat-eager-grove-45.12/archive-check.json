@@ -1,0 +1,21 @@
+{
+  "archive": "docs/implementation/evidence/aq-admission-016-f721c24/aq-admission-0.1.6.crate",
+  "archive_sha256": "d74db09f5766a437b9d43b6d63710a56afc4db69432953ef06699ec7ab09e066",
+  "transport_bytes": 35252,
+  "transport_sha256": "4f19c6c0bb728e781fb6349c4a994e28c31b0ff665fe11628c70169df9ceea50",
+  "exact_archive_transport_match": true,
+  "frozen_inventory_checks": [
+    {
+      "inventory": "crates/aq-admission/artifacts/control.compatibility-sha256.json",
+      "verified_rows": 32
+    },
+    {
+      "inventory": "crates/aq-admission/artifacts/granted-closure.compatibility-sha256.json",
+      "verified_rows": 63
+    },
+    {
+      "inventory": "crates/aq-admission/artifacts/preparation-v2.compatibility-sha256.json",
+      "verified_rows": 71
+    }
+  ]
+}

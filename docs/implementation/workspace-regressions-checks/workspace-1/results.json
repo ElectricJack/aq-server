@@ -1,0 +1,76 @@
+{
+  "scope": "workspace",
+  "source": "697b07a40c4752212b094fdb30d52acc601be04b",
+  "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "harness_sha256": "fc0d60f41053683939c77c5aff1d9629e0eb426d54c3d79a83fa46aca4bab083",
+  "resource_controls": {
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_TEST_THREADS": "1"
+  },
+  "graph_sha256": "da79578f79181b8f9c4e2ecb393a04d441a6eb5fcd952c976bef436199c93f21",
+  "expected_regressions": [
+    "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+    "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+    "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+    "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+    "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+    "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+    "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+    "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+    "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+    "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+    "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+    "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+    "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+    "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+    "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+    "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+    "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+    "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+    "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses"
+  ],
+  "runs": [
+    {
+      "case": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--no-fail-fast",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": -2,
+      "seconds": 935.086,
+      "log": "00-workspace.txt",
+      "test_results": [],
+      "regression_outcomes": {},
+      "missing_or_failed_regressions": [
+        "native_accepted_preparation::original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+        "phase_execution_transport::genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+        "phase_terminal_closure::failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+        "phase_terminal_closure::pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+        "phase_terminal_closure::suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+        "phase_terminal_closure::wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+        "profiled_hot::actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+        "schema30_preparation::current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+        "schema32_phase_execution::current32_missing_execution_history_refuses_reopen_without_repair",
+        "schema33_phase_terminal::actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+        "schema33_phase_terminal::actual_grant_cannot_commit_without_reserved_terminal_capacity",
+        "schema33_phase_terminal::already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+        "schema33_phase_terminal::collision_rolls_back33_without_changing_actual32_history",
+        "schema33_phase_terminal::old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+        "schema33_phase_terminal::ordered::actual32_open_owner_history_survives_registered33_upgrade",
+        "schema33_phase_terminal::relational_only_over_budget_backfill_rolls_back_entire_migration",
+        "schema33_phase_terminal::ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+        "schema43_cancellation::cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+        "schema43_cancellation::cancellation43_upgrade_preserves_prior_records_and_old41_refuses"
+      ]
+    }
+  ],
+  "database_endpoint": {
+    "host": "127.0.0.1",
+    "port": 20533
+  }
+}

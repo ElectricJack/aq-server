@@ -1,33 +1,184 @@
-# Development overlay: builds from source, uses the example vault and a local
-# updater spool, publishes the listeners on loopback only and keeps
-# cloudflared off by default. compose.yaml still requires AQ_VAULT_DIR and
-# AQ_UPDATER_SPOOL to be set (scripts/dev-up and scripts/smoke set them).
+# Development overlay. scripts/dev-up prepares the private vault and state.
+# Graph source is pinned independently of the server and Git candidate.
 services:
+  server-db-init:
+    profiles: [production]
+  prod-state-init:
+    profiles: [production]
+  postgres-socket-init:
+    image: postgres:17-bookworm
+    user: '0:0'
+    entrypoint: [/bin/sh, -ec]
+    command: ['install -d -o postgres -g postgres -m 0755 /run/aq-postgresql']
+    volumes: [dev_postgres_socket:/run/aq-postgresql]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: !override [no-new-privileges:true]
+  postgres:
+    environment:
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256
+    command: [postgres, -c, 'unix_socket_directories=/run/aq-postgresql,/var/run/postgresql']
+    volumes:
+      - dev_postgres_socket:/run/aq-postgresql
+    depends_on:
+      postgres-socket-init: {condition: service_completed_successfully}
+    healthcheck:
+      # The entrypoint's temporary initialization server only accepts Unix sockets.
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U agent_q -d agent_q']
+  dev-state-init:
+    image: ${AQ_SERVER_IMAGE:-agent-q-server:dev}
+    user: '0:0'
+    entrypoint: [/bin/sh, /dev-init-volumes.sh]
+    volumes:
+      - ./scripts/dev-init-volumes.sh:/dev-init-volumes.sh:ro
+      - ${AQ_VAULT_DIR:?run scripts/dev-up}:/dev-vault:ro
+      - dev_vault:/vault
+      - dev_auth:/run/aq-dev
+      - dev_source:/var/lib/aq
+      - dev_git_run:/run/aq-git
+    secrets: [graph_token, playbook_database_password, playbook_engine_keys, playbook_bridge_key, terminal_protection_key]
+    network_mode: none
+    restart: 'no'
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: !override [no-new-privileges:true]
+  graph-db-init:
+    image: postgres:17-bookworm
+    networks: [database]
+    secrets: [postgres_password, graph_database_password]
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        export PGPASSWORD="$$(cat /run/secrets/postgres_password)"
+        psql -h postgres -U agent_q -d agent_q -v ON_ERROR_STOP=1 <<'AQ_GRAPH_SQL'
+        \set graph_password `cat /run/secrets/graph_database_password`
+        SELECT format('CREATE ROLE aq_graph LOGIN NOSUPERUSER PASSWORD %L', :'graph_password')
+        WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aq_graph') \gexec
+        AQ_GRAPH_SQL
+        if ! psql -h postgres -U agent_q -d agent_q -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'aq_graph'" | grep -q 1; then
+          createdb -h postgres -U agent_q -O aq_graph aq_graph
+        fi
+        owner="$$(psql -h postgres -U agent_q -d agent_q -v ON_ERROR_STOP=1 -tAc "SELECT r.rolname || ':' || r.rolsuper::text FROM pg_database d JOIN pg_roles r ON r.oid=d.datdba WHERE d.datname='aq_graph'")"
+        test "$$owner" = 'aq_graph:false' || { echo 'existing Graph database role differs; preserve it and use a new Compose project' >&2; exit 1; }
+    restart: on-failure
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: !override [no-new-privileges:true]
+    logging: &dev-logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  playbook-db-init:
+    image: postgres:17-bookworm
+    user: '${AQ_DEV_UID:-1000}:${AQ_DEV_GID:-1000}'
+    networks: [database]
+    secrets: [postgres_password, playbook_database_password]
+    volumes:
+      - ./scripts/dev-playbook-db.sh:/dev-playbook-db.sh:ro
+    entrypoint: [/bin/sh, /dev-playbook-db.sh]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: 'no'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: !override [no-new-privileges:true]
+    logging: *dev-logging
+  aq-graph:
+    image: ${AQ_DEV_GRAPH_IMAGE:-aq-graph:225329cd6acf5a775fd2a0b016dd1c45fb16c79b}
+    build:
+      context: https://github.com/ElectricJack/aq-graph.git#225329cd6acf5a775fd2a0b016dd1c45fb16c79b
+    user: '${AQ_DEV_UID:-1000}:${AQ_DEV_GID:-1000}'
+    environment:
+      AQ_GRAPH_BIND: 0.0.0.0:8741
+      AQ_GRAPH_BOOTSTRAP_WORKSPACE: ${AQ_DEV_GRAPH_WORKSPACE:-e0000000-0000-4000-8000-000000000001}
+      AQ_GRAPH_BOOTSTRAP_ACTOR: dev-service
+      AQ_GRAPH_BOOTSTRAP_TOKEN_FILE: /run/secrets/graph_token
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/graph_database_password)" DATABASE_URL="postgres://aq_graph@postgres:5432/aq_graph"; exec aq-graph serve'
+    secrets: [graph_database_password, graph_token]
+    volumes: !override []
+    networks: [database, edge]
+    depends_on: !override
+      graph-db-init: {condition: service_completed_successfully}
+    ports: ['127.0.0.1:${AQ_DEV_GRAPH_PORT:-8741}:8741']
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: !override [no-new-privileges:true]
+    logging: *dev-logging
+    healthcheck:
+      test: [CMD, aq-graph, --endpoint, 'http://127.0.0.1:8741', health]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  aq-git:
+    image: ${AQ_SERVER_IMAGE:-agent-q-server:dev}
+    build:
+      context: .
+      target: server
+      args:
+        AQ_STATE_FORMAT: ${AQ_STATE_FORMAT:-}
+    user: '10001:10001'
+    entrypoint: [/bin/sh, /dev-git-supervisor.sh]
+    volumes: !override
+      - ./scripts/dev-git-supervisor.sh:/dev-git-supervisor.sh:ro
+      - dev_source:/var/lib/aq
+      - dev_git_run:/run/aq-git
+      - ${AQ_DEV_STATE_DIR:-./state.dev}/fixture:/fixture:ro
+    networks: [edge]
+    depends_on: !override
+      dev-state-init: {condition: service_completed_successfully}
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: !override [no-new-privileges:true]
+    logging: *dev-logging
+    healthcheck:
+      test: [CMD, aq-git, --socket, /run/aq-git/central.sock, --json, capabilities]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   server:
     build:
       context: .
       target: server
+      args:
+        AQ_STATE_FORMAT: ${AQ_STATE_FORMAT:-}
     image: ${AQ_SERVER_IMAGE:-agent-q-server:dev}
+    user: '10001:10001'
     environment:
       # compose.yaml sets production; the example vault is a development vault.
       AQ_DEPLOYMENT: development
-    volumes:
-      - type: bind
-        source: ./vault.example
-        target: /vault
-        read_only: true
-      # The updater spool (scripts/dev-up creates it; gitignored). The example
-      # vault has no [updates] section, so updates stay unavailable in dev.
-      - type: bind
-        source: ./state.dev/updater-spool/requests
-        target: /updater/requests
-      - type: bind
-        source: ./state.dev/updater-spool/status
-        target: /updater/status
-        read_only: true
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/postgres_password)" DATABASE_URL="postgres://agent_q@postgres:5432/agent_q"; vault=/vault; if test -f /vault/settlement/config.toml; then vault=/vault/settlement; fi; exec aq-server serve --vault "$$vault"'
+    # The example vault has no updates section; omit the production spool.
+    volumes: !override
+      - dev_vault:/vault:ro
+      - dev_auth:/run/aq-dev:ro
+      - dev_source:/var/lib/aq
+      - dev_git_run:/run/aq-git:ro
+      - dev_postgres_socket:/run/aq-postgresql:ro
+    secrets: !override [postgres_password]
+    depends_on: !override
+      dev-state-init: {condition: service_completed_successfully}
+      aq-graph: {condition: service_healthy}
+      aq-git: {condition: service_healthy}
+      playbook-db-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, aq-server, dependency-readiness, --vault, /vault]
+      interval: 2s
+      timeout: 5s
+      retries: 30
     ports:
-      - '127.0.0.1:8080:8080'
-      - '127.0.0.1:8081:8081'
+      - '127.0.0.1:${AQ_DEV_ADMIN_PORT:-8080}:8080'
+      - '127.0.0.1:${AQ_DEV_WORKER_PORT:-8081}:8081'
   cloudflared:
     profiles: [tunnel]
   # Only used by scripts/smoke: the worker image, run as a container.
@@ -41,7 +192,7 @@ services:
       args:
         AQ_SOURCE_REVISION: ${AQ_WORKER_SOURCE_REVISION:-}
         AQ_WORKER_ARCHIVE_SHA256: ${AQ_WORKER_ARCHIVE_SHA256:-}
-        AQ_VERSION: ${AQ_WORKER_VERSION:-0.3.1}
+        AQ_VERSION: ${AQ_WORKER_VERSION:-}
     image: ${AQ_WORKER_IMAGE:-agent-q-worker:dev}
     profiles: [smoke]
     networks: [edge]
@@ -49,9 +200,26 @@ services:
       - worker_config:/config
     read_only: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    security_opt: !override [no-new-privileges:true]
 volumes:
   worker_config:
+  dev_vault:
+  dev_auth:
+  dev_source:
+  dev_git_run:
+  dev_postgres_socket:
 secrets:
   postgres_password:
-    file: ./secrets.dev/postgres_password
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/postgres_password
+  graph_token:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/graph_token
+  graph_database_password:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/graph_database_password
+  playbook_database_password:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/playbook_database_password
+  playbook_engine_keys:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/playbook_engine_keys
+  playbook_bridge_key:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/playbook_bridge_key
+  terminal_protection_key:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/terminal_protection_key

@@ -19,18 +19,19 @@ use uuid::Uuid;
 
 async fn request(
     app: &Router,
-    credential: &str,
+    credential: &(String, Option<aq_admission_sandbox::sandbox::PermitBinding>),
     method: &str,
     path: &str,
     bytes: Vec<u8>,
 ) -> (StatusCode, Value) {
+    let sent = serde_json::from_slice::<Value>(&bytes).ok();
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header("authorization", format!("Bearer {credential}"))
+                .header("authorization", format!("Bearer {}", credential.0))
                 .header(
                     "content-type",
                     if method == "PUT" {
@@ -39,19 +40,90 @@ async fn request(
                         "application/json"
                     },
                 )
+                .header(
+                    "aq-runner-channel",
+                    credential
+                        .1
+                        .as_ref()
+                        .map(|v| serde_json::to_string(v).unwrap())
+                        .unwrap_or_default(),
+                )
                 .body(Body::from(bytes))
                 .unwrap(),
         )
         .await
         .unwrap();
     let status = response.status();
+    let envelope = response.headers().get("aq-runner-receipts").map(|h| {
+        serde_json::from_str::<aq_server::delegated_permits::receipts::Envelope>(
+            h.to_str().unwrap(),
+        )
+        .unwrap()
+    });
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert!(bytes.len() < 65536);
-    (status, serde_json::from_slice(&bytes).unwrap())
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    if let Some(envelope) = envelope {
+        assert_eq!(status, 200);
+        if let Some(result) = &envelope.result {
+            let report: ResultReport = serde_json::from_value(sent.clone().unwrap()).unwrap();
+            let native: result_record::Receipt = serde_json::from_value(value.clone()).unwrap();
+            native.validate_for(&report).unwrap();
+            assert_eq!(result.receipt_id, native.report_id);
+            assert_eq!(result.artifact_digest, native.report_digest);
+            assert_eq!(result.attempt.launch_id, report.stop.launch_id);
+            assert_eq!(result.attempt.attempt_id, report.binding.attempt_id);
+            assert_eq!(
+                result.attempt.manifest_digest,
+                report.binding.launch_manifest_digest
+            );
+            assert_eq!(envelope.finished.as_ref().unwrap().attempt, result.attempt);
+            assert_eq!(
+                envelope.finished.as_ref().unwrap().receipt_id,
+                result.receipt_id
+            );
+            if let Ok(directory) = std::env::var("B2_CAPTURE_CONTRACT") {
+                std::fs::write(
+                    std::path::Path::new(&directory).join(format!("result-{PROFILE:?}.json")),
+                    serde_json::to_vec_pretty(
+                        &json!({"request":sent,"response":value,"receipts":envelope}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        if let Some(source) = &envelope.source {
+            assert_eq!(
+                source.receipt_id.to_string(),
+                value["receipt"]["receipt_id"]
+            );
+            assert_eq!(
+                source.artifact_digest.as_str(),
+                value["receipt"]["manifest_digest"]
+            );
+            assert_eq!(
+                source.attempt.attempt_id,
+                credential.1.as_ref().unwrap().attempt_id
+            );
+            if let Ok(directory) = std::env::var("B2_CAPTURE_CONTRACT") {
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    std::path::Path::new(&directory).join(format!("source-{PROFILE:?}.json")),
+                    serde_json::to_vec_pretty(&json!({"status":value,"receipts":envelope}))
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+    } else if credential.1.is_some() && value["state"] == "retained" {
+        panic!("retained delegated source must carry correlated receipt");
+    }
+    (status, value)
 }
 async fn post(
     app: &Router,
-    token: &str,
+    token: &(String, Option<aq_admission_sandbox::sandbox::PermitBinding>),
     path: &str,
     value: &impl Serialize,
 ) -> (StatusCode, Value) {
@@ -59,7 +131,7 @@ async fn post(
 }
 async fn chunk(
     app: &Router,
-    token: &str,
+    token: &(String, Option<aq_admission_sandbox::sandbox::PermitBinding>),
     transfer: Uuid,
     file: &str,
     operation: Uuid,
@@ -103,6 +175,14 @@ struct GitManifest {
 #[tokio::test]
 #[ignore = "explicit pinned actual Git owners; one coordinated cold Git lane and default free-space policy"]
 async fn actual_phase_stopped_checkpoint_http_import_and_current_retention_are_not_legacy_gated() {
+    Box::pin(exercise(false)).await;
+}
+#[tokio::test]
+#[ignore = "explicit pinned actual Git owners"]
+async fn delegated_central_receipts() {
+    Box::pin(exercise(true)).await;
+}
+async fn exercise(delegated: bool) {
     let mut ready = Box::pin(common::presence::setup()).await;
     let mut actual = Box::pin(actual_git::Actual::prepare(&mut ready)).await;
     // Fixture edits precede synthetic terminal records. No real harness or
@@ -112,7 +192,12 @@ async fn actual_phase_stopped_checkpoint_http_import_and_current_retention_are_n
         "actual retained phase fixture change\n",
     )
     .unwrap();
-    let f = Box::pin(terminal::prepared_terminal_from_presence(ready)).await;
+    let mut f = Box::pin(terminal::prepared_terminal_from_presence(ready)).await;
+    let mut config = (*f.c.env.env.state.config).clone();
+    config.delegated_permits = Some(std::sync::Arc::new(
+        aq_server::delegated_permits::CredentialKey::new([7; 32]),
+    ));
+    f.c.env.env.state.config = std::sync::Arc::new(config);
     let issued = terminal::issue(&f).await;
     let auth = terminal::auth(&f).await;
     let start = terminal::started_request(&f, &issued);
@@ -125,7 +210,61 @@ async fn actual_phase_stopped_checkpoint_http_import_and_current_retention_are_n
         .unwrap();
     let state = &f.c.env.env.state;
     let pool = &f.c.env.env.pool;
-    let credential = &f.c.env.env.credential;
+    let SessionIdentity::Remote {
+        node_id, boot_id, ..
+    } = start.original.binding.session
+    else {
+        panic!()
+    };
+    let hard: i64 = sqlx::query_scalar("SELECT (state->>'execution_deadline_ms')::BIGINT FROM profiled_authority_hot WHERE attempt_id=$1")
+        .bind(start.original.binding.attempt_id).fetch_one(pool).await.unwrap();
+    let client = if delegated {
+        use aq_admission_sandbox::sandbox::*;
+        let authority = PhaseExecutionAuthority {
+            profile: PROFILE,
+            receipt_digest: serde_json::from_value(
+                serde_json::to_value(issued.digest().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            grant: issued.grant.clone(),
+            issued_at_ms: issued.issued_at_ms,
+            hard_deadline_ms: hard as u64,
+        };
+        let id = Uuid::new_v4();
+        let permit = DelegatedPermit {
+            schema_version: 1,
+            permit_id: id,
+            credential: aq_server::delegated_permits::CredentialKey::new([7; 32])
+                .credential(id)
+                .unwrap(),
+            binding: PermitBinding {
+                node: aq_admission_sandbox::transport::WorkerIdentity { node_id, boot_id },
+                attempt_id: issued.grant.binding.attempt_id,
+                grant_generation: issued.grant.binding.assignment_generation,
+                sandbox_id: Uuid::new_v4(),
+                channel_id: Uuid::new_v4(),
+            },
+            scope: PermitScope::Execution,
+            issued_at_ms: issued.issued_at_ms,
+            expires_at_ms: issued.grant.expires_at_ms,
+            hard_deadline_ms: hard as u64,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        aq_server::delegated_permits::runtime::install_execution_locked(
+            &mut tx,
+            Uuid::new_v4(),
+            [19; 32],
+            &permit,
+            &authority,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        (permit.credential.expose().to_owned(), Some(permit.binding))
+    } else {
+        (f.c.env.env.credential.clone(), None)
+    };
+    let credential = &client;
     let binding = &start.original.binding;
     let SessionIdentity::Remote {
         node_id, boot_id, ..

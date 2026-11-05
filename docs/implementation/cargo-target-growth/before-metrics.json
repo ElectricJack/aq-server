@@ -1,0 +1,13 @@
+{
+  "phase": "before",
+  "slot": "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4",
+  "allocated_target_bytes": 66990444544,
+  "apparent_target_bytes": 67027029936,
+  "allocated_incremental_bytes": 11080667136,
+  "linked_integration_targets": 108,
+  "integration_sources": 108,
+  "integration_executable_bytes": 49404647352,
+  "sample_binary": "target/debug/deps/profiled_results-aa04319b308b2c16",
+  "sample_binary_bytes": 543793528,
+  "sample_debug_section_bytes": 412313738
+}

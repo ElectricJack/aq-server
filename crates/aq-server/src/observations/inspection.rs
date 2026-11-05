@@ -222,21 +222,44 @@ pub async fn usage(
             &serde_json::to_vec(&(&binding, revision, &projection)).map_err(|_| invalid())?,
         ),
     };
+    let facts = budget::priced_facts(&mut tx, budget::Scope::Attempt(attempt))
+        .await
+        .map_err(|_| invalid())?;
+    let summary = budget::summarize(state, &facts).map_err(|_| invalid())?;
+    let mut costs = summary.costs.clone();
+    if costs.is_empty() {
+        costs.push(Cost::Unknown {
+            reason: UnknownReason::NotReported,
+        });
+    }
+    let completeness = if projection.canonical_calls == 0 && projection.unresolved_events == 0 {
+        AccountingCompleteness::Unknown
+    } else if summary.complete
+        && projection.incomplete_calls == 0
+        && projection.unresolved_events == 0
+        && facts.len() as u64 == projection.canonical_calls
+    {
+        AccountingCompleteness::CompleteForPolicy {
+            policy: ArtifactRef {
+                id: Text::new("aq.accounting.cost-policy").map_err(|_| invalid())?,
+                version: Text::new("1").map_err(|_| invalid())?,
+                digest: Digest::of(&serde_json::to_vec(&costs).map_err(|_| invalid())?),
+            },
+        }
+    } else {
+        let reason = summary
+            .reason
+            .unwrap_or_else(|| "native stream coverage or cost evidence is incomplete".to_owned());
+        AccountingCompleteness::Incomplete {
+            reason: Text::new(reason).map_err(|_| invalid())?,
+        }
+    };
     let usage = UsageView {
         ledger_revision: reference,
         counters: projection.counters().map_err(|_| invalid())?,
         counter_generation: None,
-        costs: vec![Cost::Unknown {
-            reason: UnknownReason::NotReported,
-        }],
-        completeness: if projection.canonical_calls == 0 && projection.unresolved_events == 0 {
-            AccountingCompleteness::Unknown
-        } else {
-            AccountingCompleteness::Incomplete {
-                reason: Text::new("native stream coverage and cost policy are not yet verified")
-                    .map_err(|_| invalid())?,
-            }
-        },
+        costs,
+        completeness,
     };
     usage.validate().map_err(|_| invalid())?;
     let snapshot = SessionUsage {

@@ -1,0 +1,11 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 2.20s
+     Running tests/permit_fixture_conformance.rs (target/debug/deps/permit_fixture_conformance-003ff7e49cd7d325)
+
+running 4 tests
+test permit_fixture_conformance_frozen_transport ... ok
+test permit_fixture_conformance ... ok
+test published_runner_receipts_match_native_owners ... ok
+test permit_fixture_conformance_source_pin ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s

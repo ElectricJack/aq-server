@@ -1,0 +1,12 @@
+{
+  "task": "fair-pinnacle-63",
+  "slot": "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-4",
+  "source_head": "e74a45e0844b76e3ab402a60f220f3a90eca0beb",
+  "command": "CARGO_BUILD_JOBS=2 cargo test -p aq-server --all-features --no-run",
+  "toolchain": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+  "integration_test_sources": 108,
+  "baseline_incremental": "Cargo default (enabled)",
+  "baseline_debug": "Cargo default (2)",
+  "log": ".aq/tmp/cargo-before.log",
+  "clean_log": ".aq/tmp/cargo-before-clean.log"
+}

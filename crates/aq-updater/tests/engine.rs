@@ -2050,3 +2050,156 @@ async fn backup_waits_for_the_maintenance_drain() {
         backed_up.duration_since(entered)
     );
 }
+
+// ------------------------------------------- storage budget (DEP7c, DEP8)
+
+#[tokio::test]
+async fn backup_rotation_keeps_five_by_default() {
+    let h = H::new();
+    std::fs::create_dir_all(&h.backup_dir).unwrap();
+    for i in 0..7 {
+        std::fs::write(
+            h.backup_dir
+                .join(format!("2020010{i}T000000Z-0.0.{i}-0.0.9.dump")),
+            b"x",
+        )
+        .unwrap();
+    }
+    let settings = h.settings();
+    assert_eq!(settings.backups_keep, 5);
+    let mut e = h.engine_with(settings);
+    h.publish(&manifest(A, 1, &[1]));
+    assert_eq!(e.install(req(A)).await.unwrap().outcome, Outcome::Succeeded);
+    let dumps = h.dumps();
+    assert_eq!(dumps.len(), 5, "{dumps:?}");
+    // The new backup and the four newest old ones survive.
+    assert!(dumps.contains(e.journal_state().active_backup.as_ref().unwrap()));
+    for i in 0..3 {
+        let old = format!("2020010{i}T");
+        assert!(
+            !dumps.iter().any(|d| d.to_str().unwrap().contains(&old)),
+            "{dumps:?}"
+        );
+    }
+}
+
+#[test]
+fn backup_space_check_needs_newest_plus_ten_percent() {
+    use aq_updater::engine::{InsufficientBackupSpace, backup_space_needed, check_backup_space};
+    let dir = std::path::Path::new("/var/lib/agent-q/backups");
+    assert_eq!(backup_space_needed(0), 0);
+    assert_eq!(backup_space_needed(1000), 1100);
+    assert_eq!(backup_space_needed(1001), 1102, "10% rounds up");
+    assert_eq!(backup_space_needed(u64::MAX), u64::MAX);
+    assert_eq!(check_backup_space(dir, 1100, 1000), Ok(()));
+    assert_eq!(check_backup_space(dir, 0, 0), Ok(()));
+    let err = check_backup_space(dir, 1099, 1000).unwrap_err();
+    assert_eq!(
+        err,
+        InsufficientBackupSpace {
+            dir: dir.to_path_buf(),
+            free: 1099,
+            newest: 1000,
+            need: 1100,
+        }
+    );
+    assert!(err.to_string().contains("plus 10%"), "{err}");
+}
+
+#[tokio::test]
+async fn backup_refused_when_free_space_below_newest_backup_plus_ten_percent() {
+    let h = H::new();
+    let a = manifest(A, 1, &[1]);
+    h.publish(&a);
+    let settings = EngineSettings {
+        min_free_bytes: 10,
+        ..h.settings()
+    };
+    h.fake.set_backup_size(1000);
+    let mut e = h.engine_with(settings);
+    assert_eq!(e.install(req(A)).await.unwrap().outcome, Outcome::Succeeded);
+    h.publish(&manifest(B, 1, &[1]));
+    h.fake.clear_log();
+    // Enough at validation; the pull then leaves 1099 bytes, below the
+    // 1000-byte newest backup plus 10%.
+    h.fake.set_free_seq(&[1_000_000, 1099]);
+    let r = e.install(req(B)).await.unwrap();
+    assert_eq!(r.outcome, Outcome::Refused, "{}", r.detail);
+    assert!(
+        r.detail.contains("1099 bytes free, 1100 needed"),
+        "{}",
+        r.detail
+    );
+    assert_eq!(h.fake.count("pull"), 1);
+    assert_eq!(h.fake.count("backup"), 0, "{:?}", h.fake.log());
+    assert_eq!(h.fake.count("enter"), 0, "nothing stopped");
+    assert_eq!(h.fake.running().as_deref(), Some(a.images.server.as_str()));
+    assert!(e.journal_state().current.is_none());
+    assert_eq!(h.dumps().len(), 1);
+
+    // Exactly the newest backup plus 10% is enough.
+    h.fake.set_free_seq(&[1_000_000, 1100]);
+    let r = e.install(req(B)).await.unwrap();
+    assert_eq!(r.outcome, Outcome::Succeeded, "{}", r.detail);
+}
+
+#[test]
+fn image_prune_selects_all_but_current_and_previous() {
+    use aq_updater::engine::{image_repository, images_to_prune};
+    let img = |d: char| {
+        format!(
+            "ghcr.io/electricjack/agent-q-server@sha256:{}",
+            d.to_string().repeat(64)
+        )
+    };
+    let (old, prev, cur) = (img('a'), img('b'), img('c'));
+    assert_eq!(
+        image_repository(&cur),
+        Some("ghcr.io/electricjack/agent-q-server")
+    );
+    let present = vec![old.clone(), prev.clone(), cur.clone(), old.clone()];
+    let keep = vec![cur.clone(), prev.clone()];
+    assert_eq!(images_to_prune(&present, &keep), vec![old]);
+    assert!(images_to_prune(&keep, &keep).is_empty());
+}
+
+#[tokio::test]
+async fn image_prune_after_update_keeps_current_and_previous_release() {
+    let (h, mut e, a) = with_a().await;
+    let stale = "ghcr.io/electricjack/agent-q-server@sha256:9999999999999999999999999999999999999999999999999999999999999999";
+    let postgres = "docker.io/library/postgres@sha256:8888888888888888888888888888888888888888888888888888888888888888";
+    h.fake.add_images(&[stale, postgres]);
+
+    let b = manifest(B, 1, &[1]);
+    h.publish(&b);
+    assert_eq!(e.install(req(B)).await.unwrap().outcome, Outcome::Succeeded);
+    let images = h.fake.images();
+    assert!(!images.iter().any(|i| i == stale), "{images:?}");
+    for kept in [&a.images.server, &b.images.server] {
+        assert!(images.contains(kept), "{kept}: {images:?}");
+    }
+    assert!(
+        images.iter().any(|i| i == postgres),
+        "other repositories untouched"
+    );
+
+    let c = manifest("1.2.0", 1, &[1]);
+    h.publish(&c);
+    assert_eq!(
+        e.install(req("1.2.0")).await.unwrap().outcome,
+        Outcome::Succeeded
+    );
+    let images = h.fake.images();
+    assert!(!images.contains(&a.images.server), "{images:?}");
+    assert!(images.contains(&b.images.server) && images.contains(&c.images.server));
+}
+
+#[tokio::test]
+async fn image_prune_failure_does_not_change_the_outcome() {
+    let (h, mut e, _a) = with_a().await;
+    h.publish(&manifest(B, 1, &[1]));
+    h.fake.fail("list_images", 0, "docker down");
+    let r = e.install(req(B)).await.unwrap();
+    assert_eq!(r.outcome, Outcome::Succeeded, "{}", r.detail);
+    assert_eq!(active_version(&e), Some(ver(B)));
+}

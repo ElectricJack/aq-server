@@ -1,0 +1,74 @@
+    Finished `test` profile [unoptimized] target(s) in 0.73s
+     Running tests/native_initial_grant.rs (target/debug/deps/native_initial_grant-92a380e18e39de88)
+
+running 54 tests
+test accept_quota_charges_incoming_jsonb_expansion_at_the_same_retained_byte_boundary ... ok
+test actual_accepted_plan_without_original_native_publication_cannot_issue_a_grant ... ok
+test prepare_uses_reserved_control_capacity ... ok
+test published::actual_git::accepted_v2::actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_lease ... ignored, qualification requires explicit pinned actual aq-git and Git executable paths
+test published::actual_git::actual_released_export_refuses_grant_without_erasing_preparation ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::real_git_publication_download_and_initial_grant_share_exact_export ... ignored, qualification requires explicit actual aq-git and Git executable paths
+test published::actual_git::worker_assembly::actual_worker_downloads_installs_hydrates_and_prepares_against_real_daemon ... ignored, requires explicit pinned native worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_durably_accepts_new_phase_and_replays_after_proposal_expiry ... ignored, requires explicit pinned phase-capable worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_phase_execution_launches_and_stops_actual_tmux_host ... ignored, requires pinned worker, aq-git/Git, host helper, synthetic ELF and actual tmux
+test published::actual_git::worker_assembly::actual_worker_prepares_phase_inputs_after_proposal_expiry ... ignored, requires explicit pinned phase-input worker smoke binary and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_reads_history_after_withheld_first_execution_reply ... ignored, requires pinned history-capable worker and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_receives_durable_phase_execution_from_actual_issuer ... ignored, requires explicit pinned phase execution worker and actual aq-git/Git
+test published::actual_git::worker_assembly::actual_worker_reports_real_host_lifecycle_and_persists_daemon_acknowledgments ... ignored, requires pinned actual worker/Git/tmux and qualified phase terminal owner
+test published::actual_git::worker_assembly::current_store_actual_worker_output_reaches_authorized_tail_after_physical_stop ... ignored, requires pinned output-capable worker, periodic ELF, Git and tmux
+test published::actual_git::worker_assembly::historical_state33_actual_worker_output_reaches_authorized_tail_after_physical_stop ... ignored, requires pinned output-capable worker, periodic ELF, Git and tmux
+test published::actual_git::worker_refresh_assembly::current_store_refresh_worker_output_reaches_real_watch_upload_ack_and_authorized_tail ... ignored, requires explicitly pinned worker0.4.0/FORMAT11, Git/tmux/static peer; no model/provider
+test published::actual_initial_grant_reconciliation_returns_history_without_live_clock_or_mutation ... ok
+test published::actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes ... ok
+test published::ambiguous_historical_grant_receipts_refuse_instead_of_choosing_a_replacement ... ok
+test published::changed_current_private_material_and_cancellation_never_issue_a_grant ... ok
+test published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original ... ok
+test published::credential_rotation_during_actual_private_git_wait_is_rechecked_without_sql_locks_held ... ok
+test published::exact_full_artifact_and_material_receipt_coverage_is_mandatory ... FAILED
+test published::final_fence_refuses_expiry_after_observed_shared_quota_lock_wait ... ok
+test published::graph_changes_during_preparation_refuse_without_retiming_original_inputs ... ok
+test published::initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time ... ok
+test published::material_receipts::existing_or_replayed_changed_installation_claims_are_refused ... ok
+test published::material_receipts::grant_failure_rolls_back_new_installation_receipt_with_authority ... ok
+test published::material_receipts::installation_receipt_is_atomic_exact_and_replay_never_reconstructs_a_missing_row ... ok
+test published::material_receipts::retained_installation_json_bytes_refuse_new_grant_under_shared_budget ... ok
+test published::mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_listener ... ok
+test published::presence::expired_permit_cannot_make_a_delayed_positive_fresh_on_receipt ... ok
+test published::presence::isolation::held_inventory_admission_does_not_consume_report_or_renewal_capacity ... ok
+test published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress ... ok
+test published::presence::isolation::independent_same_node_storage_heads_keep_other_present_after_one_missing ... ok
+test published::presence::isolation::occupied_presence_pg_connections_do_not_consume_renewal_pool ... ok
+test published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation ... ok
+test published::presence::newer_scoped_negative_survives_renew_race_and_expiry_never_falls_back_to_present ... ok
+test published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read ... ok
+test published::presence::present_fact_never_bypasses_current_private_backing_or_agent_revocation ... ok
+test published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed ... ok
+test published::presence::scoped_receipt_and_authority_forgery_refuse_without_retaining_a_head ... ok
+test published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact ... ok
+test published::receipt_failure_rolls_back_granted_hot_state_and_prepared_journal_then_exact_retry_succeeds ... ok
+test published::renewal::changed_private_material_and_revoked_agent_scope_cannot_extend_a_permit ... ok
+test published::renewal::exact_renewal_operation_cannot_mutate_journal_or_become_superseded_authority ... ok
+test published::renewal::expired_server_permit_cannot_be_resurrected_by_fresh_observations ... ok
+test published::renewal::missing_actual_installation_receipt_cannot_be_reconstructed_from_preparation ... ok
+test published::renewal::newer_unavailable_inventory_cannot_be_rewritten_by_original_installation ... ok
+test published::renewal::original_cold_inventory_actual_installation_can_renew_without_retiming_originals ... ok
+test published::renewal::races::changed_task_cas_and_content_refuse_without_reusing_admission_observation ... ok
+test published::renewal::races::delayed_actual_started_keeps_physical_checkpoint_separate_from_latest_renew_counter ... ok
+test published::renewal::races::observed_final_quota_wait_crossing_old_expiry_rolls_back_extension_and_receipt ... ok
+test published::renewal::races::receipt_insert_failure_rolls_back_hot_extension_and_exact_retry_can_succeed ... ok
+
+failures:
+
+---- published::exact_full_artifact_and_material_receipt_coverage_is_mandatory stdout ----
+
+thread 'published::exact_full_artifact_and_material_receipt_coverage_is_mandatory' (1806192) panicked at crates/aq-server/tests/native_initial_grant/published.rs:289:21:
+called `Result::unwrap()` on an `Err` value: Conflict("selection expired during admission locks")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    published::exact_full_artifact_and_material_receipt_coverage_is_mandatory
+
+test result: FAILED. 40 passed; 1 failed; 13 ignored; 0 measured; 0 filtered out; finished in 139.02s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

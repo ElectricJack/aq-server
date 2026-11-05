@@ -375,6 +375,46 @@ fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
 }
 
 #[test]
+fn interactive_clock_rejects_invalid_times_and_monotonic_overflow() {
+    use aq_admission::transport::DeliveryClock;
+    for (server, expiry) in [(0, 1), (1000, 999), (1000, 1000), (1000, 3_601_001)] {
+        assert!(DeliveryClock::new_interactive_session(server, expiry).is_err());
+    }
+    for clock in [
+        DeliveryClock {
+            server_time_ms: 1000,
+            expires_at_ms: 2000,
+            valid_for_ms: 999,
+        },
+        DeliveryClock {
+            server_time_ms: u64::MAX,
+            expires_at_ms: 1,
+            valid_for_ms: 1,
+        },
+    ] {
+        assert!(clock.validate_interactive_session().is_err());
+        assert!(clock.client_interactive_deadline_ns(1, 2).is_err());
+    }
+    let clock = DeliveryClock::new_interactive_session(1000, 3_601_000).unwrap();
+    assert!(clock.client_interactive_deadline_ns(2, 1).is_err());
+    assert!(
+        clock
+            .client_interactive_deadline_ns(u64::MAX - 1, u64::MAX)
+            .is_err()
+    );
+    let shortest = DeliveryClock::new_interactive_session(1000, 1001).unwrap();
+    assert_eq!(
+        shortest.client_interactive_deadline_ns(1, 2).unwrap(),
+        1_000_001
+    );
+    assert!(
+        shortest
+            .client_interactive_deadline_ns(1, 1_000_001)
+            .is_err()
+    );
+}
+
+#[test]
 fn long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract() {
     use aq_admission::transport::DeliveryClock;
     assert!(DeliveryClock::new(1000, 3_601_000).is_err());

@@ -1,46 +1,162 @@
+# Production stack. See vault.production.example and docs/operations.md.
+# Per-service CPU/memory/PID caps (E1c) keep sandbox and supervisor load from
+# starving this stack; NVMe 8 values are in docs/architecture/0005 §9.1.
+# compose.workers.yaml adds the supervisor host, docker-local and Boat workers.
 name: agent-q
+x-runtime: &runtime
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '3'}
 services:
   postgres:
-    image: postgres:17-bookworm
+    <<: *runtime
+    image: &postgres-image postgres:17-bookworm@sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5
+    user: postgres
     environment:
+      # Bootstrap administrator, used only by database provisioning.
       POSTGRES_DB: agent_q
       POSTGRES_USER: agent_q
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets:
-      - postgres_password
-    volumes:
-      - aq_postgres:/var/lib/postgresql/data
+    secrets: [postgres_password]
+    volumes: [aq_postgres:/var/lib/postgresql/data]
+    tmpfs: [/tmp, '/var/run/postgresql:uid=999,gid=999,mode=3775']
     networks: [database]
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U agent_q -d agent_q']
+      # Ignore the entrypoint's temporary Unix-socket initialization server.
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U agent_q -d agent_q']
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
-    logging:
-      driver: json-file
-      options: {max-size: 10m, max-file: '3'}
-  server:
-    image: ${AQ_SERVER_IMAGE:?set AQ_SERVER_IMAGE to the server image reference}
+    cpus: 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+  graph-db-init:
+    <<: *runtime
+    image: *postgres-image
+    networks: [database]
+    secrets: [postgres_password, graph_database_password]
+    volumes: [./scripts/prod-db-init.sh:/prod-db-init.sh:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, /prod-db-init.sh]
+    command: [aq_graph, graph_database_password]
+    restart: on-failure
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+  server-db-init:
+    <<: *runtime
+    image: *postgres-image
+    networks: [database]
+    secrets: [postgres_password, server_database_password]
+    volumes: [./scripts/prod-db-init.sh:/prod-db-init.sh:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, /prod-db-init.sh]
+    command: [aq_server, server_database_password]
+    restart: on-failure
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+  prod-state-init:
+    <<: *runtime
+    image: &server-image ${AQ_SERVER_IMAGE:?set AQ_SERVER_IMAGE to a digest-pinned server reference}
+    user: '0:0'
     environment:
-      # Refuses to start with a development vault or dev authentication.
-      AQ_DEPLOYMENT: production
-      AQ_VAULT_DIR: /vault
-    # The entrypoint exports PGPASSWORD from the secret file (read by the
-    # PostgreSQL client library when the URL has no password), so the password
-    # never appears in Compose config, the URL or needs URL-encoding.
+      AQ_SERVER_IMAGE: ${AQ_SERVER_IMAGE:?set AQ_SERVER_IMAGE to a digest-pinned server reference}
+    entrypoint: [/bin/sh, /prod-init-volumes.sh]
+    volumes:
+      - ./scripts/prod-init-volumes.sh:/prod-init-volumes.sh:ro
+      - aq_source:/var/lib/aq
+      - aq_git_run:/run/aq-git
+      - aq_runtime:/run/aq
+    secrets: [graph_token]
+    network_mode: none
+    restart: 'no'
+    # Only this one-shot initializer owns private project volumes.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+  aq-graph:
+    <<: *runtime
+    # E2 v0.1.1, source 2d5b02c610b53baec03658171e1d6e6ebece4bd2.
+    image: ghcr.io/electricjack/aq-graph@sha256:9978ccdd8aa6ccd00d80521a1bb791fbf73f1eaae1ddd9b0ae8ee869be071707
+    user: '10001:10001'
+    environment:
+      AQ_GRAPH_BIND: 0.0.0.0:8741
+      AQ_GRAPH_BOOTSTRAP_WORKSPACE: ${AQ_GRAPH_WORKSPACE:-e0000000-0000-4000-8000-000000000001}
+      AQ_GRAPH_BOOTSTRAP_ACTOR: ${AQ_GRAPH_ACTOR:-aq-server}
+      AQ_GRAPH_BOOTSTRAP_TOKEN_FILE: /run/aq/graph_token
     entrypoint: [/bin/sh, -ec]
     command:
-      - 'export PGPASSWORD="$$(cat /run/secrets/postgres_password)" DATABASE_URL="postgres://agent_q@postgres:5432/agent_q"; exec aq-server serve --vault /vault'
+      - 'export PGPASSWORD="$$(cat /run/secrets/graph_database_password)" DATABASE_URL="postgres://aq_graph@postgres:5432/aq_graph"; exec aq-graph serve'
+    secrets: [graph_database_password]
+    volumes: [aq_runtime:/run/aq:ro]
+    networks: [database, edge]
+    depends_on:
+      graph-db-init: {condition: service_completed_successfully}
+      prod-state-init: {condition: service_completed_successfully}
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, aq-graph, --endpoint, 'http://127.0.0.1:8741', health]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 256
+  aq-git:
+    <<: *runtime
+    # Same image as server: A3b's verified v0.2.0 binary and pinned Git runtime.
+    image: *server-image
+    user: '10001:10001'
+    entrypoint: [/bin/sh, /dev-git-supervisor.sh]
+    volumes:
+      - ./scripts/dev-git-supervisor.sh:/dev-git-supervisor.sh:ro
+      - aq_source:/var/lib/aq
+      - aq_git_run:/run/aq-git
+    networks: [edge]
+    depends_on:
+      prod-state-init: {condition: service_completed_successfully}
+    init: true
+    restart: on-failure
+    healthcheck:
+      test: [CMD, aq-git, --socket, /run/aq-git/central.sock, --json, capabilities]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 512
+  server:
+    <<: *runtime
+    # The format-1 host updater requires this service name and image variable.
+    image: *server-image
+    user: '10001:10001'
+    environment:
+      AQ_DEPLOYMENT: production
+      AQ_VAULT_DIR: /vault
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/server_database_password)" DATABASE_URL="postgres://aq_server@postgres:5432/aq_server"; exec aq-server serve --vault /vault'
     volumes:
       - type: bind
         source: ${AQ_VAULT_DIR:?set AQ_VAULT_DIR to the vault directory}
         target: /vault
         read_only: true
-      # The spool shared with the host updater (the vault's
-      # [updates] spool_dir = "/updater"): the server drops update requests
-      # into requests/ and reads status.json and the maintenance marker
-      # from status/. It never gets the Docker socket.
+      # Shared only with the host updater; server never gets the Docker socket.
       - type: bind
         source: ${AQ_UPDATER_SPOOL:?set AQ_UPDATER_SPOOL to the updater spool directory}/requests
         target: /updater/requests
@@ -48,44 +164,60 @@ services:
         source: ${AQ_UPDATER_SPOOL:?set AQ_UPDATER_SPOOL to the updater spool directory}/status
         target: /updater/status
         read_only: true
-    secrets:
-      - postgres_password
+      - aq_source:/var/lib/aq
+      - aq_git_run:/run/aq-git:ro
+      - aq_runtime:/run/aq:ro
+    secrets: [server_database_password]
     networks: [database, edge]
     depends_on:
       postgres: {condition: service_healthy}
+      server-db-init: {condition: service_completed_successfully}
+      prod-state-init: {condition: service_completed_successfully}
+      aq-graph: {condition: service_healthy}
+      aq-git: {condition: service_healthy}
     init: true
     restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    logging:
-      driver: json-file
-      options: {max-size: 10m, max-file: '3'}
+    healthcheck:
+      test: [CMD, aq-server, dependency-readiness, --vault, /vault]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 512
   cloudflared:
-    image: cloudflare/cloudflared:2025.10.0
+    <<: *runtime
+    image: cloudflare/cloudflared:2025.10.0@sha256:396cd2e6f021275ad09969a1b4f1a7e62ca5349fde62781ce082bb2c18105c70
     command: [tunnel, --no-autoupdate, run]
     environment:
       TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
-    secrets:
-      - tunnel_token
+    secrets: [tunnel_token]
     networks: [edge]
     depends_on:
       server: {condition: service_healthy}
     restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    logging:
-      driver: json-file
-      options: {max-size: 10m, max-file: '3'}
+    cpus: 0.125
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 128
 networks:
   edge: {}
   database:
     internal: true
 volumes:
   aq_postgres:
+  aq_source:
+  aq_git_run:
+  aq_runtime:
 secrets:
   postgres_password:
     file: ${AQ_SECRETS_DIR:?set AQ_SECRETS_DIR to the secrets directory}/postgres_password
+  server_database_password:
+    file: ${AQ_SECRETS_DIR:?set AQ_SECRETS_DIR to the secrets directory}/server_database_password
+  graph_database_password:
+    file: ${AQ_SECRETS_DIR:?set AQ_SECRETS_DIR to the secrets directory}/graph_database_password
+  graph_token:
+    file: ${AQ_SECRETS_DIR:?set AQ_SECRETS_DIR to the secrets directory}/graph_token
   tunnel_token:
     file: ${AQ_SECRETS_DIR:?set AQ_SECRETS_DIR to the secrets directory}/tunnel_token

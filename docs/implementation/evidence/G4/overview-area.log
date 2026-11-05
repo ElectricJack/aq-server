@@ -1,0 +1,27 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 50s
+     Running tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-7b9453c1da41bc70)
+
+running 4 tests
+test overview_ready_owner_preserves_samples_failures_and_binding_fence ... FAILED
+test overview_empty_and_bounded_project_sources_are_truthful ... ok
+test overview_uncertain_operations_are_principal_and_scope_bound ... ok
+test overview_workers_use_configured_threshold_and_project_association ... ok
+
+failures:
+
+---- overview_ready_owner_preserves_samples_failures_and_binding_fence stdout ----
+
+thread 'overview_ready_owner_preserves_samples_failures_and_binding_fence' (1587309) panicked at crates/aq-server/tests/dashboard_aggregation.rs:227:9:
+assertion `left == right` failed: {"api_version":"dashboard-read-1","coverage":{"reason":"See per-source coverage; unavailable owners do not contribute zero","state":"partial"},"data":{"attention":[{"action":null,"id":"worker:1a90f716-afbb-4ec7-9d96-931cedacceaa:00000000-0000-0000-0000-000000000001","impact":"Review the owning record for current context","kind":"worker_offline","project":{"id":"00000000-0000-0000-0000-000000000001","label":"Synthetic authority fixture"},"reason":"No heartbeat has been observed","since":null,"subject":{"id":"1a90f716-afbb-4ec7-9d96-931cedacceaa","revision":"40329","type":"worker"},"title":"Worker offline"}],"counts":{"needs_you":{"accuracy":"unknown","value":null},"ready":{"accuracy":"unknown","value":null},"recovering":{"accuracy":"exact","value":0},"running":{"accuracy":"exact","value":0}},"in_motion":[{"last_progress_at":null,"next_constraint":null,"project":{"id":"00000000-0000-0000-0000-000000000001","label":"Synthetic authority fixture"},"running":{"accuracy":"exact","value":0}}],"recent_outcomes":[],"sources":[{"coverage":{"reason":"question_owner_not_mounted","state":"unknown"},"observation":null,"project":null,"source":"questions","total":{"accuracy":"unknown","value":null}},{"coverage":{"reason":"blocked_task_owner_not_mounted","state":"unknown"},"observation":null,"project":null,"source":"blocked_tasks","total":{"accuracy":"unknown","value":null}},{"coverage":{"state":"complete"},"observation":{"coverage":"complete","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"attempts"},"project":null,"source":"attempts","total":{"accuracy":"exact","value":1}},{"coverage":{"reason":"association_from_retained_attempts","state":"partial"},"observation":{"coverage":"partial","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"workers"},"project":null,"source":"workers","total":{"accuracy":"exact","value":1}},{"coverage":{"reason":"owner_unavailable","state":"unknown"},"observation":null,"project":null,"source":"graph_ready","total":{"accuracy":"unknown","value":null}},{"coverage":{"reason":"owner_unavailable","state":"unknown"},"observation":null,"project":null,"source":"reviews","total":{"accuracy":"unknown","value":null}},{"coverage":{"reason":"recorded_native_results_only","state":"partial"},"observation":{"coverage":"partial","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"results"},"project":{"id":"00000000-0000-0000-0000-000000000001","label":"Synthetic authority fixture"},"source":"results","total":{"accuracy":"exact","value":0}},{"coverage":{"reason":"review_owner_not_mounted","state":"unknown"},"observation":null,"project":null,"source":"settlement","total":{"accuracy":"unknown","value":null}},{"coverage":{"reason":"dashboard_journal_only","state":"partial"},"observation":{"coverage":"partial","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"operations"},"project":null,"source":"operations","total":{"accuracy":"exact","value":0}}]},"observation":{"coverage":"partial","fresh_until":"1970-01-01T00:16:45.000Z","observed_at":"1970-01-01T00:16:40.000Z","quality":"reported","source":"aq_dashboard_read"},"pending_operations":[],"request_id":"2394797b-8c6f-41e3-85bb-01ccd30bbfd1","scope":{"kind":"all_authorized"},"server_time":"1970-01-01T00:16:40.000Z"}
+  left: Null
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    overview_ready_owner_preserves_samples_failures_and_binding_fence
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.93s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_aggregation`

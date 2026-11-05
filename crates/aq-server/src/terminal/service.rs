@@ -266,6 +266,7 @@ pub async fn register(
     node: &super::peer::AuthenticatedNode,
     r: &draft::Register,
 ) -> Result<TerminalInfo> {
+    crate::delegated_permits::runtime::require_session(node, &r.terminal.session)?;
     r.validate()
         .map_err(|_| AppError::BadRequest("invalid terminal registration/capability".into()))?;
     let draft::Peer::Remote {

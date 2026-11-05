@@ -1,7 +1,8 @@
 //! Private-file observation for a prospective preparation lease. The caller
 //! must fence current registry/assignment/configuration after this external I/O.
-use super::{MaterialError, read_configured};
+use super::{MaterialError, source_or_configured};
 use crate::intelligence::config::LoadedRegistry;
+use crate::profiled_execution::login_refresh::HeadSource;
 use aq_admission::{Digest, Label, LaunchBinding, MaterialLease, SessionIdentity};
 use aq_selection::{ExecutionTarget, ResolvedSelection};
 use uuid::Uuid;
@@ -13,6 +14,31 @@ pub fn issue_for_selection(
     lease_id: Uuid,
     issued_at_ms: u64,
     expires_at_ms: u64,
+    backend_kind: Option<aq_selection::BackendKind>,
+) -> Result<MaterialLease, MaterialError> {
+    issue_for_selection_from(
+        registry,
+        selection,
+        binding,
+        lease_id,
+        issued_at_ms,
+        expires_at_ms,
+        backend_kind,
+        None,
+    )
+}
+/// Issues from the newest subscription-login lineage revision when `head` is
+/// given (looked up by the caller before this blocking read).
+#[allow(clippy::too_many_arguments)]
+pub fn issue_for_selection_from(
+    registry: &LoadedRegistry,
+    selection: &ResolvedSelection,
+    binding: &LaunchBinding,
+    lease_id: Uuid,
+    issued_at_ms: u64,
+    expires_at_ms: u64,
+    backend_kind: Option<aq_selection::BackendKind>,
+    head: Option<&HeadSource>,
 ) -> Result<MaterialLease, MaterialError> {
     let ExecutionTarget::Worker { node_id, boot_id } = selection.target else {
         return Err(MaterialError::Scope);
@@ -40,13 +66,15 @@ pub fn issue_for_selection(
         || credential.material_owner.is_none()
         || configured.delivery_mode.is_none()
         || !configured.allowed_node_ids.contains(&node_id)
+        || aq_selection::credential_backend_policy(&configured.allowed_backends, backend_kind)
+            .is_err()
         || credential.provider != selection.choice.provider
         || credential.account_reference != selection.choice.account_reference
         || credential.endpoint_reference != selection.choice.endpoint_reference
     {
         return Err(MaterialError::Scope);
     }
-    let material = read_configured(registry, index)?;
+    let material = source_or_configured(registry, index, head)?;
     let lease = MaterialLease {
         schema_version: 1,
         lease_id,

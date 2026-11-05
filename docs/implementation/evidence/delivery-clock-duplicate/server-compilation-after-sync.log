@@ -1,0 +1,4 @@
+$ cargo test --locked -p aq-server --test source_retention --test project_bindings --no-run
+    Finished `test` profile [unoptimized] target(s) in 2.15s
+  Executable tests/project_bindings.rs (target/debug/deps/project_bindings-2ba66a671f8374fa)
+  Executable tests/source_retention.rs (target/debug/deps/source_retention-f6bb7162686e6303)

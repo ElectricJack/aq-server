@@ -16,6 +16,8 @@ pub const MAX_VIEWERS: usize = 4;
 pub enum Error {
     #[error("invalid relay contract")]
     Invalid,
+    #[error("input-deadline rule: deadline_ms must be 1 to 2000 ms after issued_at_ms")]
+    InputDeadline,
     #[error("scope not authorized")]
     Forbidden,
     #[error("stale session/controller/peer/revision")]
@@ -587,6 +589,12 @@ impl Ledger {
         }
         if r.expires_at_ms > a.execution_expires_at_ms || r.expires_at_ms > a.valid_until_ms {
             return Err(Error::Expired);
+        }
+        if r.expires_at_ms
+            .checked_sub(now)
+            .is_none_or(|ttl| !(1..=2000).contains(&ttl))
+        {
+            return Err(Error::InputDeadline);
         }
         let command = InputCommand {
             operation_id: r.operation_id,

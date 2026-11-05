@@ -1,0 +1,816 @@
+{
+  "mode": "main",
+  "checkout": "/tmp/aq-a3b-main-isolation-20261103",
+  "source_commit": "ea28da1ca62184e9f5f945b73b62320edbe903e0",
+  "CARGO_BUILD_JOBS": 2,
+  "RUST_TEST_THREADS": 1,
+  "runs": [
+    {
+      "target": "native_accepted_preparation",
+      "test": "original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_accepted_preparation",
+        "original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-01-native_accepted_preparation.log",
+      "started_utc": "2026-11-03T03:30:42.081021+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:35:53.765885+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 2.99s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-02-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:35:53.829420+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:26.145237+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.86s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-03-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:36:26.146225+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:29.098355+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.58s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-04-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:36:29.109199+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:32.071885+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.61s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-05-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:36:32.073099+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:35.097392+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.66s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-06-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:36:35.098014+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:39.517106+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.24s"
+      ]
+    },
+    {
+      "target": "native_initial_grant",
+      "test": "published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "native_initial_grant",
+        "published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-07-native_initial_grant.log",
+      "started_utc": "2026-11-03T03:36:39.518213+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:36:42.399298+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.55s"
+      ]
+    },
+    {
+      "target": "phase_execution",
+      "test": "refusals::no_longer_in_bounded_ready_page_cannot_issue_execution",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_execution",
+        "refusals::no_longer_in_bounded_ready_page_cannot_issue_execution",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-08-phase_execution.log",
+      "started_utc": "2026-11-03T03:36:42.400098+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:37:00.972442+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 4.42s"
+      ]
+    },
+    {
+      "target": "phase_execution_transport",
+      "test": "genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_execution_transport",
+        "genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-09-phase_execution_transport.log",
+      "started_utc": "2026-11-03T03:37:00.974228+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:37:18.101805+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.19s"
+      ]
+    },
+    {
+      "target": "phase_results",
+      "test": "frozen::head_failure_rolls_back_report_and_exact_retry_records_once",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_results",
+        "frozen::head_failure_rolls_back_report_and_exact_retry_records_once",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-10-phase_results.log",
+      "started_utc": "2026-11-03T03:37:18.102588+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:37:39.810367+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 5.26s"
+      ]
+    },
+    {
+      "target": "phase_results",
+      "test": "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_results",
+        "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-11-phase_results.log",
+      "started_utc": "2026-11-03T03:37:39.812030+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:37:49.176888+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 7.02s"
+      ]
+    },
+    {
+      "target": "phase_results",
+      "test": "refresh::held_node_lock_rechecks_revoked_credential_before_any_report_commit",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_results",
+        "refresh::held_node_lock_rechecks_revoked_credential_before_any_report_commit",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-12-phase_results.log",
+      "started_utc": "2026-11-03T03:37:49.178432+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:37:54.202527+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 4.59s"
+      ]
+    },
+    {
+      "target": "phase_terminal_closure",
+      "test": "failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-13-phase_terminal_closure.log",
+      "started_utc": "2026-11-03T03:37:54.203781+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:38:06.915624+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.22s"
+      ]
+    },
+    {
+      "target": "phase_terminal_closure",
+      "test": "pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-14-phase_terminal_closure.log",
+      "started_utc": "2026-11-03T03:38:06.916485+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:38:08.296463+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.06s"
+      ]
+    },
+    {
+      "target": "phase_terminal_closure",
+      "test": "suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-15-phase_terminal_closure.log",
+      "started_utc": "2026-11-03T03:38:08.298017+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:38:09.754721+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.12s"
+      ]
+    },
+    {
+      "target": "phase_terminal_closure",
+      "test": "wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_closure",
+        "wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-16-phase_terminal_closure.log",
+      "started_utc": "2026-11-03T03:38:09.769208+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:38:11.367592+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.19s"
+      ]
+    },
+    {
+      "target": "phase_terminal_stopped",
+      "test": "paired_stop_does_not_qualify_old_sql_result_or_release_owners",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "phase_terminal_stopped",
+        "paired_stop_does_not_qualify_old_sql_result_or_release_owners",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-17-phase_terminal_stopped.log",
+      "started_utc": "2026-11-03T03:38:11.386722+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:38:32.776362+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 3.97s"
+      ]
+    },
+    {
+      "target": "profiled_hot",
+      "test": "actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "profiled_hot",
+        "actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-18-profiled_hot.log",
+      "started_utc": "2026-11-03T03:38:32.777905+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:38:43.519817+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.16s"
+      ]
+    },
+    {
+      "target": "profiled_results",
+      "test": "results_feedback::feedback_task_links_result_revision",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "profiled_results",
+        "results_feedback::feedback_task_links_result_revision",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-19-profiled_results.log",
+      "started_utc": "2026-11-03T03:38:43.525535+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:39:11.130535+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 71 filtered out; finished in 4.71s"
+      ]
+    },
+    {
+      "target": "schema30_preparation",
+      "test": "current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema30_preparation",
+        "current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-20-schema30_preparation.log",
+      "started_utc": "2026-11-03T03:39:11.131295+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:22.930121+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.74s"
+      ]
+    },
+    {
+      "target": "schema32_phase_execution",
+      "test": "current32_missing_execution_history_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema32_phase_execution",
+        "current32_missing_execution_history_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-21-schema32_phase_execution.log",
+      "started_utc": "2026-11-03T03:39:22.932590+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:36.613982+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.96s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-22-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:39:36.616575+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:55.636651+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.95s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "actual_grant_cannot_commit_without_reserved_terminal_capacity",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "actual_grant_cannot_commit_without_reserved_terminal_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-23-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:39:55.637223+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:56.979738+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.98s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-24-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:39:56.980907+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:58.240946+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.98s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "collision_rolls_back33_without_changing_actual32_history",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "collision_rolls_back33_without_changing_actual32_history",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-25-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:39:58.241917+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:39:59.479095+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.98s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-26-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:39:59.480509+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:00.841757+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.13s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "ordered::actual32_open_owner_history_survives_registered33_upgrade",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "ordered::actual32_open_owner_history_survives_registered33_upgrade",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-27-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:40:00.843275+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:02.673499+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.25s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "relational_only_over_budget_backfill_rolls_back_entire_migration",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "relational_only_over_budget_backfill_rolls_back_entire_migration",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-28-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:40:02.675268+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:04.251020+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.21s"
+      ]
+    },
+    {
+      "target": "schema33_phase_terminal",
+      "test": "ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema33_phase_terminal",
+        "ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-29-schema33_phase_terminal.log",
+      "started_utc": "2026-11-03T03:40:04.252568+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:07.526456+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 2.90s"
+      ]
+    },
+    {
+      "target": "schema43_cancellation",
+      "test": "cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema43_cancellation",
+        "cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-30-schema43_cancellation.log",
+      "started_utc": "2026-11-03T03:40:07.527540+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:13.418081+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.19s"
+      ]
+    },
+    {
+      "target": "schema43_cancellation",
+      "test": "cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "schema43_cancellation",
+        "cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-31-schema43_cancellation.log",
+      "started_utc": "2026-11-03T03:40:13.418864+00:00",
+      "exit_code": 101,
+      "finished_utc": "2026-11-03T03:40:14.690074+00:00",
+      "test_results": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.94s"
+      ]
+    },
+    {
+      "target": "terminal_tail",
+      "test": "maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "aq-server",
+        "--test",
+        "terminal_tail",
+        "maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "log": "isolation-main-32-terminal_tail.log",
+      "started_utc": "2026-11-03T03:40:14.691505+00:00",
+      "exit_code": 0,
+      "finished_utc": "2026-11-03T03:40:31.582967+00:00",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 4.53s"
+      ]
+    }
+  ],
+  "graph_binary": {
+    "image": "aq-graph:graph01-225329cd6acf-pinned",
+    "image_id": "sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be",
+    "source_revision": "225329cd6acf5a775fd2a0b016dd1c45fb16c79b",
+    "binary": "/tmp/aq-a3b-qualification/aq-graph",
+    "sha256": "da79578f79181b8f9c4e2ecb393a04d441a6eb5fcd952c976bef436199c93f21"
+  }
+}

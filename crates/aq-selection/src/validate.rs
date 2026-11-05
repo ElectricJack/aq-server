@@ -28,6 +28,26 @@ fn lineage(value: &TaskLineage) -> Result<()> {
 fn bounds<T>(value: &[T], max: usize) -> Result<()> {
     ensure(value.len() <= max, "snapshot array bound")
 }
+fn placement(p: &Placement) -> Result<()> {
+    bounds(&p.capabilities, 16)?;
+    bounds(&p.required_capabilities, 16)?;
+    bounds(&p.templates, 64)?;
+    bounds(&p.environment_templates, 64)?;
+    for value in p.capabilities.iter().chain(&p.required_capabilities) {
+        text(value)?;
+    }
+    for template in &p.templates {
+        bounds(&template.harnesses, 32)?;
+        for h in &template.harnesses {
+            text(&h.harness)?;
+            text(&h.version)?;
+        }
+    }
+    for t in &p.environment_templates {
+        text(&t.environment)?;
+    }
+    Ok(())
+}
 pub(crate) fn fresh(observed: u64, expires: u64, now: u64) -> bool {
     observed > 0 && observed <= now && now < expires
 }
@@ -103,6 +123,9 @@ pub(crate) fn validate(
         catalog.digest() == input.project.catalog_digest.as_str(),
         "catalog snapshot mismatch",
     )?;
+    if let Some(p) = &input.placement {
+        placement(p)?;
+    }
     for value in [
         &input.project.agent_profile,
         &input.project.intelligence_profile,
@@ -285,6 +308,10 @@ pub(crate) fn validate_installation(
 ) -> Result<()> {
     let mut credentials = BTreeSet::new();
     for credential in credential_rows {
+        ensure(
+            valid_allowed_backends(&credential.allowed_backends),
+            "credential backend allowlist",
+        )?;
         text(&credential.provider)?;
         text(&credential.account_reference)?;
         text(&credential.endpoint_reference)?;

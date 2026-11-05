@@ -1,0 +1,19 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 1m 54s
+     Running tests/delegated_permit_runtime.rs (target/debug/deps/delegated_permit_runtime-adfd6dc75a2a75d2)
+
+running 3 tests
+test delegated_runner_scope_is_rechecked_after_authentication ... ok
+test reconstructed_auth_fences_revocation_and_stale_boot ... ok
+test accept_issues_and_grant_atomically_upgrades_same_permit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.34s
+
+     Running tests/permit_fixture_conformance.rs (target/debug/deps/permit_fixture_conformance-03c957459fd122a5)
+
+running 3 tests
+test permit_fixture_conformance_frozen_transport ... ok
+test permit_fixture_conformance ... ok
+test permit_fixture_conformance_source_pin ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s

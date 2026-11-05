@@ -32,12 +32,17 @@ fn credential() -> AuthorizedCredential {
         enabled: true,
         provisionable: false,
         material_owner: None,
+        allowed_backends: aq_selection::default_allowed_backends(),
     }
 }
 fn registry(path: Option<std::path::PathBuf>) -> IntelligenceConfig {
     IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
         revision: 1,
         credentials: vec![CredentialConfig {
+            kind: Default::default(),
+            allowed_backends: aq_selection::default_allowed_backends(),
             credential: credential(),
             allowed_node_ids: vec![Uuid::from_u128(10)],
             secret_file: path,
@@ -128,6 +133,13 @@ async fn call(
 fn observation() -> Value {
     let c = credential();
     json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"sequence":1,"scope":{"credential_revision":1,"provider":c.provider,"credential_profile":c.profile,"account_reference":c.account_reference,"endpoint_reference":c.endpoint_reference,"model":"model-a","node_id":null},"state":"quota_unavailable","ttl_ms":1000,"cooldown_ms":1000})
+}
+
+#[tokio::test]
+async fn absent_registry_inspection_is_a_conflict() {
+    let (_db, _state, app) = setup(registry(None)).await;
+    let (status, body) = call(&app, "/api/intelligence/registry", None, true, false).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }
 #[test]
 fn credential_loading_is_private_bounded_regular_and_never_claims_missing_keys() {
@@ -546,4 +558,110 @@ fn server_material_owner_is_derived_only_for_explicit_safe_configured_delivery()
     configured.credentials[0].credential.material_owner = None;
     configured.credentials[0].secret_file = None;
     assert!(configured.load().is_err());
+}
+
+#[test]
+fn credential_backend_configuration_is_closed_bounded_and_defaults_unrestricted() {
+    use aq_selection::{BackendKind, CredentialKind, default_allowed_backends};
+    let value = json!({
+        "revision": 1,
+        "credentials": [{"credential": credential(), "allowed_node_ids": []}]
+    });
+    let config: IntelligenceConfig = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(config.credentials[0].kind, CredentialKind::ApiKey);
+    assert_eq!(
+        config.credentials[0].allowed_backends,
+        default_allowed_backends()
+    );
+    assert!(config.validate().is_ok());
+    for kind in ["api-key", "subscription-login"] {
+        let mut v = value.clone();
+        v["credentials"][0]["kind"] = json!(kind);
+        v["credentials"][0]["allowed_backends"] = json!(["boat"]);
+        let config: IntelligenceConfig = serde_json::from_value(v).unwrap();
+        let loaded = config.load().unwrap();
+        assert_eq!(
+            loaded.credentials[0].allowed_backends,
+            vec![BackendKind::Boat]
+        );
+    }
+    for (field, invalid) in [
+        ("kind", json!("unknown")),
+        ("kind", json!("x".repeat(513))),
+        ("allowed_backends", json!(["unknown"])),
+        ("allowed_backends", json!(["x".repeat(513)])),
+    ] {
+        let mut v = value.clone();
+        v["credentials"][0][field] = invalid;
+        assert!(serde_json::from_value::<IntelligenceConfig>(v).is_err());
+    }
+    for backends in [vec![BackendKind::Boat; 2], vec![BackendKind::Boat; 4]] {
+        let mut config = config.clone();
+        config.credentials[0].allowed_backends = backends;
+        assert!(config.validate().is_err());
+    }
+    let mut forged = config.clone();
+    forged.credentials[0].credential.allowed_backends = vec![BackendKind::Boat];
+    assert!(forged.validate().is_err());
+    let mut config = config;
+    config.credentials[0].allowed_backends.clear();
+    assert!(config.validate().is_ok());
+    assert!(
+        config.load().unwrap().credentials[0]
+            .allowed_backends
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn credential_policy_changes_require_a_new_registry_revision() {
+    use aq_selection::{BackendKind, CredentialKind};
+    let (_db, state, app) = setup(registry(None)).await;
+    assert_eq!(
+        call(
+            &app,
+            "/api/intelligence/register",
+            Some(json!({})),
+            true,
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let mut updated = registry(None);
+    for change in 0..2 {
+        if change == 0 {
+            updated.credentials[0].kind = CredentialKind::SubscriptionLogin;
+        } else {
+            updated.credentials[0].allowed_backends = vec![BackendKind::Boat];
+        }
+        for advance in [false, true] {
+            if advance {
+                updated.revision += 1;
+            }
+            let mut cfg = (*state.config).clone();
+            cfg.intelligence = Some(Arc::new(updated.load().unwrap()));
+            let app = aq_server::build_admin_router(AppState {
+                config: Arc::new(cfg),
+                ..state.clone()
+            });
+            assert_eq!(
+                call(
+                    &app,
+                    "/api/intelligence/register",
+                    Some(json!({})),
+                    true,
+                    true
+                )
+                .await
+                .0,
+                if advance {
+                    StatusCode::OK
+                } else {
+                    StatusCode::CONFLICT
+                }
+            );
+        }
+    }
 }

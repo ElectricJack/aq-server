@@ -1,0 +1,233 @@
+{
+  "api_version": "dashboard-read-1",
+  "request_id": "36f4185f-653c-484d-8ada-fb37c0009d06",
+  "server_time": "2026-11-03T05:21:49.723Z",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "data": {
+    "principal": {
+      "id": "91cf17b7-cb15-4078-9651-c01634bf0da5",
+      "display_name": "owner@localhost",
+      "authorization_revision": "86357197185818749103694121437287538373"
+    },
+    "product": {
+      "version": "0.1.0",
+      "dashboard_digest": null
+    },
+    "contracts": [
+      {
+        "name": "dashboard-read",
+        "version": "dashboard-read-1",
+        "digest": "sha256:9d7cac3073706afa942033b8f7975588285f1b47fb92db47b764c40348f07801"
+      },
+      {
+        "name": "dashboard-actions",
+        "version": "dashboard-actions-1",
+        "digest": "sha256:97fdea9aa4aeae795415d53bb3a4081684416bafd6f1b44e598a8e70a51df9ce"
+      }
+    ],
+    "capabilities": [
+      {
+        "name": "dashboard.overview",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "sessions.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "session.usage.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "session.events.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "projects.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "status.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "workers.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "notifications.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "human.graph.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "human.overview.tasks.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "tasks.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "tasks.create",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "knowledge.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "search.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "decisions.read",
+        "version": "1",
+        "enabled": false,
+        "reason": "Decision inspection requires an owner account and a mounted review owner"
+      },
+      {
+        "name": "decisions.resolve",
+        "version": "1",
+        "enabled": false,
+        "reason": "Decision resolution requires an owner account and a mounted review owner"
+      },
+      {
+        "name": "providers.configured.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "provider.quota",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "supervisor.history.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "supervisor.message.enqueue",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "supervisor.conversation",
+        "version": "1",
+        "enabled": false,
+        "reason": "The global supervisor is not connected yet"
+      },
+      {
+        "name": "terminal.watch",
+        "version": "1",
+        "enabled": false,
+        "reason": "Terminal relay or session inspection is unavailable"
+      },
+      {
+        "name": "terminal.control",
+        "version": "1",
+        "enabled": false,
+        "reason": "Terminal control requires an owner account and configured terminal relay"
+      },
+      {
+        "operation_retention": {
+          "minimum_days": 90,
+          "unresolved_indefinite": true,
+          "retired_ids_indefinite": true
+        },
+        "name": "dashboard.actions",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "results.read",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "results.comment",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "results.feedback",
+        "version": "1",
+        "enabled": true
+      },
+      {
+        "name": "results.media.read",
+        "version": "1",
+        "enabled": false,
+        "reason": "Supplemental images require an owner account and mounted media storage"
+      },
+      {
+        "name": "results.media.upload",
+        "version": "1",
+        "enabled": false,
+        "reason": "Result media store is not configured"
+      },
+      {
+        "name": "playbooks.inspect",
+        "version": "1",
+        "enabled": false,
+        "reason": "Playbook inspection requires the mounted runtime namespace owner"
+      },
+      {
+        "name": "playbooks.loaded-definitions.read",
+        "version": "1",
+        "enabled": false,
+        "reason": "Loaded definitions require the configured runtime namespace owner"
+      },
+      {
+        "name": "playbooks.catalog.read",
+        "version": "1",
+        "enabled": false,
+        "reason": "Current catalog inspection requires the mounted component query and namespace owner"
+      }
+    ],
+    "limits": {
+      "page_size": 25,
+      "max_page_size": 100,
+      "snapshot_members": 256,
+      "snapshot_ttl_ms": 30000
+    },
+    "default_scope": {
+      "kind": "all_authorized"
+    },
+    "global_supervisor": {
+      "status": "unconfigured",
+      "conversation_id": null,
+      "reason": "The global supervisor is not connected yet"
+    }
+  },
+  "observation": {
+    "observed_at": "2026-11-03T05:21:49.723Z",
+    "fresh_until": "2026-11-03T05:21:54.723Z",
+    "source": "aq_dashboard_read",
+    "quality": "reported",
+    "coverage": "complete"
+  },
+  "pending_operations": [],
+  "coverage": {
+    "state": "complete"
+  }
+}

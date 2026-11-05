@@ -1,0 +1,26 @@
+   Compiling aq-admission v0.2.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/vendor/aq-admission-0.2.0)
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 18s
+     Running tests/dashboard_assets.rs (target/debug/deps/dashboard_assets-33950a1bd7acb5bb)
+
+running 1 test
+test server_image_serves_pinned_dashboard_digest ... FAILED
+
+failures:
+
+---- server_image_serves_pinned_dashboard_digest stdout ----
+
+thread 'server_image_serves_pinned_dashboard_digest' (2352279) panicked at crates/aq-server/tests/dashboard_assets.rs:327:62:
+called `Result::unwrap()` on an `Err` value: invalid dashboard manifest
+
+Caused by:
+    unknown field `version`, expected one of `schema_version`, `api_version`, `files` at line 4 column 11
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    server_image_serves_pinned_dashboard_digest
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p aq-server --test dashboard_assets`

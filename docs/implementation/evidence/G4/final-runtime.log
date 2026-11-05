@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-a22abeff305308c3)
+
+running 2 tests
+test dashboard_api::runtime::tests::snapshot_caps_are_per_principal_and_global_without_cross_actor_eviction ... ok
+test dashboard_api::runtime::tests::cursor_authenticates_actor_partition_scope_resource_limit_expiry_and_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.03s
+

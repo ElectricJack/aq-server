@@ -17,6 +17,9 @@ fn seed() -> ValidatedCatalog {
     load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog")).unwrap()
 }
 async fn setup() -> (TestDb, Router, sqlx::PgPool) {
+    setup_with("").await
+}
+async fn setup_with(extra: &str) -> (TestDb, Router, sqlx::PgPool) {
     let db = TestDb::create().await;
     let store = db.store().await;
     store
@@ -24,7 +27,7 @@ async fn setup() -> (TestDb, Router, sqlx::PgPool) {
         .await
         .unwrap()
         .unwrap();
-    let config: Config = toml::from_str(
+    let config: Config = toml::from_str(&format!(
         r#"format_version=1
 environment="development"
 [server]
@@ -37,8 +40,8 @@ dev_email="owner@localhost"
 [bootstrap]
 owner_email="owner@localhost"
 enabled=true
-"#,
-    )
+{extra}"#
+    ))
     .unwrap();
     let state = AppState {
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),
@@ -80,6 +83,23 @@ fn activation(catalog: &ValidatedCatalog, revision: u64) -> Value {
 }
 const ACTIVATE: &str = "/api/profiles/catalogs/activate";
 const STATE: &str = "/api/profiles/catalogs";
+
+#[tokio::test]
+async fn missing_registry_is_an_explicit_conflict() {
+    let (_db, app, pool) = setup().await;
+    sqlx::query("DELETE FROM profile_catalog_registry")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&app, STATE, None, false).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("registry has not been installed")
+    );
+}
 
 #[tokio::test]
 async fn exact_retry_survives_reactivation_and_changed_payload_conflicts() {
@@ -124,6 +144,80 @@ async fn exact_retry_survives_reactivation_and_changed_payload_conflicts() {
             .unwrap(),
         2
     );
+}
+
+#[tokio::test]
+async fn activation_pins_environment_template_or_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let digest = |c: char| std::iter::repeat_n(c, 64).collect::<String>();
+    let write = |name: &str, entries: Value| {
+        let path = dir.path().join(name);
+        std::fs::write(
+            &path,
+            json!({"schema_version":1,"entries":entries}).to_string(),
+        )
+        .unwrap();
+        path
+    };
+    let entry = |name: &str, c: char| json!({"name":name,"version":"1","image_digest":format!("sha256:{}",digest(c))});
+    let catalog = seed();
+    let pinned = write(
+        "pinned.json",
+        json!([entry("confined-worktree", 'a'), entry("other", 'b')]),
+    );
+    let (_db, app, pool) = setup_with(&format!(
+        "[templates]\nallowlist={:?}\n",
+        pinned.display().to_string()
+    ))
+    .await;
+    let ok = call(&app, ACTIVATE, Some(activation(&catalog, 0)), true).await;
+    assert_eq!(ok.0, StatusCode::OK, "{}", ok.1);
+    assert_eq!(
+        ok.1["environment_templates"],
+        json!([{"environment":"confined-worktree","template_digest":digest('a')}])
+    );
+    let stored: Vec<(String, String)> = sqlx::query_as(
+        "SELECT environment,template_digest FROM profile_catalog_environment_templates",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, [("confined-worktree".into(), digest('a'))]);
+    for (name, entries, reason) in [
+        (
+            "missing.json",
+            json!([entry("other", 'b')]),
+            "environment_template_missing",
+        ),
+        (
+            "ambiguous.json",
+            json!([
+                entry("confined-worktree", 'a'),
+                entry("confined-worktree", 'c')
+            ]),
+            "environment_template_ambiguous",
+        ),
+    ] {
+        let path = write(name, entries);
+        let (_db, app, pool) = setup_with(&format!(
+            "[templates]\nallowlist={:?}\n",
+            path.display().to_string()
+        ))
+        .await;
+        let refused = call(&app, ACTIVATE, Some(activation(&catalog, 0)), true).await;
+        assert_eq!(refused.0, StatusCode::CONFLICT, "{}", refused.1);
+        assert!(refused.1.to_string().contains(reason), "{}", refused.1);
+        assert_eq!(call(&app, STATE, None, false).await.1["revision"], 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM profile_catalog_environment_templates"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+    }
 }
 
 #[tokio::test]

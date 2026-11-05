@@ -1,0 +1,44 @@
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+phase = sys.argv[1]
+root = Path.cwd()
+def du(path, apparent=False):
+    if not path.exists():
+        return 0
+    arguments = ['du', '-s', '-B1']
+    if apparent:
+        arguments.append('--apparent-size')
+    return int(subprocess.check_output([*arguments, str(path)], text=True).split()[0])
+
+expected = {p.stem for p in Path('crates/aq-server/tests').glob('*.rs')}
+linked = [p for p in Path('target/debug/deps').iterdir() if p.is_file() and os.access(p, os.X_OK) and p.name.rsplit('-', 1)[0] in expected]
+samples = [p for p in linked if p.name.rsplit('-', 1)[0] == 'profiled_results']
+assert len(samples) == 1, samples
+sample = samples[0]
+sections = subprocess.check_output(['readelf', '-S', '-W', str(sample)], text=True)
+Path(f'.aq/tmp/cargo-{phase}-readelf.txt').write_text(sections)
+debug_bytes = 0
+for line in sections.splitlines():
+    fields = re.sub(r'^\s*\[\s*\d+\]', '', line).split()
+    if fields and fields[0].startswith('.debug_'):
+        debug_bytes += int(fields[4], 16)
+record = {
+    'phase': phase,
+    'slot': str(root),
+    'allocated_target_bytes': du(root / 'target'),
+    'apparent_target_bytes': du(root / 'target', apparent=True),
+    'allocated_incremental_bytes': du(root / 'target/debug/incremental'),
+    'linked_integration_targets': len(linked),
+    'integration_sources': len(expected),
+    'integration_executable_bytes': sum(p.stat().st_size for p in linked),
+    'sample_binary': str(sample),
+    'sample_binary_bytes': sample.stat().st_size,
+    'sample_debug_section_bytes': debug_bytes,
+}
+Path(f'.aq/tmp/cargo-{phase}-metrics.json').write_text(json.dumps(record, indent=2) + '\n')
+print(json.dumps(record, indent=2))

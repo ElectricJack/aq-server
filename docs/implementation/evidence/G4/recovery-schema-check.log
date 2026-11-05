@@ -1,0 +1,5 @@
+5 actual-route synthetic fixtures match dashboard-read-1 schema
+5 quota examples and invalid quota fields checked
+Owner overview, null transition time, reference digest pins and strict numeric revisions checked
+Grouped search route fixture and invalid search revisions/types/fields checked
+8 aggregate/search examples validate with empty and unknown semantics

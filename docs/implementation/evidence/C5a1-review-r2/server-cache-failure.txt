@@ -1,0 +1,172 @@
+aq test: no interpreter found for /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5 (no .venv, no resources.test_interpreters entry); using /home/jkern/dev/agent-queue2/.venv/bin/python
+aq test: slot 0 of 6, -n 6
+$ /home/jkern/dev/agent-queue2/.venv/bin/python -m pytest --dist loadfile -m 'not perf and not migration and not slow and not tmux and not integration' .aq/tmp/c5a1/test_cargo.py -n 1 -s
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5
+plugins: hypothesis-6.169.0, anyio-4.14.2, split-0.11.0, cov-7.1.0, asyncio-1.4.0, impacted-0.30.0, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+pytest-impacted: impacted_module=None, impacted_git_mode=unstaged, impacted_base_branch=None, impacted_tests_dir=None, no_impacted_dep_files=False, impacted_invalidate_all=[], backend=python (astroid)
+created: 1/1 worker
+1 worker [1 item]
+
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/crates/aq-server)
+error[E0433]: cannot find `CredentialKind` in `aq_selection`
+  --> crates/aq-server/src/intelligence/registry.rs:26:27
+   |
+26 |             aq_selection::CredentialKind::ApiKey => {
+   |                           ^^^^^^^^^^^^^^ could not find `CredentialKind` in `aq_selection`
+   |
+help: a struct with a similar name exists
+   |
+26 -             aq_selection::CredentialKind::ApiKey => {
+26 +             aq_selection::CredentialBinding::ApiKey => {
+   |
+
+error[E0425]: cannot find type `CredentialKind` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/config.rs:21:29
+   |
+21 |     pub kind: aq_selection::CredentialKind,
+   |                             ^^^^^^^^^^^^^^
+   |
+  --> crates/aq-selection/src/domain.rs:83:0
+   |
+   = note: similarly named struct `CredentialBinding` defined here
+help: a struct with a similar name exists
+   |
+21 -     pub kind: aq_selection::CredentialKind,
+21 +     pub kind: aq_selection::CredentialBinding,
+   |
+
+error[E0425]: cannot find type `BackendKind` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/config.rs:23:45
+   |
+23 |     pub allowed_backends: Vec<aq_selection::BackendKind>,
+   |                                             ^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `default_allowed_backends` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/config.rs:22:23
+   |
+22 |     #[serde(default = "aq_selection::default_allowed_backends")]
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `valid_allowed_backends` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/config.rs:77:35
+   |
+77 |                 || !aq_selection::valid_allowed_backends(&item.allowed_backends)
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `unrestricted_backends` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/config.rs:78:35
+   |
+78 |                 || !aq_selection::unrestricted_backends(&c.allowed_backends)
+   |                                   ^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `canonical_allowed_backends` in crate `aq_selection`
+   --> crates/aq-server/src/intelligence/config.rs:115:31
+    |
+115 |                 aq_selection::canonical_allowed_backends(&item.allowed_backends);
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find type `CredentialKind` in crate `aq_selection`
+  --> crates/aq-server/src/intelligence/registry.rs:14:23
+   |
+14 |         aq_selection::CredentialKind,
+   |                       ^^^^^^^^^^^^^^
+   |
+  --> crates/aq-selection/src/domain.rs:83:0
+   |
+   = note: similarly named struct `CredentialBinding` defined here
+help: a struct with a similar name exists
+   |
+14 -         aq_selection::CredentialKind,
+14 +         aq_selection::CredentialBinding,
+   |
+
+error[E0425]: cannot find type `BackendKind` in crate `aq_selection`
+   --> crates/aq-server/src/profiled_execution/material.rs:125:40
+    |
+125 |     backend_kind: Option<aq_selection::BackendKind>,
+    |                                        ^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `credential_backend_policy` in crate `aq_selection`
+   --> crates/aq-server/src/profiled_execution/material.rs:147:34
+    |
+147 |                 || aq_selection::credential_backend_policy(&cfg.allowed_backends, backend_kind)
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find type `BackendKind` in crate `aq_selection`
+  --> crates/aq-server/src/profiled_execution/material/issuance.rs:16:40
+   |
+16 |     backend_kind: Option<aq_selection::BackendKind>,
+   |                                        ^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0425]: cannot find function `credential_backend_policy` in crate `aq_selection`
+  --> crates/aq-server/src/profiled_execution/material/issuance.rs:44:26
+   |
+44 |         || aq_selection::credential_backend_policy(&configured.allowed_backends, backend_kind)
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `aq_selection`
+
+error[E0560]: struct `aq_selection::CapabilitySnapshot` has no field named `backend_kind`
+   --> crates/aq-server/src/intelligence/inventory.rs:238:9
+    |
+238 |         backend_kind: None,
+    |         ^^^^^^^^^^^^ `aq_selection::CapabilitySnapshot` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `aq_selection::CapabilitySnapshot` has no field named `backend_kind`
+   --> crates/aq-server/src/profiled_execution/presence/inventory.rs:167:9
+    |
+167 |         backend_kind: None,
+    |         ^^^^^^^^^^^^ `aq_selection::CapabilitySnapshot` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0609]: no field `allowed_backends` on type `&aq_selection::AuthorizedCredential`
+  --> crates/aq-server/src/intelligence/config.rs:78:60
+   |
+78 |                 || !aq_selection::unrestricted_backends(&c.allowed_backends)
+   |                                                            ^^^^^^^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+error[E0609]: no field `allowed_backends` on type `aq_selection::AuthorizedCredential`
+   --> crates/aq-server/src/intelligence/config.rs:114:24
+    |
+114 |             credential.allowed_backends =
+    |                        ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+error[E0609]: no field `allowed_backends` on type `aq_selection::AuthorizedCredential`
+   --> crates/aq-server/src/intelligence/config.rs:116:27
+    |
+116 |             if credential.allowed_backends.is_empty() {
+    |                           ^^^^^^^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `profile`, `provider`, `account_reference`, `endpoint_reference`, `revision` ... and 3 others
+
+Some errors have detailed explanations: E0425, E0433, E0560, E0609.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aq-server` (lib) due to 17 previous errors
+F
+=================================== FAILURES ===================================
+__________________________________ test_cargo __________________________________
+[gw0] linux -- Python 3.12.3 /home/jkern/dev/agent-queue2/.venv/bin/python
+
+    def test_cargo():
+        command = json.loads(os.environ['C5A1_COMMAND'])
+        log = Path(os.environ['C5A1_WORKDIR']) / '.aq/tmp/c5a1' / (hashlib.sha256(json.dumps(command).encode()).hexdigest()[:12] + '.command.log')
+        with log.open('w') as output:
+            result = subprocess.run(command, cwd=os.environ['C5A1_WORKDIR'], stdout=output, stderr=subprocess.STDOUT, check=False)
+        sys.stderr.write(log.read_text())
+>       assert result.returncode == 0, f'{command} exited {result.returncode}; {log}'
+E       AssertionError: ['cargo', 'test', '--locked', '-p', 'aq-server', '--lib', 'credential_'] exited 101; /home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/.aq/tmp/c5a1-r2-review/.aq/tmp/c5a1/6a48e210af86.command.log
+E       assert 101 == 0
+E        +  where 101 = CompletedProcess(args=['cargo', 'test', '--locked', '-p', 'aq-server', '--lib', 'credential_'], returncode=101).returncode
+
+.aq/tmp/c5a1/test_cargo.py:15: AssertionError
+=========================== short test summary info ============================
+FAILED .aq/tmp/c5a1/test_cargo.py::test_cargo - AssertionError: ['cargo', 'te...
+======================== 1 failed in 156.25s (0:02:36) =========================

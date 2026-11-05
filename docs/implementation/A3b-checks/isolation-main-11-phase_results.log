@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/phase_results.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_results-5f163589ffa5c296)
+
+running 1 test
+test frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 7.02s
+

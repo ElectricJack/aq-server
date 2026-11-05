@@ -1,0 +1,20 @@
+[
+  {
+    "crate": "profiled_artifacts",
+    "codegen": [
+      "embed-bitcode=no",
+      "debuginfo=line-tables-only",
+      "metadata=3e7b54b5e1618a29",
+      "extra-filename=-3787296e4ba70a1f"
+    ]
+  },
+  {
+    "crate": "schema32_phase_execution",
+    "codegen": [
+      "embed-bitcode=no",
+      "debuginfo=line-tables-only",
+      "metadata=9c05691667e332a6",
+      "extra-filename=-50b1288daedebef0"
+    ]
+  }
+]

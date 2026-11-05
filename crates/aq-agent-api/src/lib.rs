@@ -162,6 +162,15 @@ pub fn check(root: &Value, s: &Value, v: &Value) -> bool {
                         && (1..=19).contains(&t.len())
                         && t.bytes().all(|c| c.is_ascii_digit())
                 }
+                // Conversation reply cursor `A.R`, and a history cursor that is
+                // either an owner cursor `N` or a reply cursor `A.R`.
+                "^[1-9][0-9]{0,18}\\.[1-9][0-9]{0,18}$" => t
+                    .split_once('.')
+                    .is_some_and(|(a, r)| positive_token(a) && positive_token(r)),
+                "^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$" => match t.split_once('.') {
+                    Some((a, r)) => positive_token(a) && positive_token(r),
+                    None => positive_token(t),
+                },
                 "^(0|[1-9][0-9]{0,18})$" => {
                     t == "0"
                         || (!t.starts_with('0')
@@ -350,6 +359,32 @@ impl Context {
     }
     pub fn value(&self) -> &Value {
         &self.0
+    }
+}
+
+/// `^[1-9][0-9]{0,18}$`.
+fn positive_token(t: &str) -> bool {
+    !t.starts_with('0') && (1..=19).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod reply_cursor_pattern_tests {
+    #[test]
+    fn reply_and_history_cursor_patterns_are_exact() {
+        let reply =
+            serde_json::json!({"type":"string","pattern":"^[1-9][0-9]{0,18}\\.[1-9][0-9]{0,18}$"});
+        let either = serde_json::json!({"type":"string","pattern":"^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$"});
+        let ok = |s: &serde_json::Value, t: &str| super::check(s, s, &serde_json::json!(t));
+        assert!(ok(&reply, "1.1") && ok(&reply, "42.9999999999999999999"));
+        for bad in [
+            "1", "0.1", "1.0", "1.", ".1", "1.2.3", "01.1", "1.01", "a.1", "",
+        ] {
+            assert!(!ok(&reply, bad), "{bad}");
+        }
+        assert!(ok(&either, "7") && ok(&either, "7.3"));
+        for bad in ["0", "07", "7.0", "7.", "7.3.1", "x"] {
+            assert!(!ok(&either, bad), "{bad}");
+        }
     }
 }
 

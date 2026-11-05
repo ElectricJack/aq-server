@@ -1,0 +1,44 @@
+{
+  "api_version": "question-inbox-1",
+  "items": [
+    {
+      "answer": "main",
+      "answered_at_ms": 1005000,
+      "asked_at_ms": 1002000,
+      "decision_id": "2cd39577-d67d-4499-8171-bd4805c8005f",
+      "decision_revision": "2",
+      "delivery": {
+        "kind": "task_mail",
+        "message_id": "f90f1a8f-0bc7-5b30-ac9f-79a177d8b3fc"
+      },
+      "expires_at_ms": 2593000000,
+      "kind": "question",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "question": "Which branch?",
+      "state": "answered",
+      "task_id": "00000000-0000-0000-0000-000000000003",
+      "task_title": null,
+      "workspace_id": "00000000-0000-0000-0000-000000000002"
+    },
+    {
+      "answer": "Postgres",
+      "answered_at_ms": 1000000,
+      "asked_at_ms": 1000000,
+      "decision_id": "2eb7a521-bf24-4b6e-9408-f818f8760ca9",
+      "decision_revision": "2",
+      "delivery": {
+        "kind": "wait"
+      },
+      "expires_at_ms": 2593000000,
+      "kind": "question",
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "question": "Which database should the migration target?",
+      "state": "answered",
+      "task_id": "00000000-0000-0000-0000-000000000003",
+      "task_title": null,
+      "workspace_id": "00000000-0000-0000-0000-000000000002"
+    }
+  ],
+  "next_cursor": null,
+  "server_time_ms": 1005000
+}

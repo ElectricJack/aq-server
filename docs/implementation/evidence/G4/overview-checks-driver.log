@@ -1,0 +1,4 @@
+COMMAND: cargo test --locked --workspace --test profiled_results overview_attention_lists_waiting_decision_and_failed_task EXIT: 0 LOG: overview-named-final-verified.log
+COMMAND: cargo run --locked -p aq-server --example dashboard_contract EXIT: 0 LOG: overview-schema-generate.log
+COMMAND: cargo run --locked -p aq-server --example dashboard_contract -- --check EXIT: 0 LOG: overview-schema-drift.log
+COMMAND: /home/jkern/dev/agent-queue2/.venv/bin/python protocol/dashboard-read/v1/check.py EXIT: 0 LOG: overview-schema-check.log

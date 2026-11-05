@@ -95,6 +95,8 @@ max_staging_bytes = 4294967296
 max_bundle_bytes = 1073741824
 bulk_concurrency = 2
 incomplete_ttl_secs = 86400
+keep_per_task = 2
+max_age = 2592000 # seconds (30 days)
 ```
 
 Put both state and staging on the same filesystem for atomic publication.
@@ -106,14 +108,25 @@ socket ownership or infer source durability when that service is unavailable.
 
 # Reproducible aq-git package
 
-`python3 scripts/check-git-candidate.py --official` checks retained archive,
-bundle and complete source inventory; it never reads sibling checkouts.
-The adopted commit is `f3660a89cbeac0e068105af2926dfdcb06a1daad`.
-The qualified archive was compared byte for byte against its retained Git
-bundle's committed blobs. The original untracked sibling was not changed.
-`docker build -f scripts/Dockerfile.aq-git .` builds it with locked dependencies
-in pinned Rust 1.96.1 bookworm. The previous native executable required
-GLIBC2.39; this build requires at most GLIBC2.34 and executes in bookworm.
+`python3 scripts/check-git-candidate.py --official` verifies the retained
+v0.2.0 release archive, executable, build record, Git bundle and complete source
+inventory without reading sibling checkouts. The release tag is `v0.2.0`, at
+commit `e75f7b4bc36a83ae5001fefa0d5f87618e87ad4a`. The checker compares every
+archived source file with both the build record and the bundle's committed
+blobs, and checks the archive's embedded commit and locked package version.
+
+The [A3a release](https://github.com/ElectricJack/aq-git/releases/tag/v0.2.0)
+executable has SHA-256
+`3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2`.
+`docker build -f scripts/Dockerfile.aq-git .` verifies it with `sha256sum -c`
+and copies those exact bytes. The server and worker embed the same canonical
+stages. Copying the released executable makes the consumer pin match the
+release digest without relying on a reproducible rebuild. A3a built it with
+locked dependencies in the digest-pinned Rust 1.96.1 bookworm builder retained
+by these recipes; it requires at most GLIBC2.34 and executes in bookworm.
+The retained executable targets Linux x86_64. The retained build record's
+pending-publication fields describe its preparation time; the published tag
+and fresh consumer qualification are recorded in `docs/implementation/A3b.md`.
 
 Bookworm's distribution Git2.39 fails aq-git's Git2.43 minimum. The recipe also
 builds retained upstream Git2.56.0, the latest source release listed by the
@@ -127,7 +140,34 @@ runtime libraries. The recipes also link `/usr/bin/git` to the pinned runtime,
 so the component and worker defaults select Git 2.56.0. The whole application
 base image need not change.
 
-Evidence is in `docs/evidence/m4-git-*.{json,log}`. The process/socket scenario
+Current release-pin evidence is in `docs/implementation/A3b.md`; earlier
+qualification evidence is in `docs/evidence/m4-git-*.{json,log}`. The process/socket scenario
 imports source centrally, stops and removes the complete worker volume, then
 constructs a candidate from central retention. These are local qualification
 results, with no hosted-production, performance or power-loss claim.
+
+# Settled task cleanup (SBX24)
+
+When source retention is configured, the server sweeps settled tasks on startup
+and every minute, eight tasks per tick. Confirmed human or automatic task
+completion, or server-owned `published` delivery evidence, makes a task eligible.
+An execution result acknowledgement alone is not task acceptance. A task with
+any held attempt is protected, including preserved attempts that still own
+source or effects. Unknown execution authority and uncertain stops are protected
+as well. Native attempts use current hot authority, not historical projections.
+
+The newest `keep_per_task` checkpoint handles across a task's attempts remain
+(default 2, ordered by transfer creation time with transfer UUID as the tie
+breaker). After `max_age` seconds from the latest settlement fact (default
+2592000, 30 days), every eligible checkpoint handle may be released. Zero
+`keep_per_task` releases all eligible handles immediately; `max_age` must be
+positive. Open tasks never expire through this policy.
+
+Each release first inspects the handle, then durably records its exact generation,
+refs, reason and operation UUID in `source_retention_releases`. Retries preserve
+that request after socket uncertainty. Only a matching confirmed release records
+`released_at` and the response; import receipts remain historical audit evidence.
+The server never deletes aq-git store paths. Reconstructible cache eviction stays
+with aq-git: `repo.cache-evict` is worker-only and explicitly refuses central
+retained pools. This sweep therefore invokes `retention.release`, leaving object
+reclamation to aq-git's lifecycle rather than attempting central cache eviction.

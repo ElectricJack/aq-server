@@ -60,6 +60,29 @@ pub enum Error {
     #[error("invalid typed human response")]
     Response,
 }
+/// A bounded JSON response for clients consuming versioned API error envelopes.
+/// Error bodies are parsed for the caller, never logged or interpolated into errors.
+pub struct JsonResponse {
+    pub status: u16,
+    pub body: serde_json::Value,
+}
+struct RawResponse {
+    status: u16,
+    bytes: Vec<u8>,
+}
+impl RawResponse {
+    fn json(self) -> Result<JsonResponse, Error> {
+        let body = match serde_json::from_slice(&self.bytes) {
+            Ok(body) => body,
+            Err(_) if !(200..300).contains(&self.status) => serde_json::Value::Null,
+            Err(_) => return Err(Error::Response),
+        };
+        Ok(JsonResponse {
+            status: self.status,
+            body,
+        })
+    }
+}
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -273,12 +296,53 @@ impl Client {
         self.request(reqwest::Method::POST, url, Some(writer.bytes))
             .await
     }
+    /// Same transport and budgets as get_json, including bounded non-2xx JSON.
+    pub async fn get_json_response(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<JsonResponse, Error> {
+        self.request_raw(
+            reqwest::Method::GET,
+            self.endpoint(path, query)?,
+            None,
+            false,
+        )
+        .await?
+        .json()
+    }
+    /// Single submission; callers must inspect status and the typed error envelope.
+    pub async fn post_json_response<T: Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<JsonResponse, Error> {
+        let url = self.endpoint(path, &[])?;
+        let mut writer = Bounded {
+            bytes: vec![],
+            limit: self.limits.max_request_bytes,
+        };
+        serde_json::to_writer(&mut writer, body).map_err(|_| Error::RequestBound)?;
+        self.request_raw(reqwest::Method::POST, url, Some(writer.bytes), false)
+            .await?
+            .json()
+    }
     async fn request<R: DeserializeOwned>(
         &self,
         method: reqwest::Method,
         url: Url,
         body: Option<Vec<u8>>,
     ) -> Result<R, Error> {
+        let raw = self.request_raw(method, url, body, true).await?;
+        serde_json::from_slice(&raw.bytes).map_err(|_| Error::Response)
+    }
+    async fn request_raw(
+        &self,
+        method: reqwest::Method,
+        url: Url,
+        body: Option<Vec<u8>>,
+        reject_errors: bool,
+    ) -> Result<RawResponse, Error> {
         let mut headers = HeaderMap::new();
         headers.insert(self.auth_header.0.clone(), self.auth_header.1.clone());
         headers.insert(
@@ -301,9 +365,10 @@ impl Client {
         // No automatic retry even for transport ambiguity. Caller owns stable op IDs
         // and explicit receipt/unknown reconciliation; input can never be blindly sent.
         let mut response = request.send().await.map_err(|_| Error::Transport)?;
-        if !response.status().is_success() {
+        if reject_errors && !response.status().is_success() {
             return Err(Error::Status(response.status().as_u16()));
         }
+        let status = response.status().as_u16();
         if response
             .content_length()
             .is_some_and(|n| n > self.limits.max_response_bytes as u64)
@@ -321,7 +386,7 @@ impl Client {
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| Error::Response)
+        Ok(RawResponse { status, bytes })
     }
 }
 #[cfg(test)]

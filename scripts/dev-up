@@ -1,31 +1,8 @@
 #!/usr/bin/env bash
-# Build and start the development stack (server + PostgreSQL) in Docker Compose.
-# Pass --init-only to just create the dev secret and spool directories.
+# WSL2/Linux: prepare a private dev vault, then start the complete stack.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-if [ ! -f secrets.dev/postgres_password ]; then
-  mkdir -p secrets.dev
-  chmod 0700 secrets.dev
-  # The directory is private to this user; the file itself must be readable by
-  # the container user (UID 10001), because Compose bind-mounts it as-is.
-  (umask 022; head -c 24 /dev/urandom | base64 | tr -d '\n' >secrets.dev/postgres_password)
-  chmod 0644 secrets.dev/postgres_password
-  echo "created secrets.dev/postgres_password"
+if [ "${1:-}" = --init-only ]; then
+    exec python3 scripts/dev-stack.py prepare
 fi
-# compose.yaml requires the updater spool. The dev vault has no [updates]
-# section, so updates stay unavailable in dev; the gitignored directory only
-# satisfies the bind mounts.
-mkdir -p state.dev/updater-spool/requests state.dev/updater-spool/status
-[ "${1:-}" = "--init-only" ] && exit 0
-
-AQ_WORKER_SOURCE_REVISION=$(python3 scripts/check-worker-candidate.py --revision)
-AQ_WORKER_ARCHIVE_SHA256=$(python3 -c 'import json; print(json.load(open("vendor/worker-candidate.json"))["archive_sha256"])')
-AQ_WORKER_VERSION=$(python3 -c 'import json; print(json.load(open("vendor/worker-candidate.json"))["version"])')
-export AQ_WORKER_SOURCE_REVISION AQ_WORKER_ARCHIVE_SHA256 AQ_WORKER_VERSION
-
-export AQ_SERVER_IMAGE=${AQ_SERVER_IMAGE:-agent-q-server:dev}
-export AQ_VAULT_DIR="$PWD/vault.example"
-export AQ_SECRETS_DIR="$PWD/secrets.dev"
-export AQ_UPDATER_SPOOL="$PWD/state.dev/updater-spool"
-exec docker compose -f compose.yaml -f compose.dev.yaml up --build "$@"
+exec python3 scripts/dev-stack.py up "$@"

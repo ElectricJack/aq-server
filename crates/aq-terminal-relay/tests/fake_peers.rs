@@ -752,6 +752,42 @@ fn epoch_setup() -> (Ledger, Store, Access, Peer, ControllerLease) {
     let l = apply(l.open_epoch(&a, id(1303), 1).unwrap(), &mut s).ledger;
     (l, s, a, p, c)
 }
+
+#[test]
+fn finite_and_epoch_input_name_the_deadline_rule_and_preserve_exact_replay() {
+    let t = terminal(false);
+    let a = access(&t, "alice");
+    let l = Ledger::new(t, 1, 90000, None).unwrap();
+    let mut store = Store::new(&l);
+    let (l, lease) = grant(l, &mut store, &a, &peer(false), 100, 3000);
+    let before = l.encode().unwrap();
+    for ttl in [0, 2001] {
+        let mut r = input(&l, &lease, 4000, 101);
+        r.expires_at_ms = 101 + ttl;
+        assert!(matches!(l.input(&a, &r, 101), Err(Error::InputDeadline)));
+        assert_eq!(l.encode().unwrap(), before);
+    }
+    let mut r = input(&l, &lease, 4000, 101);
+    r.expires_at_ms = 102;
+    assert!(l.input(&a, &r, 101).is_ok());
+    r.expires_at_ms = 2101;
+    let l = apply(l.input(&a, &r, 101).unwrap(), &mut store).ledger;
+    // Same operation replay keeps its original observation after the deadline.
+    assert!(
+        apply(l.input(&a, &r, 3000).unwrap(), &mut store)
+            .effects
+            .is_empty()
+    );
+    let (l, _, a, _, lease) = epoch_setup();
+    let mut r = epoch_request(&l, &lease, 1, 10);
+    r.input.expires_at_ms = 2011;
+    assert!(matches!(
+        l.epoch_input(&a, &r, 10),
+        Err(Error::InputDeadline)
+    ));
+    r.input.expires_at_ms = 2010;
+    assert!(l.epoch_input(&a, &r, 10).is_ok());
+}
 fn epoch_request(
     l: &Ledger,
     c: &ControllerLease,

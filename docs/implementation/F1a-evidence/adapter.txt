@@ -1,0 +1,33 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling aq-supervisor-host v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-1/crates/aq-supervisor-host)
+error[E0369]: binary operation `==` cannot be applied to type `HostPlan`
+  --> crates/aq-supervisor-host/src/config.rs:51:75
+   |
+51 |         ensure!(digest==self.digest && current.central==*c && current.host==*h,"installed admission changed");Ok(())
+   |                                                               ------------^^-- HostPlan
+   |                                                               |
+   |                                                               HostPlan
+   |
+note: `HostPlan` does not implement `PartialEq`
+  --> vendor/aq-session-host-0.1.6/src/host_plan.rs:43:1
+   |
+43 | pub struct HostPlan {
+   | ^^^^^^^^^^^^^^^^^^^ `HostPlan` is defined in another crate
+
+error[E0369]: binary operation `==` cannot be applied to type `HostPlan`
+  --> crates/aq-supervisor-host/src/adapter.rs:21:46
+   |
+21 |         ensure!(digest==self.digest && c.host==*plan && workspace==c.workspace,"installed adapter admission changed");
+   |                                        ------^^----- HostPlan
+   |                                        |
+   |                                        HostPlan
+   |
+note: `HostPlan` does not implement `PartialEq`
+  --> vendor/aq-session-host-0.1.6/src/host_plan.rs:43:1
+   |
+43 | pub struct HostPlan {
+   | ^^^^^^^^^^^^^^^^^^^ `HostPlan` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `aq-supervisor-host` (lib) due to 2 previous errors

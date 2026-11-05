@@ -10,6 +10,28 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+#[tokio::test]
+async fn offered_window_preserves_five_seconds_of_fresh_facts_and_allows_delayed_accept() {
+    let c = setup().await;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    page.validate_for(&c.request).unwrap();
+    assert_eq!(page.offers.len(), 1);
+    let native = &page.offers[0];
+    let clock = &native.offered.clock;
+    // This catalog permits five-second-old availability observations. A fresh
+    // poll must preserve that window instead of truncating it to two seconds.
+    assert!(clock.expires_at_ms - clock.server_time_ms >= 5_000);
+    c.env.env.time.fetch_add(3_000, Ordering::SeqCst);
+    let acceptance = common::native_offer::acceptance(&c, native);
+    common::native_offer::accept(&c, &acceptance).await;
+}
+
 #[tokio::test]
 async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without_grant() {
     let c = setup().await;

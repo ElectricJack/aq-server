@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.41s
+     Running tests/phase_never_granted.rs (target/debug/deps/phase_never_granted-fedbd35d8f0ab7d3)
+
+running 2 tests
+test actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence_proof ... ok
+test actual_refresh_issued_phase_grant_never_uses_absence_release ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.43s
+
+     Running tests/phase_refresh_terminal.rs (target/debug/deps/phase_refresh_terminal-6e90a2e62ff3c8eb)
+
+running 7 tests
+test actual_refresh_started_stopped_http_records_exact_new_ack_envelopes_and_retains_task ... ok
+test duplicate_unknown_and_cross_profile_terminal_requests_never_mutate_authority ... ok
+test exact_refresh_prepare_http_uses_actual_current_store_and_its_own_qualification ... ok
+test expired_retired_runtime_still_cleans_up_with_exact_immutable_refresh_ack ... ok
+test new_history_lookup_survives_expiry_without_minting_local_or_delivery_authority ... ok
+test no_started_refresh_closure_revokes_permission_retains_holds_and_replays_exact_ack ... ok
+test refresh_route_activation_cannot_expose_an_actual_frozen_issuer_without_its_terminal_profile ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.45s
+

@@ -35,17 +35,24 @@ impl Drop for Peer {
     }
 }
 async fn peer(path: &Path) -> Peer {
+    // Forward to whichever disposable loopback PostgreSQL DATABASE_URL names:
+    // scripts/test-db (127.0.0.1:55432) locally, localhost:5432 in CI.
     let env = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
-    assert_eq!(env.host_str(), Some("127.0.0.1"));
-    assert_eq!(env.port(), Some(55432));
+    let host = env.host_str().unwrap().to_owned();
+    assert!(
+        matches!(host.as_str(), "127.0.0.1" | "localhost"),
+        "the Unix peer only forwards to a loopback test database, got {host}"
+    );
+    let port = env.port().unwrap_or(5432);
     let listener = UnixListener::bind(path.join(".s.PGSQL.5432")).unwrap();
     let connections = Arc::new(Mutex::new(vec![]));
     let saved = connections.clone();
     let task = tokio::spawn(async move {
         loop {
             let (mut unix, _) = listener.accept().await.unwrap();
+            let host = host.clone();
             let task = tokio::spawn(async move {
-                let mut tcp = TcpStream::connect("127.0.0.1:55432").await.unwrap();
+                let mut tcp = TcpStream::connect((host.as_str(), port)).await.unwrap();
                 let _ = tokio::io::copy_bidirectional(&mut unix, &mut tcp).await;
             });
             saved.lock().unwrap().push(task);
@@ -287,16 +294,26 @@ async fn ready(base: &str, task: &JoinHandle<anyhow::Result<()>>) {
     panic!("owner startup timeout");
 }
 async fn get(base: &str, path: &str) -> Value {
-    let r = client()
-        .get(format!("{base}{path}"))
-        .header("x-aq-dev-email", "owner@localhost")
-        .send()
-        .await
-        .unwrap();
-    let status = r.status();
-    let body: Value = r.json().await.unwrap();
-    assert!(status.is_success(), "{status}: {body}");
-    body
+    // Inspection reads queue on the single owner thread behind a drive quantum
+    // (up to 8 transitions, ~1-2s in unoptimized test builds) and report 503
+    // playbook_storage_unknown when that outlasts the 2s inspect deadline.
+    // Re-reading is idempotent; every other status still fails immediately.
+    for attempt in 1.. {
+        let r = client()
+            .get(format!("{base}{path}"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+            .unwrap();
+        let status = r.status();
+        let body: Value = r.json().await.unwrap();
+        if status == 503 && body["code"] == "playbook_storage_unknown" && attempt < 5 {
+            continue;
+        }
+        assert!(status.is_success(), "{status}: {body}");
+        return body;
+    }
+    unreachable!()
 }
 #[tokio::test]
 async fn explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drains() {
@@ -726,7 +743,30 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
     .await;
     assert_eq!(detail["run"]["id"], run);
     assert_eq!(detail["run"]["artifact"], binding["artifact"]);
+    // The pin strip reads the binding and activation revision the run was admitted on.
+    assert_eq!(detail["run"]["binding"], "mail");
+    assert_eq!(
+        detail["run"]["activation_revision"],
+        binding["revision"].as_u64().unwrap().to_string()
+    );
+    assert_eq!(page["items"][0]["binding"], "mail");
     assert_eq!(detail["observation_is_atomic"], false);
+    // G11 X30/X31: definition name, AQ install ordinal and active comparison.
+    let definition = &detail["run"]["definition"];
+    assert_eq!(definition["version"], "1", "{definition}");
+    assert!(definition["name"].as_str().is_some_and(|n| !n.is_empty()));
+    assert_eq!(definition["pinned_is_active"], true);
+    assert_eq!(definition["active"]["binding"], "mail");
+    assert_eq!(definition["active"]["artifact"], binding["artifact"]);
+    assert_eq!(definition["active"]["version"], "1");
+    assert_eq!(page["items"][0]["definition"], *definition);
+    // X32: ordered step graph from the run's entry.
+    assert_eq!(detail["steps"]["entry"], "main");
+    let steps = detail["steps"]["steps"].as_array().unwrap();
+    assert_eq!(steps[0]["id"], detail["steps"]["start"]);
+    assert!(steps.iter().any(|step| step["id"] == "send"), "{steps:?}");
+    // X33: no human decision is pending in this fixture.
+    assert!(detail["run"]["waiting"].is_null());
     let parallel_detail_path = format!("/api/playbooks/inspection/runs/{run}?limit=1");
     let (parallel_list, parallel_detail) = tokio::join!(
         get(&base, "/api/playbooks/inspection/runs?limit=1"),
@@ -748,8 +788,37 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
     .await;
     assert_eq!(second["items"].as_array().unwrap().len(), 1);
     assert_ne!(second["items"][0]["id"], json!(run));
+    // X34: admission time range filter over the same runs.
+    let admitted = page["items"][0]["admitted_at_ms"].as_i64().unwrap();
+    let within = get(
+        &base,
+        &format!(
+            "/api/playbooks/inspection/runs?since_ms={admitted}&until_ms={}",
+            admitted + 1
+        ),
+    )
+    .await;
+    assert!(
+        within["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == run && item["admitted_at_ms"] == admitted)
+    );
+    let future = get(
+        &base,
+        &format!(
+            "/api/playbooks/inspection/runs?since_ms={}",
+            admitted + 86_400_000
+        ),
+    )
+    .await;
+    assert_eq!(future["items"], json!([]));
+    assert!(future["next_cursor"].is_null());
     for path in [
         "/api/playbooks/inspection/runs?limit=26".to_string(),
+        "/api/playbooks/inspection/runs?since_ms=10&until_ms=10".to_string(),
+        "/api/playbooks/inspection/runs?since_ms=-1".to_string(),
         format!(
             "/api/playbooks/inspection/runs?project_id={}",
             Uuid::new_v4()
@@ -763,6 +832,78 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
             .unwrap();
         assert!(matches!(response.status().as_u16(), 400 | 404));
     }
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn dashboard_playbook_actions_start_cancel_and_refuse_stale_activation() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let (base, stop, task) = launch(s.f.state.clone()).await;
+    ready(&base, &task).await;
+    let project =
+        get(&base, "/api/playbooks/inspection/runs?limit=1").await["namespace"]["project_id"]
+            .clone();
+    let binding = get(&base, "/api/playbooks/bindings/mail").await;
+    let revision = binding["revision"].as_u64().unwrap().to_string();
+    let post = |body: Value| {
+        let base = base.clone();
+        async move {
+            let response = client()
+                .post(format!("{base}/api/v1/actions"))
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status().as_u16();
+            (status, response.json::<Value>().await.unwrap())
+        }
+    };
+    let versioned = |kind: &str, revision: &str, extra: Value| {
+        let id = Uuid::new_v4().to_string();
+        let mut payload = json!({"operation_id":id,"project_id":project,"expected_version":revision,
+            "binding":"mail","artifact":binding["artifact"]});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        json!({"operation_id":id,"kind":kind,
+            "subject":{"type":"playbook_binding","id":"mail","revision":revision},
+            "expected_versions":{"playbook_binding":revision},"payload":payload})
+    };
+    let start = versioned(
+        "playbook.run.start",
+        &revision,
+        json!({"entry":"main","inputs":{}}),
+    );
+    let (status, started) = post(start.clone()).await;
+    assert_eq!(status, 200, "{started}");
+    assert_eq!(started["data"]["disposition"], "confirmed", "{started}");
+    let affected = &started["data"]["affected_entities"][0];
+    assert_eq!(affected["type"], "playbook_run", "{started}");
+    let run = affected["id"].as_str().unwrap().to_string();
+    let (status, replayed) = post(start).await;
+    assert_eq!(status, 200, "{replayed}");
+    assert_eq!(replayed["data"]["disposition"], "confirmed", "{replayed}");
+    let id = Uuid::new_v4().to_string();
+    let (status, cancelled) = post(json!({"operation_id":id,"kind":"playbook.run.cancel",
+        "subject":{"type":"playbook_run","id":run},"expected_versions":{},"reason":"Stop it",
+        "payload":{"operation_id":id,"project_id":project,"run_id":run}}))
+    .await;
+    assert_eq!(status, 200, "{cancelled}");
+    assert_eq!(cancelled["data"]["disposition"], "confirmed", "{cancelled}");
+    let stale = (binding["revision"].as_u64().unwrap() + 1).to_string();
+    let (status, conflict) =
+        post(versioned("playbook.activation.rollback", &stale, json!({}))).await;
+    assert_eq!(status, 200, "{conflict}");
+    assert_eq!(conflict["data"]["disposition"], "conflict", "{conflict}");
+    assert_eq!(
+        conflict["data"]["current_versions"]["playbook_binding"],
+        revision
+    );
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }
@@ -834,3 +975,372 @@ mod definitions;
 
 #[path = "playbook_activation/catalog.rs"]
 mod catalog;
+
+/// Production Host7 construction: the configured owner binds the gateway
+/// work graph and leaves the check executor and judgment provider unbound,
+/// so both commands refuse with typed reasons and record no evidence.
+#[tokio::test]
+async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_ports() {
+    use aq_playbook_host::runner::{Intent, IntentStatus};
+    use aq_server::playbooks::review_domain::{CatalogProfile, HOST7_CAPABILITIES};
+    let s = setup().await;
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let text = head.replace(
+        "profile=\"human_review_v2\"",
+        "profile=\"host_v7\"\ndeployments=[]",
+    );
+    let config: Config = toml::from_str(&text).unwrap();
+    let mut state = s.f.state.clone();
+    state.config = Arc::new(config);
+    let loaded = state.config.playbooks.clone().unwrap();
+    // Host7 needs the production work graph; without it startup refuses.
+    assert!(state.agent_access.is_none());
+    assert!(
+        aq_server::playbooks::runtime::Runtime::start(&state, loaded.clone())
+            .await
+            .is_err()
+    );
+    let token = s._dir.path().join("graph-token");
+    private(&token, "g".repeat(48));
+    state.agent_access = Some(Arc::new(
+        aq_server::agent_access::Runtime::new(&aq_server::agent_access::AgentAccessConfig {
+            graph_url: "http://127.0.0.1:9/".into(),
+            graph_token_file: token,
+            credential_ttl_ms: 10000,
+            mutation_actor_id: None,
+        })
+        .await
+        .unwrap(),
+    ));
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, loaded)
+        .await
+        .unwrap();
+    let service = runtime.driver.service.clone();
+    runtime.shutdown().await.unwrap();
+
+    // Drive the production-constructed service directly under a fresh owner.
+    let pool = s.f.db.pool().await;
+    let revision: i64 = sqlx::query_scalar(
+        "SELECT runtime_revision FROM playbook_namespaces WHERE namespace_id=$1",
+    )
+    .bind(s.namespace)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let owner = service
+        .adopt_runtime(Uuid::new_v4(), revision)
+        .await
+        .unwrap();
+    let l = &s.f.selection.lineage;
+    let scope = GrantScope {
+        workspace_id: l.workspace_id,
+        project_id: l.project_id,
+        recipients: vec![],
+        capabilities: BTreeSet::from(HOST7_CAPABILITIES.map(String::from)),
+    };
+    let now = (state.clock)().timestamp_millis();
+    service
+        .grant(s.f.actor, s.grant, scope.clone(), now + 10_000)
+        .await
+        .unwrap();
+    let intent = |id: &str, name: &str, input: Value| Intent {
+        id: id.into(),
+        run: "synthetic-run".into(),
+        step: name.replace('.', "-"),
+        invocation: 1,
+        deadline_at_ms: now + 5000,
+        command: CatalogProfile::Host7.registry().commands[name].clone(),
+        input_digest: aq_server::playbooks::domain::digest(&input).unwrap(),
+        input,
+        authority: CatalogProfile::Host7.authority(s.grant, 1, &scope).unwrap(),
+        status: IntentStatus::Dispatched,
+        cancel_requested: false,
+        cancel_dispatched: false,
+        handle: None,
+        result: None,
+        reason: None,
+        late_results: vec![],
+        completion_event: None,
+    };
+    // Subjects are not graph node ids, so no graph call is made.
+    let subject = json!({"id": "work-1", "revision": 1});
+    let check = json!({"check": {"id": "unit", "validator": {"id": "aq.check.cargo-test",
+            "version": "1.0.0", "digest": format!("sha256:{}", "1".repeat(64))}},
+        "source": {"format": "sha1", "hex": "0123456789abcdef0123456789abcdef01234567"},
+        "subject": subject});
+    let r = service
+        .host_dispatch(
+            &owner,
+            s.grant,
+            1,
+            &intent("check-1", "check.request", check),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            r.outcome.as_str(),
+            &r.output["reason"],
+            &r.output["disposition"]
+        ),
+        ("refused", &json!("unavailable"), &Value::Null),
+        "{r:?}"
+    );
+    let judgment = json!({"budget": {"deadline_ms": 60000, "max_cost_microunits": 50000,
+            "max_input_tokens": 8192, "max_output_tokens": 512},
+        "context": {"artifacts": [{"digest": format!("sha256:{}", "a".repeat(64)),
+            "id": "snapshot-1", "version": "1"}], "text": "Work item summary."},
+        "output": {"choices": ["permitted-default", "isolated"], "rationale_max_bytes": 2048},
+        "question": "fits?", "subject": subject});
+    let r = service
+        .host_dispatch(
+            &owner,
+            s.grant,
+            1,
+            &intent("judge-1", "judgment.request", judgment),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            r.outcome.as_str(),
+            &r.output["reason"],
+            &r.output["provenance"]
+        ),
+        ("refused", &json!("no_permitted_profile"), &Value::Null),
+        "{r:?}"
+    );
+    // Refusals fabricate no check evidence.
+    let evidence: i64 = sqlx::query_scalar("SELECT count(*) FROM profiled_check_evidence")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(evidence, 0);
+    service.retire_runtime(&owner).await.unwrap();
+}
+
+/// One aq-git exchange on `path`: replies `ok` with `result(request)`.
+async fn git_exchange(
+    path: &Path,
+    result: impl FnOnce(&Value) -> Value + Send + 'static,
+) -> JoinHandle<Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let _ = std::fs::remove_file(path);
+    let listener = UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        let reply = json!({"ok": true, "result": result(&req), "protocol_version": 1,
+            "request_id": req["request_id"], "operation_id": req["operation_id"]});
+        reader
+            .get_mut()
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .unwrap();
+        req
+    })
+}
+
+/// D7 follow-up acceptance: production startup binds the D1 DeliveryService
+/// as Host7's integration port when `[playbooks.integration]` is configured
+/// and source retention (aq-git) is present; candidate.prepare and
+/// candidate.publish then reach a test aq-git peer through D1 unchanged.
+#[tokio::test]
+async fn host7_production_startup_prepares_and_publishes_through_delivery_service() {
+    use aq_playbook_host::runner::{Intent, IntentStatus};
+    use aq_server::playbooks::review_domain::{CatalogProfile, HOST7_CAPABILITIES};
+    use aq_worker_protocol::{ObjectAlgorithm, ObjectId, SourceRole, TransferManifest};
+    let s = setup().await;
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let text = head.replace(
+        "profile=\"human_review_v2\"",
+        "profile=\"host_v7\"\ndeployments=[]",
+    ) + "[playbooks.integration]\ncommit_name=\"AQ\"\ncommit_email=\"aq@example.test\"\nchecks=[\"unit\"]\n";
+    let config: Config = toml::from_str(&text).unwrap();
+    let mut state = s.f.state.clone();
+    state.config = Arc::new(config);
+    let loaded = state.config.playbooks.clone().unwrap();
+    let token = s._dir.path().join("graph-token");
+    private(&token, "g".repeat(48));
+    state.agent_access = Some(Arc::new(
+        aq_server::agent_access::Runtime::new(&aq_server::agent_access::AgentAccessConfig {
+            graph_url: "http://127.0.0.1:9/".into(),
+            graph_token_file: token,
+            credential_ttl_ms: 10000,
+            mutation_actor_id: None,
+        })
+        .await
+        .unwrap(),
+    ));
+    // A configured integration policy without aq-git refuses startup.
+    assert!(state.source_retention.is_none());
+    assert!(
+        aq_server::playbooks::runtime::Runtime::start(&state, loaded.clone())
+            .await
+            .is_err()
+    );
+    let socket = s._dir.path().join("git.sock");
+    state.source_retention = Some(Arc::new(
+        aq_server::source_retention::Runtime::new(
+            aq_server::source_retention::SourceRetentionConfig {
+                keep_per_task: 2,
+                max_age: 30 * 86400,
+                staging_root: s._dir.path().join("staging"),
+                git_root: s._dir.path().join("git"),
+                git_socket: socket.clone(),
+                max_staging_bytes: 2097152,
+                max_bundle_bytes: 4096,
+                bulk_concurrency: 2,
+                incomplete_ttl_secs: 60,
+            },
+        )
+        .unwrap(),
+    ));
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, loaded)
+        .await
+        .unwrap();
+    let service = runtime.driver.service.clone();
+    runtime.shutdown().await.unwrap();
+
+    // D2 publication policy on the project's repository binding, and one
+    // retained checkpoint of that repository (the D1 source receipt).
+    let pool = s.f.db.pool().await;
+    let l = &s.f.selection.lineage;
+    sqlx::query("UPDATE project_execution_bindings SET binding = binding || '{\"publication\":{\"mode\":\"fast_forward\",\"target\":\"refs/heads/main\"}}' WHERE project_id=$1")
+        .bind(l.project_id).execute(&pool).await.unwrap();
+    let source = s.f.profiled.source.clone();
+    let checkpoint = ObjectId {
+        algorithm: ObjectAlgorithm::Sha1,
+        hex: "b".repeat(40),
+    };
+    let binding = &s.f.profiled.offer.binding;
+    let aq_session_protocol::SessionIdentity::Remote { session_id, .. } = binding.session else {
+        unreachable!()
+    };
+    let m = TransferManifest {
+        transfer_id: Uuid::new_v4(),
+        role: SourceRole::Checkpoint,
+        checkpoint: checkpoint.clone(),
+        attempt: aq_worker_protocol::AttemptRef {
+            attempt_id: binding.attempt_id,
+            session_id,
+            generation: 1,
+        },
+        resolved_spec_digest: "c".repeat(64),
+        source: source.clone(),
+        artifact_id: Uuid::new_v4(),
+        manifest_digest: "d".repeat(64),
+        bundle_digest: None,
+        manifest_bytes: 1,
+        bundle_bytes: 0,
+    };
+    let receipt_id = Uuid::new_v4();
+    let receipt = json!({"receipt_id":receipt_id,"transfer_id":m.transfer_id,"repository_id":source.repository_id,"binding_generation":1,"source":checkpoint,"retention_handle":m.artifact_id,"manifest_digest":m.manifest_digest});
+    let ack = json!({"receiver_installation_id":Uuid::new_v4(),"repository_id":source.repository_id,"binding_generation":1,"transfer_id":m.artifact_id,"source":checkpoint,"retention_handle":m.artifact_id,"manifest_digest":m.manifest_digest,"retention_state":"active","historical":false});
+    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
+        .bind(m.transfer_id).bind(binding.attempt_id).bind(s.f.node.node_id).bind(source.repository_id).bind(m.artifact_id).bind(receipt_id).bind(json!(m)).bind(receipt).bind(ack).execute(&pool).await.unwrap();
+
+    let revision: i64 = sqlx::query_scalar(
+        "SELECT runtime_revision FROM playbook_namespaces WHERE namespace_id=$1",
+    )
+    .bind(s.namespace)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let owner = service
+        .adopt_runtime(Uuid::new_v4(), revision)
+        .await
+        .unwrap();
+    let scope = GrantScope {
+        workspace_id: l.workspace_id,
+        project_id: l.project_id,
+        recipients: vec![],
+        capabilities: BTreeSet::from(HOST7_CAPABILITIES.map(String::from)),
+    };
+    let now = (state.clock)().timestamp_millis();
+    service
+        .grant(s.f.actor, s.grant, scope.clone(), now + 10_000)
+        .await
+        .unwrap();
+    let intent = |id: &str, name: &str, input: Value| Intent {
+        id: id.into(),
+        run: "synthetic-run".into(),
+        step: name.replace('.', "-"),
+        invocation: 1,
+        deadline_at_ms: now + 5000,
+        command: CatalogProfile::Host7.registry().commands[name].clone(),
+        input_digest: aq_server::playbooks::domain::digest(&input).unwrap(),
+        input,
+        authority: CatalogProfile::Host7.authority(s.grant, 1, &scope).unwrap(),
+        status: IntentStatus::Dispatched,
+        cancel_requested: false,
+        cancel_dispatched: false,
+        handle: None,
+        result: None,
+        reason: None,
+        late_results: vec![],
+        completion_event: None,
+    };
+
+    // candidate.prepare -> D1 create_candidate -> aq-git candidate.create.
+    let ready = checkpoint.clone();
+    let peer = git_exchange(&socket, move |req| {
+        json!({"candidate_id":req["operation_id"],"state":"ready","candidate":ready,
+            "clean_prefix":ready,"retention_handle":req["operation_id"],"conflict_step":null,
+            "conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false})
+    })
+    .await;
+    let base = format!("refs/heads/main@sha1:{}", source.base.hex);
+    let prepare = json!({"base": {"id": base, "revision": 0},
+        "sources": [{"id": format!("aq.source/{receipt_id}"), "revision": 1}]});
+    let r = service
+        .host_dispatch(
+            &owner,
+            s.grant,
+            1,
+            &intent("prepare-1", "candidate.prepare", prepare),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.outcome, "prepared", "{r:?}");
+    let req = peer.await.unwrap();
+    assert_eq!(req["operation"], "candidate.create", "{req}");
+    let candidate = r.output["reference"].as_str().unwrap().to_string();
+
+    // Passed check evidence for the candidate. Production has no check
+    // executor bound yet, so the evidence row is seeded in its owning store.
+    let check_op = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,'check-1','check.request',$3,1,'unit',$4,'passed','{}',$5,$5)")
+        .bind(check_op).bind(s.namespace).bind(&candidate)
+        .bind(json!({"execution_profile":"aq.check.sandbox/v1","subject":{"id":candidate,"revision":1},
+            "source":{"format":"sha1","hex":checkpoint.hex}}))
+        .bind(now).execute(&pool).await.unwrap();
+
+    // candidate.publish -> D1 deliver (fast-forward policy) -> aq-git publish.
+    let (old, new) = (source.base.clone(), checkpoint.clone());
+    let peer = git_exchange(&socket, move |req| {
+        json!({"outcome":"applied","target":req["params"]["target"],"old":old,"new":new,
+            "acknowledged_at":"2026-11-02T00:00:00Z"})
+    })
+    .await;
+    let publish = json!({"candidate": {"id": candidate, "revision": 1},
+        "destination": {"id": base, "revision": 0},
+        "evidence": [{"id": format!("check-receipt:{check_op}"), "revision": 1}]});
+    let r = service
+        .host_dispatch(
+            &owner,
+            s.grant,
+            1,
+            &intent("publish-1", "candidate.publish", publish),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.outcome, "published", "{r:?}");
+    let req = peer.await.unwrap();
+    assert_eq!(req["operation"], "publish", "{req}");
+    assert_eq!(req["params"]["target"], "refs/heads/main", "{req}");
+    service.retire_runtime(&owner).await.unwrap();
+}

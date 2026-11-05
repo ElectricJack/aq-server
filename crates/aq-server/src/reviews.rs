@@ -14,15 +14,37 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
+pub(crate) mod action;
 pub mod combined;
 mod combined_http;
 mod inbox;
 mod subject_owner;
+mod view;
 pub use inbox::schema as inbox_contract_schema;
 pub use inbox::{InboxItem, InboxPage, InboxQuery, InboxState};
 use subject_owner::{Profile as SubjectProfile, Subject as OwnedSubject};
+pub use view::{DecisionKind, Impact, InboxOrder, RequestedBy, ReviewPayload};
 
 type Result<T> = std::result::Result<T, AppError>;
+/// Load retained review keys before listeners start. Never invent ephemeral keys:
+/// they must also decrypt decisions and settlement receipts after restart.
+pub fn deserialize_config<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Arc<Keyring>>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Config {
+        protection: crate::protected_storage::ProtectionConfig,
+    }
+    use serde::Deserialize;
+    Option::<Config>::deserialize(deserializer)?
+        .map(|config| {
+            Keyring::load(&config.protection)
+                .map(Arc::new)
+                .map_err(serde::de::Error::custom)
+        })
+        .transpose()
+}
 fn db(_: sqlx::Error) -> AppError {
     AppError::Internal
 }
@@ -355,6 +377,14 @@ impl Service {
         .map_err(db)?;
         let s = self.seal("request", &request.decision_id.to_string(), &body)?;
         sqlx::query("INSERT INTO human_decision_requests(decision_id,requester_id,operation_id,request_digest,subject_digest,decision_revision,state,expires_at_ms,sealed_version,key_id,nonce,ciphertext) VALUES($1,$2,$3,$4,$5,1,'pending',$6,$7,$8,$9,$10)").bind(request.decision_id).bind(actor).bind(request.operation_id).bind(digest).bind(subject_digest).bind(request.expires_at_ms as i64).bind(s.version as i32).bind(s.key_id).bind(s.nonce).bind(s.ciphertext).execute(&mut **tx).await.map_err(db)?;
+        sqlx::query(
+            "INSERT INTO human_decision_submissions(decision_id,submitted_at_ms) VALUES($1,$2)",
+        )
+        .bind(request.decision_id)
+        .bind(now(&self.state)? as i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
         sqlx::query("UPDATE review_lineage_budget SET retained_operations=retained_operations+1 WHERE project_id=$1 AND workspace_id=$2 AND task_id=$3").bind(exact.project_id).bind(exact.task.workspace_id).bind(exact.task.task_id).execute(&mut **tx).await.map_err(db)?;
         sqlx::query("UPDATE review_owner_budget SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton").bind(charge as i64).execute(&mut **tx).await.map_err(db)?;
         Ok(())
@@ -980,6 +1010,11 @@ pub fn admin_routes(service: Arc<Service>) -> axum::Router<AppState> {
         .route("/api/reviews/decisions/{id}", get(inspect_http))
         .route("/api/reviews/decisions/{id}/resolve", post(resolve_http))
         .route("/api/reviews/decisions/{id}/cancel", post(cancel_http))
+        .route("/api/reviews/decisions/{id}/defer", post(view::defer_http))
+        .route(
+            "/api/reviews/decisions/{id}/evidence/{evidence}/viewed",
+            post(view::viewed_http),
+        )
         .merge(combined_http::routes())
         .layer(DefaultBodyLimit::max(16384))
         .layer(axum::Extension(service))
@@ -989,7 +1024,7 @@ async fn inspect_http(
     axum::Extension(service): axum::Extension<Arc<Service>>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<axum::Json<serde_json::Value>> {
-    Ok(axum::Json(service.inspect(actor.id, id).await?))
+    Ok(axum::Json(service.decision_view(&actor, id).await?))
 }
 async fn resolve_http(
     crate::authz::RequireOwner(actor): crate::authz::RequireOwner,
@@ -1000,7 +1035,47 @@ async fn resolve_http(
     if id != answer.decision_id {
         return Err(invalid());
     }
-    Ok(axum::Json(service.resolve(actor.id, &answer).await?))
+    answer.validate().map_err(|_| invalid())?;
+    let pin =
+        crate::profiled_execution::settlement::actor::ActorPin::observe(&service.state, &actor)
+            .await?;
+    let view = service
+        .inspect_subject(actor.id, id, SubjectProfile::Code, Some(&pin))
+        .await?;
+    let subject = serde_json::from_value(view["request"]["subject"].clone())
+        .map_err(|_| AppError::Internal)?;
+    let payload = action::Resolve::from_answer(answer, subject);
+    let mut registry = crate::dashboard_api::actions::Registry::default();
+    registry
+        .register(action::ResolveDecision(Some(service.clone())))
+        .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    let operation = crate::dashboard_api::actions::submit_legacy(
+        &service.state,
+        &registry,
+        &actor,
+        payload.request(),
+    )
+    .await
+    .map_err(crate::dashboard_api::actions::existing::legacy_error)?;
+    if operation.disposition == crate::dashboard_api::actions::Disposition::Conflict {
+        return Err(conflict());
+    }
+    let view = service
+        .inspect_subject(actor.id, id, SubjectProfile::Code, Some(&pin))
+        .await?;
+    let receipt: DecisionReceipt =
+        serde_json::from_value(view["receipt"].clone()).map_err(|_| {
+            if operation.disposition == crate::dashboard_api::actions::Disposition::Conflict {
+                conflict()
+            } else {
+                AppError::IdentityUnavailable("decision operation is unresolved".into())
+            }
+        })?;
+    if !matches!(receipt.finality,DecisionFinality::HumanAnswer{owner_user_id,operation_id,..} if owner_user_id==actor.id && operation_id==operation.operation_id)
+    {
+        return Err(conflict());
+    }
+    Ok(axum::Json(receipt))
 }
 async fn cancel_http(
     crate::authz::RequireOwner(actor): crate::authz::RequireOwner,

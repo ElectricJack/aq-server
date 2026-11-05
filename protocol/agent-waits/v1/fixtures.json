@@ -1,0 +1,143 @@
+{
+  "ack_continuation": {
+    "body": {
+      "api_version": 1,
+      "command": {
+        "body": {
+          "admission_id": "00000000-0000-0000-0000-000000000022",
+          "attachment_digest": "a3a1cdeb929c7e1d6e70aaaa4f5f96d985c7528c200c5a27ad96255182013260",
+          "continuation": {
+            "continuation_id": "00000000-0000-0000-0000-000000000020",
+            "generation": 1,
+            "wait": {
+              "generation": 1,
+              "predicate_digest": "f8865193f6756595ac11977a8ffeebad0f6af1e094c1e4805421999646489748",
+              "wait_id": "00000000-0000-0000-0000-000000000009"
+            }
+          },
+          "outcome": {
+            "digest": "44ea7ad9bcb4dc8c3f026e3167c29b6eb1a51ffb4c64eef3a97abfdc492ddd2d",
+            "outcome_id": "00000000-0000-0000-0000-000000000023",
+            "revision": 1,
+            "wait": {
+              "generation": 1,
+              "predicate_digest": "f8865193f6756595ac11977a8ffeebad0f6af1e094c1e4805421999646489748",
+              "wait_id": "00000000-0000-0000-0000-000000000009"
+            }
+          },
+          "successor": {
+            "attempt_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000004",
+            "lineage_id": "00000000-0000-0000-0000-000000000003",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000004",
+              "boot_id": "00000000-0000-0000-0000-000000000006",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000005",
+              "session_id": "00000000-0000-0000-0000-000000000007"
+            },
+            "task_id": "00000000-0000-0000-0000-000000000002"
+          }
+        },
+        "kind": "continuation_ack"
+      },
+      "operation_id": "00000000-0000-0000-0000-000000000021",
+      "required_capability": {
+        "id": "aq.lifecycle-api.continuation-ack",
+        "version": 1
+      }
+    },
+    "body_digest": "5d7199c9e61e5d674226bc5d830f3d6e0c0cea40ed224f440cbc3b57e9f2b6f2"
+  },
+  "inspect_wait": {
+    "body": {
+      "api_version": 1,
+      "command": {
+        "body": {
+          "page": {
+            "cursor": null,
+            "limit": 1
+          },
+          "scope": {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "workspace_id": "00000000-0000-0000-0000-000000000008"
+          },
+          "target": {
+            "kind": "wait",
+            "wait": {
+              "generation": 1,
+              "predicate_digest": "f8865193f6756595ac11977a8ffeebad0f6af1e094c1e4805421999646489748",
+              "wait_id": "00000000-0000-0000-0000-000000000009"
+            }
+          }
+        },
+        "kind": "inspect"
+      },
+      "operation_id": "00000000-0000-0000-0000-00000000001f",
+      "required_capability": {
+        "id": "aq.lifecycle-api.inspect",
+        "version": 1
+      }
+    },
+    "body_digest": "5b0c0aad0a53eb9d93fd047f594480a6fc59319f99a61eec93d16a7c56550615"
+  },
+  "register_task_wait": {
+    "body": {
+      "api_version": 1,
+      "command": {
+        "body": {
+          "binding": {
+            "attempt_generation": 1,
+            "attempt_id": "00000000-0000-0000-0000-000000000004",
+            "lineage_id": "00000000-0000-0000-0000-000000000003",
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "session": {
+              "assignment_generation": 1,
+              "attempt_id": "00000000-0000-0000-0000-000000000004",
+              "boot_id": "00000000-0000-0000-0000-000000000006",
+              "kind": "remote",
+              "node_id": "00000000-0000-0000-0000-000000000005",
+              "session_id": "00000000-0000-0000-0000-000000000007"
+            },
+            "task_id": "00000000-0000-0000-0000-000000000002"
+          },
+          "continuation_generation": 1,
+          "policy": {
+            "digest": "7d461719e63d16861ffc2381fbef61994d079ac518a039d5a4e746ccbe94a0be",
+            "id": "aq-server-wait-policy-default",
+            "version": "1"
+          },
+          "predicate": {
+            "kind": "single",
+            "member": {
+              "condition": {
+                "kind": "task",
+                "requirement": "settled",
+                "revision": "1",
+                "task_id": "00000000-0000-0000-0000-000000000016"
+              },
+              "member_id": "00000000-0000-0000-0000-000000000015"
+            }
+          },
+          "predicate_digest": "f8865193f6756595ac11977a8ffeebad0f6af1e094c1e4805421999646489748",
+          "preference": "economical",
+          "scope": {
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "workspace_id": "00000000-0000-0000-0000-000000000008"
+          },
+          "wait_generation": 1,
+          "wait_id": "00000000-0000-0000-0000-000000000009"
+        },
+        "kind": "register_wait"
+      },
+      "operation_id": "00000000-0000-0000-0000-00000000001e",
+      "required_capability": {
+        "id": "aq.lifecycle-api.wait",
+        "version": 1
+      }
+    },
+    "body_digest": "7c17aaae09551de0589473f01c7152b9f11e8d9be1cec2f4de5f717a5e05dc47"
+  }
+}

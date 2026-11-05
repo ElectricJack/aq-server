@@ -1,0 +1,12 @@
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+error: module has the same name as its containing module
+ --> crates/aq-server/tests/common/phase_refresh_terminal.rs:4:1
+  |
+4 | mod phase_fixture;
+  | ^^^^^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#module_inception
+  = note: `-D clippy::module-inception` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::module_inception)]`
+
+error: could not compile `aq-server` (test "delegated_permit_runtime") due to 1 previous error

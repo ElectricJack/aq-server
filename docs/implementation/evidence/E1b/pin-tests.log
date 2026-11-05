@@ -1,0 +1,9 @@
+test_corrupted_archive_and_sidecar_refuse (__main__.DashboardCandidateTests.test_corrupted_archive_and_sidecar_refuse) ... ok
+test_manifest_digest_and_image_checksum_drift_refuse (__main__.DashboardCandidateTests.test_manifest_digest_and_image_checksum_drift_refuse) ... ok
+test_published_bundle_extracts_exact_manifest_and_assets (__main__.DashboardCandidateTests.test_published_bundle_extracts_exact_manifest_and_assets) ... ok
+test_unsafe_and_duplicate_archive_members_refuse (__main__.DashboardCandidateTests.test_unsafe_and_duplicate_archive_members_refuse) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.330s
+
+OK

@@ -1,0 +1,65 @@
+{
+  "original": {
+    "operation_id": "00000000-0000-4000-8000-000000000003",
+    "kind": "supervisor.message.send",
+    "subject": {
+      "type": "conversation",
+      "id": "00000000-0000-4000-8000-000000000050",
+      "revision": "1"
+    },
+    "expected_versions": {
+      "conversation": "1"
+    },
+    "payload": {
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "message_id": "00000000-0000-4000-8000-000000000030",
+      "expected_conversation_revision": "1",
+      "body": "Please inspect the pending decision.",
+      "context": [],
+      "attachments": []
+    }
+  },
+  "identical": {
+    "operation_id": "00000000-0000-4000-8000-000000000003",
+    "kind": "supervisor.message.send",
+    "subject": {
+      "type": "conversation",
+      "id": "00000000-0000-4000-8000-000000000050",
+      "revision": "1"
+    },
+    "expected_versions": {
+      "conversation": "1"
+    },
+    "payload": {
+      "attachments": [],
+      "context": [],
+      "body": "Please inspect the pending decision.",
+      "expected_conversation_revision": "1",
+      "message_id": "00000000-0000-4000-8000-000000000030",
+      "operation_id": "00000000-0000-4000-8000-000000000003"
+    }
+  },
+  "changed": {
+    "operation_id": "00000000-0000-4000-8000-000000000003",
+    "kind": "supervisor.message.send",
+    "subject": {
+      "type": "conversation",
+      "id": "00000000-0000-4000-8000-000000000050",
+      "revision": "1"
+    },
+    "expected_versions": {
+      "conversation": "1"
+    },
+    "payload": {
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "message_id": "00000000-0000-4000-8000-000000000030",
+      "expected_conversation_revision": "1",
+      "body": "Changed meaning",
+      "context": [],
+      "attachments": []
+    }
+  },
+  "identical_disposition": "confirmed",
+  "changed_status": 409,
+  "original_operation_id": "00000000-0000-4000-8000-000000000003"
+}

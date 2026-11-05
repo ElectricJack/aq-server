@@ -189,6 +189,14 @@ pub(crate) struct MemberProgress {
     pub last_checked_at: Option<u64>,
     pub last_verified_at: Option<u64>,
 }
+/// Read-only member freshness for owner/agent inspection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MemberFreshness {
+    pub state: wire::MemberOutcome,
+    pub unavailable_reason: Option<wire::Text>,
+    pub last_checked_at_ms: Option<u64>,
+    pub last_verified_at_ms: Option<u64>,
+}
 /// Registry data only; no active-grant, hold-proof or physical-state fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "StoredSnapshot")]

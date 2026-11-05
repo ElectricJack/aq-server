@@ -1,0 +1,25 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000301",
+  "kind": "playbook.run.start",
+  "subject": {
+    "type": "playbook_binding",
+    "id": "worker-recovery",
+    "revision": "7"
+  },
+  "expected_versions": {
+    "playbook_binding": "7"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000301",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "7",
+    "binding": "worker-recovery",
+    "artifact": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "entry": "main",
+    "inputs": {
+      "dry_run": true,
+      "limit": 3,
+      "target": "slot-2"
+    }
+  }
+}

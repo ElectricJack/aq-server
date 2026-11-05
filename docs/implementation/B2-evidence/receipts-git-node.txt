@@ -1,0 +1,22 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-5/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 8.33s
+     Running tests/phase_source_retention.rs (target/debug/deps/phase_source_retention-50589287c4059f3c)
+
+running 2 tests
+test frozen::actual_phase_stopped_checkpoint_http_import_and_current_retention_are_not_legacy_gated ... SOURCE_RETENTION_OWNER group=3355405 start=5838005 session=3354892 root=/tmp/.tmpf8zGGF/rc
+SOURCE_RETENTION_OWNER group=3355566 start=5838155 session=3354892 root=/tmp/.tmpf8zGGF/rw
+SOURCE_RETENTION_OWNER_DRAINED group=3355566
+SOURCE_RETENTION_OWNER_DRAINED group=3355405
+actual phase source retained checkpoint upload report and current-retention proof; no physical/provider/settlement claim
+ok
+test refresh::actual_phase_stopped_checkpoint_http_import_and_current_retention_are_not_legacy_gated ... SOURCE_RETENTION_OWNER group=3356471 start=5839213 session=3354892 root=/tmp/.tmpWxJryY/rc
+SOURCE_RETENTION_OWNER group=3356639 start=5839363 session=3354892 root=/tmp/.tmpWxJryY/rw
+SOURCE_RETENTION_OWNER_DRAINED group=3356639
+SOURCE_RETENTION_OWNER_DRAINED group=3356471
+actual phase source retained checkpoint upload report and current-retention proof; no physical/provider/settlement claim
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 22.34s
+
+
+Owned test session 3354892; remaining processes: []

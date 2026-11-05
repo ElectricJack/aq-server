@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/aq-wait-engine", "crates/aq-central-authority", "crates/aq-result-media", "crates/aq-phase-terminal-protocol", "crates/aq-review-protocol", "crates/aq-playbook-host", "crates/aq-observation-admission", "crates/aq-session-cli", "crates/aq-terminal-relay-protocol", "crates/aq-terminal-relay", "crates/aq-observation-api", "crates/aq-accounting", "crates/aq-notify", "crates/aq-human-http", "crates/aq-notifications", "crates/aq-admission", "crates/aq-agent-api", "crates/aq-lifecycle-api", "crates/aq-selection", "crates/aq-profiles", "crates/aq-session-api", "crates/aq-release", "crates/aq-server", "crates/aq-updater"]
-exclude = ["vendor/aq-playbooks-0173673", "vendor/png-0.18.1-aq1", "vendor/aq-playbooks-d3bd349", "vendor/aq-playbooks-a463e59", "vendor/aq-playbooks-42f9449", "vendor/aq-lifecycle-protocol-0.1.0", "vendor/aq-session-protocol-0.1.0", "vendor/aq-worker-protocol-0.1.1", "vendor/aq-worker-protocol-0.2.0", "vendor/aq-protocol-0.1.0"]
+members = ["crates/aq-supervisor-host", "crates/aqv2", "crates/aq-wait-engine", "crates/aq-central-authority", "crates/aq-result-media", "crates/aq-phase-terminal-protocol", "crates/aq-review-protocol", "crates/aq-playbook-host", "crates/aq-observation-admission", "crates/aq-session-cli", "crates/aq-terminal-relay-protocol", "crates/aq-terminal-relay", "crates/aq-observation-api", "crates/aq-accounting", "crates/aq-notify", "crates/aq-human-http", "crates/aq-notifications", "crates/aq-admission", "crates/aq-agent-api", "crates/aq-lifecycle-api", "crates/aq-selection", "crates/aq-profiles", "crates/aq-session-api", "crates/aq-release", "crates/aq-server", "crates/aq-updater"]
+exclude = ["vendor/aq-session-host-0.1.7", "vendor/aq-codex-mapper-0.1.1", "vendor/aq-responses-transport-0.1.0", "vendor/aq-playbooks-0173673", "vendor/png-0.18.1-aq1", "vendor/aq-lifecycle-protocol-0.1.0", "vendor/aq-session-protocol-0.1.0", "vendor/aq-worker-protocol-0.1.1", "vendor/aq-worker-protocol-0.2.0", "vendor/aq-protocol-0.1.0", "vendor/aq-admission-0.2.0", "vendor/aq-admission-0.3.0", "vendor/aq-admission-0.3.1", "vendor/aq-admission-0.3.2", "vendor/aq-admission-0.3.3"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,9 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+aq-session-host = { path = "vendor/aq-session-host-0.1.7", version = "=0.1.7" }
+aq-codex-mapper = { path = "vendor/aq-codex-mapper-0.1.1", version = "=0.1.1" }
+aq-responses-transport = { path = "vendor/aq-responses-transport-0.1.0", version = "=0.1.0" }
 aq-protocol = { path = "vendor/aq-protocol-0.1.0", version = "=0.1.0" }
 aq-worker-protocol = { path = "vendor/aq-worker-protocol-0.2.0", version = "=0.2.0" }
 aq-release = { path = "crates/aq-release" }
@@ -46,6 +49,15 @@ http-body-util = "0.1"
 rsa = "0.9"
 tempfile = "3"
 
+# Bound worker test artifacts while retaining workspace backtrace file:line.
+# The test profile inherits these settings from dev.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 strip = true
@@ -55,3 +67,4 @@ strip = true
 # Exact published PNG source plus the narrow upstream malformed-PLTE fix.
 png = { path = "vendor/png-0.18.1-aq1" }
 aq-session-protocol = { path = "vendor/aq-session-protocol-0.1.0" }
+aq-lifecycle-protocol = { path = "vendor/aq-lifecycle-protocol-0.1.0" }

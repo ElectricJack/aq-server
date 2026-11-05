@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/phase_terminal_closure.rs (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_terminal_closure-d615e61739dac0a0)
+
+running 1 test
+test wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority ... 
+thread 'wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority' (2151638) panicked at crates/aq-server/tests/common/phase_execution_core.rs:155:5:
+assertion `left == right` failed: {"body":{"code":"unavailable","operation_id":null,"schema_version":1},"kind":"failure"}
+  left: 500
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.19s
+
+error: test failed, to rerun pass `-p aq-server --test phase_terminal_closure`

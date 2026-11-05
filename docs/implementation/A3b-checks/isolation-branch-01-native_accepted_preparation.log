@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running tests/native_accepted_preparation.rs (target/debug/deps/native_accepted_preparation-05fe5ad61a94428e)
+
+running 1 test
+test original_inputs_remain_scoped_after_proposal_expiry_then_expire_held ... 
+thread 'original_inputs_remain_scoped_after_proposal_expiry_then_expire_held' (2114577) panicked at crates/aq-server/tests/native_accepted_preparation.rs:342:5:
+assertion failed: aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state,
+            q.original.identity.node_id,
+            q.original.acceptance.binding.attempt_id).await.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    original_inputs_remain_scoped_after_proposal_expiry_then_expire_held
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 4.33s
+
+error: test failed, to rerun pass `-p aq-server --test native_accepted_preparation`

@@ -118,7 +118,9 @@ async fn current30_missing_one_or_both_tables_refuses_reopen_without_repair() {
     let store = db.store().await;
     let pool = db.pool().await;
     store.close().await;
-    sqlx::query("DROP TABLE profiled_v2_accepts")
+    // Remove newer foreign-key dependencies as part of deliberate corruption.
+    // Reopening must refuse the damage without silently repairing it.
+    sqlx::query("DROP TABLE profiled_v2_accepts CASCADE")
         .execute(&pool)
         .await
         .unwrap();
@@ -131,7 +133,7 @@ async fn current30_missing_one_or_both_tables_refuses_reopen_without_repair() {
         format(&pool).await,
         aq_server::STATE_FORMAT_VERSION.to_string()
     );
-    sqlx::query("DROP TABLE profiled_v2_proposals")
+    sqlx::query("DROP TABLE profiled_v2_proposals CASCADE")
         .execute(&pool)
         .await
         .unwrap();

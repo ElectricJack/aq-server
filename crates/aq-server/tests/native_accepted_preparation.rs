@@ -70,7 +70,10 @@ async fn configure(c: &mut Case) {
             .fetch_one(&c.env.env.pool)
             .await
             .unwrap();
-    assert_eq!(format, aq_server::STATE_FORMAT_VERSION.to_string());
+    assert_eq!(
+        format,
+        aq_server::test_support::fixture_store_state_version().to_string()
+    );
     let present:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&c.env.env.pool).await.unwrap();
     assert!(
         present,
@@ -104,9 +107,9 @@ async fn setup_with_functional_clock(
     assert_eq!(page.offers.len(), 1, "{body}");
     let offer = page.offers.remove(0);
     if freeze_phase_clock {
-        // ONLY the route/auth/nonce fixture: actual NativeOffer publication and
-        // all original clocks stay unchanged. Freeze elapsed age before the first
-        // v2 Proposal/Accept. This cannot qualify real I/O freshness or latency.
+        // Actual NativeOffer publication and all original clocks stay unchanged.
+        // Freeze elapsed age before the first v2 Proposal/Accept for functional
+        // owner assertions. This cannot qualify real I/O freshness or latency.
         let fixed = (c.env.env.state.clock)();
         c.env.env.state.clock = std::sync::Arc::new(move || fixed);
     }
@@ -280,7 +283,63 @@ async fn source(c: &Case, q: &AcceptRequest) -> axum::response::Response {
 }
 #[tokio::test]
 async fn original_inputs_remain_scoped_after_proposal_expiry_then_expire_held() {
-    let (mut c, p, q) = setup().await;
+    // Before migration40 the expiry owner cannot close phase preparations.
+    // Preserve that refusal alongside the current phase-aware release below.
+    let (c, p, q) =
+        aq_server::test_support::with_store_profile(39, setup_with_functional_clock(true)).await;
+    let node = q.original.identity.node_id;
+    let attempt = q.original.acceptance.binding.attempt_id;
+    let (c, _) = expire_original_inputs(c, p, q).await;
+    let error =
+        aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state, node, attempt)
+            .await
+            .err()
+            .expect("historical expiry owner must refuse a phase preparation");
+    assert!(
+        matches!(&error, aq_server::error::AppError::Conflict(message)
+            if message == "ungranted closure refused by current owners [23514:legacy_acceptance_join]"),
+        "expected the historical acceptance guard, got {error:?}"
+    );
+    let held: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert!(held);
+}
+#[tokio::test]
+async fn current_original_inputs_expire_then_release_with_exact_phase_absence_proof() {
+    let (c, p, q) = setup_with_functional_clock(true).await;
+    let node = q.original.identity.node_id;
+    let binding = q.original.acceptance.binding.clone();
+    let attempt = binding.attempt_id;
+    let (c, deadline) = expire_original_inputs(c, p, q).await;
+    let closure =
+        aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state, node, attempt)
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(closure.changed);
+    assert_eq!(closure.proof.reason, "preparation_expired");
+    assert_eq!(closure.proof.binding, binding);
+    assert_eq!(closure.proof.applicable_deadline_ms, deadline);
+    let replay =
+        aq_server::profiled_execution::no_grant::close_expired(&c.env.env.state, node, attempt)
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(!replay.changed);
+    assert_eq!(closure.bytes, replay.bytes);
+    let (held, valid, grants): (bool, bool, i64) = sqlx::query_as(
+        "SELECT holds_task,profiled_never_granted_valid(attempt_id),(SELECT count(*) FROM profiled_phase_execution_grants WHERE attempt_id=a.attempt_id) FROM execution_attempts a WHERE attempt_id=$1"
+    ).bind(attempt).fetch_one(&c.env.env.pool).await.unwrap();
+    assert!(!held);
+    assert!(valid);
+    assert_eq!(grants, 0);
+}
+
+async fn expire_original_inputs(mut c: Case, p: phase::Proposal, q: AcceptRequest) -> (Case, u64) {
     let a = owner::accept(&c.env.env.state, &auth(&c).await, &q, Uuid::new_v4())
         .await
         .unwrap();
@@ -339,23 +398,9 @@ async fn original_inputs_remain_scoped_after_proposal_expiry_then_expire_held() 
             .await
             .is_err()
     );
-    assert!(
-        aq_server::profiled_execution::no_grant::close_expired(
-            &c.env.env.state,
-            q.original.identity.node_id,
-            q.original.acceptance.binding.attempt_id
-        )
-        .await
-        .is_err()
-    );
-    let held: bool =
-        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
-            .bind(q.original.acceptance.binding.attempt_id)
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
-    assert!(held);
+    (c, a.receipt.lease.expires_at_ms)
 }
+
 #[tokio::test]
 async fn changed_bytes_runtime_scope_and_cancel_refuse_without_new_receipts() {
     let (c, p, q) = setup().await;

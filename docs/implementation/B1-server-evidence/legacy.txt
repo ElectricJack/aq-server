@@ -1,0 +1,66 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized] target(s) in 1.84s
+     Running tests/granted_closure.rs (target/debug/deps/granted_closure-47cb153b62c71ecd)
+
+running 5 tests
+test actual_host_optional_shape_does_not_weaken_the_post_started_contract ... ok
+test serialization_is_not_original_owner_or_current_authority ... ok
+test strict_decode_rejects_duplicates_floats_oversize_and_release_semantics ... ok
+test frozen_017_source_and_artifacts_are_preserved ... ok
+test synthetic_fixtures_schemas_and_independent_vectors_do_not_drift ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/preparation_refresh.rs (target/debug/deps/preparation_refresh-8d635c01fba8c3c5)
+
+running 15 tests
+test canonical_signed64_registry_revisions_and_exact_owner_configuration_are_required ... ok
+test interactive_clock_rejects_invalid_times_and_monotonic_overflow ... ok
+test long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract ... ok
+test explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour ... ok
+test actual_fact_revision_is_the_current_registry_and_not_a_restamped_original ... ok
+test principal_inventory_context_and_private_backing_pins_remain_mandatory ... ok
+test unrelated_observation_revision_advances_do_not_reselect_or_invalidate_configuration ... ok
+test normative_schema_contract_and_facts_are_exact_and_never_claim_owner_authentication ... ok
+test fresh_profile_never_extends_original_accepted_or_replayed_execution_deadlines ... ok
+test strict_new_wire_refuses_unknown_duplicate_oversized_or_wrong_family_documents ... ok
+test all_known_registry_floors_reject_rollback_even_above_the_original_revision ... ok
+test unavailable_cooldown_unknown_and_expired_facts_still_refuse_initial_execution ... ok
+test real_typed_refresh_chain_preserves_selected_pins_and_independent_phase_clocks ... ok
+test actual_original_accepted_and_credential_associations_cannot_be_rehashed_away ... ok
+test profile_negotiation_is_exact_from_proposal_and_never_upgrades_old_history ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+     Running tests/preparation_v2.rs (target/debug/deps/preparation_v2-a1595af782020ead)
+
+running 16 tests
+test exact_qualified_018_source_and_artifacts_are_preserved ... ok
+test structural_claims_are_not_authenticated_owner_truth ... ok
+test grant_issuance_must_be_inside_phase_and_current_budget ... ok
+test exact_unique_artifacts_and_linked_transfer_roles_refuse_substitution ... ok
+test acceptance_cannot_change_hold_request_or_retime_expired_proposal ... ok
+test serialization_and_decode_are_bounded_and_unknown_fields_refuse ... ok
+test accepted_phase_requires_explicit_new_worker_duration_bound ... ok
+test independent_execution_replay_never_extends_or_revives_old_sample ... ok
+test historical_receipt_does_not_become_live_from_expired_delivery ... ok
+test original_artifact_retention_caps_accepted_preparation ... ok
+test changed_current_choice_context_source_and_unknown_facts_deny_initial_confirmation ... ok
+test exact_contract_and_complete_unique_features_are_mandatory ... ok
+test cold_preparation_and_execution_are_distinct_immutable_phases ... ok
+test v2_decoder_never_falls_back_to_legacy_or_different_schema ... ok
+test mandatory_owner_fact_set_hash_and_lifetime_are_bounded ... ok
+test generated_artifacts_and_independent_canonical_vectors_match ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+     Running tests/transport.rs (target/debug/deps/transport-5938e71d4da081c2)
+
+running 4 tests
+test exact_stop_replay_is_immutable_and_journal_order_is_launch_scoped ... ok
+test stop_journal_requires_durable_closed_reservation_and_unknown_never_releases ... ok
+test roundtrip_budget_is_charged_and_replay_cannot_restart_ttl ... ok
+test published_transport_replays_and_mutations_reject_duplicate_unknown_and_scope ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

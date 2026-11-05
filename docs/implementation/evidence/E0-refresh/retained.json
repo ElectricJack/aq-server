@@ -1,0 +1,296 @@
+{
+  "containers": {
+    "aq-git": {
+      "health": "healthy",
+      "id": "05a93245d3e7585ba667dd980de8fa7571d0f745e4394353b301630b0e731aca",
+      "image": "sha256:94a3d9adea2cf2f693cde66e8c0b58dd9d9cd3a2b47eced78545092dbefdb638",
+      "mounts": [
+        {
+          "destination": "/dev-git-supervisor.sh",
+          "rw": false,
+          "source": "/home/jkern/.local/state/aq-platform-e0-final/source/scripts/dev-git-supervisor.sh",
+          "type": "bind"
+        },
+        {
+          "destination": "/fixture",
+          "rw": false,
+          "source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/798e66da5cdb615cd825adf3b1d8db0342a596b3206742cb9ff80dae8364ec3f",
+          "type": "bind"
+        },
+        {
+          "destination": "/run/aq-git",
+          "rw": true,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_git_run/_data",
+          "type": "volume"
+        },
+        {
+          "destination": "/var/lib/aq",
+          "rw": true,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_source/_data",
+          "type": "volume"
+        }
+      ],
+      "restart_count": 0,
+      "started_at": "2026-11-02T23:25:49.646125452Z"
+    },
+    "aq-graph": {
+      "health": "healthy",
+      "id": "52c0dc0265d87e1f0692fe726c1c2522972b37316e252a4c294771e813c73bed",
+      "image": "sha256:807beba98dcd20b0ae335f09cae8c06ecb182a352ee78de278cb47fccb2ee3be",
+      "mounts": [
+        {
+          "destination": "/run/secrets/graph_database_password",
+          "rw": false,
+          "source": "/home/jkern/.local/state/aq-platform-e0-final/secrets/graph_database_password",
+          "type": "bind"
+        },
+        {
+          "destination": "/run/secrets/graph_token",
+          "rw": false,
+          "source": "/home/jkern/.local/state/aq-platform-e0-final/secrets/graph_token",
+          "type": "bind"
+        }
+      ],
+      "restart_count": 0,
+      "started_at": "2026-11-02T23:25:58.278071445Z"
+    },
+    "postgres": {
+      "health": "healthy",
+      "id": "32695a8d72b2e9fc5240fefaf6488d1300734a2990d41f5c127cdbe1965a6b58",
+      "image": "sha256:99445113a4a19e82dd3713c65bd9f6fb5bf972065ab043df8d1e1c93e957da9a",
+      "mounts": [
+        {
+          "destination": "/run/secrets/postgres_password",
+          "rw": false,
+          "source": "/home/jkern/.local/state/aq-platform-e0-final/secrets/postgres_password",
+          "type": "bind"
+        },
+        {
+          "destination": "/var/lib/postgresql/data",
+          "rw": true,
+          "source": "/var/lib/docker/volumes/aq-e0-final_aq_postgres/_data",
+          "type": "volume"
+        }
+      ],
+      "restart_count": 0,
+      "started_at": "2026-11-02T23:25:48.118305115Z"
+    },
+    "server": {
+      "health": "healthy",
+      "id": "40241b830ecce53f64c81d13138a2cb14aaf3c4269810a5c3ef918166e421830",
+      "image": "sha256:6f119d44a482162e7c8d8c04255e56e1e571b9b9e518efd03a8c0fbbd4fd4f96",
+      "mounts": [
+        {
+          "destination": "/run/aq-dev",
+          "rw": false,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_auth/_data",
+          "type": "volume"
+        },
+        {
+          "destination": "/run/aq-git",
+          "rw": false,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_git_run/_data",
+          "type": "volume"
+        },
+        {
+          "destination": "/run/secrets/postgres_password",
+          "rw": false,
+          "source": "/home/jkern/.local/state/aq-platform-e0-final/secrets/postgres_password",
+          "type": "bind"
+        },
+        {
+          "destination": "/var/lib/aq",
+          "rw": true,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_source/_data",
+          "type": "volume"
+        },
+        {
+          "destination": "/vault",
+          "rw": false,
+          "source": "/var/lib/docker/volumes/aq-e0-final_dev_vault/_data",
+          "type": "volume"
+        }
+      ],
+      "restart_count": 0,
+      "started_at": "2026-11-03T05:21:31.046005758Z"
+    }
+  },
+  "graph_task": {
+    "acceptance_criteria": "",
+    "body": "Use only the owner-designated scratch repository.",
+    "content_revision": 1,
+    "content_type": "note",
+    "created_at": "2026-11-02T23:26:11.574940Z",
+    "created_by": "dev-service",
+    "deleted": false,
+    "id": "e0000000-0000-4000-8000-000000000004",
+    "kind": "task",
+    "labels": [],
+    "last_verified_at": null,
+    "last_verified_by": null,
+    "metadata": {},
+    "provenance": [],
+    "retired": false,
+    "retirement_reason": null,
+    "review_at": null,
+    "successor_id": null,
+    "summary": null,
+    "summary_of_revision": null,
+    "task_state": "active",
+    "title": "Local development scratch task",
+    "updated_at": "2026-11-02T23:26:11.574940Z",
+    "valid_from": null,
+    "valid_until": null,
+    "verification": "unverified",
+    "version": 1,
+    "workspace_id": "e0000000-0000-4000-8000-000000000001"
+  },
+  "preserved": [
+    "principal",
+    "project",
+    "users",
+    "workers",
+    "graph_task",
+    "repository",
+    "retention",
+    "seed",
+    "credentials",
+    "config_sha256",
+    "server_mounts",
+    "dependency_container_identity_and_start_time"
+  ],
+  "principal": "91cf17b7-cb15-4078-9651-c01634bf0da5",
+  "project": {
+    "binding": {
+      "allowed_agent_profiles": [
+        "implementer@1"
+      ],
+      "allowed_environments": [
+        "confined-worktree"
+      ],
+      "allowed_execution_profiles": [
+        "confined-development@1"
+      ],
+      "allowed_intelligence_profiles": [
+        "engineering@1"
+      ],
+      "allowed_node_ids": [
+        "806c44f7-0e2a-4094-b976-687e4e54aedf"
+      ],
+      "allowed_worker_groups": [],
+      "catalog_digest": "0c8a041de2e1af9e6937cd0c87cefed8a0c82d6e592d986c7d0ab3dfc817d6f2",
+      "ceilings": {
+        "context_bytes": 8192,
+        "cost_limit_microunits": null,
+        "cpu_millis": 60000,
+        "currency": null,
+        "memory_bytes": 268435456,
+        "permissions": [
+          {
+            "operation": "task.read",
+            "scope_reference": "project:example"
+          }
+        ],
+        "process_limit": 8,
+        "require_hard_cost_enforcement": false,
+        "wall_time_ms": 60000
+      },
+      "context": [],
+      "enabled": true,
+      "graph_adapter_reference": "aq.graph.configured",
+      "graph_workspace_id": "e0000000-0000-4000-8000-000000000001",
+      "name": "Local scratch development",
+      "policy": {
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "identity": "local-development",
+        "revision": "1"
+      },
+      "project_id": "e0000000-0000-4000-8000-000000000002",
+      "repository_adapter_reference": "aq.git.configured",
+      "repository_binding_generation": 1,
+      "repository_id": "e0000000-0000-4000-8000-000000000003",
+      "schema_version": 1
+    },
+    "revision": 1,
+    "validated_at_ms": 1793661973930,
+    "validation": {
+      "expires_at_ms": 1793662003930,
+      "graph": "verified",
+      "graph_adapter_reference": "aq.graph.configured",
+      "graph_workspace_id": "e0000000-0000-4000-8000-000000000001",
+      "observed_at_ms": 1793661973930,
+      "repository": "verified",
+      "repository_adapter_reference": "aq.git.configured",
+      "repository_generation": 1,
+      "repository_id": "e0000000-0000-4000-8000-000000000003"
+    }
+  },
+  "repository": {
+    "allow_file_transport": false,
+    "allowed_refs": [
+      "refs/heads/main"
+    ],
+    "allowed_targets": [
+      "refs/heads/main"
+    ],
+    "binding_generation": 1,
+    "credential_profile": null,
+    "feature_profile": null,
+    "identity": "e0-development",
+    "mode": "central",
+    "object_format": "sha1",
+    "remote_url": "https://github.com/ElectricJack/aq-scratch.git",
+    "repository_id": "e0000000-0000-4000-8000-000000000003"
+  },
+  "retention": {
+    "binding_generation": 1,
+    "dependencies": [],
+    "generation": 3,
+    "id": "e0000000-0000-4000-8000-000000000011",
+    "refs": [
+      {
+        "name": "refs/aq-git/checkpoints/e0000000-0000-4000-8000-000000000011",
+        "oid": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+      }
+    ],
+    "release_operation": null,
+    "release_reason": null,
+    "repository_id": "e0000000-0000-4000-8000-000000000003",
+    "resource": "checkpoint",
+    "state": "active",
+    "version": 1
+  },
+  "seed": {
+    "designation": {
+      "base_branch": "main",
+      "credential_ref": "none",
+      "local_fixture": false,
+      "url": "https://github.com/ElectricJack/aq-scratch.git"
+    },
+    "node_id": "806c44f7-0e2a-4094-b976-687e4e54aedf",
+    "project_id": "e0000000-0000-4000-8000-000000000002",
+    "repository_id": "e0000000-0000-4000-8000-000000000003",
+    "task_id": "e0000000-0000-4000-8000-000000000004",
+    "workspace_id": "e0000000-0000-4000-8000-000000000001"
+  },
+  "server_image_id": "sha256:6f119d44a482162e7c8d8c04255e56e1e571b9b9e518efd03a8c0fbbd4fd4f96",
+  "source_revision": "c802fed50bd579009b13a4cc11f77af52fe88d22",
+  "users": [
+    {
+      "bound": true,
+      "email": "owner@localhost",
+      "role": "owner"
+    }
+  ],
+  "workers": [
+    {
+      "enrolled_at": "2026-11-02T23:26:11.463675Z",
+      "id": "806c44f7-0e2a-4094-b976-687e4e54aedf",
+      "last_seen_at": null,
+      "name": "e0-local-development",
+      "protocol_version": 1,
+      "status": "offline",
+      "worker_version": "e0-seed"
+    }
+  ]
+}

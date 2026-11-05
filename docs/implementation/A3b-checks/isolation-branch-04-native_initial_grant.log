@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/native_initial_grant.rs (target/debug/deps/native_initial_grant-7e3e955f5826c45a)
+
+running 1 test
+test published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation ... 
+thread 'published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation' (2115421) panicked at crates/aq-server/tests/native_initial_grant/published/presence.rs:97:35:
+called `Result::unwrap()` on an `Err` value: Conflict("native initial grant is not currently available")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 53 filtered out; finished in 6.67s
+
+error: test failed, to rerun pass `-p aq-server --test native_initial_grant`

@@ -1,17 +1,21 @@
 //! Pure deterministic selection over bounded snapshots. No inputs confer authority.
 //! Server-owned adapters authenticate facts and recheck them at actual admission.
 mod candidate_core;
+mod credential_policy;
+pub use credential_policy::*;
 pub mod central;
 mod domain;
 mod explanation;
 pub use explanation::human_selection;
 mod feedback;
 pub use feedback::*;
+mod placement;
+pub use placement::*;
 mod select;
 mod validate;
 pub use aq_session_protocol::{ArtifactRef, Digest, Scope, Text, Validate};
 pub use domain::*;
-pub use select::{select, select_legacy_for_inspection};
+pub use select::{OFFER_SELECTION_TTL_MS, select, select_for_offer, select_legacy_for_inspection};
 use serde::Serialize;
 #[derive(Debug, thiserror::Error)]
 pub enum SelectionError {

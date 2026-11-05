@@ -32,12 +32,16 @@ renewal tests are included in the 25, not counted twice. Library tests include
 private read progress despite a saturated Tokio blocking pool, cancellation
 ownership bounds, scoped sequence-first health and causal installation rules.
 
-Exact commands, run from `/tmp/aq08-native-renewal`:
+Rerun the focused selection from the leased slot root:
+
+Rerun commands below use the leased slot target and disable incremental builds;
+see [Cargo worker build guidance](../guides/cargo-worker-builds.md).
+Historical commands, results and hashes remain in the machine-readable evidence.
 
 ```sh
-env DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=4 CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo test -p aq-server --test native_initial_grant --test schema28_closure --all-features --locked --offline
-env CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo test -p aq-server --lib profiled_execution:: --all-features --locked --offline
-env CARGO_TARGET_DIR=/tmp/aq08-native-producer-target CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
+env DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres RUST_TEST_THREADS=4 CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p aq-server --test native_initial_grant --test schema28_closure --all-features --locked --offline
+env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p aq-server --lib profiled_execution:: --all-features --locked --offline
+env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo clippy -p aq-server --all-targets --all-features --locked --offline -- -D warnings
 cargo fmt --all --check
 ```
 

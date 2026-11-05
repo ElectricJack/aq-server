@@ -566,6 +566,19 @@ impl Owner {
             .map_err(|_| CatalogCallError::Host(Error::Stopped))?
     }
 }
+fn runner_error(e: aq_playbooks_runner::Error) -> Error {
+    match e {
+        aq_playbooks_runner::Error::Exhausted(_) => Error::Overloaded,
+        // The pinned runner reports atomic namespace limits as this refusal.
+        // Preserve its type here without changing the vendored engine API.
+        aq_playbooks_runner::Error::Refused(reason)
+            if reason == "namespace retention/admission quota exhausted" =>
+        {
+            Error::Overloaded
+        }
+        other => Error::Engine(other.to_string()),
+    }
+}
 fn engine_error(e: impl std::fmt::Display) -> Error {
     Error::Engine(e.to_string())
 }
@@ -619,7 +632,7 @@ fn execute<S: Storage>(
             serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.iter().filter(|d|d.run.is_none()).count()})
         }
         Request::AdmitOnce { request, now_ms } => {
-            serde_json::to_value(engine.admit_once(*request, now_ms).map_err(engine_error)?)
+            serde_json::to_value(engine.admit_once(*request, now_ms).map_err(runner_error)?)
                 .map_err(engine_error)?
         }
         Request::Admission { key } => {
@@ -643,7 +656,7 @@ fn execute<S: Storage>(
         } => serde_json::to_value(
             engine
                 .admit_event_in_epoch(&authenticated_producer, *event, epoch, now_ms)
-                .map_err(engine_error)?,
+                .map_err(runner_error)?,
         )
         .map_err(engine_error)?,
         Request::Fanout {
@@ -651,7 +664,7 @@ fn execute<S: Storage>(
             limit,
             now_ms,
         } => {
-            serde_json::json!({"admitted": engine.fanout(&event_key, limit, now_ms).map_err(engine_error)?})
+            serde_json::json!({"admitted": engine.fanout(&event_key, limit, now_ms).map_err(runner_error)?})
         }
         Request::Recover { now_ms } => {
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
@@ -752,7 +765,12 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         || registry.commands.iter().any(|(name, c)| {
             !COMMANDS.contains(&name.as_str())
                 || name != &c.name
-                || c.recovery != model::Recovery::Reconcilable
+                || !matches!(
+                    c.recovery,
+                    model::Recovery::Observation
+                        | model::Recovery::KeyedIdempotent
+                        | model::Recovery::Reconcilable
+                )
         })
         || registry.events.iter().any(|(name, c)| name != &c.name)
     {

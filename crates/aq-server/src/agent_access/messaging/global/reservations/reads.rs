@@ -62,12 +62,14 @@ pub(super) async fn reservation(
     let state = match row.get::<String, _>("state").as_str() {
         "awaiting_prepared_plan" => ReservationState::AwaitingPreparedPlan,
         "cancelled_before_plan" => ReservationState::CancelledBeforePlan,
+        "consumed" => ReservationState::Consumed,
         _ => return Err(unavailable()),
     };
     let revision = row.get::<i64, _>("revision") as u64;
     let cancel_operation_id = row.get::<Option<Uuid>, _>("cancel_operation_id");
-    if (state == ReservationState::AwaitingPreparedPlan
-        && (revision != 1 || cancel_operation_id.is_some()))
+    if (state == ReservationState::Consumed && (revision != 2 || cancel_operation_id.is_some()))
+        || (state == ReservationState::AwaitingPreparedPlan
+            && (revision != 1 || cancel_operation_id.is_some()))
         || (state == ReservationState::CancelledBeforePlan
             && (revision != 2 || cancel_operation_id.is_none()))
     {
@@ -166,12 +168,20 @@ pub(super) async fn selection(
         if active {
             return Err(unavailable());
         }
-        let rows=sqlx::query("SELECT m.message_id,m.cursor,m.payload_digest,octet_length(m.body) AS body_bytes,central_global_mail_source_valid(m.message_id) AS valid FROM mailbox_messages m WHERE m.mailbox_key=$1 AND m.cursor>$2 AND m.cursor<=$3 ORDER BY m.cursor LIMIT 129 FOR SHARE OF m").bind(&mailbox).bind(cursor(request.scan_after)?).bind(through).fetch_all(&mut **tx).await.map_err(db)?;
+        let rows=sqlx::query("SELECT m.message_id,m.cursor,m.payload_digest,octet_length(m.body) AS body_bytes,central_global_mail_source_valid(m.message_id) AS valid,EXISTS(SELECT 1 FROM central_supervisor_mail_members b JOIN central_supervisor_reservations r ON r.reservation_id=b.reservation_id WHERE b.actor_id=$4 AND b.message_id=m.message_id AND r.state='consumed') AS consumed FROM mailbox_messages m WHERE m.mailbox_key=$1 AND m.cursor>$2 AND m.cursor<=$3 ORDER BY m.cursor LIMIT 129 FOR SHARE OF m").bind(&mailbox).bind(cursor(request.scan_after)?).bind(through).bind(a.id).fetch_all(&mut **tx).await.map_err(db)?;
         let mut messages = Vec::new();
         for (index, row) in rows.into_iter().enumerate() {
+            if index >= MAX_SCAN {
+                break;
+            }
+            if row.get::<bool, _>("consumed") {
+                result.scanned_through_cursor =
+                    u64::try_from(row.get::<i64, _>("cursor")).map_err(|_| unavailable())?;
+                continue;
+            }
             let bytes =
                 u64::try_from(row.get::<i32, _>("body_bytes")).map_err(|_| unavailable())?;
-            if index >= MAX_SCAN || messages.len() >= 16 || result.body_bytes + bytes > 65536 {
+            if messages.len() >= 16 || result.body_bytes + bytes > 65536 {
                 break;
             }
             if bytes == 0 || bytes > 16384 || !row.get::<bool, _>("valid") {

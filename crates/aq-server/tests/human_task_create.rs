@@ -335,7 +335,7 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     };
     f.state.agent_access = Some(Arc::new(Runtime::new(&config).await.unwrap()));
     assert!(human::task_create_available(&f.state));
-    let app = human::routes(&f.state).with_state(f.state.clone());
+    let app = aq_server::build_admin_router(f.state.clone());
     let project = f.selection.lineage.project_id;
     let path = format!("/api/human/projects/{project}/tasks");
     let op = Uuid::new_v4();
@@ -392,6 +392,32 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
             .await
             .is_err()
     );
+    let action = |id: Uuid, revision: &str| {
+        let payload: Value = serde_json::from_str(&request(id, revision)).unwrap();
+        json!({"operation_id":id,"kind":"task.create","subject":{"type":"project","id":project,"revision":revision},"expected_versions":{"project":revision},"payload":payload}).to_string()
+    };
+    let (code, union) = send(
+        &app,
+        "/api/v1/actions",
+        Some(&action(op, "1")),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, 200, "{union}");
+    assert_eq!(union["data"]["disposition"], "confirmed");
+    assert_eq!(union["data"]["affected_entities"][0]["id"], json!(op));
+    assert_eq!(
+        send(
+            &app,
+            &format!("/api/v1/operations/{op}"),
+            None,
+            "owner@localhost"
+        )
+        .await
+        .1["data"],
+        union["data"]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     // Stale revision has durable proof of no dispatch, not a generic ambiguous409.
     let stale = Uuid::new_v4();
     let (code, refused) = send(&app, &path, Some(&request(stale, "2")), "owner@localhost").await;
@@ -427,6 +453,25 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     assert_eq!(
         send(&app, &lost_path, None, "owner@localhost").await.1,
         unknown
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), count);
+    let (code, unresolved) = send(
+        &app,
+        &format!("/api/v1/operations/{lost}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, 200, "{unresolved}");
+    assert_eq!(unresolved["data"]["disposition"], "unknown");
+    let bootstrap = send(&app, "/api/v1/bootstrap", None, "owner@localhost")
+        .await
+        .1;
+    assert!(
+        bootstrap["pending_operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(lost))
     );
     assert_eq!(calls.load(Ordering::SeqCst), count);
     let actual: Value = client
@@ -471,6 +516,24 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
             "recovery must reuse exact mapped Graph bytes"
         );
     }
+    let resolved = send(
+        &app,
+        &format!("/api/v1/operations/{lost}"),
+        None,
+        "owner@localhost",
+    )
+    .await
+    .1;
+    assert_eq!(resolved["data"]["disposition"], "confirmed");
+    assert_eq!(resolved["data"]["operation_id"], json!(lost));
+    assert!(
+        !send(&app, "/api/v1/bootstrap", None, "owner@localhost")
+            .await
+            .1["pending_operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(lost))
+    );
     // A second explicit recovery observes the lease and cannot double-dispatch.
     // Revoking Owner while a real response is held prevents returning a stale-authority receipt.
     let racing = Uuid::new_v4();
@@ -525,6 +588,58 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     assert_eq!(code, StatusCode::OK, "{durable}");
     assert_eq!(durable["state"], "confirmed");
     assert_eq!(calls.load(Ordering::SeqCst), before);
+    let (code, reconciled) = send(
+        &app,
+        &format!("/api/v1/operations/{racing}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{reconciled}");
+    assert_eq!(
+        reconciled["data"]["disposition"], "confirmed",
+        "a committed native task must remain reconcilable"
+    );
+    // The union route must withhold admission metadata after owner revocation too.
+    let union_race = Uuid::new_v4();
+    hold.store(true, Ordering::SeqCst);
+    let race_app = app.clone();
+    let union_body = action(union_race, "1");
+    let pending = tokio::spawn(async move {
+        send(
+            &race_app,
+            "/api/v1/actions",
+            Some(&union_body),
+            "owner@localhost",
+        )
+        .await
+    });
+    arrived.notified().await;
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    release.notify_one();
+    let (code, withheld) = pending.await.unwrap();
+    assert_eq!(code, StatusCode::FORBIDDEN, "{withheld}");
+    assert!(withheld.get("data").is_none(), "{withheld}");
+    assert!(withheld.get("pending_operations").is_none(), "{withheld}");
+    sqlx::query("UPDATE users SET role='owner' WHERE id=$1")
+        .bind(f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (code, reconciled) = send(
+        &app,
+        &format!("/api/v1/operations/{union_race}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{reconciled}");
+    assert_eq!(reconciled["data"]["disposition"], "confirmed");
+
     // Unknown remains possible under changed service or project; neither can retry.
     let blocked = Uuid::new_v4();
     lose.store(true, Ordering::SeqCst);
@@ -600,6 +715,100 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(calls.load(Ordering::SeqCst), before);
+    assert_eq!(
+        send(
+            &app,
+            &format!("/api/v1/operations/{lost}"),
+            None,
+            "owner@localhost"
+        )
+        .await
+        .0,
+        404
+    );
+    sqlx::query("UPDATE users SET role='owner' WHERE id=$1")
+        .bind(f.actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE project_execution_bindings SET revision=1 WHERE project_id=$1")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let union_id = Uuid::new_v4();
+    let (code, first) = send(
+        &app,
+        "/api/v1/actions",
+        Some(&action(union_id, "1")),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, 200, "{first}");
+    assert_eq!(first["data"]["disposition"], "confirmed");
+    let (code, native) = send(
+        &app,
+        &path,
+        Some(&request(union_id, "1")),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, 200, "{native}");
+    assert_eq!(native["task_id"], json!(union_id));
+    assert_eq!(calls.load(Ordering::SeqCst), before + 1);
+
+    // Model a retained operation admitted before the union journal existed.
+    // Only the isolated test database's union identity trigger is disabled.
+    sqlx::query("ALTER TABLE dashboard_operations DISABLE TRIGGER USER")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM dashboard_operations WHERE operation_id=$1")
+        .bind(blocked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE dashboard_operations ENABLE TRIGGER USER")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let count = calls.load(Ordering::SeqCst);
+    let bootstrap = send(&app, "/api/v1/bootstrap", None, "owner@localhost")
+        .await
+        .1;
+    assert!(
+        bootstrap["pending_operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(blocked)),
+        "{bootstrap}"
+    );
+    assert_eq!(
+        send(
+            &app,
+            &format!("/api/v1/operations/{blocked}"),
+            None,
+            "other@localhost"
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (code, historical) = send(
+        &app,
+        &format!("/api/v1/operations/{blocked}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{historical}");
+    assert_eq!(historical["data"]["disposition"], "unknown");
+    assert_eq!(historical["data"]["operation_id"], json!(blocked));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        count,
+        "historical discovery must never redispatch"
+    );
     server.abort();
     child.kill().await.unwrap();
     child.wait().await.unwrap();

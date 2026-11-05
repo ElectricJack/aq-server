@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized] target(s) in 0.59s
+     Running tests/central_sessions.rs (target/debug/deps/central_sessions-04d2ebc0b9e4bde3)
+
+running 10 tests
+test central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit ... ok
+test central_owner_boot_clock_sequence_deadline_and_identity_fences ... ok
+test central_owner_expiry_and_cancel_survive_refused_renewal_and_running ... ok
+test central_owner_historical_rows_and_identity_cannot_be_rewritten ... ok
+test central_owner_rejects_unverified_admission_and_stop ... ok
+test central_owner_reopens_committed_permit_without_new_generation ... ok
+test central_owner_retained_history_blocks_old_mail_and_cross_role_ids ... ok
+test central_owner_reused_conversation_for_new_actor_is_typed_conflict ... ok
+test central_owner_serializes_start_and_successor_races ... ok
+test inspect_reads_without_locking_the_session_head ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.56s
+

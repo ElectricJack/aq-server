@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-c71b3cbb1ebfd8a2)
+
+running 6 tests
+test profiled_execution::settlement::eligibility::tests::synthetic_combined_decision_requires_new_exact_subject_and_two_matching_views ... ok
+test profiled_execution::settlement::eligibility::tests::synthetic_declared_pending_effects_are_not_erased_by_a_closed_empty_ledger ... ok
+test profiled_execution::settlement::eligibility::tests::synthetic_pure_plan_requires_every_independent_owner_product ... ok
+test profiled_execution::settlement::eligibility::tests::synthetic_policy_and_revision_changes_never_inherit_approval ... ok
+test profiled_execution::settlement::eligibility::tests::synthetic_reconciliation_and_applicability_remain_bound_to_original_facts ... ok
+test profiled_execution::settlement::eligibility::tests::synthetic_unknown_process_outcome_still_requires_real_independent_settlement_bases ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 185 filtered out; finished in 0.04s
+

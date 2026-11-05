@@ -1,0 +1,9 @@
+{
+  "provenance": "Python hashlib SHA256; json.dumps(sort_keys=True,separators=(comma,colon),ensure_ascii=False)",
+  "payload_sha256": "70c9c88d7a865190f65b658fbd808da9c727a2e62feb34f362b58088c509397a",
+  "descriptor_sha256": "31caf7330b8f592e5eef8b11e0a0c354903d8666d43a1a850cfa018be0573859",
+  "input_sha256": [
+    "238fa28a94976c7da14563bc873c2729bd5cd325389085bb4c6dd0de28923590",
+    "e9da65cf9299b9ab67fb58536af00693cc83d079bc700e4ae3aeb97257b6004e"
+  ]
+}

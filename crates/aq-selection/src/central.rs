@@ -96,6 +96,7 @@ pub fn select_central(
         validated.execution,
         policy,
         &CoreInputs {
+            backend_kind: None,
             target: ObservationTarget::CentralInstallation,
             installation: CoreInstallation {
                 harnesses: &inst.harnesses,
@@ -108,6 +109,7 @@ pub fn select_central(
             compositions: &compositions,
             ceilings: &ceilings,
             allowed_environments: &allowed,
+            placement: None,
             now_ms: input.now_ms,
             global,
             environment_denied: "central_environment_denied",

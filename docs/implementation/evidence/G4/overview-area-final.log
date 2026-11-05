@@ -1,0 +1,21 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.01s
+     Running tests/dashboard_aggregation.rs (target/debug/deps/dashboard_aggregation-7b9453c1da41bc70)
+
+running 4 tests
+test overview_ready_owner_preserves_samples_failures_and_binding_fence ... ok
+test overview_empty_and_bounded_project_sources_are_truthful ... ok
+test overview_uncertain_operations_are_principal_and_scope_bound ... ok
+test overview_workers_use_configured_threshold_and_project_association ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.36s
+
+     Running tests/profiled_results.rs (target/debug/deps/profiled_results-034af8115d6d8c27)
+
+running 3 tests
+test review_inbox::overview_running_and_recovering_use_started_and_stopped_owners ... ok
+test review_inbox::overview_attention_lists_waiting_decision_and_failed_task ... ok
+test settlement_owner39::overview_settlement_acceptance_does_not_claim_graph_completion ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 3.53s
+

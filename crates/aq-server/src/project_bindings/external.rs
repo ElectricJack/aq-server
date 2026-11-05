@@ -43,8 +43,12 @@ async fn observe_with_gate(
     let git = async {
         match &state.source_retention {
             Some(rt) => {
-                rt.verify_repository(binding.repository_id, binding.repository_binding_generation)
-                    .await
+                rt.verify_repository(
+                    binding.repository_id,
+                    binding.repository_binding_generation,
+                    binding.publication.as_ref().map(|p| p.target.as_str()),
+                )
+                .await
             }
             None => RepositoryVerification::Unavailable,
         }
@@ -110,6 +114,14 @@ struct VerificationRepository {
     binding_generation: u64,
     mode: String,
     object_format: String,
+    /// aq-git binding allowlist; a publication policy may only name one of these.
+    #[serde(default)]
+    allowed_targets: Vec<String>,
+}
+/// Exact spelling: aq-git authorizes the literal branch, so case-folding here
+/// would admit a policy aq-git later refuses with `unsupported_feature`.
+fn target_allowed(allowed: &[String], target: Option<&str>) -> bool {
+    target.is_none_or(|t| allowed.iter().any(|a| a == t))
 }
 fn present_value<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -121,6 +133,7 @@ impl crate::source_retention::Runtime {
         &self,
         id: Uuid,
         generation: u64,
+        publication_target: Option<&str>,
     ) -> RepositoryVerification {
         let request_id = format!("project-repo-{}", Uuid::new_v4());
         let request = json!({"protocol_version":1,"request_id":request_id,"operation":"repo.show","repository_id":id,"expected_binding_generation":generation,"params":{},"deadline_ms":5000});
@@ -183,6 +196,9 @@ impl crate::source_retention::Runtime {
         if result.mode != "central" || result.object_format != "sha1" {
             return RepositoryVerification::Unsupported;
         }
+        if !target_allowed(&result.allowed_targets, publication_target) {
+            return RepositoryVerification::Forbidden;
+        }
         match result.binding_generation {
             g if g == generation && g > 0 => RepositoryVerification::Verified(g),
             g if g > 0 => RepositoryVerification::Stale(Some(g)),
@@ -194,6 +210,16 @@ impl crate::source_retention::Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_target_must_be_an_allowed_target() {
+        let allowed = vec!["refs/heads/main".to_string()];
+        assert!(target_allowed(&allowed, None));
+        assert!(target_allowed(&[], None));
+        assert!(target_allowed(&allowed, Some("refs/heads/main")));
+        assert!(!target_allowed(&allowed, Some("refs/heads/Main")));
+        assert!(!target_allowed(&allowed, Some("refs/heads/release")));
+        assert!(!target_allowed(&[], Some("refs/heads/main")));
+    }
     #[test]
     fn repository_reply_rejects_duplicate_subject_and_envelope_fields() {
         let payload = r#"{"protocol_version":1,"request_id":"read","ok":true,"result":{"repository_id":"00000000-0000-0000-0000-000000000002","binding_generation":1,"mode":"central","object_format":"sha1"}}"#;

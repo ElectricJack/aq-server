@@ -1,0 +1,172 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "See per-source search coverage",
+    "state": "partial"
+  },
+  "data": {
+    "groups": [
+      {
+        "has_more": true,
+        "hits": [
+          {
+            "excerpt": "Example public summarywith control removed",
+            "project": {
+              "id": "6d13cceb-e105-4d83-ad70-fcd8d112cade",
+              "label": "Synthetic authority fixture"
+            },
+            "ref": {
+              "id": "00000000-0000-0000-0000-000000000001",
+              "kind": "task",
+              "revision": "3"
+            },
+            "title": "example task 1"
+          }
+        ],
+        "next_cursor": "9ruTZEtqkp6QbDxwohJoYpIMgqhRie1jaKhL84pRPskv3rgUKE3SKcabtNT2F3acbZIR1QXt7NYF5qBlojUNfZYrJQO1frWAiyPr837IAiW0bt2vvAX5WTQy2ax1i88uED0U8MuvH9rNLO1aCLuNDgLXKfD4UjTADLPbXpS-9an_zK3FUraj16leSpYde4IaZdXUxdIupI0DcGgj6JpicIe5RfoZQvUK8oIx-v79lBN-Cc2QnOrQrnuc33FesryhIwCOZHA9gQuQpZ4OpdaDzxABzdzWRUgXS3_7SvNPbviMYFVW_ihvosl4oWDDzXmsyW74ZHIKuGcHQ6rR-vHu-CIxBflzLKYCN_-pNgZK4Q-SmD48ddZiR0QSS6IDBJL3d4d02Z5oauW5Ik4SqAMyeSui68rUniNTcoqdYe5MSmPrRpTe7Tj5q4_mKGfbaRa_5cWIGjHwzduHwqEoBhssptjXkosZra5U3szMs1v0TcLVvOXbsil__TPmqhiyq9iGBEByU3lHx4lL-vdZh50Jw5L5fmuw-PpFVE2ZkzOqikh6HfJcuo-0SOpjYHG_H03JT29Pn8Q0WK6ev1Q2xaFFiCcXDDj03H19bnStl8YQ_GL7tXyrrzFWvz3TyyWdYl-_af2sX9Oo67EI5A",
+        "type": "task"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "session"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "result"
+      },
+      {
+        "has_more": false,
+        "hits": [],
+        "next_cursor": null,
+        "type": "playbook"
+      },
+      {
+        "has_more": true,
+        "hits": [
+          {
+            "excerpt": "Example public summarywith control removed",
+            "project": {
+              "id": "6d13cceb-e105-4d83-ad70-fcd8d112cade",
+              "label": "Synthetic authority fixture"
+            },
+            "ref": {
+              "id": "00000000-0000-0000-0000-000000000001",
+              "kind": "knowledge",
+              "revision": "3"
+            },
+            "title": "example knowledge 1"
+          }
+        ],
+        "next_cursor": "of8ntcak4em2jxkmRDNHf01cCn17e-_MoKiY4FeUm3eJiSCMPuKxEPYZh8te_9mDii8klTRy4CM8aVQL6GLsMx7n4WeeOkAUa8pMU5lxfckmPxOkl9sO5txoNHa7IdUGeusdHALBvDWxZJ_csNPWYCOEovMmlgKEEvvbeZhiOExXf4Wk-YUIuwmpMgBDxWSXvNuqU40EnAg08GU38vqjJnyGXltePQqwLh2OXgTw_wAj48X9_65JNkWQpwBBJtssvYegdFCQEGOyQnig-pIVVSebXxQfcHShzRBRSjRjCSf9jSNWTgvLar6qE60-PUJmRNNgqm-_wVJ6sQ65SiMLz3KLvRUKN9RTPaPqPmBerPU4OtS4u0H5PW0GqW72UrmEAEshqu8BEKokMuf3PJqMOP5PHsFpTHLwQkSgbeWh4IhRGug_TFPyWg_9tdnd3l0Z3BIEBqu_cJfOyfbgJzQSdIXz1oRXZ_We1Dub8KAk-MM5TcphCuXuzgU71Vu-mQibmZ_0h6sijXjXaymSJtZlxiAdZu4hdEbqF9f8hXLGs_iYekXVkhb9dyjS9_zxS8Z63JPOCGDdCcRvYK1XgB_svE5yUISZSUfpAOVecERdFAPV8hJMW7IFltmcuqXEbvNDFrosQhwH4SUn4Q",
+        "type": "knowledge"
+      }
+    ],
+    "snapshot_id": "0d779033-0dbc-4f7e-ad73-defe5351626c",
+    "sources": [
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "task"
+        },
+        "project": null,
+        "source": "task",
+        "total": {
+          "accuracy": "exact",
+          "value": 3
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "session"
+        },
+        "project": null,
+        "source": "session",
+        "total": {
+          "accuracy": "exact",
+          "value": 0
+        }
+      },
+      {
+        "coverage": {
+          "reason": "retained_native_and_legacy_metadata_only",
+          "state": "partial"
+        },
+        "observation": {
+          "coverage": "partial",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "result"
+        },
+        "project": null,
+        "source": "result",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "reason": "owner_unavailable_or_not_visible",
+          "state": "partial"
+        },
+        "observation": null,
+        "project": null,
+        "source": "playbook",
+        "total": {
+          "accuracy": "unknown",
+          "value": null
+        }
+      },
+      {
+        "coverage": {
+          "state": "complete"
+        },
+        "observation": {
+          "coverage": "complete",
+          "fresh_until": "1970-01-01T00:17:10.000Z",
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "quality": "reported",
+          "source": "knowledge"
+        },
+        "project": null,
+        "source": "knowledge",
+        "total": {
+          "accuracy": "exact",
+          "value": 3
+        }
+      }
+    ]
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "637d3e85-64af-4c72-bcf4-0ba04cf19b9a",
+  "scope": {
+    "kind": "project",
+    "project_id": "6d13cceb-e105-4d83-ad70-fcd8d112cade"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

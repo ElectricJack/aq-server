@@ -299,13 +299,46 @@ async fn graph(state: &AppState, input: &Input) -> Result<ReadProvenance, AppErr
 /// No SQL locks are held by this read owner. Cancellation of the private read
 /// retains its existing bounded worker ownership through I/O and zeroization.
 pub(super) async fn collect(state: &AppState, input: &Input) -> Result<Observed, AppError> {
+    collect_with_lane(state, input, false).await
+}
+pub(super) async fn collect_continuing(
+    state: &AppState,
+    input: &Input,
+) -> Result<Observed, AppError> {
+    collect_with_lane(state, input, true).await
+}
+async fn collect_with_lane(
+    state: &AppState,
+    input: &Input,
+    continuing: bool,
+) -> Result<Observed, AppError> {
     let association = input.association()?;
     let file = async {
         let started = now(state)?;
         let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
-        let file =
-            renewal::verify_phase_material_backing(registry, input.material.clone(), input.node()?)
-                .await?;
+        let source = crate::profiled_execution::login_refresh::lease_source(
+            &state.store.pool,
+            &registry,
+            &input.material,
+        )
+        .await?;
+        let file = if continuing {
+            renewal::verify_continuing_material_backing(
+                registry,
+                input.material.clone(),
+                input.node()?,
+                source,
+            )
+            .await?
+        } else {
+            renewal::verify_phase_material_backing(
+                registry,
+                input.material.clone(),
+                input.node()?,
+                source,
+            )
+            .await?
+        };
         let received = now(state)?;
         if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
             return Err(unavailable());

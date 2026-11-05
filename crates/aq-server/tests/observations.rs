@@ -21,6 +21,154 @@ use uuid::Uuid;
 fn text(s: &str) -> Text {
     Text::new(s).unwrap()
 }
+
+#[tokio::test]
+async fn monthly_vm_budget_prices_authenticated_facts_and_refuses_placement() {
+    use aq_accounting::vm_time::{Fact, Size};
+    use aq_selection::NodeCeiling;
+    use aq_server::profiled_execution::placement::{self, Ledger};
+    let (f, _) = seeded(Some(true)).await;
+    let pool = f.db.pool().await;
+    let node = f.node.node_id;
+    sqlx::query("INSERT INTO delegated_node_boots(node_id,boot_id,registration) VALUES($1,$2,$3)")
+        .bind(node)
+        .bind(f.node.boot_id)
+        .bind(json!({"backend": {
+            "kind":"boat", "capabilities":["vm-isolation"], "max_concurrent_sandboxes":4,
+            "spend_ceiling":{"currency":"USD","micros":4_500},"templates":[]
+        }}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let fact = Fact {
+        attempt_id: f.profiled.offer.binding.attempt_id,
+        sandbox_id: "boat-vm-1".into(),
+        size: Size::Small,
+        started_at_ms: NOW - 900_000,
+        stopped_at_ms: None,
+    };
+    let post = |fact: Fact, credential: Option<String>| {
+        let state = f.state.clone();
+        async move {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/v1/worker/observations/vm-time")
+                .header("content-type", "application/json");
+            if let Some(credential) = credential {
+                request = request.header("authorization", format!("Bearer {credential}"));
+            }
+            aq_server::build_worker_router(state)
+                .oneshot(
+                    request
+                        .body(Body::from(serde_json::to_vec(&fact).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    let book = aq_accounting::pricing::RateCardBook::default();
+    let ceiling = |now| {
+        let pool = &pool;
+        let book = &book;
+        async move {
+            placement::facts_in(
+                pool,
+                &Ledger { pool, book },
+                None,
+                node,
+                &"f".repeat(64),
+                "ci@1",
+                now,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .ceiling
+        }
+    };
+    // Existing attempts without VM evidence cannot silently look free.
+    assert_eq!(ceiling(NOW).await, Some(NodeCeiling::SpendUnaccounted));
+    // Admission may fence its own new reservation before a VM exists.
+    let mut conn = pool.acquire().await.unwrap();
+    let own = observations::vm_time::node(
+        &mut conn,
+        node,
+        &aq_admission_sandbox::sandbox::Money {
+            currency: "USD".into(),
+            micros: 4_500,
+        },
+        NOW,
+        Some(fact.attempt_id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(own.micros, 0);
+    drop(conn);
+    assert_eq!(post(fact.clone(), None).await, StatusCode::UNAUTHORIZED);
+    let mut other = fact.clone();
+    other.attempt_id = Uuid::new_v4();
+    assert_eq!(
+        post(other, Some(f.credential.clone())).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(fact.clone(), Some(f.credential.clone())).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(fact.clone(), Some(f.credential.clone())).await,
+        StatusCode::OK
+    );
+    // $0.018/h x 15 minutes = $0.0045. Replays do not double the cost.
+    assert_eq!(ceiling(NOW - 200).await, None);
+    assert_eq!(ceiling(NOW).await, Some(NodeCeiling::Spend));
+    let mut changed = fact.clone();
+    changed.size = Size::Xlarge;
+    assert_eq!(
+        post(changed, Some(f.credential.clone())).await,
+        StatusCode::CONFLICT
+    );
+    let mut stopped = fact.clone();
+    stopped.stopped_at_ms = Some(NOW);
+    assert_eq!(
+        post(stopped.clone(), Some(f.credential.clone())).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(stopped, Some(f.credential.clone())).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(fact, Some(f.credential.clone())).await,
+        StatusCode::CONFLICT
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    let spend = observations::vm_time::node(
+        &mut conn,
+        node,
+        &aq_admission_sandbox::sandbox::Money {
+            currency: "USD".into(),
+            micros: 4_500,
+        },
+        NOW + 3_600_000,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(spend.micros, 4_500); // stopped time costs nothing
+    let month = observations::vm_time::month(NOW, 4_500).unwrap();
+    assert_eq!(ceiling(month.next_month_start_ms).await, None);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM accounting_vm_time WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
 async fn seeded(transport_active: Option<bool>) -> (Fixture, OwnerSource) {
     let mut f = fixture().await;
     if let Some(active) = transport_active {
@@ -86,6 +234,7 @@ async fn seeded(transport_active: Option<bool>) -> (Fixture, OwnerSource) {
                 )),
             }],
         },
+        billing: None,
     };
     (f, source)
 }
@@ -933,4 +1082,537 @@ async fn admitted_http_context_cannot_write_or_replay_after_credential_rotation(
         .await
         .unwrap();
     assert_eq!(counts(&f).await, (1, 1));
+}
+
+// H2: production usage accounting. The catalog, credential kind and rate cards
+// are owner configuration; the worker only supplies batches through the route.
+mod accounting {
+    use super::*;
+    use aq_accounting::{
+        Category,
+        pricing::{RateCard, RateCardRevision, Rule},
+    };
+    use aq_server::intelligence::config::{
+        AccountingCatalog, CredentialConfig, IntelligenceConfig, SourcePolicy,
+    };
+    use aq_server::observations::{budget, catalog};
+    use std::sync::Arc;
+
+    fn layout() -> Layout {
+        Layout {
+            policy: artifact("layout", b"layout"),
+            input_includes_cache_read: false,
+            input_includes_cache_write: false,
+            output_includes_reasoning: false,
+        }
+    }
+    fn card(f: &Fixture, revision: u64, input_rate: u64) -> RateCardRevision {
+        let reference = |r: u64| artifact(&format!("rate-card-r{r}"), b"rates");
+        RateCardRevision {
+            revision,
+            corrects: (revision > 1).then(|| reference(revision - 1)),
+            card: RateCard {
+                reference: reference(revision),
+                allocation_policy: artifact("allocation", b"per-call"),
+                currency: text("USD"),
+                provider: text(&f.selection.choice.provider),
+                model: text("model"),
+                layout: layout(),
+                rules: [
+                    (Category::Input, input_rate),
+                    (Category::Output, 15_000_000),
+                    (Category::CacheRead, 0),
+                    (Category::CacheWrite, 0),
+                    (Category::Reasoning, 0),
+                ]
+                .into_iter()
+                .map(|(category, rate)| Rule {
+                    category,
+                    subtract: vec![],
+                    microunits_per_million_tokens: rate,
+                })
+                .collect(),
+            },
+        }
+    }
+    fn install(f: &mut Fixture, kind: aq_selection::CredentialKind, cards: Vec<RateCardRevision>) {
+        let choice = &f.selection.choice;
+        let credential = aq_selection::AuthorizedCredential {
+            allowed_backends: aq_selection::default_allowed_backends(),
+            profile: choice.credential_profile.clone(),
+            provider: choice.provider.clone(),
+            account_reference: choice.account_reference.clone(),
+            endpoint_reference: choice.endpoint_reference.clone(),
+            revision: 1,
+            enabled: true,
+            provisionable: false,
+            material_owner: None,
+        };
+        let accounting = AccountingCatalog {
+            sources: vec![SourcePolicy {
+                provider: choice.provider.clone(),
+                harness: choice.harness.clone(),
+                reference: artifact("aq.accounting.source", b"catalog"),
+                layout: layout(),
+                parsers: vec![ParserAuthority {
+                    parser: artifact("parser", b"parser"),
+                    category_claim: artifact("parser", b"parser"),
+                    priority: 1,
+                    complete_accounting_evidence: Some(artifact(
+                        "synthetic-qualification",
+                        b"test-only",
+                    )),
+                }],
+            }],
+            rate_cards: cards,
+        };
+        let mut config = (*f.state.config).clone();
+        config.intelligence = Some(Arc::new(
+            IntelligenceConfig {
+                revision: 1,
+                credentials: vec![CredentialConfig {
+                    kind,
+                    allowed_backends: aq_selection::default_allowed_backends(),
+                    credential,
+                    allowed_node_ids: vec![],
+                    secret_file: None,
+                    delivery_mode: None,
+                }],
+                accounting,
+                ..Default::default()
+            }
+            .load()
+            .unwrap(),
+        ));
+        f.state.config = Arc::new(config);
+    }
+    fn call(source: &OwnerSource, sequence: u64, native: &str, input: u64) -> ObservationRecord {
+        let mut body = event(source, sequence, input).body;
+        if let ObservationKind::Usage { usage } = &mut body.kind {
+            usage.call.native_call_id = text(native);
+        }
+        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
+    }
+    async fn send(f: &Fixture, p: &Packet) -> StatusCode {
+        aq_server::build_worker_router(f.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/worker/observations/batch")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", f.credential))
+                    .body(Body::from(serde_json::to_vec(p).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+    async fn costs(
+        f: &Fixture,
+        attempt: Uuid,
+    ) -> (Vec<Cost>, aq_lifecycle_api::AccountingCompleteness) {
+        let view = observations::inspection::usage(&f.state, f.actor, attempt)
+            .await
+            .unwrap();
+        view.validate().unwrap();
+        (view.usage.costs, view.usage.completeness)
+    }
+    fn estimate(f: &Fixture, revision: u64, amount: u64) -> Cost {
+        let c = card(f, revision, 0).card;
+        Cost::NonInvoiceEstimate {
+            amount_microunits: amount,
+            currency: text("USD"),
+            rate_card: c.reference,
+            basis: EstimateBasis::TokenRates,
+            allocation_policy: c.allocation_policy,
+        }
+    }
+    async fn policy_events(f: &Fixture, lineage: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM accounting_policy_events WHERE lineage_id=$1")
+            .bind(lineage)
+            .fetch_one(&f.db.pool().await)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn attempt_usage_feeds_ledger_and_budget() {
+        let (mut f, _) = seeded(Some(true)).await;
+        let cards = vec![card(&f, 1, 3_000_000)];
+        install(&mut f, aq_selection::CredentialKind::ApiKey, cards);
+        let attempt = f.profiled.offer.binding.attempt_id;
+        let s = catalog::source_for_attempt(&f.state, attempt)
+            .await
+            .unwrap()
+            .expect("catalog covers the selected provider and harness");
+        assert_eq!(s.billing, Some(EstimateBasis::TokenRates));
+        assert_eq!(
+            s.account_claim.as_str(),
+            f.selection.choice.account_reference
+        );
+        // The production batch route registers the trusted source before ingest.
+        let first = packet(&f, vec![call(&s, 1, "call-1", 1000)]);
+        assert_eq!(send(&f, &first).await, StatusCode::OK);
+        assert_eq!(counts(&f).await, (1, 1));
+        // 1000 input x 3 + 4 output x 15 microunits per token, rounded up once.
+        let (got, completeness) = costs(&f, attempt).await;
+        assert_eq!(got, vec![estimate(&f, 1, 3060)]);
+        assert!(matches!(
+            completeness,
+            aq_lifecycle_api::AccountingCompleteness::CompleteForPolicy { .. }
+        ));
+        // An exact replay neither appends nor recounts.
+        assert_eq!(send(&f, &first).await, StatusCode::OK);
+        assert_eq!(counts(&f).await, (1, 1));
+        // A rate-card correction is a new revision; it re-prices, never adds.
+        let cards = vec![card(&f, 1, 3_000_000), card(&f, 2, 2_000_000)];
+        install(&mut f, aq_selection::CredentialKind::ApiKey, cards);
+        assert_eq!(costs(&f, attempt).await.0, vec![estimate(&f, 2, 2060)]);
+        let soft = budget::SoftCeiling {
+            limit_microunits: 2500,
+            currency: "USD".into(),
+        };
+        let lineage = s.binding.lineage_id;
+        let before = budget::lineage(&f.state, lineage, Some(&soft))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.spent_microunits, Some(2060));
+        assert_eq!(before.currency.as_deref(), Some("USD"));
+        assert_eq!(
+            before.accounting,
+            aq_selection::AccountingCompleteness::Complete
+        );
+        assert_eq!(policy_events(&f, lineage).await, 0);
+        // A retry shares the lineage: history it re-imports is not recounted
+        // and its new calls add to, never reset, the lineage spend.
+        let previous = s.clone();
+        successor(&mut f, &previous).await;
+        let next = f.profiled.offer.binding.attempt_id;
+        let s2 = catalog::source_for_attempt(&f.state, next)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(s2.source_id, s.source_id);
+        let retry = packet(
+            &f,
+            vec![call(&s2, 2, "call-1", 1000), call(&s2, 3, "call-2", 500)],
+        );
+        assert_eq!(send(&f, &retry).await, StatusCode::OK);
+        assert_eq!(costs(&f, attempt).await.0, vec![estimate(&f, 2, 2060)]);
+        assert_eq!(costs(&f, next).await.0, vec![estimate(&f, 2, 1060)]);
+        let after = budget::lineage(&f.state, lineage, Some(&soft))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.spent_microunits, Some(3120));
+        assert!(after.ledger_revision > before.ledger_revision);
+        // The soft ceiling is crossed once and emits exactly one policy event.
+        assert!(after.soft_ceiling_reached);
+        assert_eq!(policy_events(&f, lineage).await, 1);
+        budget::lineage(&f.state, lineage, Some(&soft))
+            .await
+            .unwrap();
+        assert_eq!(policy_events(&f, lineage).await, 1);
+        // No hard budget provider exists, so a requested hard ceiling is still
+        // refused by selection (hard_cost_enforcement_unqualified, 0004 §2.2).
+        assert!(after.snapshot().hard_budget_provider.is_none());
+        drop(f);
+    }
+
+    // C4 follow-up: the node's accounted spend feeds its B1 spend ceiling.
+    #[tokio::test]
+    async fn node_spend_ceiling_uses_accounted_node_spend() {
+        use aq_selection::NodeCeiling;
+        use aq_server::profiled_execution::placement::{self, Ledger};
+        let (mut f, _) = seeded(Some(true)).await;
+        let cards = vec![card(&f, 1, 3_000_000)];
+        install(&mut f, aq_selection::CredentialKind::ApiKey, cards);
+        let pool = f.db.pool().await;
+        let book = catalog::rate_book(&f.state);
+        let node = f.node.node_id;
+        let advertise = |currency: &str, micros: u64| {
+            json!({"backend": {"kind": "cloudflare-containers", "capabilities": ["vm-isolation"],
+                "max_concurrent_sandboxes": 4,
+                "spend_ceiling": {"currency": currency, "micros": micros}, "templates": []}})
+        };
+        sqlx::query(
+            "INSERT INTO delegated_node_boots(node_id,boot_id,registration) VALUES($1,$2,$3)",
+        )
+        .bind(node)
+        .bind(Uuid::new_v4())
+        .bind(advertise("USD", 3_060))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let ceiling = || async {
+            let ledger = Ledger {
+                pool: &pool,
+                book: &book,
+            };
+            placement::facts_in(&pool, &ledger, None, node, &"f".repeat(64), "ci@1", NOW)
+                .await
+                .unwrap()
+                .expect("a B1-registered node has placement facts")
+                .ceiling
+        };
+        let readvertise = |currency: &'static str, micros: u64| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("UPDATE delegated_node_boots SET registration=$2 WHERE node_id=$1")
+                    .bind(node)
+                    .bind(advertise(currency, micros))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        // No reported calls yet: zero spent, so the node is under its ceiling.
+        assert_eq!(ceiling().await, None);
+        let attempt = f.profiled.offer.binding.attempt_id;
+        let s = catalog::source_for_attempt(&f.state, attempt)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            send(&f, &packet(&f, vec![call(&s, 1, "call-1", 1000)])).await,
+            StatusCode::OK
+        );
+        let summary = budget::node(&pool, &book, node).await.unwrap();
+        assert_eq!(summary.spent_microunits, Some(3060));
+        assert!(summary.complete);
+        // 3060 spent: at the 3060 ceiling the node refuses with a typed reason.
+        assert_eq!(ceiling().await, Some(NodeCeiling::Spend));
+        assert_eq!(NodeCeiling::Spend.reason(), "node_spend_ceiling_reached");
+        // Under a higher ceiling it receives offers.
+        readvertise("USD", 3_061).await;
+        assert_eq!(ceiling().await, None);
+        // A ceiling in another currency is not comparable: refused, not zero.
+        readvertise("EUR", 1_000_000).await;
+        assert_eq!(ceiling().await, Some(NodeCeiling::SpendUnaccounted));
+        // Another node's spend is not this node's.
+        assert_eq!(
+            budget::node(&pool, &book, Uuid::new_v4())
+                .await
+                .unwrap()
+                .costs,
+            vec![]
+        );
+        drop(f);
+    }
+
+    #[tokio::test]
+    async fn flat_subscription_usage_is_labelled_not_costed() {
+        let (mut f, _) = seeded(Some(true)).await;
+        let cards = vec![card(&f, 1, 3_000_000)];
+        install(
+            &mut f,
+            aq_selection::CredentialKind::SubscriptionLogin,
+            cards,
+        );
+        let attempt = f.profiled.offer.binding.attempt_id;
+        let s = catalog::source_for_attempt(&f.state, attempt)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.billing, Some(EstimateBasis::SubscriptionAllocation));
+        let p = packet(&f, vec![call(&s, 1, "call-1", 1000)]);
+        assert_eq!(send(&f, &p).await, StatusCode::OK);
+        // Token usage is recorded in full...
+        let view = observations::inspection::usage(&f.state, f.actor, attempt)
+            .await
+            .unwrap();
+        assert_eq!(view.canonical_calls, 1);
+        assert_eq!(view.known_category_subtotals[0], 1000);
+        // ...but no rate card is pinned and nothing is charged at token rates.
+        let fact: Value =
+            sqlx::query_scalar("SELECT fact FROM observation_call_heads WHERE owner_attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(&f.db.pool().await)
+                .await
+                .unwrap();
+        assert_eq!(fact["pricing_reference"], Value::Null);
+        assert_eq!(
+            view.usage.costs,
+            vec![Cost::Unknown {
+                reason: UnknownReason::NotApplicable
+            }]
+        );
+        assert!(!view.usage.costs.iter().any(|c| matches!(
+            c,
+            Cost::NonInvoiceEstimate {
+                basis: EstimateBasis::TokenRates,
+                ..
+            }
+        )));
+        let aq_lifecycle_api::AccountingCompleteness::Incomplete { reason } =
+            &view.usage.completeness
+        else {
+            panic!("subscription cost is labelled, not complete");
+        };
+        assert!(reason.as_str().contains("subscription"));
+        let lineage = budget::lineage(&f.state, s.binding.lineage_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            lineage.accounting,
+            aq_selection::AccountingCompleteness::Complete
+        );
+        drop(f);
+    }
+
+    // H2 follow-up: re-enrolling after a credential change bumps the source
+    // generation and revokes its predecessor. Late usage from the revoked
+    // generation is kept as evidence but never charged, and the lineage budget
+    // reads heads by their lineage column.
+    #[tokio::test]
+    async fn credential_change_bumps_source_generation_and_revokes_previous() {
+        use aq_selection::CredentialKind;
+        let (mut f, _) = seeded(Some(true)).await;
+        let cards = vec![card(&f, 1, 3_000_000)];
+        install(&mut f, CredentialKind::SubscriptionLogin, cards.clone());
+        let attempt = f.profiled.offer.binding.attempt_id;
+        let pool = f.db.pool().await;
+        let derive = |f: &Fixture| {
+            let state = f.state.clone();
+            async move {
+                catalog::source_for_attempt(&state, attempt)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        let s1 = derive(&f).await;
+        assert_eq!(s1.generation, 1);
+        assert_eq!(
+            send(&f, &packet(&f, vec![call(&s1, 1, "call-1", 1000)])).await,
+            StatusCode::OK
+        );
+        // An unchanged derivation re-enrolls idempotently at the same generation.
+        assert!(
+            catalog::register_attempt(&f.state, attempt, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(derive(&f).await.source_id, s1.source_id);
+
+        install(&mut f, CredentialKind::ApiKey, cards);
+        let s2 = derive(&f).await;
+        assert_eq!(s2.generation, 2);
+        assert_ne!(s2.source_id, s1.source_id);
+        assert_eq!(
+            s2.native_session_key.as_str(),
+            format!("aq.attempt/{attempt}/2")
+        );
+        assert_eq!(s2.billing, Some(EstimateBasis::TokenRates));
+        assert!(
+            catalog::register_attempt(&f.state, attempt, None)
+                .await
+                .unwrap()
+        );
+        let revocation: (Uuid, i64) = sqlx::query_as(
+            "SELECT superseded_by_source_id,superseded_by_generation \
+             FROM observation_source_revocations WHERE source_id=$1 AND generation=1",
+        )
+        .bind(s1.source_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revocation, (s2.source_id, 2));
+        // The enrolled generation is now current; repeated enrollment is stable.
+        assert!(
+            catalog::register_attempt(&f.state, attempt, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(derive(&f).await.generation, 2);
+        let sources: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM observation_sources WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(sources, 2);
+        // A revoked source is never re-admitted, and the history is immutable.
+        assert!(matches!(
+            observations::register_source(&f.state, &s1).await,
+            Err(observations::Error::Refused)
+        ));
+        assert!(
+            sqlx::query("DELETE FROM observation_source_revocations")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+
+        // Late usage from generation 1 keeps the sequence moving but is unresolved.
+        assert_eq!(
+            send(&f, &packet(&f, vec![call(&s1, 2, "call-2", 500)])).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(&f, &packet(&f, vec![call(&s2, 3, "call-3", 100)])).await,
+            StatusCode::OK
+        );
+        assert_eq!(counts(&f).await, (3, 3));
+        let decisions: Vec<String> = sqlx::query_scalar(
+            "SELECT decision->>'kind' FROM observation_events WHERE attempt_id=$1 ORDER BY sequence",
+        )
+        .bind(attempt)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(decisions, ["append", "unresolved", "append"]);
+        // Only charged calls have heads in the lineage; the token-rate call is
+        // priced, the subscription call is labelled, the revoked one is absent.
+        let lineage = s2.binding.lineage_id;
+        let heads: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM observation_call_heads WHERE lineage_id=$1")
+                .bind(lineage)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(heads, 2);
+        let budget = budget::lineage(&f.state, lineage, None)
+            .await
+            .unwrap()
+            .unwrap();
+        // 100 input x 3 + 4 output x 15 microunits per token.
+        assert_eq!(budget.spent_microunits, Some(360));
+        drop(f);
+    }
+}
+
+#[tokio::test]
+async fn retention_closes_late_packet_window_without_resetting_sequence() {
+    let (f, s) = setup().await;
+    let first = packet(&f, vec![event(&s, 1, 10)]);
+    observations::ingest(&f.state, f.node.node_id, &first)
+        .await
+        .unwrap();
+    let charge: i64 = sqlx::query_scalar(
+        "SELECT charged_bytes FROM observation_packet_retention WHERE node_id=$1 AND message_id=$2",
+    )
+    .bind(f.node.node_id)
+    .bind(first.body.message_id)
+    .fetch_one(&f.db.pool().await)
+    .await
+    .unwrap();
+    assert!(charge > 0);
+    sqlx::query("INSERT INTO retention_closed_attempts(attempt_id,closed_at_ms) VALUES($1,$2)")
+        .bind(s.binding.attempt_id)
+        .bind(NOW as i64)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    for p in [first, packet(&f, vec![event(&s, 2, 20)])] {
+        assert!(matches!(
+            observations::ingest(&f.state, f.node.node_id, &p).await,
+            Err(observations::Error::Refused)
+        ));
+    }
+    assert_eq!(counts(&f).await, (1, 1));
+    assert_eq!(projection(&f, &s).await.known_subtotals[0], 10);
 }

@@ -1,0 +1,32 @@
+$ cargo test --locked -p aq-admission --test preparation_refresh --test transport
+    Finished `test` profile [unoptimized] target(s) in 0.64s
+     Running tests/preparation_refresh.rs (target/debug/deps/preparation_refresh-8d635c01fba8c3c5)
+
+running 15 tests
+test actual_fact_revision_is_the_current_registry_and_not_a_restamped_original ... ok
+test actual_original_accepted_and_credential_associations_cannot_be_rehashed_away ... ok
+test canonical_signed64_registry_revisions_and_exact_owner_configuration_are_required ... ok
+test all_known_registry_floors_reject_rollback_even_above_the_original_revision ... ok
+test explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour ... ok
+test interactive_clock_rejects_invalid_times_and_monotonic_overflow ... ok
+test long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract ... ok
+test fresh_profile_never_extends_original_accepted_or_replayed_execution_deadlines ... ok
+test normative_schema_contract_and_facts_are_exact_and_never_claim_owner_authentication ... ok
+test principal_inventory_context_and_private_backing_pins_remain_mandatory ... ok
+test profile_negotiation_is_exact_from_proposal_and_never_upgrades_old_history ... ok
+test real_typed_refresh_chain_preserves_selected_pins_and_independent_phase_clocks ... ok
+test strict_new_wire_refuses_unknown_duplicate_oversized_or_wrong_family_documents ... ok
+test unavailable_cooldown_unknown_and_expired_facts_still_refuse_initial_execution ... ok
+test unrelated_observation_revision_advances_do_not_reselect_or_invalidate_configuration ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+     Running tests/transport.rs (target/debug/deps/transport-5938e71d4da081c2)
+
+running 4 tests
+test exact_stop_replay_is_immutable_and_journal_order_is_launch_scoped ... ok
+test roundtrip_budget_is_charged_and_replay_cannot_restart_ttl ... ok
+test stop_journal_requires_durable_closed_reservation_and_unknown_never_releases ... ok
+test published_transport_replays_and_mutations_reject_duplicate_unknown_and_scope ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

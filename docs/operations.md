@@ -29,7 +29,7 @@ manifest bundle for this identity and issuer, bound to the tag and commit the
 manifest itself names:
 
 ```
---certificate-identity-regexp '^https://github\.com/ElectricJack/agent-q/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+--certificate-identity-regexp '^https://github\.com/ElectricJack/aq-server/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 --certificate-oidc-issuer https://token.actions.githubusercontent.com
 --certificate-github-workflow-ref refs/tags/v<manifest version>
 --certificate-github-workflow-sha <manifest source_revision>
@@ -58,13 +58,13 @@ use the same version. Change all three together.
 | `/etc/agent-q/updater.toml` | `root:aq-updater 0640` | updater config |
 | `/etc/agent-q/agent-q.env` | `root:aq-updater 0640` | operator env file: `AQ_VAULT_DIR`, `AQ_SECRETS_DIR` |
 | `/etc/agent-q/vault/` | `root:root 0755`, files `0644` | the vault, mounted read-only into the server (UID 10001 must read it) |
-| `/etc/agent-q/secrets/` | `root:aq-updater 0750`, files `0644` | `postgres_password`, `tunnel_token` (bind-mounted as-is, so readable by the container users) |
+| `/etc/agent-q/secrets/` | `root:aq-updater 0750`, files `0644` | `postgres_password`, `server_database_password`, `graph_database_password`, `graph_token`, `tunnel_token` (bind-mounted as-is, so readable by the container users) |
 | `/opt/agent-q/compose.yaml` | `root:root 0644` | the production Compose file, from the release tag |
 | `/var/lib/agent-q/updater/` | `aq-updater:aq-updater 0750` | updater state: `journal.json`, `history.jsonl`, `release.env`, the lock |
 | `/var/lib/agent-q/updater/spool/` | `aq-updater 0755` | the spool shared with the server |
 | `/var/lib/agent-q/updater/spool/requests/` | `aq-updater:10001 2770` | server writes request files here (read-write mount) |
 | `/var/lib/agent-q/updater/spool/status/` | `aq-updater 0755` | `status.json`, `maintenance` (read-only mount) |
-| `/var/lib/agent-q/backups/` | `aq-updater:aq-updater 0700` | pre-update `pg_dump` backups, the last 5 kept |
+| `/var/lib/agent-q/backups/` | `aq-updater:aq-updater 0700` | pre-update `pg_dump` backups of the server's `aq_server` database (provisioned first with `server-db-init`), the last 5 kept |
 
 `state_dir` may use only the characters `A-Z a-z 0-9 . _ / + @ : -`: its spool
 path is written unquoted into `release.env`, and the updater refuses a config
@@ -135,7 +135,7 @@ The binary is attached to each GitHub Release as `aq-updater-x86_64-linux`
 file. The repository is public, so download both directly:
 
 ```sh
-base=https://github.com/ElectricJack/agent-q/releases/download/v0.1.0
+base=https://github.com/ElectricJack/aq-server/releases/download/v0.1.0
 curl -fsSLO "$base/aq-updater-x86_64-linux" -fsSLO "$base/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS
 install -m 0755 aq-updater-x86_64-linux /usr/local/bin/aq-updater
@@ -157,7 +157,189 @@ aq-updater --version
   spool_dir = "/updater"
   ```
 
-- `/etc/agent-q/secrets/postgres_password` and `tunnel_token`, mode 0644.
+- Start from `vault.production.example/config.toml`. Set the HTTPS public origin,
+  Access `team_domain` and application `audience`, and the bootstrap owner email.
+  Keep `environment = "production"` and `auth.mode = "cloudflare_access"`.
+  Graph uses `AQ_GRAPH_WORKSPACE` (default `e0000000-0000-4000-8000-000000000001`)
+  and `AQ_GRAPH_ACTOR` (default `aq-server`); the vault's mutation actor must agree.
+- `/etc/agent-q/secrets/` contains independent generated `postgres_password`,
+  `server_database_password`, `graph_database_password`, `graph_token`, and the
+  Cloudflare `tunnel_token`. Bind-mounted secret files need mode 0644 for the
+  container UIDs; keep their host parent directory restricted as above. Never
+  put their contents in Compose or the operator env file. The server receives
+  only its database password, with the graph token copied into private runtime
+  state (UID 10001, mode 0600). The bootstrap PostgreSQL administrator is used
+  only by provisioning; `aq_server` and `aq_graph` own separate databases and
+  have no superuser/create-role/create-database privileges.
+- Retained databases and credentials are checked, not silently reassigned.
+  Existing installations that used `agent_q` for server data need an explicit
+  backup/migration into the `aq_server` database before adopting this stack;
+  Compose does not migrate or delete existing data. Retain the graph token
+  across restarts; rotation requires an explicit coordinated change.
+- Every service image resolves by digest. Supply `AQ_SERVER_IMAGE` as
+  `registry/repository@sha256:<64 lowercase hex digits>` through the updater's
+  release env file. Production initialization refuses a mutable reference.
+  Server and supervised Git share that image, containing A3b's v0.2.0 binary;
+  PostgreSQL, cloudflared and E2's graph v0.1.1 have explicit digests in Compose.
+- Copy `scripts/prod-db-init.sh`, `scripts/prod-init-volumes.sh` and
+  `scripts/dev-git-supervisor.sh` alongside Compose under its `scripts/`
+  directory. The one-shot state initializer has ownership capabilities only
+  for project-owned named volumes. Long-running services drop all capabilities,
+  use read-only roots and rotated logs. Git state/source staging are shared with
+  the server; its healthcheck requires both graph and Git readiness. The server
+  has no host port, and PostgreSQL is on the internal database network.
+- Run `scripts/compose-smoke.sh prod` for a disposable production-authenticated
+  readiness and Git recovery drill. It disables only cloudflared in its overlay.
+  Without `AQ_SERVER_IMAGE`, it builds this checkout and obtains a digest using
+  a disposable loopback registry; a supplied image must already be digest-pinned.
+  The smoke removes its own Compose containers/volumes and registry afterward.
+- Add `compose.workers.yaml` to the Compose file list for the cloud worker.
+  Build `Dockerfile.worker` using the immutable source and checksum in
+  `vendor/worker-candidate.json`, then set `AQ_WORKER_IMAGE` to its published
+  manifest digest. [Worker image evidence](implementation/E1c-worker-image.md)
+  records the qualified reference and build commands. It includes aq-worker
+  0.5.1 with the docker-local controller; the old 0.3.1 image is unsupported.
+  Set `AQ_SANDBOX_UID` and `AQ_SANDBOX_GID` to the dedicated rootless sandbox
+  daemon's non-root socket owner, and `AQ_SANDBOX_SOCKET_DIR` to its socket
+  directory. `aq-worker-state-init` prepares only the journal and credential
+  lease named volumes for this identity before the worker starts.
+  `AQ_WORKER_CONFIG_DIR` is mounted read-only: place the saved enrollment at
+  `agent-q/worker.toml` (0600, readable by the sandbox UID) and the operator
+  controller configuration at `controller.json`. Its `state_dir` must be under
+  `/state`, and `docker_local.socket` must be `/run/aq-sandbox/podman.sock`.
+  The enrollment's `server_url` must be the public HTTPS Access hostname;
+  `AQ_SERVER_URL` does not override saved enrollment. The worker joins only
+  its own egress network. The root initializer has no network or bind mounts.
+  Run `AQ_WORKER_IMAGE=<published-digest> scripts/compose-smoke.sh prod-workers`
+  for a disposable worker startup, heartbeat, controller journal and sandbox
+  load drill. This test uses a local server route and seeded foundation
+  credential; it does not qualify Access enrollment or B2 admission.
+- The same overlay includes `aq-worker-boat` (E1d), an independent `boat`
+  node. Deploy it first in the desktop-hosted production stack (E5a); use the
+  same service on the VPS later (E5b). It has no host sandbox socket or host
+  port. Its only network is worker egress, and its node and runner traffic
+  must use the public **machine** HTTPS hostname through Cloudflare Access.
+  `aq-worker-cloud` continues to use only `docker-local`.
+
+  Enable the Compose profile with `docker compose --profile boat up -d` when
+  using `compose.yaml:compose.workers.yaml`. It is opt-in because adding this
+  controller to the existing topology needs **4.125 vCPU and 6.625 GiB** of
+  service/sandbox ceilings, plus at least **1 decimal GB** for the host
+  (minimum 8,113,539,584 bytes total). The unchanged 4-vCPU/8-GB VPS budget
+  fails that check. E5b must establish a fitting aggregate budget before
+  enabling the same profile there; do not relax the existing smoke guard.
+
+  The default `AQ_BOAT_ENABLED=0`, example config directory and empty key
+  sentinel start a `configuration-required` placeholder. Its healthcheck
+  reports process availability; that state does **not** mean an enrolled,
+  admission-ready worker. Check `docker compose exec aq-worker-boat cat
+  /run/aq-boat/status`. No enrollment, provider request or attempt is made
+  in this state. Restart the service after completing configuration:
+
+  ```sh
+  AQ_BOAT_WORKER_IMAGE=ghcr.io/electricjack/agent-q-worker@sha256:<C7-manifest-digest>
+  AQ_BOAT_CONFIG_DIR=/etc/agent-q/worker-boat
+  AQ_BOAT_ATTEMPT_KEY_FILE=/etc/agent-q/secrets/boat_attempt_key
+  AQ_PUBLIC_HOSTNAME=machine.example.com
+  # Set to 1 only after the deployment gates below are met.
+  AQ_BOAT_ENABLED=0
+  ```
+
+  `AQ_BOAT_WORKER_IMAGE` must contain C7's Boat backend and the existing
+  `/usr/local/bin/worker-init-volumes` image helper. The qualified cloud image
+  in `deploy/worker-image.env` and the current vendored worker candidate
+  predate C7: they can run the placeholder but cannot run Boat attempts.
+  Build the separate image from aq-worker C7 commit `c009b6d` (supervisor
+  disposition, 2026-11-03), and set the variable to its immutable manifest
+  SHA-256, never a tag. C7 release-image publication follows the owner's C7
+  PR merge and is outside E1d. A C7-capable image is a deployment prerequisite;
+  setting the image variable is not evidence of backend qualification.
+
+  Create the Boat configuration directory with owner 10001:10001, mode
+  0700. Enroll a **new** node using a fresh enrollment code and a dedicated
+  node Access service token; never copy `AQ_WORKER_CONFIG_DIR`, its
+  `agent-q/worker.toml`, node UUID, controller state or credentials. Enrollment
+  needs a writable config mount for this one command (the service mounts it
+  read-only). With the env variables above exported, run:
+
+  ```sh
+  docker run --rm -i --user 10001:10001 \
+    --mount "type=bind,src=$AQ_BOAT_CONFIG_DIR,dst=/config" \
+    --entrypoint aq-worker "$AQ_BOAT_WORKER_IMAGE" \
+    enroll --server "https://$AQ_PUBLIC_HOSTNAME" \
+    --name aq-worker-boat --cf-service-token
+  ```
+
+  Supply the enrollment code, CF client ID and secret on stdin as prompted,
+  never as arguments. Confirm the saved `server_url` is the machine HTTPS
+  hostname and both `cf_client_id` and `cf_client_secret` are present. Keep
+  `agent-q/worker.toml` mode 0600, readable only by UID 10001. The saved
+  enrollment controls transport; `AQ_SERVER_URL` does not override it.
+  Provision a second, distinct Access token for this node's sandbox runners
+  through the runner material path; never forward the node token or Boat key.
+
+  Copy `deploy/boat.example/controller.json.example` to the directory as
+  `controller.json`. Replace all placeholders from the C7 runtime and the
+  reviewed template allowlist; set `boat.node_id` to the **new** enrolled
+  UUID. C7 refuses a mismatch. `node.templates` must advertise the selected
+  qualified templates, and `boat.templates` must contain their pinned image
+  digest, saved snapshot name, immutable snapshot ID and scan policy from
+  the Boat materialization. The example deliberately advertises none until
+  qualification is complete. Configure exactly one `boat` backend, with no
+  `docker_local`. Leave `state_dir=/state/controller`,
+  `boat.journal_path=/state/boat-mappings.json` and
+  `boat.key_file=/run/aq-boat/api-key`. The dedicated `aq_worker_boat_state`
+  volume persists controller identity and authoritative sandbox mappings;
+  `aq_worker_boat_leases` is also independent of the cloud node. The
+  networkless initializer owns only those volumes as UID/GID 10001.
+
+  Use distinct Boat organizations `attempt_org` and `template_org`. The
+  attempt key needs sandbox create/read/update/stop/delete, command/file
+  operations and read access to the scanned build snapshots. Do not grant
+  template snapshot writes, wildcard, account-admin, AI proxy, SSH, desktop
+  or hosting rights. Put that key only in `AQ_BOAT_ATTEMPT_KEY_FILE`, owned
+  by 10001 with mode 0600. Compose file-backed secrets retain host ownership
+  and mode. The entrypoint copies it to node-only tmpfs as a same-owner
+  0600 file, as required by C7 `BoatKey`; it is never stored in the state
+  volume or passed to sandboxes. The build key has a separate scope/org
+  and stays off this service. `boat-build.json.example` shows the C7
+  materializer configuration; use it on the separate template build host.
+
+  Keep C7 hard-deadline auto-stop enabled: every VM create/update supplies
+  a positive TTL bounded by the original attempt hard deadline plus its
+  five-second margin (rounded by less than one second). The controller's
+  one-second sweep and five-second deadline margin back up provider TTL.
+  Compose's stop grace period is not the VM deadline mechanism. Attempt
+  archives remain automatic stopped retention, never paid saved snapshots;
+  saved snapshots are for scanned templates only, at most the 10 included.
+  Default resource requests are small (2 vCPU / 4 GiB); a request for the
+  default size (4 vCPU / 8 GiB) must be explicit. C7 derives size from the
+  attempt resource request; it has no `default_size` configuration field.
+
+  Before enabling attempts, establish both owner-mandated budget stops:
+  the $20/month Boat plan with auto top-up **off**, run
+  `boat billing extra-starts off`, set the dedicated attempt member's usage
+  cap within the included $20 of VM time, and concurrent-sandbox cap **4**.
+  Keep `node.max_concurrent_sandboxes=4` and
+  `node.spend_ceiling={"currency":"USD","micros":18000000}` ($18).
+  H2 now prices Boat VM running time in the current UTC calendar month at
+  the owner's reference rates: small $0.018/hour, default $0.036/hour,
+  large $0.072/hour and xlarge $0.200/hour. Placement refuses at the ceiling
+  (`node_spend_ceiling_reached`) or when spend is unknown
+  (`node_spend_unaccounted`). **Deployment gate:** use an aq-worker release
+  that journals and reports actual VM creation and confirmed stop times to
+  `/v1/worker/observations/vm-time`; backfill this node's historical attempts.
+  Verify that reporting and the monthly refusal before enabling attempts.
+  See [monthly Boat accounting](implementation/H2-monthly-boat-budget.md)
+  for the report contract, pinned rates and migration. Do not reset state or
+  assume unreported VM use is zero. C7 live provider/template qualification and
+  the authenticated admission/runner transport must also be ready.
+
+  Run `scripts/compose-smoke.sh prod-boat` without Boat credentials. It
+  starts only this node and its initializer, checks the placeholder,
+  isolation, engine limits and state persistence across restart, then
+  removes its own containers/volumes. It creates no Boat VMs and does not
+  qualify public Access enrollment, monthly accounting or live execution.
 - `/etc/agent-q/agent-q.env`, the operator's env file. It holds only the
   operator's paths:
 
@@ -210,13 +392,14 @@ aqc() {
 ```toml
 state_dir = "/var/lib/agent-q/updater"
 backup_dir = "/var/lib/agent-q/backups"
+# Pre-update backups kept in backup_dir (the default; at least 1).
+backups_keep = 5
 # Defaults, shown for reference:
 # release_repo = "ghcr.io/electricjack/agent-q-release"
 # channel = "stable"
 # readiness_deadline_secs = 120
 # poll_interval_secs = 3600
 # min_free_bytes = 2147483648
-# backups_keep = 5
 # expected_auth_mode = "cloudflare_access"
 # maintenance_drain_secs = 5
 
@@ -229,7 +412,7 @@ project_name = "agent-q"
 [verifier]
 kind = "cosign_keyless"
 cosign_path = "/usr/local/bin/cosign"
-identity_regexp = '^https://github\.com/ElectricJack/agent-q/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+identity_regexp = '^https://github\.com/ElectricJack/aq-server/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 oidc_issuer = "https://token.actions.githubusercontent.com"
 ```
 
@@ -241,6 +424,30 @@ install -o root -g aq-updater -m 0640 updater.toml /etc/agent-q/updater.toml
 maintenance on and before it starts the backup, so that an admin write that
 passed the maintenance check just before the marker appeared can commit and
 land in the backup. `0` turns the wait off.
+
+### Disk space: backups and images
+
+The updater bounds what it keeps on the root filesystem:
+
+- **Backup rotation.** After each pre-update backup it keeps the newest
+  `backups_keep` dumps (default 5) in `backup_dir` and deletes older ones. The
+  backup of the active release's data (`active_backup`) and the backup of the
+  update in flight are never deleted, even when they are older.
+- **Free-space checks.** Before pulling, the updater refuses an update when
+  `backup_dir`'s filesystem has less free space than the larger of
+  `min_free_bytes` and three times the newest backup. After the pull, and
+  before maintenance or anything else stops, it checks again and refuses to
+  start the backup when free space is below the newest backup's size plus
+  10%. Both refusals are recorded as `refused` in the history with the bytes
+  free and needed; the active release keeps running. Free some space and
+  request the update again.
+- **Image prune.** After a successful update (or `restore-previous`), the
+  updater removes the local images of the release repositories (the server
+  and worker images named in release manifests) other than the current and
+  previous release's. Other Compose images (postgres, aq-graph, cloudflared)
+  are pinned in `compose.yaml` and not touched. Docker refuses to remove an
+  image a container still uses. A failed prune is logged as a warning and
+  never changes the update's outcome.
 
 ### Registry login (`docker login ghcr.io`)
 
@@ -269,7 +476,7 @@ token by logging in again; nothing else stores it.
 ```ini
 [Unit]
 Description=Agent Q host updater
-Documentation=https://github.com/ElectricJack/agent-q/blob/main/docs/operations.md
+Documentation=https://github.com/ElectricJack/aq-server/blob/main/docs/operations.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 # At most 5 starts in 10 minutes. Restart= below restarts the updater after a
@@ -529,7 +736,7 @@ Do this once, before the first tag. `release.yml` signs whatever a `v*` tag
 points at, so only the owner may create those tags. This is the owner's
 action in the GitHub UI; nothing in the repository sets it up.
 
-On github.com/ElectricJack/agent-q: **Settings → Rules → Rulesets → New
+On github.com/ElectricJack/aq-server: **Settings → Rules → Rulesets → New
 ruleset → New tag ruleset**, then:
 
 - **Ruleset name:** `release tags`
@@ -604,8 +811,8 @@ git merge-base --is-ancestor <merge-commit> origin/main && echo "on main"
 6. Promote it to the stable channel:
 
    ```sh
-   gh workflow run promote.yml -R ElectricJack/agent-q -f version=0.2.0
-   gh run watch -R ElectricJack/agent-q
+   gh workflow run promote.yml -R ElectricJack/aq-server -f version=0.2.0
+   gh run watch -R ElectricJack/aq-server
    ```
 
    `promote.yml` requires the GitHub Release to exist (that is, the release
@@ -624,7 +831,7 @@ Releases do not replace `aq-updater` itself; the spec defers that. To upgrade
 it:
 
 ```sh
-gh release download v0.2.0 -R ElectricJack/agent-q -p aq-updater-x86_64-linux -p SHA256SUMS
+gh release download v0.2.0 -R ElectricJack/aq-server -p aq-updater-x86_64-linux -p SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 sudo -u aq-updater aq-updater status        # expect state: idle
 systemctl stop aq-updater                   # waits for an in-flight update
@@ -647,10 +854,10 @@ them from the worker image digest in a verified manifest:
 1. Get the manifest and bundle from the GitHub Release and verify them:
 
    ```sh
-   gh release download v0.2.0 -R ElectricJack/agent-q -p manifest.json -p manifest.sigstore.json
+   gh release download v0.2.0 -R ElectricJack/aq-server -p manifest.json -p manifest.sigstore.json
    SHA=$(python3 -c 'import json; print(json.load(open("manifest.json"))["source_revision"])')
    cosign verify-blob --bundle manifest.sigstore.json \
-     --certificate-identity-regexp '^https://github\.com/ElectricJack/agent-q/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+     --certificate-identity-regexp '^https://github\.com/ElectricJack/aq-server/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
      --certificate-github-workflow-ref refs/tags/v0.2.0 \
      --certificate-github-workflow-sha "$SHA" \

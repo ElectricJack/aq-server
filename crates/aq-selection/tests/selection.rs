@@ -1,5 +1,5 @@
 mod common;
-use aq_profiles::{FallbackReason, UnknownCostPolicy};
+use aq_profiles::{ExecutionConfinement, FallbackReason, UnknownCostPolicy};
 use aq_selection::*;
 use common::*;
 use uuid::Uuid;
@@ -712,4 +712,314 @@ fn native_policy_binding_does_not_allow_rehashed_instruction_or_permission_forge
     input.compositions[0].composition.graph_access_policy_kind = None;
     input.compositions[0].digest = digest(&input.compositions[0].composition).unwrap();
     assert!(select(&catalog, &input).is_err());
+}
+
+#[test]
+fn credential_restricted_backend_is_ineligible() {
+    let (catalog, mut input) = fixture();
+    input.node.backend_kind = Some(BackendKind::Boat);
+    for credential in &mut input.credentials {
+        credential.allowed_backends = vec![BackendKind::DockerLocal];
+    }
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none());
+    assert!(
+        out.traces
+            .iter()
+            .all(|t| t.state == CandidateState::PolicyDenied)
+    );
+    assert!(
+        out.traces[0]
+            .reason_codes
+            .contains(&"credential_backend_not_allowed".into())
+    );
+
+    input.node.backend_kind = None;
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none());
+    assert!(
+        out.traces[0]
+            .reason_codes
+            .contains(&"credential_backend_unknown".into())
+    );
+
+    input.node.backend_kind = Some(BackendKind::DockerLocal);
+    assert!(select(&catalog, &input).unwrap().resolved.is_some());
+
+    for credential in &mut input.credentials {
+        credential.allowed_backends = default_allowed_backends();
+    }
+    input.node.backend_kind = None;
+    assert!(select(&catalog, &input).unwrap().resolved.is_some());
+    for backend in default_allowed_backends() {
+        input.node.backend_kind = Some(backend);
+        assert!(select(&catalog, &input).unwrap().resolved.is_some());
+    }
+    for credential in &mut input.credentials {
+        credential.allowed_backends.clear();
+    }
+    assert!(select(&catalog, &input).unwrap().resolved.is_none());
+}
+
+#[test]
+fn credential_backend_denial_obeys_explicit_fallback_policy() {
+    let (catalog, mut input) = fixture();
+    input.credentials[0].allowed_backends = vec![BackendKind::DockerLocal];
+    input.node.backend_kind = Some(BackendKind::Boat);
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.traces[0].state, CandidateState::PolicyDenied);
+    assert_eq!(out.resolved.unwrap().choice.model, "model-b");
+    let mut policy = policy();
+    policy
+        .fallback_on
+        .retain(|r| *r != FallbackReason::PolicyDenied);
+    let catalog = change_policy(&catalog, policy, &mut input);
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none());
+    assert!(out.reason_codes.contains(&"no_permitted_fallback".into()));
+}
+
+#[test]
+fn credential_backend_snapshot_validation_and_legacy_defaults() {
+    let (catalog, mut input) = fixture();
+    let encoded = serde_json::to_value(&input).unwrap();
+    assert!(encoded["node"].get("backend_kind").is_none());
+    assert!(encoded["credentials"][0].get("allowed_backends").is_none());
+    let decoded: SelectionInputs = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded.node.backend_kind, None);
+    assert_eq!(
+        decoded.credentials[0].allowed_backends,
+        default_allowed_backends()
+    );
+    for (field, value) in [
+        ("backend_kind", serde_json::json!("unknown")),
+        ("backend_kind", serde_json::json!("x".repeat(513))),
+    ] {
+        let mut unknown = encoded.clone();
+        unknown["node"][field] = value;
+        assert!(serde_json::from_value::<SelectionInputs>(unknown).is_err());
+    }
+    for backends in [vec![BackendKind::Boat; 2], vec![BackendKind::Boat; 4]] {
+        input.credentials[0].allowed_backends = backends;
+        assert!(select(&catalog, &input).is_err());
+    }
+}
+fn sandbox_placement(input: &SelectionInputs, harness_version: &str) -> Placement {
+    let template = input.node.harnesses[0].environment.digest.clone();
+    Placement {
+        capabilities: vec!["vm-isolation".into()],
+        required_capabilities: vec![],
+        templates: vec![AdvertisedTemplate {
+            digest: template.clone(),
+            harnesses: vec![AdvertisedHarness {
+                harness: "codex".into(),
+                version: harness_version.into(),
+            }],
+        }],
+        environment_templates: vec![EnvironmentTemplate {
+            environment: "confined-worktree".into(),
+            template,
+        }],
+        ceiling: None,
+        preferred_peer: None,
+        backend: None,
+    }
+}
+fn all_traces_refuse(out: &SelectionOutcome, state: CandidateState, reason: &str) {
+    assert!(out.resolved.is_none());
+    assert!(!out.traces.is_empty());
+    for trace in &out.traces {
+        assert_eq!(trace.state, state, "{trace:?}");
+        assert!(trace.reason_codes.contains(&reason.into()), "{trace:?}");
+    }
+}
+#[test]
+fn template_missing_selected_harness_version_is_ineligible() {
+    let (catalog, mut input) = fixture();
+    input.placement = Some(sandbox_placement(&input, "fixture-1"));
+    let selected = select(&catalog, &input).unwrap().resolved.unwrap();
+    assert_eq!(
+        selected.choice.environment.digest,
+        input.placement.as_ref().unwrap().environment_templates[0].template,
+        "the frozen environment pin is the resolved template digest"
+    );
+    input.placement = Some(sandbox_placement(&input, "fixture-2"));
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "template_missing_selected_harness_version",
+    );
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.environment_templates.clear();
+    input.placement = Some(placement);
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "environment_template_unresolved",
+    );
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.environment_templates[0].template = Digest::of(b"other-template");
+    input.placement = Some(placement);
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "environment_template_digest_mismatch",
+    );
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.templates.clear();
+    input.placement = Some(placement);
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(&out, CandidateState::Unsupported, "template_not_advertised");
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.required_capabilities = vec!["nested-docker".into()];
+    input.placement = Some(placement);
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "required_backend_capability_unsupported",
+    );
+}
+#[test]
+fn node_at_spend_ceiling_refuses_with_reason_in_trace() {
+    let (catalog, mut input) = fixture();
+    for (ceiling, reason) in [
+        (NodeCeiling::Spend, "node_spend_ceiling_reached"),
+        (NodeCeiling::Concurrency, "node_concurrency_ceiling_reached"),
+        (NodeCeiling::SpendUnaccounted, "node_spend_unaccounted"),
+        (NodeCeiling::DiskPressure, "node_disk_pressure"),
+    ] {
+        let mut placement = sandbox_placement(&input, "fixture-1");
+        placement.ceiling = Some(ceiling);
+        input.placement = Some(placement);
+        let out = select(&catalog, &input).unwrap();
+        all_traces_refuse(&out, CandidateState::Unavailable, reason);
+    }
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.preferred_peer = Some(BackendKind::DockerLocal);
+    input.placement = Some(placement);
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unavailable,
+        "placement_preferred_backend_available",
+    );
+    // Old persisted inputs without placement still deserialize.
+    let mut json = serde_json::to_value(&input).unwrap();
+    json.as_object_mut().unwrap().remove("placement");
+    let old: SelectionInputs = serde_json::from_value(json).unwrap();
+    assert!(old.placement.is_none());
+}
+#[test]
+fn container_only_backend_admits_only_permitted_container_confinement() {
+    let (catalog, mut input) = fixture();
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.backend = Some(BackendKind::DockerLocal);
+    input.placement = Some(placement);
+    // Default execution profile denies container confinement.
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::PolicyDenied,
+        "container_confinement_not_permitted",
+    );
+    let native = ExecutionConfinement {
+        permit_container: false,
+        require_native: true,
+    };
+    let required = change_confinement(&catalog, native, &mut input);
+    let out = select(&required, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "execution_requires_native_confinement",
+    );
+    let permit = ExecutionConfinement {
+        permit_container: true,
+        require_native: false,
+    };
+    let permitted = change_confinement(&catalog, permit, &mut input);
+    assert!(select(&permitted, &input).unwrap().resolved.is_some());
+    assert_eq!(
+        admit_confinement(input.placement.as_ref(), &permit),
+        Ok(ConfinementMode::Container)
+    );
+    // Non-container-only backends (and nodes without a sandbox) stay native,
+    // including for native-required profiles.
+    for backend in [Some(BackendKind::Boat), None] {
+        input.placement.as_mut().unwrap().backend = backend;
+        assert_eq!(
+            admit_confinement(input.placement.as_ref(), &native),
+            Ok(ConfinementMode::Native)
+        );
+    }
+    assert_eq!(
+        admit_confinement(None, &ExecutionConfinement::default()),
+        Ok(ConfinementMode::Native)
+    );
+    let required = change_confinement(&catalog, native, &mut input);
+    assert!(select(&required, &input).unwrap().resolved.is_some());
+}
+type PlacementMutation = (fn(&mut Placement), &'static str);
+
+#[test]
+fn fence_recheck_refuses_frozen_choice_with_selection_reasons() {
+    let (catalog, mut input) = fixture();
+    input.placement = Some(sandbox_placement(&input, "fixture-1"));
+    let choice = select(&catalog, &input).unwrap().resolved.unwrap().choice;
+    assert_eq!(recheck(input.placement.as_ref().unwrap(), &choice), Ok(()));
+    let mutations: Vec<PlacementMutation> = vec![
+        (
+            |p| p.ceiling = Some(NodeCeiling::Concurrency),
+            "node_concurrency_ceiling_reached",
+        ),
+        (
+            |p| p.ceiling = Some(NodeCeiling::SpendUnaccounted),
+            "node_spend_unaccounted",
+        ),
+        (
+            |p| p.ceiling = Some(NodeCeiling::DiskPressure),
+            "node_disk_pressure",
+        ),
+        (
+            |p| p.required_capabilities = vec!["nested-docker".into()],
+            "required_backend_capability_unsupported",
+        ),
+        (
+            |p| p.environment_templates.clear(),
+            "environment_template_unresolved",
+        ),
+        (
+            |p| p.environment_templates[0].template = Digest::of(b"other-template"),
+            "environment_template_digest_mismatch",
+        ),
+        (|p| p.templates.clear(), "template_not_advertised"),
+        (
+            |p| p.templates[0].harnesses[0].version = "fixture-2".into(),
+            "template_missing_selected_harness_version",
+        ),
+        (
+            |p| p.preferred_peer = Some(BackendKind::DockerLocal),
+            "placement_preferred_backend_available",
+        ),
+    ];
+    for (mutate, reason) in mutations {
+        let mut placement = sandbox_placement(&input, "fixture-1");
+        mutate(&mut placement);
+        // The fence refuses the frozen choice with the reason selection would
+        // now record for it.
+        assert_eq!(recheck(&placement, &choice), Err(reason));
+        let mut now = input.clone();
+        now.placement = Some(placement);
+        let out = select(&catalog, &now).unwrap();
+        assert!(out.resolved.is_none());
+        assert!(
+            out.traces
+                .iter()
+                .all(|t| t.reason_codes.contains(&reason.into()))
+        );
+    }
 }

@@ -14,7 +14,7 @@ original = "            (ROOT / 'fixtures/qualified-graph.json').write_text(json
 replacement = '''            writer_file = Path(temp) / 'ordinary-writer-token'
             writer_file.write_text(writer)
             writer_file.chmod(0o600)
-            env = dict(os.environ, AQ_AGENT_GRAPH_TEST_URL=base,
+            env = dict(os.environ, CARGO_INCREMENTAL='0', AQ_AGENT_GRAPH_TEST_URL=base,
                        AQ_AGENT_GRAPH_TEST_TOKEN_FILE=str(writer_file))
             subprocess.run(['cargo', 'test', '-p', 'aq-server', '--test', 'agent_access',
                             '--', '--nocapture'], cwd=ROOT.parents[2], env=env, check=True)'''

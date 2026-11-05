@@ -1,0 +1,489 @@
+{
+  "branch_source": "43212ff9371125b6f089b329757370eb972e6390",
+  "main_source": "ea28da1ca62184e9f5f945b73b62320edbe903e0",
+  "approved_disposition_message": "msg-ca59a3e2ee0142fda8c632fbd677fb97",
+  "summary": {
+    "pre_existing_identical_on_main": 19,
+    "missing_graph_fixture_corrected": 1,
+    "persistent_branch_only": 0,
+    "passed_in_unchanged_isolation_or_recheck": 12
+  },
+  "cases": [
+    {
+      "index": 1,
+      "target": "native_accepted_preparation",
+      "test": "original_inputs_remain_scoped_after_proposal_expiry_then_expire_held",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-01-native_accepted_preparation.log",
+      "main_log": "isolation-main-01-native_accepted_preparation.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 2,
+      "target": "native_initial_grant",
+      "test": "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+      "first_branch_exit": 101,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-02-native_initial_grant.log",
+      "main_log": "isolation-main-02-native_initial_grant.log",
+      "branch_rechecks": [
+        {
+          "target": "native_initial_grant",
+          "test": "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+            "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+          "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+          "started_utc": "2026-11-03T03:40:50.732400+00:00",
+          "log": "branch-difference-recheck-01.log",
+          "exit_code": 101,
+          "finished_utc": "2026-11-03T03:40:54.776404+00:00",
+          "test_results": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.13s"
+          ]
+        },
+        {
+          "round": 1,
+          "mode": "branch",
+          "source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+            "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+          "log": "concurrent-grant-paired-1-branch.log",
+          "started_utc": "2026-11-03T03:42:47.820691+00:00",
+          "exit_code": 0,
+          "finished_utc": "2026-11-03T03:42:50.390702+00:00",
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.55s"
+          ]
+        },
+        {
+          "round": 2,
+          "mode": "branch",
+          "source_commit": "43212ff9371125b6f089b329757370eb972e6390",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+            "published::concurrent_exact_prepare_never_creates_two_grants_or_extends_the_original",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+          "log": "concurrent-grant-paired-2-branch.log",
+          "started_utc": "2026-11-03T03:42:55.052061+00:00",
+          "exit_code": 0,
+          "finished_utc": "2026-11-03T03:42:58.042811+00:00",
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.98s"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "target": "native_initial_grant",
+      "test": "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+      "first_branch_exit": 101,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-03-native_initial_grant.log",
+      "main_log": "isolation-main-03-native_initial_grant.log",
+      "branch_rechecks": [
+        {
+          "target": "native_initial_grant",
+          "test": "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+            "published::presence::isolation::held_report_admission_preserves_inventory_and_renewal_progress",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+          "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+          "started_utc": "2026-11-03T03:40:55.205692+00:00",
+          "log": "branch-difference-recheck-02.log",
+          "exit_code": 0,
+          "finished_utc": "2026-11-03T03:40:57.897059+00:00",
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.68s"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "target": "native_initial_grant",
+      "test": "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+      "first_branch_exit": 101,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-04-native_initial_grant.log",
+      "main_log": "isolation-main-04-native_initial_grant.log",
+      "branch_rechecks": [
+        {
+          "target": "native_initial_grant",
+          "test": "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/native_initial_grant-7e3e955f5826c45a",
+            "published::presence::legacy_barrier_then_v2_restoration_requires_new_private_observation",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "f7060c5391ae1ab61f5550e38603a082dd8efedc22055b626b2438964686b750",
+          "binary_last_modified_utc": "2026-11-03T02:36:24.639076+00:00",
+          "started_utc": "2026-11-03T03:40:58.266349+00:00",
+          "log": "branch-difference-recheck-03.log",
+          "exit_code": 0,
+          "finished_utc": "2026-11-03T03:41:00.743874+00:00",
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 2.47s"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "target": "native_initial_grant",
+      "test": "published::presence::normalized_binding_removal_then_restore_requires_new_scoped_read",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-05-native_initial_grant.log",
+      "main_log": "isolation-main-05-native_initial_grant.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 6,
+      "target": "native_initial_grant",
+      "test": "published::presence::scoped_head_failure_rolls_back_receipt_and_exact_retry_can_succeed",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-06-native_initial_grant.log",
+      "main_log": "isolation-main-06-native_initial_grant.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 7,
+      "target": "native_initial_grant",
+      "test": "published::presence::scoped_record_is_not_a_grant_and_compatible_new_inventory_preserves_renewal_fact",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-07-native_initial_grant.log",
+      "main_log": "isolation-main-07-native_initial_grant.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 8,
+      "target": "phase_execution",
+      "test": "refusals::no_longer_in_bounded_ready_page_cannot_issue_execution",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-08-phase_execution.log",
+      "main_log": "isolation-main-08-phase_execution.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 9,
+      "target": "phase_execution_transport",
+      "test": "genuine_old_schema_cannot_issue_production_grant_without_reserved_cleanup_capacity",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-09-phase_execution_transport.log",
+      "main_log": "isolation-main-09-phase_execution_transport.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 10,
+      "target": "phase_results",
+      "test": "frozen::head_failure_rolls_back_report_and_exact_retry_records_once",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-10-phase_results.log",
+      "main_log": "isolation-main-10-phase_results.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 11,
+      "target": "phase_results",
+      "test": "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+      "first_branch_exit": 101,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-11-phase_results.log",
+      "main_log": "isolation-main-11-phase_results.log",
+      "branch_rechecks": [
+        {
+          "target": "phase_results",
+          "test": "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+          "command": [
+            "/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/target/debug/deps/phase_results-f84dd70510a4a7d6",
+            "frozen::human_metadata::opt_in_phase_metadata_refuses_changed_nominal_terminal_origin",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ],
+          "binary_sha256": "fb109994214f34dc7d01f0889b086a1224bb52b87c51d29d8a2cd5ba86e769d7",
+          "binary_last_modified_utc": "2026-11-03T02:36:19.630045+00:00",
+          "started_utc": "2026-11-03T03:41:01.359323+00:00",
+          "log": "branch-difference-recheck-04.log",
+          "exit_code": 0,
+          "finished_utc": "2026-11-03T03:41:07.688871+00:00",
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 6.32s"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "target": "phase_results",
+      "test": "refresh::held_node_lock_rechecks_revoked_credential_before_any_report_commit",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-12-phase_results.log",
+      "main_log": "isolation-main-12-phase_results.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 13,
+      "target": "phase_terminal_closure",
+      "test": "failed_closure_insert_rolls_back_permission_revocation_and_retains_retry_identity",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-13-phase_terminal_closure.log",
+      "main_log": "isolation-main-13-phase_terminal_closure.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 14,
+      "target": "phase_terminal_closure",
+      "test": "pre_started_host_stop_can_omit_pane_and_root_status_without_inventing_started",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-14-phase_terminal_closure.log",
+      "main_log": "isolation-main-14-phase_terminal_closure.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 15,
+      "target": "phase_terminal_closure",
+      "test": "suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_held",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-15-phase_terminal_closure.log",
+      "main_log": "isolation-main-15-phase_terminal_closure.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 16,
+      "target": "phase_terminal_closure",
+      "test": "wrong_origin_checkpoint_or_current_credential_cannot_change_phase_authority",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-16-phase_terminal_closure.log",
+      "main_log": "isolation-main-16-phase_terminal_closure.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 17,
+      "target": "phase_terminal_stopped",
+      "test": "paired_stop_does_not_qualify_old_sql_result_or_release_owners",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-17-phase_terminal_stopped.log",
+      "main_log": "isolation-main-17-phase_terminal_stopped.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 18,
+      "target": "profiled_hot",
+      "test": "actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-18-profiled_hot.log",
+      "main_log": "isolation-main-18-profiled_hot.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 19,
+      "target": "profiled_results",
+      "test": "results_feedback::feedback_task_links_result_revision",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "Graph fixture configured: both pass",
+      "branch_log": "isolation-branch-19-profiled_results.log",
+      "main_log": "isolation-main-19-profiled_results.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 20,
+      "target": "schema30_preparation",
+      "test": "current30_missing_one_or_both_tables_refuses_reopen_without_repair",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-20-schema30_preparation.log",
+      "main_log": "isolation-main-20-schema30_preparation.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 21,
+      "target": "schema32_phase_execution",
+      "test": "current32_missing_execution_history_refuses_reopen_without_repair",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-21-schema32_phase_execution.log",
+      "main_log": "isolation-main-21-schema32_phase_execution.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 22,
+      "target": "schema33_phase_terminal",
+      "test": "actual32_history_survives33_and_reserves_cleanup_without_terminal_effects",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-22-schema33_phase_terminal.log",
+      "main_log": "isolation-main-22-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 23,
+      "target": "schema33_phase_terminal",
+      "test": "actual_grant_cannot_commit_without_reserved_terminal_capacity",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-23-schema33_phase_terminal.log",
+      "main_log": "isolation-main-23-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 24,
+      "target": "schema33_phase_terminal",
+      "test": "already_open_writer_cannot_insert_legacy_started_for_actual_phase_grant",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-24-schema33_phase_terminal.log",
+      "main_log": "isolation-main-24-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 25,
+      "target": "schema33_phase_terminal",
+      "test": "collision_rolls_back33_without_changing_actual32_history",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-25-schema33_phase_terminal.log",
+      "main_log": "isolation-main-25-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 26,
+      "target": "schema33_phase_terminal",
+      "test": "old_snapshot_classifies_actual030_origin_even_without_visible032_grant",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-26-schema33_phase_terminal.log",
+      "main_log": "isolation-main-26-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 27,
+      "target": "schema33_phase_terminal",
+      "test": "ordered::actual32_open_owner_history_survives_registered33_upgrade",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-27-schema33_phase_terminal.log",
+      "main_log": "isolation-main-27-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 28,
+      "target": "schema33_phase_terminal",
+      "test": "relational_only_over_budget_backfill_rolls_back_entire_migration",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-28-schema33_phase_terminal.log",
+      "main_log": "isolation-main-28-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 29,
+      "target": "schema33_phase_terminal",
+      "test": "ordered::current33_missing_mandatory_objects_refuses_reopen_without_repair",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-29-schema33_phase_terminal.log",
+      "main_log": "isolation-main-29-schema33_phase_terminal.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 30,
+      "target": "schema43_cancellation",
+      "test": "cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuses",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-30-schema43_cancellation.log",
+      "main_log": "isolation-main-30-schema43_cancellation.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 31,
+      "target": "schema43_cancellation",
+      "test": "cancellation43_upgrade_preserves_prior_records_and_old41_refuses",
+      "first_branch_exit": 101,
+      "main_exit": 101,
+      "classification": "pre-existing: identical panic on clean main",
+      "branch_log": "isolation-branch-31-schema43_cancellation.log",
+      "main_log": "isolation-main-31-schema43_cancellation.log",
+      "branch_rechecks": []
+    },
+    {
+      "index": 32,
+      "target": "terminal_tail",
+      "test": "maximum_frame_and_later_gap_do_not_stall_or_skip_budgeted_frames",
+      "first_branch_exit": 0,
+      "main_exit": 0,
+      "classification": "passes unchanged isolation/rechecks on both",
+      "branch_log": "isolation-branch-32-terminal_tail.log",
+      "main_log": "isolation-main-32-terminal_tail.log",
+      "branch_rechecks": []
+    }
+  ]
+}

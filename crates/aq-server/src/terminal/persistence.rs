@@ -26,6 +26,7 @@ pub fn relay(e: aq_terminal_relay::Error) -> AppError {
     match e {
         Error::Forbidden => AppError::Forbidden(e.to_string()),
         Error::Invalid => AppError::BadRequest(e.to_string()),
+        Error::InputDeadline => AppError::InputDeadline,
         Error::Capacity => AppError::IdentityUnavailable(e.to_string()),
         Error::Persistence => AppError::Internal,
         _ => AppError::Conflict(e.to_string()),

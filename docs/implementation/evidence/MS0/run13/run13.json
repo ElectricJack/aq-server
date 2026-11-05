@@ -1,0 +1,150 @@
+{
+  "schema": "aq.i0.run-evidence.v1",
+  "task": "calm-stone-85",
+  "date": "2026-11-03",
+  "stack": "aq-e0-qual",
+  "server": {
+    "repository": "ElectricJack/aq-server",
+    "revision": "2d337f368ffcfc71c5de929a38fbacaa3b0c5d75",
+    "contains": "PR #50 keen-impact-58: settlement router mounted, production combined-decision path, relay upload without watcher",
+    "image": "sha256:f7f726c88654c7b16494f0a4bee71425c25ddffa04c18b4baa86a5cac800cb6b"
+  },
+  "worker_image": {
+    "image": "sha256:20abe6352e6a1161a70ce56ee89239487a2d50f3235701088862c131a64db389",
+    "source_revision": "f4703fec23b1d7d0b4cb7bd2a9edf46031a7b5cd",
+    "codex": "0.166.0",
+    "definition_version": "3",
+    "profiled_revision": 6,
+    "intelligence_revision": 4
+  },
+  "node": "f761410b-43f5-4106-ab80-f044dd446da0",
+  "profile": "owner-chatgpt-codex",
+  "model": {
+    "model": "gpt-6.1-sol",
+    "native_reasoning": "high"
+  },
+  "target": {
+    "repository": "ElectricJack/aq-scratch",
+    "branch": "main",
+    "repository_id": "e0a10000-0000-4000-8000-000000000003",
+    "base": "2e32645bab743729bfaeb0f2eec417c2ace7794b"
+  },
+  "graph_task": {
+    "id": "e0a10000-0000-4000-8000-000000000007",
+    "criterion": "authorized-task-text-1",
+    "instruction": "Append exactly one new line 'I0 run 13 (calm-stone-85): hello from aq-worker' to the end of README.md; change nothing else; submit the AQ result."
+  },
+  "aborted_invocations": [
+    {
+      "name": "run13a",
+      "attempt": "aee8e9ed",
+      "exit_code": 2,
+      "wall_seconds": 2.8,
+      "error": "phase local observation expired",
+      "codex_launched": false,
+      "material_lease": false,
+      "margin_ms": -22
+    },
+    {
+      "name": "run13b",
+      "attempt": "613a516e",
+      "exit_code": 2,
+      "wall_seconds": 2.7,
+      "error": "phase local observation expired",
+      "codex_launched": false,
+      "material_lease": false,
+      "note": "proposal sent 1 ms inside the local deadline; its reply returned after it"
+    }
+  ],
+  "offer_window_race": {
+    "cause": "offer deadline is min(now+30s, ..., selected.expires_at_ms); selection TTL is capped at now+2000 ms (aq-selection select.rs:238) and computed ~0.7-0.9 s into the poll, so the offered window is ~1.4-1.8 s. The worker anchors its local deadline at poll send (http_profile.rs:88 live()), counting poll latency twice. Under host load 11-18 the accept loses.",
+    "mitigation_used": "docker cpu-shares 8192 on the qual stack and the worker container for run 13c; reset to 1024 afterwards",
+    "run13c_load_at_launch": 11.23
+  },
+  "run": {
+    "name": "run13c",
+    "container": "aq-i0-run13",
+    "started_utc": "2026-11-03T18:16:03Z",
+    "stopped_utc": "2026-11-03T18:31:46Z",
+    "wall_seconds": 941.0,
+    "exit_code": 0,
+    "final_line": "native run: AttemptStopped; retained state preserved",
+    "attempt": "f246a730-1fcd-5c62-a4a2-d98f4851eaab",
+    "offer": "dce3972e-3802-599b-bfcb-0c553595c2ac",
+    "assignment_generation": 3,
+    "session": "0c695d7d-cfff-5db2-b502-3a679a09d423",
+    "boot": "f675b4bd-8697-4968-aaa4-eb4dcf84236a",
+    "grant": "53437605-fcfa-44cb-9027-5d5217021c5a",
+    "stop_reason": "reconciliation",
+    "in_session_result_submitted_utc": "2026-11-03T18:16:38Z",
+    "worker_routes_in_run_window": {
+      "all_status_200": true,
+      "terminal_relay_upload": 423,
+      "terminal_relay_output_poll": 3469,
+      "terminal_relay_poll": 53,
+      "heartbeat": 62,
+      "profiled_artifact": 32,
+      "once_each": [
+        "probe", "profiled/register", "profiled/inventory-v2", "profiled/poll",
+        "profiled-v2/proposal", "profiled-v2/accept", "profiled/material",
+        "profiled/source + manifest + bundle", "profiled-v2/prepare",
+        "profiled-v2/started", "profiled-v2/stopped",
+        "execution/sources begin, manifest, bundle, finalize", "profiled/results"
+      ]
+    }
+  },
+  "report": {
+    "id": "095807a2-9dc3-4a16-be5a-9abbb26c2730",
+    "operation": "2bb64359-8f4c-49fd-b561-2ff17e1c6954",
+    "origin": "phase_refresh_execution_v1",
+    "process_outcome": "expired",
+    "record_receipt_digest_prefix": "8654521d",
+    "conclusion_excerpt": "Changes: completed requested append to README.md: I0 run 13 (calm-stone-85): hello from aq-worker; Checks: python3 - byte assertions passed ...; git diff --check passed; ... sole change; Limits: independent review pending."
+  },
+  "retained_source": {
+    "transfer": "df5a8007-6e5c-41ad-851a-6f0df3a287ac",
+    "source_receipt": "74145d1f-61e6-4a6c-8b1b-5223b56ce5d4",
+    "import_manifest": "ec1c290c-c356-4ea9-a4cd-53510f3c490b",
+    "checkpoint": "17fe8a728b05d97963b86116a1543f54d0785db8",
+    "checkpoint_parent": "2e32645bab743729bfaeb0f2eec417c2ace7794b",
+    "diff_stat": "README.md | 1 +",
+    "added_line": "I0 run 13 (calm-stone-85): hello from aq-worker",
+    "trailing_newline": "single",
+    "state": "retained"
+  },
+  "settlement": {
+    "reviewer": "owner MS0 reviewer 7f23ea6c-e37b-4a74-83e2-7428ac733292 (dev owner identity, :32848)",
+    "steps": [
+      {"route": "POST /api/reviews/combined/prepare", "status": 200, "subject": "aq.source-effects-review-subject/095807a2-9dc3-4a16-be5a-9abbb26c2730", "subject_digest_prefix": "5530ae7f"},
+      {"route": "POST /api/reviews/combined", "status": 200, "decision": "2c66a3c3-431f-4f3a-8315-dfef70b77892", "echoed_equal": true},
+      {"route": "GET /api/reviews/combined/{decision}", "status": 200, "state": "pending", "decision_revision": 1},
+      {"route": "POST /api/settlement/evaluations", "status": 503, "error": "updates_unavailable: combined review has no recorded answer"},
+      {"route": "POST /api/reviews/combined/{decision}/resolve", "status": 200, "choice": "approve", "decision_revision": 2, "finality": "human_answer"},
+      {"route": "POST /api/settlement/evaluations (same intent)", "status": 200, "operation": "d58ab4f8-3fcc-48cc-898e-8be679885b64", "disposition": "accepted", "release": "c821499f-f9a6-47af-9354-938a1684a173", "completion_operation": "b196d43a-5c0f-4d8e-b389-6b412f730edb"},
+      {"route": "GET /api/settlement/evaluations/{op}", "status": 200, "disposition": "accepted"},
+      {"route": "POST /api/settlement/completions/{op}/reconcile", "status": 200, "state": "confirmed", "dispatch_count": 1, "graph_task_version": 2, "content_revision": 2, "change_set": "47ffc167-50ae-46e6-b9e2-e354641755f0", "recovery": "none"}
+    ],
+    "db_after": {
+      "execution_attempts.holds_task": false,
+      "profiled_settlement_evaluations.disposition": "accepted",
+      "profiled_verified_releases": "c821499f, qualification aq.phase-terminal-refresh-qualification/e0-qual",
+      "profiled_task_completions.state": "confirmed",
+      "profiled_task_completions.outbox_acknowledged": false,
+      "source_transfers.state": "retained",
+      "execution_attempts.state_json_note": "record_revision 2 still shows status offered, retention pending; stale against the settlement rows"
+    }
+  },
+  "login": {
+    "refreshed": false,
+    "writeback_needed": false,
+    "owner_file": "~/.codex/auth.json byte-identical to the pre-run baseline (sha256 prefix 98a9a084, 4017 bytes, 0600, mtime unchanged)",
+    "leased_material": "worker volume material.bin byte-identical to baseline",
+    "server_vault": "owner-chatgpt-codex.auth.json byte-identical to baseline",
+    "other_login_files": "none in worker state volume; docker diff aq-i0-run13 shows no auth paths"
+  },
+  "retained_containers": ["aq-i0-run13", "aq-i0-run13a", "aq-i0-run13b"],
+  "findings": [
+    "Native runner keeps the Codex session until the wall deadline after an in-session result is recorded (runner/codex.rs run loop exits only on cancel, deadline or natural pane exit), so a completed edit reports process outcome expired after ~15 min.",
+    "Profiled offer window (~1.4-1.8 s, from the 2 s selection TTL) is shorter than poll + accept latency on a loaded host; worker also double-counts poll latency in its local deadline."
+  ]
+}

@@ -1,0 +1,1218 @@
+{
+  "cases": [
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "valid bounded provider judgment",
+      "valid": true,
+      "value": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 512
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "invalid 1.0.0 synchronous judgment input",
+      "valid": false,
+      "value": {
+        "choices": [
+          "a"
+        ],
+        "context": "snapshot-1",
+        "question": "Q?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "invalid judgment without budget",
+      "valid": false,
+      "value": {
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "invalid judgment over token ceiling",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 65537
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "invalid judgment with caller-chosen credential profile",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 512
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "credential_profile": "profile/other",
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "input",
+      "name": "invalid judgment tool loop request",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 512
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        },
+        "tools": [
+          "shell"
+        ]
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "output",
+      "name": "valid judgment admission handle",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "output",
+      "name": "invalid synchronous assessment without provenance",
+      "outcome": "assessed",
+      "valid": false,
+      "value": {
+        "choice": "permitted-default",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "output",
+      "name": "valid assessment with provenance",
+      "outcome": "assessed",
+      "valid": true,
+      "value": {
+        "choice": "permitted-default",
+        "provenance": {
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "credential_profile": "profile/judgment-default",
+          "model": "model-a",
+          "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "provider": "provider-a",
+          "usage": {
+            "cost_microunits": 4100,
+            "input_tokens": 900,
+            "output_tokens": 120
+          }
+        },
+        "rationale": "Default profile satisfies constraints.",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "output",
+      "name": "valid typed budget refusal",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "provenance": {
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "credential_profile": "profile/judgment-default",
+          "model": "model-a",
+          "output_digest": null,
+          "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "provider": "provider-a",
+          "usage": {
+            "cost_microunits": 4100,
+            "input_tokens": 900,
+            "output_tokens": 120
+          }
+        },
+        "reason": "budget_exceeded",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "judgment.request",
+      "kind": "output",
+      "name": "invalid untyped refusal",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "provenance": null,
+        "reason": "too expensive",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.completed",
+      "kind": "event",
+      "name": "valid judgment completion event",
+      "valid": true,
+      "value": {
+        "outcome": "assessed",
+        "output": {
+          "choice": "permitted-default",
+          "provenance": {
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_profile": "profile/judgment-default",
+            "model": "model-a",
+            "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provider": "provider-a",
+            "usage": {
+              "cost_microunits": 4100,
+              "input_tokens": 900,
+              "output_tokens": 120
+            }
+          },
+          "rationale": "Default profile satisfies constraints.",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.completed",
+      "kind": "event",
+      "name": "invalid judgment completion with secret",
+      "valid": false,
+      "value": {
+        "outcome": "assessed",
+        "output": {
+          "choice": "permitted-default",
+          "provenance": {
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_profile": "profile/judgment-default",
+            "credential_secret": "sk-redacted",
+            "model": "model-a",
+            "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provider": "provider-a",
+            "usage": {
+              "cost_microunits": 4100,
+              "input_tokens": 900,
+              "output_tokens": 120
+            }
+          },
+          "rationale": "Default profile satisfies constraints.",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "valid registered check selection",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "invalid 1.0.0 suite check input",
+      "valid": false,
+      "value": {
+        "execution_context": "ci",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        },
+        "suite": "unit"
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "invalid check without validator",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit"
+        },
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "invalid arbitrary shell check",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "command": "cargo test",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "invalid caller-asserted pass",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "passed": true,
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "invalid mutable source ref",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "source": {
+          "format": "branch",
+          "hex": "main"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid check admission handle",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-2"
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid passed receipt",
+      "outcome": "passed",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "passed",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": 0,
+            "stop": "exited"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "invalid pass with nonzero exit",
+      "outcome": "passed",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "passed",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": 1,
+            "stop": "exited"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "invalid pass with uncertain stop",
+      "outcome": "passed",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "passed",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": null,
+            "stop": "lost"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "invalid pass without receipt",
+      "outcome": "passed",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "passed",
+        "receipt": null,
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid failed receipt",
+      "outcome": "failed",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "failed",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": 101,
+            "stop": "exited"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid timed out infrastructure failure",
+      "outcome": "infrastructure_failure",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "timed_out",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": null,
+            "stop": "timed_out"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid cancelled before attempt",
+      "outcome": "infrastructure_failure",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "cancelled",
+        "receipt": null,
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "invalid unknown disposition as failure",
+      "outcome": "failed",
+      "valid": false,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "unknown",
+        "receipt": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executor_version": "aq-check-executor/1.0.0",
+          "exit": {
+            "code": 1,
+            "stop": "exited"
+          },
+          "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "result_artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "check-log",
+              "version": "1"
+            }
+          ]
+        },
+        "reference": "check-receipt:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid stale refusal",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": "stale",
+        "reason": "stale_subject",
+        "reference": "check:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "output",
+      "name": "valid unregistered check refusal",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "disposition": null,
+        "reason": "not_required",
+        "reference": "check:op-2",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "aq.check.receipted",
+      "kind": "event",
+      "name": "valid check receipt event",
+      "valid": true,
+      "value": {
+        "outcome": "passed",
+        "output": {
+          "check": {
+            "id": "unit",
+            "validator": {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "aq.check.cargo-test",
+              "version": "1.0.0"
+            }
+          },
+          "disposition": "passed",
+          "receipt": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "executor_version": "aq-check-executor/1.0.0",
+            "exit": {
+              "code": 0,
+              "stop": "exited"
+            },
+            "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "result_artifacts": [
+              {
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "id": "check-log",
+                "version": "1"
+              }
+            ]
+          },
+          "reference": "check-receipt:op-2",
+          "source": {
+            "format": "sha1",
+            "hex": "0123456789abcdef0123456789abcdef01234567"
+          },
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.check.receipted",
+      "kind": "event",
+      "name": "invalid check receipt event with free outcome",
+      "valid": false,
+      "value": {
+        "outcome": "ok",
+        "output": {
+          "check": {
+            "id": "unit",
+            "validator": {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "aq.check.cargo-test",
+              "version": "1.0.0"
+            }
+          },
+          "disposition": "passed",
+          "receipt": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "executor_version": "aq-check-executor/1.0.0",
+            "exit": {
+              "code": 0,
+              "stop": "exited"
+            },
+            "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "result_artifacts": [
+              {
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "id": "check-log",
+                "version": "1"
+              }
+            ]
+          },
+          "reference": "check-receipt:op-2",
+          "source": {
+            "format": "sha1",
+            "hex": "0123456789abcdef0123456789abcdef01234567"
+          },
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "valid reconciled judgment completion",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "assessed",
+        "output": {
+          "choice": "permitted-default",
+          "provenance": {
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_profile": "profile/judgment-default",
+            "model": "model-a",
+            "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provider": "provider-a",
+            "usage": {
+              "cost_microunits": 4100,
+              "input_tokens": 900,
+              "output_tokens": 120
+            }
+          },
+          "rationale": "Default profile satisfies constraints.",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "valid reconciled check completion",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "passed",
+        "output": {
+          "check": {
+            "id": "unit",
+            "validator": {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "aq.check.cargo-test",
+              "version": "1.0.0"
+            }
+          },
+          "disposition": "passed",
+          "receipt": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "executor_version": "aq-check-executor/1.0.0",
+            "exit": {
+              "code": 0,
+              "stop": "exited"
+            },
+            "inputs_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "result_artifacts": [
+              {
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "id": "check-log",
+                "version": "1"
+              }
+            ]
+          },
+          "reference": "check-receipt:op-2",
+          "source": {
+            "format": "sha1",
+            "hex": "0123456789abcdef0123456789abcdef01234567"
+          },
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "valid reconciled decision completion",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "approved",
+        "output": {
+          "reference": "decision:op-3",
+          "subject": {
+            "id": "work-1",
+            "revision": 1
+          }
+        }
+      }
+    }
+  ],
+  "compatibility": {
+    "added_events": [
+      "aq.check.receipted",
+      "aq.judgment.completed"
+    ],
+    "base": {
+      "fingerprint": "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1",
+      "registry_sha256": "sha256:69c4e3482ecc522d0ba50ed78f00b77c0587e16b845bc4a93092381cea1d6d37",
+      "version": "1.0.0"
+    },
+    "changed_commands": {
+      "check.request": {
+        "capabilities": [
+          "check.request.v2"
+        ],
+        "from": "1.0.0",
+        "to": "2.0.0"
+      },
+      "judgment.request": {
+        "capabilities": [
+          "judgment.request.v2"
+        ],
+        "from": "1.0.0",
+        "to": "2.0.0"
+      },
+      "operation.get": {
+        "capabilities": [
+          "operation.get"
+        ],
+        "from": "1.0.0",
+        "to": "2.0.0"
+      }
+    },
+    "unchanged_commands": {
+      "candidate.prepare": "sha256:c47b97ab7d7302d34115649e3ccaa2a828842f64dec50a23a9ec9381581a22ae",
+      "candidate.publish": "sha256:7a510d82b43b2b59b7f0906b4eff3823427ed7d088f793396bfce6d9348b5be5",
+      "context.read": "sha256:33681ea332d3d0b475fcfafe32bc3762d6037f035c9114dccf9b4f788302f6cd",
+      "decision.request": "sha256:a9b64f5947567934a8217be9e0bacb53e7f225239e91e10c3c3b0b691efe3f05",
+      "findings.reconcile": "sha256:239802aecd6961c9a7ba93b0387cb2f872e42ddc4246e7901bae7219f19288d8",
+      "message.send": "sha256:c75d3f9fceebbef2dc1f0c20ff2eda3a61aaf90cdc817d624fe349eb752eca6e",
+      "operation.cancel": "sha256:268e68958d3dadf6caae3a642ec3b8bfaf3869cbbc9f20873cb833af5c650810",
+      "work.change": "sha256:fb3d3ed7e0d6b2a108220e684bd871663d9ce184bd8d4d952d1d065cc1a7fadd",
+      "work.ensure": "sha256:0fcf486b0ad4b1e570ff5c7f5b688d15d675be5da8d0c961f83e59a68045ea16"
+    },
+    "unchanged_events": {
+      "aq.artifact.recorded": "sha256:10e31a719c1d30c2825ac39913777cf07533eaa4cfd46a355d6b6a761b7427a1",
+      "aq.check.completed": "sha256:057b68bf02f62ecf38f342ea07dfd1586ccd4e566ad0ab8ec93345c61fbfd23c",
+      "aq.decision.completed": "sha256:90d042036d23155858b8e1d0cd41a8dd832cdcb530cab8cce8d22b26cdc96934",
+      "aq.integration.changed": "sha256:c0f20b58ee35f85af9868dd07e4c61b432de9fdd2fbfc2692e5b5b6d94a09e29",
+      "aq.operation.updated": "sha256:36071ae1086d80e5fc5166df3f1300c3e6e1df08caf7d039572d8f4418965ee3",
+      "aq.signal.reported": "sha256:9d93528eb9ccf35cc71fed2072668145a25d7f7d9d8dbd567232eb67066811cd",
+      "aq.work.changed": "sha256:78aaaf08411f1d17e93e12feb21feab4bcfb6636e56738afd1305aa3c1074401"
+    }
+  },
+  "replay_cases": [
+    {
+      "command": "judgment.request",
+      "conflicting_input": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 512
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "A different question?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "expected_handle": "judgment-replay",
+      "input": {
+        "budget": {
+          "deadline_ms": 60000,
+          "max_cost_microunits": 50000,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 512
+        },
+        "context": {
+          "artifacts": [
+            {
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "id": "snapshot-1",
+              "version": "1"
+            }
+          ],
+          "text": "Work item summary."
+        },
+        "output": {
+          "choices": [
+            "permitted-default",
+            "isolated"
+          ],
+          "rationale_max_bytes": 2048
+        },
+        "question": "Which execution preference fits this work?",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "operation": "judgment-replay"
+    },
+    {
+      "command": "check.request",
+      "conflicting_input": {
+        "check": {
+          "id": "integration",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "expected_handle": "check-replay",
+      "input": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "id": "aq.check.cargo-test",
+            "version": "1.0.0"
+          }
+        },
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      },
+      "operation": "check-replay"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "standalone": {
+    "image": "aq-git-a3b:0.2.0",
+    "image_id": "sha256:4e405e60f637f766582fcb182d1e3bd963ba8e78c94d2cc57203d28f0f358642",
+    "aq_git_sha256": "3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2",
+    "aq_git": "aq-git 0.2.0",
+    "git": "git version 2.56.0"
+  },
+  "worker": {
+    "image": "aq-worker-a3b:0.2.0",
+    "image_id": "sha256:bfb1309ad2f7fc1765ff0526b0b568882b4611f05981c5c9841120375d08fbf1",
+    "aq_git_sha256": "3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2",
+    "aq_git": "aq-git 0.2.0",
+    "git": "git version 2.56.0"
+  },
+  "server": {
+    "image": "aq-server-a3b:0.2.0",
+    "image_id": "sha256:2dc0cb33fdc8e960a08204d6dadf34162b92eade587c268d0ee9d4c3a46163f8",
+    "aq_git_sha256": "3feca63cffa5065566f2c604fd00d4ad92e1bc367c62ec69bedd42c2b37f35d2",
+    "aq_git": "aq-git 0.2.0",
+    "git": "git version 2.56.0"
+  }
+}

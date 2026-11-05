@@ -4,6 +4,7 @@ pub mod api;
 mod artifacts;
 mod build;
 mod compose;
+pub(crate) mod fairness;
 use super::native_offer::observation;
 
 mod publication;
@@ -20,6 +21,7 @@ fn now(state: &AppState) -> Result<u64, AppError> {
         .filter(|n| *n > 0)
         .ok_or_else(refused)
 }
+use super::on_heap;
 fn refused() -> AppError {
     AppError::Conflict("native offer admission requirements unavailable".into())
 }

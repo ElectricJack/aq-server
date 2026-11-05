@@ -67,6 +67,9 @@ pub struct ProjectBinding {
     pub policy: Reference,
     pub context: Vec<Reference>,
     pub ceilings: ProjectCeilings,
+    /// Absent on legacy records, which keeps their serialized digest unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<crate::delivery::PublicationPolicy>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +171,9 @@ fn labels(values: &[String], max: usize) -> Result<(), String> {
 impl ProjectBinding {
     pub fn validate(&self, config: &ProjectConfig) -> Result<(), String> {
         config.validate()?;
+        if let Some(p) = &self.publication {
+            p.validate().map_err(|e| e.to_string())?;
+        }
         require(
             self.schema_version == 1
                 && !self.project_id.is_nil()
@@ -442,6 +448,7 @@ pub(crate) mod tests {
                 currency: None,
                 require_hard_cost_enforcement: false,
             },
+            publication: None,
         }
     }
     fn record() -> ProjectRecord {

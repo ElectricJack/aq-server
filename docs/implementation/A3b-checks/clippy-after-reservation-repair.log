@@ -1,0 +1,3 @@
+    Blocking waiting for file lock on build directory
+    Checking aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-0/crates/aq-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11m 57s

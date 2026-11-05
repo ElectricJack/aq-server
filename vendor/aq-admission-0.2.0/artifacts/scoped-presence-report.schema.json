@@ -1,0 +1,712 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/Text"
+        },
+        "version": {
+          "$ref": "#/$defs/Text"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "AuthorityAnchor": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "grant_revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/AuthorityKind"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "operation_id",
+        "grant_revision",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "AuthorityKind": {
+      "enum": [
+        "initial_grant",
+        "renewal"
+      ],
+      "type": "string"
+    },
+    "ClockSource": {
+      "enum": [
+        "CLOCK_BOOTTIME"
+      ],
+      "type": "string"
+    },
+    "DeliveryClock": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "server_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "valid_for_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "server_time_ms",
+        "expires_at_ms",
+        "valid_for_ms"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string",
+      "x-utf8-byte-limit": 64
+    },
+    "InventoryIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sequence": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "snapshot_digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "operation_id",
+        "sequence",
+        "revision",
+        "request_digest",
+        "snapshot_digest"
+      ],
+      "type": "object"
+    },
+    "Label": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-byte-limit": 512
+    },
+    "LaunchBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "assignment_generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "execution_spec_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "graph_access_profile_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "launch_manifest_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "offer_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionIdentity"
+        }
+      },
+      "required": [
+        "session",
+        "schema_version",
+        "offer_id",
+        "attempt_id",
+        "assignment_generation",
+        "execution_spec_digest",
+        "launch_manifest_digest",
+        "graph_access_profile_digest"
+      ],
+      "type": "object"
+    },
+    "MaterialDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "$ref": "#/$defs/DeliveryClock"
+        },
+        "lease": {
+          "$ref": "#/$defs/MaterialLease"
+        }
+      },
+      "required": [
+        "lease",
+        "clock"
+      ],
+      "type": "object"
+    },
+    "MaterialLease": {
+      "additionalProperties": false,
+      "description": "Private authenticated lease metadata; not a public prompt/profile artifact.\nThe fingerprint binds exact bytes, never a claim inferred from key presence.",
+      "properties": {
+        "account_reference": {
+          "$ref": "#/$defs/Label"
+        },
+        "binding": {
+          "$ref": "#/$defs/LaunchBinding"
+        },
+        "credential_profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "credential_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint_reference": {
+          "$ref": "#/$defs/Label"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "issued_at_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "lease_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "material_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "material_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "provider": {
+          "$ref": "#/$defs/Label"
+        },
+        "purpose": {
+          "$ref": "#/$defs/Label"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "lease_id",
+        "binding",
+        "credential_profile",
+        "credential_revision",
+        "provider",
+        "account_reference",
+        "endpoint_reference",
+        "purpose",
+        "material_digest",
+        "material_bytes",
+        "issued_at_ms",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "MissingReason": {
+      "enum": [
+        "missing",
+        "changed"
+      ],
+      "type": "string"
+    },
+    "Negotiation": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ArtifactRef",
+          "properties": {
+            "id": {
+              "pattern": "^aq[.]scoped-material-presence-qualification/.+"
+            }
+          }
+        }
+      },
+      "required": [
+        "protocol",
+        "qualification"
+      ],
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "clock_source": {
+          "$ref": "#/$defs/ClockSource"
+        },
+        "kernel_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "permit_acquired_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "permit_deadline_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "read_completed_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "read_started_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sent_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kernel_boot_id",
+        "clock_source",
+        "permit_acquired_ns",
+        "permit_deadline_ns",
+        "read_started_ns",
+        "read_completed_ns",
+        "sent_ns"
+      ],
+      "type": "object"
+    },
+    "Presence": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "installation": {
+              "$ref": "#/$defs/PrivateInstallationRecord"
+            },
+            "kind": {
+              "const": "present",
+              "type": "string"
+            },
+            "observed_material_bytes": {
+              "format": "uint64",
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "observed_material_digest": {
+              "$ref": "#/$defs/Digest"
+            }
+          },
+          "required": [
+            "kind",
+            "installation",
+            "observed_material_digest",
+            "observed_material_bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "missing",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/MissingReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/UnknownReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PrivateInstallationRecord": {
+      "additionalProperties": false,
+      "description": "Exact mirror of the existing private installer's nonsecret canonical record.\nIts hash must equal the ACTUAL retained MaterialReceipt.private_binding.",
+      "properties": {
+        "clock_source": {
+          "$ref": "#/$defs/ClockSource"
+        },
+        "delivery": {
+          "$ref": "#/$defs/MaterialDelivery"
+        },
+        "kernel_boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "material_synced_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "preparation_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "received_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "retrieval_deadline_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sent_ns": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "worker": {
+          "$ref": "#/$defs/WorkerIdentity"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "preparation_digest",
+        "worker",
+        "kernel_boot_id",
+        "clock_source",
+        "delivery",
+        "sent_ns",
+        "received_ns",
+        "material_synced_ns",
+        "retrieval_deadline_ns"
+      ],
+      "type": "object"
+    },
+    "Protocol": {
+      "enum": [
+        "aq.scoped-material-presence.v1"
+      ],
+      "type": "string"
+    },
+    "SessionIdentity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assignment_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "boot_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "remote",
+              "type": "string"
+            },
+            "node_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "boot_id",
+            "attempt_id",
+            "assignment_generation",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authority_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "central",
+              "type": "string"
+            },
+            "session_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "authority_id",
+            "session_id",
+            "generation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Text": {
+      "description": "Nonempty UTF-8 text, at most 512 bytes; no control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string",
+      "x-utf8-byte-limit": 512
+    },
+    "UnknownReason": {
+      "enum": [
+        "unreadable",
+        "boot_unknown"
+      ],
+      "type": "string"
+    },
+    "WorkerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "boot_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "node_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "boot_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authority": {
+      "$ref": "#/$defs/AuthorityAnchor"
+    },
+    "binding": {
+      "$ref": "#/$defs/LaunchBinding"
+    },
+    "grant_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "guardian_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "identity": {
+      "$ref": "#/$defs/WorkerIdentity"
+    },
+    "installation_receipt_digest": {
+      "$ref": "#/$defs/Digest"
+    },
+    "inventory": {
+      "$ref": "#/$defs/InventoryIdentity"
+    },
+    "launch_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "lease_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "negotiation": {
+      "$ref": "#/$defs/Negotiation"
+    },
+    "observation": {
+      "$ref": "#/$defs/Observation"
+    },
+    "operation_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "presence": {
+      "$ref": "#/$defs/Presence"
+    },
+    "private_binding": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "reservation_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "runtime": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "runtime_qualification": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "schema_version": {
+      "const": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 9223372036854775807,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "ttl_ms": {
+      "format": "uint64",
+      "maximum": 30000,
+      "minimum": 1000,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "operation_id",
+    "identity",
+    "runtime",
+    "runtime_qualification",
+    "negotiation",
+    "binding",
+    "grant_id",
+    "guardian_id",
+    "launch_id",
+    "reservation_id",
+    "lease_id",
+    "installation_receipt_digest",
+    "private_binding",
+    "inventory",
+    "authority",
+    "sequence",
+    "ttl_ms",
+    "observation",
+    "presence"
+  ],
+  "title": "PresenceReport",
+  "type": "object",
+  "x-max-document-bytes": 65536,
+  "x-relational-validation-required": true
+}

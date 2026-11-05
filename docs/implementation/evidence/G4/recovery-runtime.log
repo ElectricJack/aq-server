@@ -1,0 +1,10 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-3/crates/aq-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 42s
+     Running unittests src/lib.rs (target/debug/deps/aq_server-4f89422fbe2e836c)
+
+running 2 tests
+test dashboard_api::runtime::tests::snapshot_caps_are_per_principal_and_global_without_cross_actor_eviction ... ok
+test dashboard_api::runtime::tests::cursor_authenticates_actor_partition_scope_resource_limit_expiry_and_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.01s
+

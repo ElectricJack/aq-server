@@ -1,0 +1,28 @@
+   Compiling aq-server v0.1.0 (/home/jkern/dev/aq-platform-agents/aq-server/.aq/worktrees/slot-7/crates/aq-server)
+    Finished `test` profile [unoptimized] target(s) in 4.53s
+     Running tests/central_sessions.rs (target/debug/deps/central_sessions-27efcdbc01cb4805)
+
+running 9 tests
+test central_owner_boot_clock_sequence_deadline_and_identity_fences ... ok
+test central_owner_concurrent_renewal_has_one_winner_and_no_shorter_permit ... ok
+test central_owner_expiry_and_cancel_survive_refused_renewal_and_running ... ok
+test central_owner_historical_rows_and_identity_cannot_be_rewritten ... ok
+test central_owner_rejects_unverified_admission_and_stop ... ok
+test central_owner_reopens_committed_permit_without_new_generation ... ok
+test central_owner_retained_history_blocks_old_mail_and_cross_role_ids ... ok
+test central_owner_reused_conversation_for_new_actor_is_typed_conflict ... ok
+test central_owner_serializes_start_and_successor_races ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.83s
+
+     Running tests/supervisor_conversation.rs (target/debug/deps/supervisor_conversation-605d4d474aaad33d)
+
+running 6 tests
+test actual_mount_has_owner_caps_and_csrf_while_standalone_and_viewer_do_not ... ok
+test dropped_http_reply_recovers_byte_identical_receipt_and_one_committed_message ... ok
+test finite_retention_preserves_original_replay_and_lookup_at_capacity ... ok
+test history_replay_retained_refusals_and_shared_owner_scope_use_one_mailbox ... ok
+test max_body_pages_trim_to_byte_budget_and_preserve_both_cursor_directions ... ok
+test owner_current_identity_and_input_bounds_refuse_without_mail_or_worker_fallback ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.35s

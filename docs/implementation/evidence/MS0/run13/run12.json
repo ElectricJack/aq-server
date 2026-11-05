@@ -1,0 +1,187 @@
+{
+  "schema": "aq.i0.run-evidence.v1",
+  "task": "calm-stone-85",
+  "date": "2026-11-03",
+  "stack": "aq-e0-qual",
+  "server": {
+    "repository": "ElectricJack/aq-server",
+    "revision": "61b8d0e5a2ae34bb37f02695648e1ef1394cd9a2",
+    "image": "sha256:098efcb5a9f78f8e2f1bafc97d1d87ff3f418d6bebb14bacbde7609f1f54c0e0"
+  },
+  "worker_image": {
+    "image": "sha256:20abe6352e6a1161a70ce56ee89239487a2d50f3235701088862c131a64db389",
+    "source_revision": "f4703fec23b1d7d0b4cb7bd2a9edf46031a7b5cd",
+    "contains_fixes": [
+      "azure-horizon-22.1.1",
+      "azure-horizon-22.1.2",
+      "azure-horizon-22.1.3",
+      "azure-horizon-22.1.4"
+    ],
+    "codex": "0.166.0",
+    "definition_version": "2",
+    "profiled_revision": 5,
+    "intelligence_revision": 3
+  },
+  "node": "f761410b-43f5-4106-ab80-f044dd446da0",
+  "profile": "owner-chatgpt-codex",
+  "model": {
+    "model": "gpt-6.1-sol",
+    "native_reasoning": "high"
+  },
+  "target": {
+    "repository": "ElectricJack/aq-scratch",
+    "branch": "main",
+    "repository_id": "e0a10000-0000-4000-8000-000000000003"
+  },
+  "graph_task": "e0a10000-0000-4000-8000-000000000006",
+  "aborted_invocations": [
+    {
+      "name": "run12a",
+      "exit_code": 2,
+      "wall_seconds": 0.7,
+      "cause": "status tap ran outside the Docker host network; first enrollment heartbeat got connection refused",
+      "server_contact": false,
+      "material_lease": false
+    },
+    {
+      "name": "run12-409",
+      "exit_code": 2,
+      "wall_seconds": 2.5,
+      "cause": "profiled poll 409: admission_definition_identity_guard refuses changed definition bodies at an unchanged version; fixed by definition_version 2 and revision bumps",
+      "admitted": false,
+      "material_lease": false
+    }
+  ],
+  "run": {
+    "container": "aq-i0-run12",
+    "started_unix": 1793718588.6,
+    "stopped_unix": 1793719490.0,
+    "wall_seconds": 916.4,
+    "exit_code": 0,
+    "final_line": "native run: AttemptStopped; retained state preserved",
+    "attempt": "ab352201-950e-5a77-9008-a374c85f2f00",
+    "offer": "78f2a7a9",
+    "session": "68d91fb0",
+    "boot": "02f81bd2",
+    "grant": "53c38069",
+    "launch": "c4c9673b",
+    "terminal": "c3c32118-c3f3-4b54-9066-15d0043bfb40",
+    "stop_reason": "reconciliation",
+    "server_attempt": {
+      "holds_task": true,
+      "retention": "pending"
+    }
+  },
+  "report": {
+    "id": "7439f3bc-d47d-4a7d-8f30-7b86f262d343",
+    "operation": "3a5f0af4",
+    "outcome": "expired",
+    "digest_prefix": "ec3dc14e",
+    "outcome_artifact": "ad13ed52",
+    "conclusion_excerpt": "Changes: none; pinned task specifies no concrete edit or acceptance criteria ... python request writer unavailable; initial submit rejected, status ready_for_claim. Completion not claimed."
+  },
+  "retained_source": {
+    "transfer": "5004984f",
+    "export_operation": "fddeca60",
+    "receipt": "8c64dfb6",
+    "retention_handle": "1640c116-76f5-460d-beec-9dda0faca27b",
+    "status": "retained/active",
+    "accepted_at": "2026-11-03T15:24:51Z",
+    "checkpoint": "0b52d2d6-6b90-4de5-ab38-1f7c7c31ad12",
+    "checkpoint_equals_base": "2e32645",
+    "changed": false
+  },
+  "worker_routes": {
+    "all_200": [
+      "probe",
+      "register",
+      "inventory-v2",
+      "poll",
+      "proposal",
+      "accept",
+      "prepare",
+      "started",
+      "stopped",
+      "material",
+      "results",
+      "source",
+      "source/manifest",
+      "source/bundle",
+      "execution/sources/begin",
+      "execution/sources/{id}/manifest",
+      "execution/sources/{id}/bundle",
+      "execution/sources/finalize"
+    ],
+    "heartbeats": 64,
+    "artifact_calls": 32
+  },
+  "terminal_relay": {
+    "note": "tap totals include run12a and run12-409; both made no relay calls",
+    "register": {
+      "200": 1
+    },
+    "upload": {
+      "409 watch snapshot resynchronization required": 214,
+      "500 internal": 4
+    },
+    "poll_500": 8,
+    "output_poll_500": 13,
+    "cause_409": "aq-server terminal/runtime.rs Runtime::frame/snapshot refuse when no buffer exists; a buffer is reserved only by a Watch or Capture mutation (terminal/service.rs); no watcher was attached"
+  },
+  "settlement": {
+    "decision_id_probe": "ffe4dc0c-9e79-473f-b26e-472d490c4e2d",
+    "evaluation_operation_probe": "787cc2c8-7a13-463e-b4eb-cbf9f15866c1",
+    "completion_operation_probe": "788b1550-c9e6-4c22-9b2a-688de3ad173d",
+    "calls": [
+      {
+        "route": "GET /api/reviews/combined/{decision_id}",
+        "status": 404,
+        "error": "no such route"
+      },
+      {
+        "route": "GET /api/reviews/decisions",
+        "status": 404,
+        "error": "no such route"
+      },
+      {
+        "route": "POST /api/settlement/evaluations",
+        "status": 404,
+        "error": "no such route"
+      },
+      {
+        "route": "GET /api/settlement/evaluations/{operation_id}",
+        "status": 404,
+        "error": "no such route"
+      },
+      {
+        "route": "POST /api/settlement/completions/{operation_id}/reconcile",
+        "status": 404,
+        "error": "no such route"
+      }
+    ],
+    "db_rows_after": {
+      "settlement evaluations": 0,
+      "review decision requests": 0,
+      "completions": 0
+    },
+    "cause": "the reviews/settlement router is not mounted on the qualification server (quick-glacier-78); and in 61b8d0e5 combined decisions are created only by prepare_combined_as + admit_combined (reviews/combined.rs), which have no HTTP or production caller, so evaluate has no decision to bind to",
+    "settled": false,
+    "resolve_not_called": "POST /api/reviews/combined/{decision_id}/resolve follows a successful evaluation; evaluate returned 404 and no combined decision exists",
+    "probe_port": 32848
+  },
+  "login": {
+    "delivery": "private material lease only (/v1/worker/profiled/material)",
+    "lease_material_equals_baseline": true,
+    "owner_auth_equals_baseline": true,
+    "owner_auth_mode": "0600",
+    "refreshed_login_found": false,
+    "writeback": "not needed (no refresh)",
+    "container_diff_auth_paths": 0
+  },
+  "preserved_containers": [
+    "aq-i0-run12",
+    "aq-i0-run12-409",
+    "aq-i0-run12a"
+  ],
+  "acceptance": "unmet: settlement routes unavailable; outcome expired with no source change"
+}

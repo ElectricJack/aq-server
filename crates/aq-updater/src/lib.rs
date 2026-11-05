@@ -9,3 +9,6 @@ pub mod journal;
 pub mod runtime;
 pub mod spool;
 pub mod verify;
+
+#[cfg(test)]
+pub(crate) mod test_support;
