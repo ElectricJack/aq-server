@@ -46,6 +46,15 @@
         },
         {
           "$ref": "#/components/schemas/HumanGraph"
+        },
+        {
+          "$ref": "#/components/schemas/HumanWork"
+        },
+        {
+          "$ref": "#/components/schemas/HumanHistory"
+        },
+        {
+          "$ref": "#/components/schemas/HumanSummary"
         }
       ]
     }
@@ -84,13 +93,100 @@
           },
           "truncated": {
             "type": "boolean"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/HumanParent"
+          },
+          "omitted": {
+            "type": "object",
+            "properties": {
+              "tasks": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$"
+              },
+              "tasks_by_state": {
+                "type": "object",
+                "properties": {
+                  "draft": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "active": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "completed": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "canceled": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "unknown": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  }
+                },
+                "required": [
+                  "draft",
+                  "active",
+                  "completed",
+                  "canceled",
+                  "unknown"
+                ],
+                "additionalProperties": false
+              },
+              "other_nodes": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$"
+              },
+              "edges": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$"
+              },
+              "exact": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tasks",
+              "tasks_by_state",
+              "other_nodes",
+              "edges",
+              "exact"
+            ],
+            "additionalProperties": false
+          },
+          "expansion": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,18}$"
+                  }
+                },
+                "required": [
+                  "limit"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": [
           "root_id",
           "nodes",
           "edges",
-          "truncated"
+          "truncated",
+          "parent",
+          "omitted",
+          "expansion"
         ],
         "additionalProperties": false
       },
@@ -757,11 +853,406 @@
               "null"
             ],
             "maxLength": 4096
+          },
+          "executions": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/HumanExecution"
+            }
           }
         },
         "required": [
           "items",
           "next_cursor"
+        ],
+        "additionalProperties": false
+      },
+      "HumanParent": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "knowledge",
+                  null
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 512
+              },
+              "task_state": {
+                "enum": [
+                  "draft",
+                  "active",
+                  "completed",
+                  "canceled",
+                  null
+                ]
+              },
+              "edge_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "title",
+              "task_state",
+              "edge_id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "HumanExecution": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt_id",
+          "session_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "HumanWork": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_state": {
+            "enum": [
+              "draft",
+              "active",
+              "completed",
+              "canceled",
+              null
+            ]
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "readiness": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "enum": [
+                  "draft",
+                  "completed",
+                  "canceled",
+                  "running",
+                  "waiting",
+                  "unknown",
+                  "ready"
+                ]
+              },
+              "blockers": {
+                "type": "array",
+                "maxItems": 64,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "edge_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 512
+                    },
+                    "task_state": {
+                      "enum": [
+                        "draft",
+                        "active",
+                        "completed",
+                        "canceled",
+                        null
+                      ]
+                    },
+                    "satisfied": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "edge_id",
+                    "id",
+                    "title",
+                    "task_state",
+                    "satisfied"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "complete": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "state",
+              "blockers",
+              "complete"
+            ],
+            "additionalProperties": false
+          },
+          "parent": {
+            "$ref": "#/components/schemas/HumanParent"
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HumanExecution"
+              }
+            ]
+          }
+        },
+        "required": [
+          "task_id",
+          "task_state",
+          "version",
+          "readiness",
+          "parent",
+          "execution"
+        ],
+        "additionalProperties": false
+      },
+      "HumanHistory": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 25,
+            "items": {
+              "type": "object",
+              "properties": {
+                "sequence": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,18}$"
+                },
+                "entry_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "category": {
+                  "enum": [
+                    "revision",
+                    "lifecycle",
+                    "edge"
+                  ]
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "actor_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "sequence",
+                "entry_id",
+                "category",
+                "operation",
+                "actor_id",
+                "reason",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "properties": {
+                "attempt_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "session_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "holds_task": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "attempt_id",
+                "session_id",
+                "holds_task",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "attempts_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task_id",
+          "items",
+          "next_cursor",
+          "attempts",
+          "attempts_truncated"
+        ],
+        "additionalProperties": false
+      },
+      "HumanSummary": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "const": "descendants"
+          },
+          "implementation": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$"
+              },
+              "by_state": {
+                "type": "object",
+                "properties": {
+                  "draft": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "active": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "completed": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "canceled": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  },
+                  "unknown": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,18})$"
+                  }
+                },
+                "required": [
+                  "draft",
+                  "active",
+                  "completed",
+                  "canceled",
+                  "unknown"
+                ],
+                "additionalProperties": false
+              },
+              "complete": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "total",
+              "by_state",
+              "complete"
+            ],
+            "additionalProperties": false
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "unavailable"
+              },
+              "owner": {
+                "const": "D1"
+              }
+            },
+            "required": [
+              "state",
+              "owner"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "task_id",
+          "scope",
+          "implementation",
+          "delivery"
         ],
         "additionalProperties": false
       }

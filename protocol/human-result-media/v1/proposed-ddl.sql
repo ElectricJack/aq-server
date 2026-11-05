@@ -20,12 +20,12 @@ CREATE TABLE result_media_intents (
  -- Immutable server-derived report/task/attempt/source projection; never task truth.
  report_binding JSONB NOT NULL,
  storage_id UUID NOT NULL,
- rendering_policy TEXT NOT NULL CHECK(rendering_policy='aq.png.rgba8-srgb-v1'),
+ rendering_policy TEXT NOT NULL CHECK(rendering_policy IN ('aq.png.rgba8-srgb-v1','aq.mp4.passthrough-v1')),
  admission_limits JSONB NOT NULL,
  request_bytes BYTEA NOT NULL CHECK(octet_length(request_bytes) BETWEEN 1 AND 16384),
  request_digest TEXT NOT NULL CHECK(request_digest='sha256:' || encode(sha256(request_bytes),'hex')),
  input_digest TEXT NOT NULL CHECK(input_digest ~ '^sha256:[0-9a-f]{64}$'),
- input_bytes BIGINT NOT NULL CHECK(input_bytes BETWEEN 1 AND 1048576),
+ input_bytes BIGINT NOT NULL CHECK(input_bytes BETWEEN 1 AND CASE WHEN rendering_policy='aq.mp4.passthrough-v1' THEN 4194304 ELSE 1048576 END),
  filename TEXT NOT NULL CHECK(octet_length(filename) BETWEEN 1 AND 256),
  capture JSONB,
  state TEXT NOT NULL CHECK(state IN ('reserved','received','finalizing','retained','rejected','expired')),
@@ -38,7 +38,7 @@ CREATE TABLE result_media_intents (
  lease_expires_at_ms BIGINT,
  processing_attempts INTEGER NOT NULL DEFAULT 0 CHECK(processing_attempts BETWEEN 0 AND 8),
  received_at_ms BIGINT,
- rejection TEXT CHECK(rejection IN ('invalid_png','unsupported_png','input_mismatch','pixel_limit','processing_limit','storage_failure')),
+ rejection TEXT CHECK(rejection IN ('invalid_png','unsupported_png','input_mismatch','pixel_limit','processing_limit','storage_failure','invalid_video','unsupported_video','poster_unavailable')),
  receipt_bytes BYTEA CHECK(octet_length(receipt_bytes) BETWEEN 1 AND 16384),
  receipt_digest TEXT,
  -- Private generated file generation, never a caller path or public field.

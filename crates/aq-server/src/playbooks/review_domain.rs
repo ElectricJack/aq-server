@@ -21,12 +21,41 @@ pub enum CatalogProfile {
     /// fingerprint-pinned for a new namespace/generation, numbered 7 after the
     /// main-line D8 profile 6. Adds the
     /// asynchronous judgment.request.v2/check.request.v2 and operation.get.
+    /// D11 registers all twelve catalog commands (adds findings.reconcile,
+    /// message.send and decision.request).
     Host7,
+    /// AQ host catalog 2.1.0 (supersedes 2.0.0), vendored and
+    /// fingerprint-pinned beside the untouched Host7 pin. Same capabilities as
+    /// Host7; candidate.prepare (2.1.0) outputs the prepared `source` OID that
+    /// policies bind check.request `source` to.
+    Host8,
+}
+pub const HOST8_VERSION: &str = "2.1.0";
+pub const HOST8_FINGERPRINT: &str =
+    "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716";
+fn host8_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../../vendor/aq-host-catalog-2.1.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.1.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST8_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST8_FINGERPRINT),
+                "vendored AQ host catalog 2.1.0 fingerprint"
+            );
+            registry
+        })
+        .clone()
 }
 pub const HOST7_VERSION: &str = "2.0.0";
 pub const HOST7_FINGERPRINT: &str =
     "sha256:e2ce7dc8ff4b37538f8d27f175a4e365ff95cf14508ae7074beea04026b143db";
-pub const HOST7_CAPABILITIES: [&str; 7] = [
+pub const HOST7_CAPABILITIES: [&str; 12] = [
     "context.read",
     "work.ensure",
     "work.change",
@@ -34,6 +63,11 @@ pub const HOST7_CAPABILITIES: [&str; 7] = [
     "operation.get",
     "judgment.request.v2",
     "check.request.v2",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
 ];
 fn host7_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
@@ -92,12 +126,18 @@ impl CatalogProfile {
             Self::Host5 => 5,
             Self::Monitoring6 => 6,
             Self::Host7 => 7,
+            Self::Host8 => 8,
         }
+    }
+    /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0): the
+    /// asynchronous judgment/check, integration and operation.get adapters.
+    pub fn is_host2(self) -> bool {
+        matches!(self, Self::Host7 | Self::Host8)
     }
     pub fn has_reviews(self) -> bool {
         !matches!(
             self,
-            Self::Mail1 | Self::Host5 | Self::Monitoring6 | Self::Host7
+            Self::Mail1 | Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
         )
     }
     pub fn registry(self) -> Registry {
@@ -113,6 +153,9 @@ impl CatalogProfile {
         }
         if self == Self::Host7 {
             return host7_registry();
+        }
+        if self == Self::Host8 {
+            return host8_registry();
         }
         let mut registry = super::domain::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
@@ -137,8 +180,11 @@ impl CatalogProfile {
         if self == Self::Mail1 {
             return scope.validate();
         }
-        if matches!(self, Self::Host5 | Self::Monitoring6 | Self::Host7) {
-            let mut allowed: BTreeSet<String> = if self == Self::Host7 {
+        if matches!(
+            self,
+            Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
+        ) {
+            let mut allowed: BTreeSet<String> = if self.is_host2() {
                 HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
             } else {
                 HOST5_CAPABILITIES.iter().map(|c| c.to_string()).collect()

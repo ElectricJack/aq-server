@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "credential": "per-attempt machine credential (Authorization: Bearer); node_id and attempt_id are taken from the authenticated binding",
+  "routes": [
+    {
+      "method": "POST", "path": "/v1/agent/questions", "capability": "question.ask",
+      "request": {"api_version": 1, "operation_id": "uuid", "question": "string, 1..4096 bytes, not blank"},
+      "response": ["api_version", "decision_id", "decision_revision", "kind", "state", "subject_id", "subject_revision", "question_digest", "wait_id", "expires_at_ms"]
+    },
+    {
+      "method": "POST", "path": "/v1/agent/questions/show", "capability": "question.show",
+      "request": {"api_version": 1, "decision_id": "uuid"},
+      "response": ["api_version", "decision_id", "decision_revision", "kind", "state", "subject_id", "subject_revision", "question_digest", "wait_id", "expires_at_ms", "answer?", "receipt_digest?"]
+    }
+  ],
+  "owner_action": {"kind": "question.answer", "subject": {"type": "decision", "revision": "decision_revision"}, "expected_versions": {"decision": "decision_revision"}, "payload_schema": "protocol/dashboard-actions/v1/schema.json"},
+  "errors": {
+    "invalid_request": 400,
+    "unauthorized": 401, "session_revoked": 401, "session_expired": 401,
+    "scope_denied": 403,
+    "not_found": 404,
+    "id_conflict": 409, "stale_generation": 409, "wait_conflict": 409
+  }
+}

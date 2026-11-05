@@ -335,7 +335,7 @@ pub(super) async fn recover(state: &AppState, user: &User, id: Uuid) -> Result<O
         };
         store::finish_draft(state, user, &p, &v, outcome).await?;
     }
-    let registry = existing::registry(state, None);
+    let registry = existing::registry(state, None, None);
     crate::dashboard_api::actions::submit_legacy(state, &registry, user, request).await
 }
 

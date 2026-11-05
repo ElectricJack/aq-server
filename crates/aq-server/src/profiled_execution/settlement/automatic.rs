@@ -130,7 +130,14 @@ pub async fn settle_after_record(
             AutoDisposition::Held => conflict_held = s.reason.as_deref() == Some(VERSION_CONFLICT),
         }
     }
-    let (verdict, evidence) = evaluate_locked(state, &mut tx, &r, delivery).await?;
+    // H5: a parked (Held / RetainedSuspended) predecessor is suspended, never
+    // success or failure; the hold survives until the successor's BootstrapAck.
+    let suspended =
+        crate::hibernation::suspended_hold(&mut tx, r.report.binding.attempt_id).await?;
+    let (verdict, evidence) = match suspended {
+        Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
+        None => evaluate_locked(state, &mut tx, &r, delivery).await?,
+    };
     let time = now(state)?;
     let held = |reason: &'static str| ("held", reason);
     let (disposition, reason) = match verdict {

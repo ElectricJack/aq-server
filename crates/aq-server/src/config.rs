@@ -58,6 +58,9 @@ pub struct Config {
     pub agent_access: Option<crate::agent_access::AgentAccessConfig>,
     #[serde(default)]
     pub source_retention: Option<crate::source_retention::SourceRetentionConfig>,
+    /// D2 repository onboarding: GitHub API base and vault-held Git credential profiles.
+    #[serde(default)]
+    pub onboarding: Option<crate::repository_onboarding::OnboardingConfig>,
     #[serde(default)]
     pub result_media: Option<crate::result_media::config::MediaConfig>,
     /// Explicit mappings to protected Codex OAuth files; never a browser credential.
@@ -366,6 +369,7 @@ mod tests {
             agent_access: None,
             source_retention: None,
             result_media: None,
+            onboarding: None,
             terminals: None,
 
             intelligence: None,

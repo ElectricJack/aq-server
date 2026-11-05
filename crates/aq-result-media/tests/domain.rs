@@ -36,6 +36,8 @@ fn status() -> UploadStatus {
         rejection: None,
         artifact: Some(a),
         limits: Limits::default(),
+        media: MediaKind::Image,
+        poster_artifact_id: None,
     }
 }
 #[test]

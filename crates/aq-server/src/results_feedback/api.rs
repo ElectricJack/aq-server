@@ -152,7 +152,7 @@ async fn feed(
         || page.scope.as_deref() == Some("project") && page.project_id.is_none()
         || !matches!(
             page.media.as_deref(),
-            None | Some("any") | Some("image") | Some("none")
+            None | Some("any") | Some("image") | Some("video") | Some("none")
         )
         || page.since_ms.is_some_and(|n| n < 0)
         || page.until_ms.is_some_and(|n| n < 0)
@@ -365,7 +365,7 @@ async fn submit<P: adapters::Payload + Serialize>(
     id: Uuid,
     p: P,
 ) -> Result<(StatusCode, Json<actions::OperationResponse>)> {
-    let registry = actions::existing::registry(state, None);
+    let registry = actions::existing::registry(state, None, None);
     let op = actions::submit_legacy(state, &registry, user, adapters::request(id, p)).await?;
     Ok((
         actions::operation_status(&op),

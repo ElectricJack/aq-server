@@ -257,7 +257,8 @@ fn every_kind_has_a_stable_wire_name_and_label() {
             "milestone.gate_ready",
             "worker.offline",
             "storage.pressure",
-            "sandbox.preserved"
+            "sandbox.preserved",
+            "session.stalled"
         ]
     );
     assert_eq!(

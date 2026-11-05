@@ -4,7 +4,7 @@
 //! ports (no real sandbox, provider or network); every receipt disposition
 //! comes from an executor-reported stop, never from the host.
 mod common;
-use aq_playbook_host::runner::{Intent, IntentStatus};
+use aq_playbook_host::runner::{CancellationResult, Intent, IntentStatus};
 use aq_server::{
     playbooks::{
         domain::*,
@@ -47,6 +47,7 @@ struct FakeChecks {
     script: Mutex<BTreeMap<String, CheckObservation>>,
     attempts: Mutex<BTreeMap<Uuid, (CheckAttempt, CheckObservation)>>,
     starts: Mutex<usize>,
+    cancels: Mutex<Vec<Uuid>>,
 }
 impl FakeChecks {
     fn starts(&self) -> usize {
@@ -64,6 +65,10 @@ impl CheckExecutor for FakeChecks {
     }
     async fn start(&self, attempt: &CheckAttempt) -> Result<()> {
         *self.starts.lock().unwrap() += 1;
+        assert!(
+            !self.cancels.lock().unwrap().contains(&attempt.operation),
+            "start after cancel"
+        );
         let mut attempts = self.attempts.lock().unwrap();
         assert!(
             !attempts.contains_key(&attempt.operation),
@@ -81,6 +86,11 @@ impl CheckExecutor for FakeChecks {
             .get(&operation)
             .map(|(_, o)| o.clone())
             .unwrap_or(CheckObservation::NotFound))
+    }
+    /// Acknowledges only; the stop is reported later through `observe`.
+    async fn cancel(&self, operation: Uuid) -> Result<()> {
+        self.cancels.lock().unwrap().push(operation);
+        Ok(())
     }
 }
 
@@ -520,6 +530,154 @@ async fn check_request_runs_in_sandbox_and_reports_typed_outcome() {
         "unavailable",
         Value::Null,
     );
+}
+
+#[tokio::test]
+async fn check_request_cancel_completes_from_executor_stop() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let checks = Arc::new(FakeChecks::default());
+    checks.pinned.lock().unwrap().insert(
+        "work-1".into(),
+        PinnedOutcome {
+            revision: 1,
+            required_checks: ["unit", "slow"]
+                .iter()
+                .enumerate()
+                .map(|(i, id)| PinnedCheck {
+                    id: (*id).into(),
+                    validator: validator(i as u8 + 1),
+                })
+                .collect(),
+        },
+    );
+    *checks.script.lock().unwrap() = BTreeMap::from([
+        ("unit".into(), run(CheckStop::Exited(0), true)),
+        ("slow".into(), CheckObservation::Running),
+    ]);
+    let judge = Arc::new(FakeJudge::default());
+    *judge.replies.lock().unwrap() =
+        BTreeMap::from([("fits?".into(), Ok(reply("isolated", 10, 10)))]);
+    let h = host(&f, Some(checks.clone()), Some(judge)).await;
+    let ns = h.service.namespace.namespace_id;
+    let slow_input = || check_input("slow", &validator(2), 1);
+    let stopped = || {
+        let CheckObservation::Finished(r) = run(CheckStop::Cancelled, true) else {
+            unreachable!()
+        };
+        r
+    };
+    let cancel = |handle: &str| json!({"handle": handle});
+    let work = json!({"id": "work-1", "revision": 1});
+
+    // operation.cancel asks the executor to stop; while the executor still
+    // reports running the cancel is only accepted and nothing completes.
+    let slow = h.accepted("check-1", "check.request", slow_input()).await;
+    let op: Uuid = slow.parse().unwrap();
+    let r = h.run("cancel-1", "operation.cancel", cancel(&slow)).await;
+    assert_eq!(r.outcome, "accepted", "{r:?}");
+    assert_eq!(r.output, json!({"reference": slow, "subject": work}));
+    assert_eq!(*checks.cancels.lock().unwrap(), [op]);
+    assert_eq!(h.get(&slow).await.outcome, "running");
+    assert_eq!(outbox(&pool, ns).await, 0, "no fabricated completion");
+    // The executor's cancelled stop alone completes the operation.
+    checks.finish(op, stopped());
+    let r = h.run("cancel-2", "operation.cancel", cancel(&slow)).await;
+    assert_eq!(r.outcome, "cancelled", "{r:?}");
+    let (outcome, output) = h.completed(&slow).await;
+    assert_eq!(
+        (outcome.as_str(), &output["disposition"]),
+        ("infrastructure_failure", &json!("cancelled"))
+    );
+    assert_eq!(
+        output["receipt"]["exit"],
+        json!({"code": null, "stop": "cancelled"})
+    );
+    assert_eq!(outbox(&pool, ns).await, 1, "one aq.check.receipted event");
+    // A lost response returns the retained cancel result.
+    let r = h.run("cancel-1", "operation.cancel", cancel(&slow)).await;
+    assert_eq!(r.outcome, "accepted");
+
+    // A check that stopped otherwise is too_late and keeps its outcome.
+    let unit = h
+        .accepted(
+            "check-2",
+            "check.request",
+            check_input("unit", &validator(1), 1),
+        )
+        .await;
+    let r = h.run("cancel-3", "operation.cancel", cancel(&unit)).await;
+    assert_eq!(r.outcome, "too_late", "{r:?}");
+    assert_eq!(h.completed(&unit).await.0, "passed");
+    // Judgments are not cancellable; unknown handles are refused.
+    let judgment = h
+        .accepted("judge-1", "judgment.request", judgment_input("fits?", work))
+        .await;
+    for (i, handle) in [judgment, Uuid::new_v4().to_string()].iter().enumerate() {
+        let r = h
+            .run(&format!("cancel-r{i}"), "operation.cancel", cancel(handle))
+            .await;
+        assert_eq!(r.outcome, "refused", "{r:?}");
+    }
+
+    // Runner cancellation of the check.request intent itself, on a fresh
+    // namespace so each phase stays well inside the intent deadline.
+    let h = host(&f, Some(checks.clone()), None).await;
+    let runner = |id: &str, input: Value| {
+        let intent = h.intent(id, "check.request", input);
+        let service = &h.service;
+        let runtime = &h.runtime;
+        let grant = h.grant;
+        async move {
+            service
+                .check_cancel(runtime, grant, 1, &intent)
+                .await
+                .unwrap()
+        }
+    };
+    // Before admission: confirmed, and the intent never starts an attempt.
+    let starts = checks.starts();
+    assert!(matches!(
+        runner("check-3", slow_input()).await,
+        CancellationResult::Confirmed
+    ));
+    assert!(matches!(
+        h.service
+            .host_dispatch(
+                &h.runtime,
+                h.grant,
+                1,
+                &h.intent("check-3", "check.request", slow_input())
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert_eq!(checks.starts(), starts);
+    // Admitted and running: accepted until the executor reports the stop.
+    let slow = h.accepted("check-4", "check.request", slow_input()).await;
+    assert!(matches!(
+        runner("check-4", slow_input()).await,
+        CancellationResult::Accepted
+    ));
+    assert_eq!(h.get(&slow).await.outcome, "running");
+    checks.finish(slow.parse().unwrap(), stopped());
+    assert!(matches!(
+        runner("check-4", slow_input()).await,
+        CancellationResult::Confirmed
+    ));
+    assert_eq!(h.completed(&slow).await.1["disposition"], "cancelled");
+    // Already completed otherwise: too late.
+    h.accepted(
+        "check-2",
+        "check.request",
+        check_input("unit", &validator(1), 1),
+    )
+    .await;
+    assert!(matches!(
+        runner("check-2", check_input("unit", &validator(1), 1)).await,
+        CancellationResult::TooLate
+    ));
 }
 
 fn judgment_input(question: &str, subject: Value) -> Value {

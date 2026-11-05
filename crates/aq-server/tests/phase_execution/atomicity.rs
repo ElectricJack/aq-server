@@ -45,10 +45,26 @@ async fn final_receipt_insert_failure_rolls_back_hot_journal_and_installation() 
 }
 #[tokio::test]
 async fn original_proposal_expiry_does_not_limit_new_execution_lease() {
-    let f = prepared(true).await;
+    // The live offer window is the minimum of its input facts. A short-lived
+    // node-scoped observation bounds it, while the operator observation keeps
+    // current health, so only the original proposal expiry passes.
+    let f = prepared_with_short_observation(true, 2000).await;
     let now = (f.c.env.env.state.clock)().timestamp_millis() as u64;
-    let wait = f.p.original.offered.clock.expires_at_ms.saturating_sub(now) + 25;
-    assert!(wait < 5000, "bounded actual original proposal wait");
+    let offer_expiry = f.p.original.offered.clock.expires_at_ms;
+    assert!(
+        offer_expiry > now,
+        "original proposal is still live before the advance"
+    );
+    let wait = offer_expiry - now + 25;
+    assert!(
+        wait < 2100,
+        "short observation bounds the original proposal"
+    );
+    assert!(
+        now + wait < f.a.lease.expires_at_ms,
+        "original proposal must expire inside the live preparation lease"
+    );
+    // The injected owner clock advances; nothing sleeps.
     f.c.env
         .env
         .time

@@ -3,7 +3,7 @@ use aq_server::{
     store::{Store, StoreError},
     test_support::{self, TestDb},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 #[tokio::test]
 async fn cancellation43_upgrade_preserves_prior_records_and_old41_refuses() {
     let db = TestDb::create().await;
@@ -59,7 +59,17 @@ async fn cancellation43_upgrade_preserves_dashboard42_operation_and_old42_refuse
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(before, after);
+    // Later migrations may add columns (0061 adds owner_id/supervisor_session_id);
+    // every schema-42 column must survive the upgrade unchanged.
+    let after_42: serde_json::Map<String, Value> = before
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|key| (key.clone(), after[key].clone()))
+        .collect();
+    assert_eq!(before, Value::Object(after_42));
+    assert_eq!(after["owner_id"], json!(principal.to_string()));
+    assert_eq!(after["supervisor_session_id"], Value::Null);
     assert!(matches!(
         test_support::migrate_profile(&pool, 42).await,
         Err(StoreError::IncompatibleState {

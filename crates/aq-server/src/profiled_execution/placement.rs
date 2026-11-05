@@ -327,6 +327,23 @@ impl Derivation {
     };
 }
 
+/// First store format carrying every table `derive` reads: `delegated_node_boots`
+/// (migration 50), `profile_catalog_environment_templates` (55) and
+/// `node_storage_reports` (67).
+pub const PLACEMENT_FORMAT: u32 = 67;
+
+/// Whether this store carries placement facts. A store held at an earlier
+/// migration prefix has no sandbox registrations, so placement is absent (as
+/// for an unregistered node) instead of failing the whole poll or fence.
+async fn placement_recorded(conn: &mut PgConnection) -> Result<bool, AppError> {
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(db)?;
+    Ok(version.parse::<u32>().map_err(|_| AppError::Internal)? >= PLACEMENT_FORMAT)
+}
+
 /// Placement facts read on `conn`, so an admission fence reads them inside its
 /// SERIALIZABLE transaction.
 #[allow(clippy::too_many_arguments)]
@@ -340,6 +357,9 @@ pub async fn derive(
     now_ms: u64,
     derivation: Derivation,
 ) -> Result<Option<aq_selection::Placement>, AppError> {
+    if !placement_recorded(&mut *conn).await? {
+        return Ok(None);
+    }
     let own: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT registration FROM delegated_node_boots WHERE node_id=$1")
             .bind(node_id)
@@ -476,6 +496,7 @@ pub async fn derive(
         preferred_peer: preferred_peer(backend.kind, &preference, &peers)
             .map(convert)
             .transpose()?,
+        backend: Some(convert(backend.kind)?),
     }))
 }
 

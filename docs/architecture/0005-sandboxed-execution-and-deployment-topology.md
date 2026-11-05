@@ -2,7 +2,7 @@
 
 **Status:** Required design. Nothing in this document is implemented yet.
 
-**Date:** 2026-11-02. **Amended:** 2026-11-03 with the storage budget and continuous cleanup (review `rev-steady-rapids`; §§4, 5.1, 5.2, 9.2, 10, 11, 14 and 15).
+**Date:** 2026-11-02. **Amended:** 2026-11-03 with the storage budget and continuous cleanup (review `rev-steady-rapids`; §§4, 5.1, 5.2, 9.2, 10, 11, 14 and 15). **Amended:** 2026-11-04 with the owner rescope of subscription-login refresh to a versioned login with compare-and-swap write-back (C5b; §§7, 8.3, 10, 11 and 15). **Amended:** 2026-11-04 with the Claude Code 2.1.318 and OpenCode 1.18.35 harness rows and the Claude `native` fail-closed rule (§8.3).
 
 This is the canonical cross-component design for:
 
@@ -316,10 +316,16 @@ Rules:
 - **Separate OS users inside every sandbox:** `runner` and `agent`. Permit, proxy keys and runner state are not readable by `agent`. This is the in-sandbox boundary. It is not a claim of protection against a hostile agent on a shared-kernel container.
 - **Subscription logins are leased, written back and wiped:**
   - Material is delivered through the existing private material lease (`/v1/worker/profiled/material`), extended to the delegated permit.
-  - If the harness refreshes its login during the attempt, the runner returns the refreshed material to the vault before teardown, through a new lease-scoped write endpoint. A refresh-token rotation must not silently invalidate the stored copy.
-  - The write-back creates a new credential revision marked as a **refresh** in the same lineage, written by the current lease holder. Renewal fencing (0002 §5) treats a refresh-lineage revision from the attempt's own lease as continuity, not rotation. An operator rotation or revocation still refuses renewal.
+  - If the harness refreshes its login during the attempt, the runner returns the refreshed material to the vault before teardown, through a new lease-scoped write endpoint (`POST /v1/worker/profiled/material/refresh`). A refresh-token rotation must not silently invalidate the stored copy.
+  - **One versioned login per credential.** Each subscription credential stores one login with a monotonic version. The configured file is version 0, and each accepted write-back or operator import adds the next version. The vault holds the bytes; SQL holds only digests and sizes.
+  - **Compare-and-swap write-back.** The runner sends the refreshed file with the version it was based on. The server accepts version N+1 only if its current version is still N. Otherwise it keeps its current version and answers `409` with that version, because a newer write won. A replay of the same lease and content is idempotent.
+  - **Operator import/replace always wins.** An operator command stores a login file or token as the newest version, even if its bytes equal the current version. Leases issued before it can no longer renew or write back.
+  - **Renewal compares credential identity, not bytes.** Renewal fencing (0002 §5) accepts a lease whose material is any version of the same credential, including versions written back by any lease. Only a newer operator replace, or a rotated configured file plus reload, refuses renewal. Revocation still refuses renewal.
+  - **The next attempt fetches the newest version.** Issuance uses the newest version, so one node's refresh reaches every other node on its next attempt.
   - Teardown deletes the material.
-- **Concurrent use is a per-credential policy:** each subscription credential profile declares `max_concurrent_leases`, with a default of 1. A value above 1 is allowed only for credentials marked `refresh_safe`, meaning the provider does not rotate refresh tokens on use. Without that mark, concurrent write-backs could invalidate each other. Placement treats a credential at its lease limit as unavailable (P7).
+  - Logins the CLI never rewrites need no write-back. Claude Code subscription logins are a long-lived, env-only token (`CLAUDE_CODE_OAUTH_TOKEN`), so they are leased env-only; they are still stored and versioned. Write-back serves logins rewritten in place, such as Codex `auth.json`.
+  - Implementation and tests: [C5b](../implementation/C5b.md).
+- **Concurrent leases are not capped yet.** A per-credential concurrent-lease limit (`max_concurrent_leases`, with `refresh_safe` for providers that do not rotate refresh tokens on use) is deferred to `calm-delta-18.8.2`. Until then, two concurrent attempts may refresh the same login: the version CAS keeps the first write-back and refuses the second with `409`, and that attempt's login may stop working if the provider rotated the refresh token.
 - **Placement policy per credential profile:** each credential profile lists the backends it may be used on. The default is every enabled backend, for API keys and subscription logins alike (section 1.6). An operator may narrow the list for a credential.
 - **The agent can read subscription logins.** Harness CLIs read their login file directly, so the material sits in the agent user's harness home. The `runner`/`agent` separation does not protect it. It protects only the permit, the proxy-held API keys and runner state. The controls for subscription logins are: lease scope, one attempt per sandbox, wipe at teardown, and the J4 security review.
 - Template images and boat saved snapshots must contain no credentials. The template pipeline scans the images and snapshots it produces for known credential paths and fails if any are found.
@@ -401,7 +407,7 @@ Each harness adapter documents how it maps the vendor's headless/container guida
   3. Save the updated file between runs.
 
   OpenAI calls ChatGPT-managed auth on runners an advanced option for trusted runners and says API keys are the right default for automation. It also warns not to use this workflow for public repositories that run untrusted code. AQ sandboxes run only the owner's agents on the owner's projects, which is the trusted-runner case. Projects that run untrusted contributions should restrict their credentials to API keys (section 7).
-- **Getting a ChatGPT login into the vault.** Run `codex login --device-auth` in a one-off *enrollment sandbox* whose `CODEX_HOME` is captured straight into the vault, so the file is never copied off a desktop by hand. Device-code login must be enabled in the ChatGPT account's security settings.
+- **Getting a ChatGPT login into the vault.** The current path is the operator import/replace command (section 7), which stores an existing `auth.json` as the newest version. The planned path runs `codex login --device-auth` in a one-off *enrollment sandbox* whose `CODEX_HOME` is captured straight into the vault, so the file is never copied off a desktop by hand. Device-code login must be enabled in the ChatGPT account's security settings. Device-auth enrollment is deferred by the 2026-11-04 C5b rescope.
 - **API keys.** OpenAI warns against job-level `OPENAI_API_KEY`/`CODEX_API_KEY` environment variables where repository code runs. AQ goes further: Codex is configured with a custom model provider pointing at the runner's loopback Responses proxy (the existing `aq-responses-transport`). The key never reaches the agent user's environment or files.
 - **Native sandbox on Linux.** Codex uses `bwrap` (bubblewrap) from `PATH`. Without it, Codex falls back to a bundled helper that needs unprivileged user-namespace creation.
   - Templates install bubblewrap.
@@ -415,7 +421,72 @@ Each harness adapter documents how it maps the vendor's headless/container guida
 
   Codex requires a Git repository, and the attempt workspace is always an aq-git worktree, so `--skip-git-repo-check` is never needed.
 
-**Claude Code, Gemini CLI, OpenCode:** the same table must be filled in from each vendor's current headless documentation during WRK-11/12/13. That covers:
+**Claude Code 2.1.318,** checked on 2026-11-04 against Anthropic's [CLI reference](https://code.claude.com/docs/en/cli-reference), [headless mode](https://code.claude.com/docs/en/headless), [permission modes](https://code.claude.com/docs/en/permission-modes), [`.claude` directory](https://code.claude.com/docs/en/claude-directory), [sessions](https://code.claude.com/docs/en/sessions), [settings reference](https://code.claude.com/docs/en/settings-reference), [authentication](https://code.claude.com/docs/en/authentication), [environment variables](https://code.claude.com/docs/en/env-vars), [LLM gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol), [network configuration](https://code.claude.com/docs/en/network-config), [sandboxing](https://code.claude.com/docs/en/sandboxing) and [changelog](https://code.claude.com/docs/en/changelog) documentation. "Witnessed" means observed on the pinned CLI in the live qualification run, not stated in the docs. Adapter evidence: aq-worker `docs/implementation/I1.md` (task `azure-horizon-22.4`).
+
+- **Headless invocation.** `claude -p` (print mode) with `--output-format stream-json --verbose` and `--input-format text`. The prompt goes on stdin, never in argv. Exit 0 means success and non-zero means failure. AQ adds:
+  - `--setting-sources user --settings <home>/settings.json`, so workspace project and local settings are ignored;
+  - `--strict-mcp-config`, so project MCP servers are off;
+  - `--session-id <uuid>`, so the transcript path is known in advance;
+  - `--disable-slash-commands`.
+- **Non-interactive permissions.** `--permission-mode` accepts `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` and `bypassPermissions`. AQ uses `acceptEdits` in `native` mode and `bypassPermissions` in `container` mode.
+  - Claude refuses `bypassPermissions` as root or under sudo "unless inside a recognized sandbox". The recognition variable, `IS_SANDBOX=1`, is **undocumented** (witnessed).
+  - The production agent is the non-root `agent` user (SBX7), so the recipe never sets `IS_SANDBOX`. Only the single-UID docker-local test runner, which runs as in-container uid 0, exports it.
+- **Config directory.** `CLAUDE_CONFIG_DIR` moves every `~/.claude` path, including `settings.json`, `.claude.json`, `projects/` and `.credentials.json`. AQ sets both `HOME` and `CLAUDE_CONFIG_DIR` to the attempt's private home.
+- **Transcripts and retention.** The session is JSONL at `projects/<project>/<session-id>.jsonl` under the config directory.
+  - The `<project>` slug rule is **undocumented** (witnessed): every non-alphanumeric character becomes `-`, and slugs longer than 200 bytes are hash-shortened. A missing transcript is therefore an observation gap, not silence.
+  - `cleanupPeriodDays` defaults to 30 with a minimum of 1. AQ sets 1, and the home is wiped with the sandbox anyway.
+- **Credential file and refresh.**
+  - On Linux, `/login` writes `~/.claude/.credentials.json` with mode 0600.
+  - `claude setup-token` prints a long-lived token without saving it, for use as `CLAUDE_CODE_OAUTH_TOKEN`. The refresh mechanism is undocumented, and Claude Code cannot refresh an expired token.
+  - AQ leases the setup token env-only (section 7), so it needs no write-back. With only the env token, Claude writes no `.credentials.json` (witnessed). This is the one exception to the "credentials are stored as files" rule: the token is still stored and versioned in the vault, but it reaches the agent as a spawned-environment variable.
+  - Enrollment is operator import only: the owner runs `claude setup-token` on a trusted desktop and the operator imports the token as the newest login version (section 7). In-sandbox enrollment capture is parked.
+- **Credential precedence.** Claude Code picks the first credential present, in this order:
+  1. cloud-provider variables;
+  2. `ANTHROPIC_AUTH_TOKEN`;
+  3. `ANTHROPIC_API_KEY`;
+  4. `apiKeyHelper`;
+  5. `CLAUDE_CODE_OAUTH_TOKEN`;
+  6. the `/login` OAuth credentials.
+
+  Bare mode (`--bare` or `CLAUDE_CODE_SIMPLE`) never reads OAuth. AQ forbids every non-subscription variable in the agent environment and sets `forceLoginMethod: "claudeai"`, so a stray key can't silently take precedence over the leased login.
+- **API keys: not supported (owner decision, 2026-11-04).** AQ runs Claude Code on the subscription login only. A Claude credential profile therefore cannot use an API key, and that limitation is recorded here. If the route is built, the documented gateway shape is its specification:
+  - `ANTHROPIC_BASE_URL` points at the runner's loopback proxy;
+  - the proxy serves `POST /v1/messages` (`/v1/messages/count_tokens` is optional) and `GET /v1/models?limit=1000` for model discovery;
+  - it forwards `anthropic-version` and `anthropic-beta` verbatim;
+  - redirects fail by design, so the proxy must answer directly;
+  - the agent authenticates with a per-attempt dummy bearer (`ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`), and the proxy injects the real `x-api-key` upstream.
+- **Network and telemetry.** The recipe sets `DISABLE_AUTOUPDATER`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`; any non-empty value turns each one on. The documented hosts include `api.anthropic.com`, `claude.ai` and `platform.claude.com`.
+- **Native sandbox on Linux.** Claude Code uses bubblewrap plus socat, with seccomp to block Unix sockets.
+  - It confines **shell commands only**. The file tools, MCP servers and hooks run outside it, so `native` mode for Claude is narrower than for Codex.
+  - It is **fail-open by default**: if the sandbox can't start, commands run unconfined. **Rule: AQ's `native` mode for Claude must set `sandbox.failIfUnavailable: true`**, so an unavailable sandbox fails startup instead (SBX13, SBX19). The adapter's `native` settings don't set it yet (follow-up `azure-horizon-22.4.1`).
+  - The kernel minimum is **undocumented**, and Ubuntu's AppArmor user-namespace restriction can block it.
+  - On docker-local, C2's UID-map `EPERM` applies just as it does to Codex, so confinement stays `container`. `native` is not qualified on any backend yet.
+
+**OpenCode 1.18.35** (npm `opencode-ai@1.18.35`, binary package `opencode-linux-x64@1.18.35`), checked on 2026-11-04 against the [CLI](https://opencode.ai/docs/cli/), [providers](https://opencode.ai/docs/providers/) and [permissions](https://opencode.ai/docs/permissions/) documentation and against the pinned binary's behaviour. Adapter evidence: aq-worker `docs/implementation/I3.md` (task `azure-horizon-22.6`).
+
+- **Headless invocation.** `opencode run --format json --pure --model <provider>/<model>`.
+  - The prompt goes on stdin, which OpenCode reads when stdin is not a TTY.
+  - Events (`step_start`, `tool_use`, `text`, `step_finish`) arrive as JSON lines on stdout.
+  - `--pure` disables external plugins.
+  - `opencode export <session>` writes the session as JSON, and that export is the transcript reader's input.
+- **Config directory.** The adapter sets only `OPENCODE_CONFIG`, which names the config file inside the private home. It refuses `OPENCODE_CONFIG_DIR` and `OPENCODE_CONFIG_CONTENT`, which the docs also list.
+  - It sets the documented `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `OPENCODE_DISABLE_AUTOUPDATE=1`.
+  - It also sets these, which the binary reads: `OPENCODE_DISABLE_MODELS_FETCH`, `_LSP_DOWNLOAD`, `_SHARE`, `_CLAUDE_CODE` and `_EXTERNAL_SKILLS`, plus `_DEFAULT_PLUGINS` on the proxy route.
+  - `HOME` and every `XDG_*` directory sit inside the private 0700 home.
+- **Credential file and refresh.** `opencode auth login` writes `$XDG_DATA_HOME/opencode/auth.json` (by default `~/.local/share/opencode/auth.json`).
+  - Entries are either `{type:"oauth", refresh, access, expires, accountId?}` or `{type:"api", key}`.
+  - The OpenAI "ChatGPT Pro/Plus (headless)" method is a device-code login.
+  - OpenCode refreshes OAuth entries in place in `auth.json`. The C6b write-back (section 7) triggers when `openai.expires` advances.
+- **API-key routing through a loopback proxy.** OpenCode documents `provider.<id>.options.baseURL` "for proxies or custom endpoints". The proxy route points `openai` at `http://127.0.0.1:<port>/v1`, the runner's `aq-responses-transport` proxy.
+  - `auth.json` then holds only the proxy's attempt-local capability, as an `api` entry. The real key stays with the runner.
+  - The proxy admits OpenCode's typeless "easy input messages" (`{role, content}`) as `message` items, and nothing else in that shape.
+- **Native sandbox: none.** The docs describe only approval rules (`allow`/`ask`/`deny`), with no OS isolation. Only `container` confinement is qualified, and `native` is refused.
+  - The adapter allows every tool without prompting, except `external_directory`, `question`, `webfetch` and `websearch`, which are `deny`.
+- **Qualification status (owner deferral).** The owner deferred both credentialed routes:
+  - The live qualification ran on a local Ollama provider, which needs no credential.
+  - The ChatGPT subscription route and the API-key proxy route (B6b) are built and unit-tested, but neither has been qualified live.
+
+**Gemini CLI:** the same rows must be filled in from Google's current headless documentation during WRK-12. That covers:
 
 - headless invocation;
 - config directory variable;
@@ -536,7 +607,7 @@ Notes:
 | SBX5 | Work reported finished has reached central retention. A sandbox holding unretained work is stopped and preserved, never destroyed, until retention succeeds or an operator releases it. |
 | SBX6 | Runners report directly to the server under a delegated permit. The permit is preparation-scoped until the grant, then execution-scoped, and is bound to attempt, grant generation, sandbox identity, node boot and hard deadline. A new node boot must explicitly re-adopt live sandboxes. Permits cannot act beyond their scope. |
 | SBX7 | Node and backend credentials never enter a sandbox; runner and agent are separate OS users; provider API keys are reached through a loopback proxy. |
-| SBX8 | Subscription login material is leased per attempt, written back if refreshed, wiped at teardown, and limited by `max_concurrent_leases`. It is allowed on every enabled backend unless the operator narrows that credential's backend list. |
+| SBX8 | Subscription login material is leased per attempt, written back if refreshed by a compare-and-swap on the credential's version, and wiped at teardown. An operator import/replace always wins, and renewal compares credential identity, not bytes. The next attempt receives the newest version. A concurrent-lease cap is deferred (`calm-delta-18.8.2`). It is allowed on every enabled backend unless the operator narrows that credential's backend list. |
 | SBX9 | Templates are pipeline-built, digest-pinned, credential-free and allowlisted; each backend materialization records provenance back to the image digest. |
 | SBX10 | `docker-local` uses a dedicated per-user rootless Podman ≥ 5 or rootless `dockerd` daemon through its Docker-compatible API; `/info` must report `name=rootless`. Its fixed, non-privileged launch policy enforces reservation CPU, memory and PID limits through cgroup v2 user delegation; hosts lacking `cpu`, `memory` or `pids` delegation are not admissible. Private material is archived before start into a `0700` directory and `0600` file outside the work volume and mount aliases. On WSL2, `uidmap` and subordinate UID/GID ranges are prerequisites for SBX7 separation; `AQ_SANDBOX_SINGLE_UID=1` is a diagnostic fallback that loses that separation and does not meet SBX7. Shared-kernel containers do not claim hostile-code isolation. |
 | SBX11 | `boat` creates sandboxes by forking a template snapshot, sets auto-stop to the grant's hard deadline, supports snapshot suspend for the same attempt, and confirms deletion. |
@@ -572,7 +643,7 @@ Notes:
 | Real agent on each deployed backend | Codex CLI with an API key and with a ChatGPT login on desktop `docker-local`, VPS `docker-local` and `boat`; graph context, edit, handoff, version-checked outcome. |
 | Isolation | Two concurrent attempts on one node cannot read each other's workspace, credentials or processes; the agent user cannot read the permit, proxy key or runner state. |
 | Harness confinement | For each template × backend: Codex `native` mode either works (writes outside the workspace are refused inside the sandbox) or the backend is recorded as `container`-only; a profile requiring `native` is refused on a `container`-only backend. |
-| Credential refresh | A subscription login refreshed during an attempt is written back; the next attempt succeeds with the stored copy. A second concurrent lease beyond `max_concurrent_leases` is refused. |
+| Credential refresh | A subscription login refreshed during an attempt is written back as version N+1 and the attempt keeps renewing; the next attempt succeeds with the newest version. A stale write-back based on an older version gets `409` with the current version and changes nothing. After an operator replace, earlier leases can no longer renew or write back. |
 | Recovery | Kill the worker node during a remote attempt: the runner keeps reporting, and on restart the sandbox is re-adopted. Kill the runner: the grant expires, the sandbox is destroyed, and a retry starts in a new sandbox. Lose a journal entry: the orphan sweep destroys the sandbox before its deadline margin. |
 | Hibernation and wake | Hibernate a waiting attempt; wake starts a new attempt with fresh authority. On boat, from the credential-wiped snapshot, with the workspace intact; with the snapshot deleted, from central retention. In both cases there are no duplicate effects, and no credentials remain in the archived snapshot. |
 | Preserve before destroy | Partition a remote sandbox from the server mid-attempt: the sandbox is stopped and preserved, not destroyed, and handoff completes after reconnection. Operator release is required to discard it. |
@@ -643,7 +714,7 @@ These calls were made by the designer while resolving a builder review on 2026-1
 3. **Hibernation:** wake is always a new attempt (architecture 0004). A boat snapshot is only an optional warm start, archived with its credentials wiped first.
 4. **Preserve before destroy:** sandboxes with unretained work are stopped and kept, not destroyed. Deadline sweeps stop sandboxes; they don't delete them.
 5. **Permits** have a preparation phase, so a sandbox exists before the grant. Permits are boot-bound, and the node re-adopts its sandboxes after a restart.
-6. **Subscription refresh write-back** is a refresh-lineage revision that renewal fencing accepts. Concurrent leases above 1 require `refresh_safe`.
+6. **Subscription refresh write-back** is a refresh-lineage revision that renewal fencing accepts. Concurrent leases above 1 require `refresh_safe`. *Superseded 2026-11-04 by the owner rescope of C5b:* one versioned login per credential, a compare-and-swap write-back, an operator import/replace that always wins, renewal by credential identity, and issuance of the newest version (section 7). The concurrent-lease cap is deferred (`calm-delta-18.8.2`).
 7. **Terminal and observation polls** are per sandbox, with the per-node limits counted on the server.
 8. **boat:** a dedicated organization for attempts, a separate scope for builds, and name-prefix scoping for sweeps. Runner and agent run in the OCI container inside the VM. Nested Docker is not offered initially.
 9. **Git remote credentials** stay central. Templates that contain private source go only to a private registry.

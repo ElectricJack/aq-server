@@ -309,6 +309,10 @@ pub(crate) fn evaluate(
                             if let Some(placement) = input.placement {
                                 crate::placement::check(placement, harness)?;
                             }
+                            crate::placement::admit_confinement(
+                                input.placement,
+                                &execution.confinement,
+                            )?;
                             let credential = credential.ok_or((
                                 CandidateState::MissingCredentials,
                                 "credential_profile_unregistered",

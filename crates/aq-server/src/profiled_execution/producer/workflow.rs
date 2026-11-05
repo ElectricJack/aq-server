@@ -72,25 +72,33 @@ async fn runtime(
             return Err(refused());
         }
     }
-    for cap in [
-        "aq.profiled-launch",
-        "aq.terminal",
-        "aq.harness.startup-context",
-        "aq.harness.confined-worktree",
-        "aq.harness.stop",
-    ] {
-        if !admitted
+    let has = |cap: &str| {
+        admitted
             .request
             .capabilities
             .iter()
             .any(|c| c.id.as_str() == cap && c.version == 1)
-            || !qualified
+            && qualified
                 .capabilities
                 .iter()
                 .any(|c| c.id.as_str() == cap && c.version == 1)
-        {
+    };
+    for cap in [
+        "aq.profiled-launch",
+        "aq.terminal",
+        "aq.harness.startup-context",
+        "aq.harness.stop",
+    ] {
+        if !has(cap) {
             return Err(refused());
         }
+    }
+    // The frozen manifest carries exactly one confinement mode (native or
+    // container); the node must qualify at least one of them.
+    if !has(aq_selection::ConfinementMode::Native.capability())
+        && !has(aq_selection::ConfinementMode::Container.capability())
+    {
+        return Err(refused());
     }
     let row=sqlx::query("SELECT boot_id,sequence,snapshot FROM intelligence_node_snapshots WHERE node_id=$1 FOR SHARE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(refused)?;
     let snapshot: CapabilitySnapshot =

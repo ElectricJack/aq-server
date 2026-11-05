@@ -3,6 +3,7 @@
 pub mod config;
 mod feedback;
 mod inventory;
+pub mod login_import;
 mod principal;
 mod registry;
 pub mod resolver;

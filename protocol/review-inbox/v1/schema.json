@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "DecisionKind": {
+      "description": "Decision kinds served by this owner. Question decisions (F5) add a variant.",
+      "enum": [
+        "review"
+      ],
+      "type": "string"
+    },
+    "Impact": {
+      "additionalProperties": false,
+      "description": "Direct downstream reach: distinct live tasks this task `blocks`.",
+      "properties": {
+        "blocked_tasks": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "The bounded graph read was truncated; the count is a lower bound.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "blocked_tasks",
+        "truncated"
+      ],
+      "type": "object"
+    },
     "InboxItem": {
       "additionalProperties": false,
       "properties": {
@@ -15,6 +42,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "deferred_until_ms": {
+          "description": "This owner's active deferral, if any.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "eligible_owner": {
           "type": "boolean"
         },
@@ -22,6 +58,23 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "impact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Impact"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null when the graph is unavailable to this read."
+        },
+        "kind": {
+          "$ref": "#/$defs/DecisionKind"
+        },
+        "kind_payload": {
+          "$ref": "#/$defs/ReviewPayload"
         },
         "project_id": {
           "format": "uuid",
@@ -31,13 +84,37 @@
           "format": "uuid",
           "type": "string"
         },
+        "requested_by": {
+          "$ref": "#/$defs/RequestedBy"
+        },
+        "requested_judgment": {
+          "maxLength": 1024,
+          "type": "string"
+        },
         "state": {
           "pattern": "^(pending|answered|expired|cancelled)$",
           "type": "string"
         },
+        "submitted_at_ms": {
+          "description": "Null for decisions admitted before submission times were recorded.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "task_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "title": {
+          "description": "Graph task title; null when the graph is unavailable to this read.",
+          "maxLength": 4096,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -49,7 +126,82 @@
         "task_id",
         "report_id",
         "current_report_head",
-        "eligible_owner"
+        "eligible_owner",
+        "kind",
+        "requested_judgment",
+        "kind_payload",
+        "requested_by"
+      ],
+      "type": "object"
+    },
+    "InboxOrder": {
+      "oneOf": [
+        {
+          "const": "decision",
+          "description": "Stable decision-id order with cursor continuation.",
+          "type": "string"
+        },
+        {
+          "const": "impact",
+          "description": "Downstream impact desc, then not-deferred, then oldest submitted.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestedBy": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "maxLength": 320,
+          "type": "string"
+        },
+        "user_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id",
+        "email"
+      ],
+      "type": "object"
+    },
+    "ReviewPayload": {
+      "additionalProperties": false,
+      "description": "Kind-specific payload for `review` decisions.",
+      "properties": {
+        "criteria_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process_outcome": {
+          "pattern": "^(success|failed|cancelled|expired|unknown)$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject_profile": {
+          "pattern": "^code_review_v1$",
+          "type": "string"
+        },
+        "task_content_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "subject_profile",
+        "task_version",
+        "task_content_revision",
+        "criteria_count"
       ],
       "type": "object"
     }
@@ -75,6 +227,22 @@
         "null"
       ]
     },
+    "open_total": {
+      "description": "Pending decisions requested by or awaiting this owner (in the project\nfilter), or null when more than the bounded scan exists.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "order": {
+      "$ref": "#/$defs/InboxOrder"
+    },
+    "order_complete": {
+      "description": "False when impact ordering ran on partial data (scan bound reached or\nsome impacts unavailable); such items keep submitted-time order.",
+      "type": "boolean"
+    },
     "sampled": {
       "description": "Pages sample current authorized rows; they are not a transactional snapshot.",
       "type": "boolean"
@@ -89,7 +257,9 @@
     "api_version",
     "server_time_ms",
     "items",
-    "sampled"
+    "sampled",
+    "order",
+    "order_complete"
   ],
   "title": "InboxPage",
   "type": "object"

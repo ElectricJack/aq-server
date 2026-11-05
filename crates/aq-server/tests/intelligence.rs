@@ -38,6 +38,7 @@ fn credential() -> AuthorizedCredential {
 fn registry(path: Option<std::path::PathBuf>) -> IntelligenceConfig {
     IntelligenceConfig {
         accounting: Default::default(),
+        material_store: None,
         revision: 1,
         credentials: vec![CredentialConfig {
             kind: Default::default(),

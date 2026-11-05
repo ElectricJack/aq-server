@@ -43,7 +43,7 @@ pub struct Env {
     pub _dir: tempfile::TempDir,
     pub _db: Arc<TestDb>,
     pub credential: String,
-    pub _gate: tokio::sync::OwnedMutexGuard<()>,
+    pub _gate: FixtureGate,
 }
 impl Drop for Env {
     fn drop(&mut self) {
@@ -112,12 +112,34 @@ pub type ActualProfileChoice = actual::ActualProfileChoice;
 
 // Actual and historical fixtures share the existing test-only serialization
 // gate. Neither constructor creates a second admission driver.
-async fn fixture_gate() -> tokio::sync::OwnedMutexGuard<()> {
+//
+// The gate is not re-entrant: a test that builds a second fixture while its
+// first is still alive (including one merely shadowed by `let c = ...` again)
+// would wait on itself forever. That is refused at once instead of hanging.
+static GATE_HOLDER: std::sync::Mutex<Option<std::thread::ThreadId>> = std::sync::Mutex::new(None);
+pub struct FixtureGate(#[allow(dead_code)] tokio::sync::OwnedMutexGuard<()>);
+impl Drop for FixtureGate {
+    fn drop(&mut self) {
+        // Cleared before the guard field releases the mutex.
+        *GATE_HOLDER.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+async fn fixture_gate() -> FixtureGate {
     static GATE: std::sync::OnceLock<Arc<tokio::sync::Mutex<()>>> = std::sync::OnceLock::new();
-    GATE.get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+    let me = std::thread::current().id();
+    assert_ne!(
+        *GATE_HOLDER.lock().unwrap_or_else(|p| p.into_inner()),
+        Some(me),
+        "a selection fixture is still alive on this test thread; drop it before \
+         building another (the fixture gate is not re-entrant and would deadlock)"
+    );
+    let guard = GATE
+        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
         .lock_owned()
-        .await
+        .await;
+    *GATE_HOLDER.lock().unwrap_or_else(|p| p.into_inner()) = Some(me);
+    FixtureGate(guard)
 }
 pub async fn setup(real: bool) -> Env {
     let gate = fixture_gate().await;
@@ -325,6 +347,11 @@ pub struct SelectionFixture {
     pub time: u64,
     pub operation: Uuid,
 }
+tokio::task_local! {
+    /// Within this scope the selection fixture configures its credentials as
+    /// subscription logins with an owner-only material store (C5b).
+    pub static SUBSCRIPTION_LOGIN: bool;
+}
 pub async fn selection_fixture() -> SelectionFixture {
     use aq_selection::*;
     use aq_server::intelligence::config::{CredentialConfig, IntelligenceConfig};
@@ -373,6 +400,7 @@ pub async fn selection_fixture() -> SelectionFixture {
     std::fs::write(&key, b"synthetic-not-a-provider-key").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let login = SUBSCRIPTION_LOGIN.try_with(|v| *v).unwrap_or(false);
     let mut configured: Vec<_> = input
         .credentials
         .iter()
@@ -380,7 +408,11 @@ pub async fn selection_fixture() -> SelectionFixture {
         .map(|mut c| {
             c.provisionable = false;
             CredentialConfig {
-                kind: Default::default(),
+                kind: if login {
+                    aq_selection::CredentialKind::SubscriptionLogin
+                } else {
+                    Default::default()
+                },
                 allowed_backends: aq_selection::default_allowed_backends(),
                 credential: c,
                 allowed_node_ids: vec![env.node],
@@ -407,6 +439,7 @@ pub async fn selection_fixture() -> SelectionFixture {
     });
     let config = IntelligenceConfig {
         accounting: Default::default(),
+        material_store: login.then(|| env._dir.path().join("material-store")),
         revision: 1,
         credentials: configured,
         qualified_harnesses: input.node.harnesses.clone(),

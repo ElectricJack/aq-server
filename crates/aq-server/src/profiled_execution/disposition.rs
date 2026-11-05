@@ -32,6 +32,33 @@ pub struct Receipt {
     pub recorded_at_ms: i64,
 }
 
+/// First store format carrying `profiled_stopped_dispositions` (migration 66).
+pub const DISPOSITION_FORMAT: u32 = 66;
+
+/// Whether the owner terminally disposed this task. A store held at an earlier
+/// migration prefix has no disposition table and so records no disposition,
+/// instead of failing every poll and replacement assessment that reads it.
+pub(crate) async fn task_disposed(
+    conn: &mut sqlx::PgConnection,
+    task: Uuid,
+) -> Result<bool, AppError> {
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(db)?;
+    if version.parse::<u32>().map_err(|_| AppError::Internal)? < DISPOSITION_FORMAT {
+        return Ok(false);
+    }
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_stopped_dispositions WHERE task_id=$1)",
+    )
+    .bind(task)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(db)
+}
+
 fn db(error: sqlx::Error) -> AppError {
     tracing::error!(%error, "stopped disposition storage failure");
     AppError::Internal

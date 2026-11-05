@@ -26,7 +26,7 @@ pub struct SupervisorPrincipal {
     pub scopes: Vec<String>,
 }
 
-fn rejected() -> AppError {
+pub(super) fn rejected() -> AppError {
     AppError::Unauthenticated("supervisor credential rejected".into())
 }
 fn inactive() -> AppError {

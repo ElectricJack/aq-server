@@ -4,12 +4,12 @@
   "source_revision": "2b58715",
   "files": {
     "schema.json": {
-      "sha256": "a9fdaf3766c09ee40c87c68aeb161da738991decb876e79aa8d7efba112fab97",
-      "bytes": 85989
+      "sha256": "4b96d88fb9910fa78de29045da8a529b757758b0f6796416c19c481d4965d16a",
+      "bytes": 87751
     },
     "openapi.json": {
-      "sha256": "eace57b329766da89478d87f1fd68a69c7463073a276fc5f65c9b4ac1917e7e7",
-      "bytes": 183327
+      "sha256": "9f47bf10869cdcbea1916590574dcaaa1e6d39c77b83db34b3a42cbbc0001a3d",
+      "bytes": 185259
     },
     "cli-contract.json": {
       "sha256": "75087bf8ee96918ba12266b96cc3b3dfc064c8d4187673eb2428af3e7d840e52",
@@ -24,8 +24,8 @@
       "bytes": 61208
     },
     "fixtures/messaging.json": {
-      "sha256": "b6e5e86da0fe752fea0168e67fe48599c516e229c483690f57a94994d7928d50",
-      "bytes": 12987
+      "sha256": "a1895f51c830ce38ac12857c265ec1c5e2b0341ae170d4fbe10548c80984143e",
+      "bytes": 15258
     },
     "fixtures/mutation-delivery.json": {
       "sha256": "12ad3cc630778ef0088e75569b7cd586e5ff393ef71bb9753c5a4dea2e1958a3",

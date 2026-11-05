@@ -133,14 +133,57 @@ pub async fn prepare_turn(
     {
         return Err(refused());
     }
-    let bodies: Vec<(Uuid, String)> = sqlx::query("SELECT m.message_id,m.body FROM central_supervisor_mail_members b JOIN mailbox_messages m ON m.message_id=b.message_id WHERE b.reservation_id=$1 ORDER BY b.ordinal LIMIT 17")
+    // X5: pinned context refs follow the body; turns without refs keep their
+    // bytes. A pre-0071 store has no context table and therefore no refs.
+    let context: bool =
+        sqlx::query_scalar("SELECT to_regclass('global_supervisor_message_context') IS NOT NULL")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    let refs = if context {
+        "(SELECT c.refs FROM global_supervisor_message_context c WHERE c.message_id=m.message_id)"
+    } else {
+        "NULL::jsonb"
+    };
+    // agile-vault-27: bound owner files render after the refs, in Create order.
+    let stored: bool =
+        sqlx::query_scalar("SELECT to_regclass('global_supervisor_attachments') IS NOT NULL")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    let files = if stored {
+        super::attachments::DESCRIPTORS
+    } else {
+        "NULL::jsonb"
+    };
+    let bodies: Vec<(Uuid, String)> = sqlx::query(&format!("SELECT m.message_id,m.sender,m.body,{refs} AS refs,{files} AS files FROM central_supervisor_mail_members b JOIN mailbox_messages m ON m.message_id=b.message_id WHERE b.reservation_id=$1 ORDER BY b.ordinal LIMIT 17"))
         .bind(reservation)
         .fetch_all(&mut *tx)
         .await
         .map_err(db)?
         .into_iter()
-        .map(|r| (r.get("message_id"), r.get("body")))
-        .collect();
+        .map(|r| {
+            let mut body: String = r.get("body");
+            // bold-stone-51: agent mail names its sending session; owner bytes are unchanged.
+            let sender: serde_json::Value = r.get("sender");
+            if sender["kind"] == "session" {
+                let b = &sender["binding"];
+                body = format!(
+                    "[from agent session {} task {} project {}]\n{body}",
+                    b["session_id"].as_str().unwrap_or("?"),
+                    b["task_id"].as_str().unwrap_or("?"),
+                    b["project_id"].as_str().unwrap_or("?"),
+                );
+            }
+            for c in super::writes::stored_context(r.get("refs"))? {
+                body.push_str(&format!("\n[context {}]", c.render()));
+            }
+            for a in super::attachments::stored(r.get("files"))? {
+                body.push_str(&format!("\n[attachment {}]", a.render()));
+            }
+            Ok((r.get("message_id"), body))
+        })
+        .collect::<Result<_>>()?;
     if bodies.len() != view.batch.messages.len() {
         return Err(unavailable());
     }
@@ -207,25 +250,45 @@ pub async fn authorize_dispatch(
     Ok(())
 }
 
-/// Dispatch and reply are live while some actor's head generation is active.
-pub async fn live(pool: &PgPool) -> bool {
-    let Ok(actors) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM central_session_heads WHERE current_generation>0 LIMIT 8",
+/// X4: the active central session bound to a conversation (any, when `None`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct Binding {
+    pub(crate) actor_id: Uuid,
+    pub(crate) generation: u64,
+    pub(crate) session_id: Uuid,
+}
+pub(crate) async fn binding(pool: &PgPool, conversation: Option<Uuid>) -> Option<Binding> {
+    let actors = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM central_session_heads WHERE current_generation>0 ORDER BY actor_id LIMIT 8",
     )
     .fetch_all(pool)
     .await
-    else {
-        return false;
-    };
+    .ok()?;
     let owner = sessions(pool);
     for actor in actors {
-        if let Ok(Some(s)) = owner.inspect(actor).await
-            && active(&s)
+        let Ok(Some(s)) = owner.inspect(actor).await else {
+            continue;
+        };
+        let plan = s.run.plan();
+        if !active(&s)
+            || conversation.is_some_and(|c| c != plan.subject.conversation_id())
+            || plan.subject.actor_id() != actor
         {
-            return true;
+            continue;
+        }
+        if let Some(session_id) = session_id(plan) {
+            return Some(Binding {
+                actor_id: actor,
+                generation: plan.generation,
+                session_id,
+            });
         }
     }
-    false
+    None
+}
+/// Dispatch and reply are live while some actor's head generation is active.
+pub async fn live(pool: &PgPool) -> bool {
+    binding(pool, None).await.is_some()
 }
 
 /// The owner-visible host delivery state for a dispatch's generation.

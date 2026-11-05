@@ -1,11 +1,14 @@
-//! Pure supplemental-media validation and deterministic PNG rendering.
+//! Pure supplemental-media validation, deterministic PNG rendering and
+//! structural MP4 clip preflight.
 //! No SQL, filesystem, HTTP, authentication, execution or result-owner grants.
 //! A well-formed report binding is data; only the daemon can resolve its owner.
 #![forbid(unsafe_code)]
+mod clip;
 mod codec;
 mod domain;
 mod limits;
 
+pub use clip::{ClipHeader, preflight_mp4, synthetic_mp4};
 pub use codec::{Header, PreparedImage, PreparedVariant, preflight_png, prepare_png};
 pub use domain::*;
 pub use limits::*;
@@ -16,6 +19,8 @@ pub enum Invalid {
     Limit(&'static str),
     UnsupportedPng,
     MalformedPng,
+    UnsupportedVideo,
+    MalformedVideo,
     ProcessingFailure,
 }
 impl std::fmt::Display for Invalid {
@@ -27,6 +32,10 @@ impl std::fmt::Display for Invalid {
                 f.write_str("PNG is outside the supported static RGB/RGBA8 subset")
             }
             Self::MalformedPng => f.write_str("PNG validation failed"),
+            Self::UnsupportedVideo => {
+                f.write_str("video is outside the supported non-fragmented MP4 subset")
+            }
+            Self::MalformedVideo => f.write_str("MP4 validation failed"),
             Self::ProcessingFailure => f.write_str("PNG processing failed"),
         }
     }

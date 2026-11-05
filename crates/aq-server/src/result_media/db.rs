@@ -233,6 +233,8 @@ impl Intent {
             rejection: self.rejection,
             artifact,
             limits: self.limits.clone(),
+            media: self.request.media,
+            poster_artifact_id: self.request.poster_artifact_id,
         })
     }
 }
@@ -272,6 +274,8 @@ pub(super) async fn load_optional(
                 || receipt.input.bytes != request.input_bytes
                 || receipt.input.filename != request.filename
                 || receipt.capture != request.capture
+                || receipt.media() != request.media
+                || receipt.clip.as_ref().map(|c| c.poster_artifact_id) != request.poster_artifact_id
                 || receipt.digest().map_err(|_| Error::Owner)?.as_str()
                     != r.get::<String, _>("receipt_digest")
             {

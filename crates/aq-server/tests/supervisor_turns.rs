@@ -86,12 +86,16 @@ struct Fixture {
     app: Router,
     actor: Uuid,
     conversation: Uuid,
+    /// Milliseconds added to the fixed request clock (agile-vault-27 expiry).
+    skew: Arc<std::sync::atomic::AtomicI64>,
 }
 impl Fixture {
     async fn new(version: u32) -> Self {
         let db = TestDb::create().await;
         let store = with_store_profile(version, db.store()).await;
         let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
+        let skew = Arc::new(std::sync::atomic::AtomicI64::new(0));
+        let clock_skew = skew.clone();
         let user = store
             .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
             .await
@@ -102,7 +106,11 @@ impl Fixture {
             store,
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),
             config: Arc::new(config),
-            clock: Arc::new(move || now),
+            clock: Arc::new(move || {
+                now + chrono::Duration::milliseconds(
+                    clock_skew.load(std::sync::atomic::Ordering::SeqCst),
+                )
+            }),
             agent_access: None,
             source_retention: None,
         };
@@ -123,6 +131,7 @@ impl Fixture {
             app,
             actor: Uuid::new_v4(),
             conversation,
+            skew,
         };
         f.owner()
             .configure_actor(
@@ -172,6 +181,33 @@ impl Fixture {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    async fn human(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("x-aq-dev-email", "owner@localhost")
+            .header("x-aq-request", "1");
+        let body = body.map_or_else(Body::empty, |v| Body::from(v.to_string()));
+        let response = self
+            .app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+    fn marker_path(&self) -> String {
+        format!("/api/human/conversations/{}/read-marker", self.conversation)
+    }
+    fn history_path(&self) -> String {
+        format!("/api/human/conversations/{}/messages", self.conversation)
     }
     async fn send(&self) -> Uuid {
         let id = Uuid::new_v4();
@@ -860,4 +896,538 @@ async fn reply_attachments_serve_typed_drafts_and_session_receipts_through_histo
              "receipt_refs":[{"type":"graph_change_set","id":change_set}],"request_digest":request_digest}
         ])
     );
+}
+
+#[tokio::test]
+async fn runtime_reports_the_live_central_binding() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let unavailable =
+        json!({"state":"unavailable","binding":null,"reason":"central_runtime_not_connected"});
+    let (status, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{discovery}");
+    assert_eq!(discovery["runtime"], unavailable);
+    assert_eq!(discovery["limits"]["context_refs"], json!(16));
+    assert_eq!(discovery["limits"]["attachments"], json!(4));
+    conversation_schema(&discovery);
+    f.send().await;
+    let reservation = f.reserve().await.reservation.unwrap();
+    let p = f.plan(reservation.id, 1).await;
+    let s = f.start(&p).await;
+    let available = json!({"state":"available","binding":{"actor_id":f.actor,"generation":1,"session_id":dispatch_session(&p)},"reason":"central_session_active"});
+    let (_, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(discovery["runtime"], available);
+    conversation_schema(&discovery);
+    let (status, history) = f.human("GET", &f.history_path(), None).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history["runtime"], available);
+    conversation_schema(&history);
+    f.report(
+        &p,
+        Event::Handoff {
+            evidence: HandoffEvidence {
+                association: s.run.association().unwrap().clone(),
+                disposition: HandoffDisposition::HandedOff,
+                receipt: artifact(),
+            },
+        },
+    )
+    .await;
+    f.report(
+        &p,
+        Event::Stopped {
+            evidence: StopEvidenceRef {
+                host: observation(&p),
+                stopped_writers: artifact(),
+            },
+        },
+    )
+    .await;
+    let (_, history) = f.human("GET", &f.history_path(), None).await;
+    assert_eq!(
+        history["runtime"], unavailable,
+        "a stopped session is not live"
+    );
+}
+
+#[tokio::test]
+async fn context_refs_are_validated_echoed_and_rendered_into_the_turn() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let (task, project) = (Uuid::new_v4(), Uuid::new_v4());
+    let create = |context: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"look at this","context":context,"attachments":[]});
+    let many: Vec<Value> = (0..17)
+        .map(|_| json!({"type":"task","id":Uuid::new_v4(),"revision":null}))
+        .collect();
+    for bad in [
+        json!([{"type":"task","id":task,"revision":"1"},{"type":"task","id":task,"revision":"2"}]),
+        json!([{"type":"task","id":Uuid::nil(),"revision":null}]),
+        json!([{"type":"task","id":task,"revision":"0"}]),
+        json!([{"type":"task","id":task}]),
+        json!([{"type":"widget","id":task,"revision":null}]),
+        json!([{"type":"task","id":task,"revision":null,"extra":1}]),
+        json!(many),
+    ] {
+        let (status, body) = f.post(&f.history_path(), None, create(bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} -> {body}");
+    }
+    let context = json!([{"type":"task","id":task,"revision":"3"},{"type":"project","id":project,"revision":null}]);
+    let request = create(context.clone());
+    let (status, receipt) = f.post(&f.history_path(), None, request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, history) = f.human("GET", &f.history_path(), None).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    conversation_schema(&history);
+    let items = history["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{history}");
+    assert_eq!(items[0]["message_id"], request["message_id"]);
+    assert_eq!(items[0]["context"], context);
+    let plain = f.send().await;
+    let (_, history) = f.human("GET", &f.history_path(), None).await;
+    let item = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["message_id"] == json!(plain))
+        .unwrap()
+        .clone();
+    assert!(item.get("context").is_none(), "refless items are unchanged");
+    let reservation = f.reserve().await.reservation.unwrap();
+    let turn = dispatch::prepare_turn(
+        &f.pool,
+        f.actor,
+        reservation.id,
+        1,
+        Uuid::new_v4(),
+        1_000_000,
+    )
+    .await
+    .unwrap();
+    let input = String::from_utf8(turn.input).unwrap();
+    assert!(
+        input.contains(&format!(
+            "look at this\n[context task {task} revision 3]\n[context project {project}]\n"
+        )),
+        "{input}"
+    );
+    assert!(input.contains("next owner message\n"), "{input}");
+}
+
+#[tokio::test]
+async fn read_marker_is_per_principal_monotonic_and_bounded_by_latest() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let path = f.marker_path();
+    let (status, marker) = f.human("GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{marker}");
+    conversation_schema(&marker);
+    assert_eq!(marker["principal_id"], json!(f.user.id));
+    assert_eq!(marker["read_cursor"], Value::Null);
+    assert_eq!(marker["latest_cursor"], Value::Null);
+    assert_eq!(marker["unread"], json!({"count":0,"capped":false}));
+    let put = |cursor: Value| f.human("PUT", &path, Some(json!({"cursor":cursor})));
+    assert_eq!(
+        put(json!("1")).await.0,
+        StatusCode::BAD_REQUEST,
+        "nothing to read yet"
+    );
+
+    f.send().await;
+    let reservation = f.reserve().await.reservation.unwrap();
+    let p = f.plan(reservation.id, 1).await;
+    let s = f.start(&p).await;
+    f.report(
+        &p,
+        Event::Handoff {
+            evidence: HandoffEvidence {
+                association: s.run.association().unwrap().clone(),
+                disposition: HandoffDisposition::HandedOff,
+                receipt: artifact(),
+            },
+        },
+    )
+    .await;
+    f.answer(&p).await;
+    let (_, history) = f.human("GET", &f.history_path(), None).await;
+    let items = history["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{history}");
+    let (owner, reply) = (items[0]["cursor"].clone(), items[1]["cursor"].clone());
+
+    let (_, marker) = f.human("GET", &path, None).await;
+    conversation_schema(&marker);
+    assert_eq!(marker["latest_cursor"], reply);
+    assert_eq!(
+        marker["unread"],
+        json!({"count":1,"capped":false}),
+        "the owner's own message is never unread"
+    );
+    let (status, marker) = put(owner.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{marker}");
+    assert_eq!(
+        (&marker["read_cursor"], marker["unread"]["count"].as_u64()),
+        (&owner, Some(1))
+    );
+    let (status, marker) = put(reply.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{marker}");
+    conversation_schema(&marker);
+    assert_eq!(
+        (&marker["read_cursor"], marker["unread"]["count"].as_u64()),
+        (&reply, Some(0))
+    );
+    let (status, marker) = put(owner.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{marker}");
+    assert_eq!(
+        marker["read_cursor"], reply,
+        "the marker never moves backward"
+    );
+    let (anchor, r) = reply.as_str().unwrap().split_once('.').unwrap();
+    let r: u64 = r.parse().unwrap();
+    for bad in [
+        json!({"cursor":format!("{anchor}.{}", r + 1)}),
+        json!({"cursor":(anchor.parse::<u64>().unwrap() + 1).to_string()}),
+        json!({"cursor":"x"}),
+        json!({"cursor":"0"}),
+        json!({"cursor":owner,"extra":1}),
+    ] {
+        assert_eq!(
+            f.human("PUT", &path, Some(bad.clone())).await.0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    // Markers are keyed by principal: another principal's row is invisible here.
+    let other: Uuid = sqlx::query_scalar("INSERT INTO users(id,email,role,created_at) SELECT gen_random_uuid(),'viewer@localhost','viewer',created_at FROM users WHERE id=$1 RETURNING id")
+        .bind(f.user.id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO global_supervisor_read_markers(principal_id,conversation_id,anchor,reply,updated_at_ms) VALUES($1,$2,1,0,1)")
+        .bind(other)
+        .bind(f.conversation)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (_, marker) = f.human("GET", &path, None).await;
+    assert_eq!(marker["read_cursor"], reply);
+}
+
+/// agile-vault-27: one raw request (owner dev headers unless a bearer is given).
+async fn raw(
+    f: &Fixture,
+    method: &str,
+    path: &str,
+    content_type: Option<&str>,
+    token: Option<&str>,
+    body: Vec<u8>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(t) = content_type {
+        request = request.header("content-type", t);
+    }
+    request = match token {
+        Some(token) => request.header("authorization", format!("Bearer {token}")),
+        None => request
+            .header("x-aq-dev-email", "owner@localhost")
+            .header("x-aq-request", "1"),
+    };
+    let response = f
+        .app
+        .clone()
+        .oneshot(request.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let (status, headers) = (response.status(), response.headers().clone());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, bytes.to_vec())
+}
+fn attachment_path(f: &Fixture, id: Uuid) -> String {
+    format!(
+        "/api/human/conversations/{}/attachments/{id}",
+        f.conversation
+    )
+}
+async fn upload(
+    f: &Fixture,
+    id: Uuid,
+    name: &str,
+    media: &str,
+    bytes: &[u8],
+) -> (StatusCode, Value) {
+    let name: String = name.bytes().map(|b| format!("%{b:02X}")).collect();
+    let (status, _, body) = raw(
+        f,
+        "PUT",
+        &format!("{}?name={name}", attachment_path(f, id)),
+        Some(media),
+        None,
+        bytes.to_vec(),
+    )
+    .await;
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+fn sha(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+}
+
+#[tokio::test]
+async fn owner_attachments_are_stored_bound_echoed_rendered_and_served() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let (status, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(discovery["limits"]["attachments"], json!(4));
+    conversation_schema(&discovery);
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    let (notes, image) = (Uuid::new_v4(), Uuid::new_v4());
+    for (id, name, media, bytes, want) in [
+        (
+            notes,
+            "a.html",
+            "text/html",
+            b"<b>".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a.txt",
+            "text/plain; charset=utf-8",
+            b"x".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a.png",
+            "image/png",
+            b"not a png".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a.txt",
+            "text/plain",
+            b"a\0b".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a.json",
+            "application/json",
+            b"{".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a.txt",
+            "text/plain",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "a/b.txt",
+            "text/plain",
+            b"x".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "..",
+            "text/plain",
+            b"x".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Uuid::nil(),
+            "a.txt",
+            "text/plain",
+            b"x".to_vec(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            notes,
+            "big.txt",
+            "text/plain",
+            vec![b'x'; (1 << 20) + 1],
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ] {
+        let (status, body) = upload(&f, id, name, media, &bytes).await;
+        assert_eq!(status, want, "{name} {media} -> {body}");
+    }
+    let text = "# plan\n\"quoted\" ]\n".as_bytes();
+    let (status, staged) = upload(&f, notes, "plan \"v2\"].md", "text/markdown", text).await;
+    assert_eq!(status, StatusCode::CREATED, "{staged}");
+    conversation_schema(&staged);
+    assert_eq!(staged["state"], "staged");
+    assert_eq!(staged["digest"], sha(text));
+    assert_eq!(staged["expires_at_ms"], json!(1_000_000 + 86_400_000));
+    let (status, again) = upload(&f, notes, "plan \"v2\"].md", "text/markdown", text).await;
+    assert_eq!(
+        (status, &again),
+        (StatusCode::OK, &staged),
+        "identical retry"
+    );
+    let (status, _) = upload(&f, notes, "other.md", "text/markdown", text).await;
+    assert_eq!(status, StatusCode::CONFLICT, "id reuse with other metadata");
+    let (status, _) = upload(&f, image, "shot.png", "image/png", &png).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let r = |id: Uuid, digest: &str| json!({"id":id,"digest":digest});
+    let create = |attachments: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"see files","context":[],"attachments":attachments});
+    for bad in [
+        json!([r(notes, &sha(text)), r(notes, &sha(text))]),
+        json!([r(Uuid::nil(), &sha(text))]),
+        json!([r(notes, "sha256:XYZ")]),
+        json!([{"id":notes}]),
+        json!(
+            (0..5)
+                .map(|_| r(Uuid::new_v4(), &sha(text)))
+                .collect::<Vec<_>>()
+        ),
+    ] {
+        let (status, body) = f.post(&f.history_path(), None, create(bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} -> {body}");
+    }
+    for refused in [
+        json!([r(notes, &sha(b"other"))]),
+        json!([r(Uuid::new_v4(), &sha(text))]),
+    ] {
+        let (status, receipt) = f.post(&f.history_path(), None, create(refused)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{receipt}");
+        assert_eq!(receipt["reason"], "attachment_unavailable");
+        conversation_schema(&receipt);
+    }
+    let refs = json!([r(notes, &sha(text)), r(image, &sha(&png))]);
+    let request = create(refs.clone());
+    let (status, receipt) = f.post(&f.history_path(), None, request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, bound) = upload(&f, notes, "plan \"v2\"].md", "text/markdown", text).await;
+    assert_eq!(status, StatusCode::OK);
+    conversation_schema(&bound);
+    assert_eq!(bound["state"], "attached");
+    assert_eq!(bound["message_id"], request["message_id"]);
+    let (status, receipt) = f
+        .post(
+            &f.history_path(),
+            None,
+            create(json!([r(image, &sha(&png))])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "an attached file binds once");
+    assert_eq!(receipt["reason"], "attachment_unavailable");
+    let (_, history) = f.human("GET", &f.history_path(), None).await;
+    conversation_schema(&history);
+    let items = history["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{history}");
+    assert_eq!(
+        items[0]["attachments"],
+        json!([
+            {"id":notes,"name":"plan \"v2\"].md","media_type":"text/markdown","size_bytes":text.len(),"digest":sha(text)},
+            {"id":image,"name":"shot.png","media_type":"image/png","size_bytes":png.len(),"digest":sha(&png)},
+        ])
+    );
+    let plain = f.send().await;
+    let (_, history) = f.human("GET", &f.history_path(), None).await;
+    let item = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["message_id"] == json!(plain))
+        .unwrap()
+        .clone();
+    assert!(
+        item.get("attachments").is_none(),
+        "fileless items are unchanged"
+    );
+    let (status, headers, bytes) =
+        raw(&f, "GET", &attachment_path(&f, notes), None, None, vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, text);
+    assert_eq!(headers["content-type"], "text/markdown");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-aq-content-digest"], sha(text).as_str());
+    assert_eq!(
+        headers["content-disposition"],
+        "attachment; filename*=UTF-8''plan%20%22v2%22%5D.md"
+    );
+    // The supervisor may read only files whose message was dispatched to it.
+    let reservation = f.reserve().await.reservation.unwrap();
+    let p = f.plan(reservation.id, 1).await;
+    let input: Vec<u8> = sqlx::query_scalar(
+        "SELECT input_bytes FROM central_supervisor_dispatches WHERE dispatch_id=$1",
+    )
+    .bind(p.dispatch_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let input = String::from_utf8(input).unwrap();
+    assert!(
+        input.contains(&format!(
+            "see files\n[attachment {notes} name \"plan \\\"v2\\\"].md\" text/markdown {} bytes {}]\n[attachment {image} name \"shot.png\" image/png {} bytes {}]",
+            text.len(),
+            sha(text),
+            png.len(),
+            sha(&png)
+        )),
+        "{input}"
+    );
+    f.start(&p).await;
+    let token = reply::issue_credential(&f.pool, f.actor, 60_000, 999_000)
+        .await
+        .unwrap();
+    let supervisor = |id: Uuid| format!("/v1/supervisor/conversation/attachments/{id}");
+    let (status, _, bytes) = raw(&f, "GET", &supervisor(image), None, Some(&token), vec![]).await;
+    assert_eq!((status, bytes), (StatusCode::OK, png.clone()));
+    let staged = Uuid::new_v4();
+    upload(&f, staged, "later.txt", "text/plain", b"later").await;
+    let (status, _, _) = raw(&f, "GET", &supervisor(staged), None, Some(&token), vec![]).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "undispatched files stay private"
+    );
+    let (status, _, _) = raw(
+        &f,
+        "GET",
+        &supervisor(image),
+        None,
+        Some("aqsv1_bogus"),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn staged_attachments_expire_and_are_bounded_per_conversation() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let old = Uuid::new_v4();
+    let (status, _) = upload(&f, old, "old.txt", "text/plain", b"old").await;
+    assert_eq!(status, StatusCode::CREATED);
+    f.skew
+        .store(86_400_000, std::sync::atomic::Ordering::SeqCst);
+    let request = json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"late","context":[],"attachments":[{"id":old,"digest":sha(b"old")}]});
+    let (status, receipt) = f.post(&f.history_path(), None, request).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{receipt}");
+    assert_eq!(receipt["reason"], "attachment_unavailable");
+    let (status, _, _) = raw(&f, "GET", &attachment_path(&f, old), None, None, vec![]).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "expired staged files are gone"
+    );
+    for i in 0..16 {
+        let (status, body) =
+            upload(&f, Uuid::new_v4(), &format!("{i}.txt"), "text/plain", b"x").await;
+        assert_eq!(status, StatusCode::CREATED, "{i}: {body}");
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM global_supervisor_attachments")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 16, "the expired row was purged on upload");
+    let (status, body) = upload(&f, Uuid::new_v4(), "17.txt", "text/plain", b"x").await;
+    assert!(!status.is_success(), "staged quota: {status} {body}");
 }

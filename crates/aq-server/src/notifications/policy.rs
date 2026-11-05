@@ -50,9 +50,11 @@ pub enum Kind {
     StoragePressure,
     /// SBX22(a): subject = attempt ID of a sandbox preserved on its node.
     SandboxPreserved,
+    /// H3 stall ladder rung 3: subject = attempt ID; opened once per episode.
+    SessionStalled,
 }
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::TaskFailedOrBlocked,
         Kind::DecisionNeeded,
         Kind::QuestionAsked,
@@ -61,6 +63,7 @@ impl Kind {
         Kind::WorkerOffline,
         Kind::StoragePressure,
         Kind::SandboxPreserved,
+        Kind::SessionStalled,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -72,6 +75,7 @@ impl Kind {
             Kind::WorkerOffline => "worker.offline",
             Kind::StoragePressure => "storage.pressure",
             Kind::SandboxPreserved => "sandbox.preserved",
+            Kind::SessionStalled => "session.stalled",
         }
     }
     fn label(self) -> &'static str {
@@ -84,6 +88,7 @@ impl Kind {
             Kind::WorkerOffline => "Worker offline",
             Kind::StoragePressure => "Storage pressure",
             Kind::SandboxPreserved => "Sandbox preserved",
+            Kind::SessionStalled => "Session stalled",
         }
     }
     /// Maps an attempt failure reason to the episode kind it opens, if any.

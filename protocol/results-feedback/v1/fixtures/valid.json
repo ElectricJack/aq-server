@@ -134,6 +134,24 @@
     }
   },
   {
+    "type": "Comment",
+    "value": {
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "expected_version": "1",
+      "body": "Fix the caption",
+      "anchor": {
+        "kind": "video_range",
+        "artifact_id": "00000000-0000-4000-8000-000000000007",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "start_ms": 1000,
+        "end_ms": 2500
+      },
+      "follow": true,
+      "result_id": "00000000-0000-4000-8000-000000000002",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
     "type": "Detail",
     "value": {
       "result": {

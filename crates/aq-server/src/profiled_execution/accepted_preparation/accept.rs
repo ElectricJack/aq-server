@@ -92,14 +92,28 @@ pub async fn accept(
     let selection = before.selection.clone();
     let binding = q.original.acceptance.binding.clone();
     let lease_id = Uuid::new_v5(&q.original.operation_id, binding.attempt_id.as_bytes());
+    let head = super::super::login_refresh::newest_source(
+        &state.store.pool,
+        &registry,
+        &selection.choice.credential_profile,
+        selection.credential_revision,
+    )
+    .await?;
     let permit =
         super::super::accepted_preparation::material_read_permit().map_err(|_| refused())?;
     let mut material = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            super::super::material::issue_for_selection(
-                &registry, &selection, &binding, lease_id, received, expiry, None,
+            super::super::material::issue_for_selection_from(
+                &registry,
+                &selection,
+                &binding,
+                lease_id,
+                received,
+                expiry,
+                None,
+                head.as_ref(),
             )
         }),
     )

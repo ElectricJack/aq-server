@@ -151,8 +151,25 @@ impl Owner {
             return Err(Error::Capacity);
         }
         db::capacity(&mut tx, binding.project_id.as_uuid()).await?;
-        sqlx::query("INSERT INTO result_media_intents(operation_id,actor_id,actor_identity,report_id,report_revision,project_id,report_binding,storage_id,rendering_policy,admission_limits,request_bytes,request_digest,input_digest,input_bytes,filename,capture,state,created_at_ms,upload_expires_at_ms,retain_until_ms,transition_at_ms,reserved_bytes,file_generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'aq.png.rgba8-srgb-v1',$9,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$16,10485760,$1)")
-            .bind(id).bind(actor.id).bind(db::key(actor)?).bind(report).bind(revision.as_str()).bind(binding.project_id.as_uuid()).bind(json(&binding)?).bind(self.root.id).bind(json(&self.limits)?).bind(raw).bind(media::Digest::of(raw).as_str()).bind(request.input_digest.as_str()).bind(request.input_bytes as i64).bind(&request.filename).bind(json(&request.capture)?).bind(at as i64).bind(upload as i64).bind(retain as i64).execute(&mut *tx).await.map_err(sql)?;
+        if let Some(poster) = request.poster_artifact_id {
+            // A clip names a live retained image on this same revision.
+            let poster = db::load_optional(&mut tx, poster.as_uuid())
+                .await?
+                .ok_or(Error::Invalid)?;
+            let image = poster.receipt.as_ref().is_some_and(|r| {
+                r.rendering_policy == media::RenderingPolicy::Rgba8SrgbV1 && at < r.retain_until_ms
+            });
+            if !image
+                || poster.binding != binding
+                || poster.storage != self.root.id
+                || poster.withheld
+                || poster.cleanup != "none"
+            {
+                return Err(Error::Invalid);
+            }
+        }
+        sqlx::query("INSERT INTO result_media_intents(operation_id,actor_id,actor_identity,report_id,report_revision,project_id,report_binding,storage_id,rendering_policy,admission_limits,request_bytes,request_digest,input_digest,input_bytes,filename,capture,state,created_at_ms,upload_expires_at_ms,retain_until_ms,transition_at_ms,reserved_bytes,file_generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$19,$9,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$16,10485760,$1)")
+            .bind(id).bind(actor.id).bind(db::key(actor)?).bind(report).bind(revision.as_str()).bind(binding.project_id.as_uuid()).bind(json(&binding)?).bind(self.root.id).bind(json(&self.limits)?).bind(raw).bind(media::Digest::of(raw).as_str()).bind(request.input_digest.as_str()).bind(request.input_bytes as i64).bind(&request.filename).bind(json(&request.capture)?).bind(at as i64).bind(upload as i64).bind(retain as i64).bind(request.media.policy().as_str()).execute(&mut *tx).await.map_err(sql)?;
         self.root.check()?;
         db::principal(&mut tx, actor).await?;
         tx.commit().await.map_err(sql)?;

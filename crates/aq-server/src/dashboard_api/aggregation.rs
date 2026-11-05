@@ -519,11 +519,12 @@ async fn reviews(
     let mut more = truncated;
     for p in projects {
         let page = owner
-            .inbox(
+            .inbox_lean(
                 user.id,
                 &crate::reviews::InboxQuery {
                     project_id: Some(p.label.id),
                     state: crate::reviews::InboxState::Open,
+                    order: crate::reviews::InboxOrder::Decision,
                     limit: 25,
                     cursor: None,
                 },

@@ -14,7 +14,7 @@ kinds `result.follow`, `result.comment`, `comment.revise`, `thread.resolve`,
 `feedback.task_create`, `feedback.link`, `result.evidence_waive`.
 
 - Results: GET `/api/v1/results?mode=latest|needs_review|following`, optionally
-  `scope=all_authorized|project`, `project_id`, `task_id`, `media=any|image|none`,
+  `scope=all_authorized|project`, `project_id`, `task_id`, `media=any|image|video|none`,
   inclusive `since_ms`/`until_ms`, `limit` (default 20, maximum 100), `cursor`.
   Membership is frozen for five minutes; every page rechecks current authority
   and retained report provenance. Cursors bind all filters, identity and size.
@@ -56,15 +56,20 @@ kinds `result.follow`, `result.comment`, `comment.revise`, `thread.resolve`,
 
 Image anchors require finalized retained PNG evidence on that exact revision,
 matching input or render digest, finite normalized bounds and positive extent.
-Video anchors have a schema for forward compatibility but receive typed 422
-`unsupported_media_kind`; no clip or transcoding owner is mounted.
+Video anchors require a retained `aq.mp4.passthrough-v1` clip on that exact
+revision with a matching digest and `0 <= start_ms < end_ms <= clip.duration_ms`
+from the owner's receipt (never client metadata). An anchor whose kind does not
+match the cited artifact's media receives typed 422 `unsupported_media_kind`.
+`media=video` lists results with a retained clip, `media=image` with a retained
+PNG, and `media=none` with no retained media.
 
 Capture requirements live in append-only SQL `result_task_policies`, keyed by
 project/task/policy revision. This is the administrative task-policy store;
 policy authoring and completion-gate wiring belong to their task-policy owners.
 The retained report transaction snapshots the latest policy, including every
 requirement field. Historical reports receive explicit empty policy revision 0.
-Policies are bounded and SQL-validated, support PNG image requirements, and
+Policies are bounded and SQL-validated, support PNG image (`kind=image`) and MP4 clip
+(`kind=video`) requirements, each satisfied only by its own media kind, and
 cannot be corrected in place. Each required count must match finalized, retained,
 not withheld evidence with exact report, scenario, environment, viewport and
 claimed source, or have an authorized exact-policy waiver. Scenario/steps and

@@ -1,0 +1,19 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000304",
+  "kind": "playbook.activation.rollback",
+  "subject": {
+    "type": "playbook_binding",
+    "id": "worker-recovery",
+    "revision": "7"
+  },
+  "expected_versions": {
+    "playbook_binding": "7"
+  },
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000304",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "expected_version": "7",
+    "binding": "worker-recovery",
+    "artifact": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

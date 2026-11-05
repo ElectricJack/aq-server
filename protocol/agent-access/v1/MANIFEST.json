@@ -3,15 +3,15 @@
   "major": 1,
   "status": "Finite daemon gateway implemented and locally qualified; full product/harness integration and production client qualification remain pending. No release/deployment claim.",
   "inventory_algorithm": "SHA256 of canonical sorted JSON map of relative paths to SHA256 and byte size; excludes MANIFEST.json and Python caches",
-  "inventory_sha256": "fdb3177afd64f383dd497057185beb24d2aaed374a7353fe211c75cae9b7966f",
+  "inventory_sha256": "046734729f254931a666e72dbfa4bf02e58a9776ea128508d1ea8b7174809db7",
   "files": {
     ".gitignore": {
       "sha256": "e99f6ee4eb88882ea6589ecb717e10a41401763241b246b6821bc091cfe2227e",
       "bytes": 20
     },
     "v1/README.md": {
-      "sha256": "c1ad1191e9525ec50c36af56cbf282abf7873f7de4d72c8e0dc5335b090cf3fe",
-      "bytes": 17194
+      "sha256": "8fe58c41712d259e4963005653b59cf306a716b6c41f61f0a9910d92b79176ed",
+      "bytes": 17671
     },
     "v1/build_fixtures.py": {
       "sha256": "2eb4d5405a0de6d79b10e636e086f39de1a82f8dd666c3ef711ca9bf85f7df69",
@@ -26,8 +26,8 @@
       "bytes": 2416
     },
     "v1/client_types.py": {
-      "sha256": "47a2be0ef54b16f8031909f13a489fc51a80bffd08d17aa96e39a5e3c4ea4cd0",
-      "bytes": 16005
+      "sha256": "e52854499000097d4c3074a184c72cfd827bdf9eb21e52602e2f93f558c50737",
+      "bytes": 16316
     },
     "v1/conformance_model.py": {
       "sha256": "c7748743977da091aad30de642db61ace1aed66d9db54d927748ac9673adc505",
@@ -58,8 +58,8 @@
       "bytes": 61208
     },
     "v1/fixtures/messaging.json": {
-      "sha256": "b6e5e86da0fe752fea0168e67fe48599c516e229c483690f57a94994d7928d50",
-      "bytes": 12987
+      "sha256": "a1895f51c830ce38ac12857c265ec1c5e2b0341ae170d4fbe10548c80984143e",
+      "bytes": 15258
     },
     "v1/fixtures/mutation-delivery.json": {
       "sha256": "12ad3cc630778ef0088e75569b7cd586e5ff393ef71bb9753c5a4dea2e1958a3",
@@ -78,24 +78,24 @@
       "bytes": 58424
     },
     "v1/generate.py": {
-      "sha256": "e7d40ea363bb825b5e66f3d8332beb10a87a06385a542cce3c5ef2133702fa32",
-      "bytes": 27880
+      "sha256": "ea2defabc9b5b8335ad9b6249bbd464ebeeff0f08d4010a1619be691bb5453fc",
+      "bytes": 28228
     },
     "v1/openapi.json": {
-      "sha256": "eace57b329766da89478d87f1fd68a69c7463073a276fc5f65c9b4ac1917e7e7",
-      "bytes": 183327
+      "sha256": "9f47bf10869cdcbea1916590574dcaaa1e6d39c77b83db34b3a42cbbc0001a3d",
+      "bytes": 185259
     },
     "v1/requirements-dev.txt": {
       "sha256": "e5d8aad6444e49bf2726aa35af230a27c9e754aa5e539bbd85f96aae54b4a878",
       "bytes": 235
     },
     "v1/schema.json": {
-      "sha256": "a9fdaf3766c09ee40c87c68aeb161da738991decb876e79aa8d7efba112fab97",
-      "bytes": 85989
+      "sha256": "4b96d88fb9910fa78de29045da8a529b757758b0f6796416c19c481d4965d16a",
+      "bytes": 87751
     },
     "v1/test_conformance.py": {
-      "sha256": "13ab445cfc1f3997bde81e3ac8493c318e8f4ac11500b5818c52e94fac2f98dc",
-      "bytes": 28325
+      "sha256": "4ba30f41c020c5c5d73d42fe3c5690c4b73842fddd9825437dfa63a743e80035",
+      "bytes": 29426
     },
     "v1/upstream/aq-graph-api.md": {
       "sha256": "64f916198677872f732599e3dcd51beffb889165240687b3a2f25e3ee687c59e",
@@ -116,6 +116,7 @@
   },
   "extensions": [
     "AQ-11 additive scoped messaging and explicit profile capabilities",
-    "AQ-07 durable finite mutation delivery/recovery, structural draft allowlists and captured native draft defaults"
+    "AQ-07 durable finite mutation delivery/recovery, structural draft allowlists and captured native draft defaults",
+    "Additive supervisor mailbox recipient and central supervisor message sender"
   ]
 }

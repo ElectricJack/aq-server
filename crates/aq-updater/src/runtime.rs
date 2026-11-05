@@ -1555,8 +1555,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let fake = t.path().join("docker");
-        std::fs::write(&fake, "#!/bin/sh\necho \"boom: $1\" >&2\nexit 7\n").unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_stub(&fake, "#!/bin/sh\necho \"boom: $1\" >&2\nexit 7\n");
         let c = cli().with_docker_binary(fake.clone());
         let e = c.pull(IMAGE).await.unwrap_err();
         let RuntimeError::Failed(m) = e else {
@@ -1567,7 +1566,7 @@ mod tests {
         assert!(matches!(e, RuntimeError::Failed(_)), "{e:?}");
 
         // backup streams stdout into a new 0600 file and fsyncs it.
-        std::fs::write(&fake, "#!/bin/sh\nprintf 'PGDMP-data'\n").unwrap();
+        crate::test_support::write_stub(&fake, "#!/bin/sh\nprintf 'PGDMP-data'\n");
         let dest = t.path().join("b.dump");
         let c = DockerCli {
             release_env: t.path().join("release.env"),
@@ -1581,11 +1580,10 @@ mod tests {
         assert!(c.backup(&dest).await.is_err());
         assert_eq!(std::fs::read(&dest).unwrap(), b"PGDMP-data");
         // A failing dump removes the partial file it created.
-        std::fs::write(
+        crate::test_support::write_stub(
             &fake,
             "#!/bin/sh\nprintf 'partial'\necho 'pg_dump: error: disk full' >&2\nexit 1\n",
-        )
-        .unwrap();
+        );
         let dest2 = t.path().join("c.dump");
         let e = c.backup(&dest2).await.unwrap_err();
         assert!(
@@ -1597,7 +1595,6 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_release_removes_the_container_even_on_error() {
-        use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let fake = t.path().join("docker");
         let log = t.path().join("log");
@@ -1624,8 +1621,7 @@ mod tests {
         ];
         for (body, failing, reaches_cp) in cases {
             let _ = std::fs::remove_file(&log);
-            std::fs::write(&fake, body).unwrap();
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_support::write_stub(&fake, &body);
             let c = cli().with_docker_binary(fake.clone());
             let e = c.fetch_release(ReleaseSelector::Channel).await.unwrap_err();
             assert!(e.to_string().contains(failing), "{e}");
@@ -1681,17 +1677,14 @@ CONTEXT: error near row 7\n";
 
     #[tokio::test]
     async fn compose_failures_do_not_leak_stderr_into_the_error() {
-        use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let fake = t.path().join("docker");
-        std::fs::write(
+        crate::test_support::write_stub(
             &fake,
             "#!/bin/sh\necho 'pg_restore: error: could not execute query: ERROR:  duplicate key' >&2\n\
 echo 'DETAIL:  Key (email)=(alice@example.com) already exists.' >&2\n\
 echo 'CONTEXT:  COPY users, line 1: \"alice@example.com\"' >&2\nexit 1\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let c = DockerCli {
             release_env: t.path().join("release.env"),
             ..cli().with_docker_binary(fake.clone())
@@ -1712,11 +1705,10 @@ echo 'CONTEXT:  COPY users, line 1: \"alice@example.com\"' >&2\nexit 1\n",
             assert!(e.contains("failed (exit status: 1)"), "{e}");
         }
         // An env-file error: nothing from stderr reaches the error.
-        std::fs::write(
+        crate::test_support::write_stub(
             &fake,
             "#!/bin/sh\necho 'failed to read compose.env: line 2: unexpected character in \"SECRET=hunter2\"' >&2\nexit 15\n",
-        )
-        .unwrap();
+        );
         let e = c.stop_server().await.unwrap_err().to_string();
         assert_eq!(e, "docker compose stop failed (exit status: 15)");
         // Plain docker calls (registry errors) keep their stderr tail.

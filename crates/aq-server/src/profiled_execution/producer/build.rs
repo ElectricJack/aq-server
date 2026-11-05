@@ -52,12 +52,14 @@ fn artifact(source: &aq_session_api::Source) -> Result<ArtifactRef, AppError> {
         digest: serde_json::from_value(json!(source.digest)).map_err(|_| refused())?,
     })
 }
-fn capabilities() -> Result<Vec<wire::Capability>, AppError> {
+/// Offer capabilities; `[2..]` is the manifest's harness list, which carries
+/// exactly one confinement capability for the frozen confinement mode.
+fn capabilities(mode: aq_selection::ConfinementMode) -> Result<Vec<wire::Capability>, AppError> {
     [
         "aq.profiled-launch",
         "aq.terminal",
         "aq.harness.startup-context",
-        "aq.harness.confined-worktree",
+        mode.capability(),
         "aq.harness.stop",
     ]
     .into_iter()
@@ -170,6 +172,29 @@ pub struct Assembly<'a> {
     pub source_operation: Uuid,
     pub logical_identity: &'a str,
     pub generation: u64,
+}
+/// Re-derives the frozen confinement mode from the selection's placement facts
+/// and the selected execution profile's confinement permission.
+fn confinement_mode(
+    compiled: &Compiled,
+    composition: &aq_profiles::FrozenComposition,
+    decision: &Decision,
+) -> Result<aq_selection::ConfinementMode, AppError> {
+    let key = composition
+        .execution_profile
+        .identity
+        .strip_prefix("execution:")
+        .ok_or_else(refused)?;
+    let execution = compiled
+        .catalog
+        .artifact()
+        .catalog
+        .execution
+        .iter()
+        .find(|e| aq_profiles::key(&e.id, e.version) == key)
+        .ok_or_else(refused)?;
+    aq_selection::admit_confinement(decision.inputs.placement.as_ref(), &execution.confinement)
+        .map_err(|_| refused())
 }
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
@@ -515,7 +540,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .iter()
         .map(scope)
         .collect::<Result<Vec<_>, _>>()?;
-    let required_caps = capabilities()?;
+    let mode = confinement_mode(&compiled, &composition, &decision)?;
+    let required_caps = capabilities(mode)?;
     let spending_budget = project
         .ceilings
         .cost_limit_microunits
@@ -697,4 +723,35 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         decision,
         deadline,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aq_selection::ConfinementMode::{Container, Native};
+
+    #[test]
+    fn manifest_carries_exactly_one_confinement_capability() {
+        for (mode, want, other) in [
+            (
+                Native,
+                wire::NATIVE_CONFINEMENT_CAPABILITY,
+                wire::CONTAINER_CONFINEMENT_CAPABILITY,
+            ),
+            (
+                Container,
+                wire::CONTAINER_CONFINEMENT_CAPABILITY,
+                wire::NATIVE_CONFINEMENT_CAPABILITY,
+            ),
+        ] {
+            let caps = capabilities(mode).unwrap();
+            let harness: Vec<&str> = caps[2..].iter().map(|c| c.id.as_str()).collect();
+            assert_eq!(
+                harness,
+                ["aq.harness.startup-context", want, "aq.harness.stop"]
+            );
+            assert!(!harness.contains(&other));
+            wire::require_capabilities(&caps[2..], &caps).unwrap();
+        }
+    }
 }

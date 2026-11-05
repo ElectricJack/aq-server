@@ -19,9 +19,11 @@ pub mod combined;
 mod combined_http;
 mod inbox;
 mod subject_owner;
+mod view;
 pub use inbox::schema as inbox_contract_schema;
 pub use inbox::{InboxItem, InboxPage, InboxQuery, InboxState};
 use subject_owner::{Profile as SubjectProfile, Subject as OwnedSubject};
+pub use view::{DecisionKind, Impact, InboxOrder, RequestedBy, ReviewPayload};
 
 type Result<T> = std::result::Result<T, AppError>;
 /// Load retained review keys before listeners start. Never invent ephemeral keys:
@@ -375,6 +377,14 @@ impl Service {
         .map_err(db)?;
         let s = self.seal("request", &request.decision_id.to_string(), &body)?;
         sqlx::query("INSERT INTO human_decision_requests(decision_id,requester_id,operation_id,request_digest,subject_digest,decision_revision,state,expires_at_ms,sealed_version,key_id,nonce,ciphertext) VALUES($1,$2,$3,$4,$5,1,'pending',$6,$7,$8,$9,$10)").bind(request.decision_id).bind(actor).bind(request.operation_id).bind(digest).bind(subject_digest).bind(request.expires_at_ms as i64).bind(s.version as i32).bind(s.key_id).bind(s.nonce).bind(s.ciphertext).execute(&mut **tx).await.map_err(db)?;
+        sqlx::query(
+            "INSERT INTO human_decision_submissions(decision_id,submitted_at_ms) VALUES($1,$2)",
+        )
+        .bind(request.decision_id)
+        .bind(now(&self.state)? as i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
         sqlx::query("UPDATE review_lineage_budget SET retained_operations=retained_operations+1 WHERE project_id=$1 AND workspace_id=$2 AND task_id=$3").bind(exact.project_id).bind(exact.task.workspace_id).bind(exact.task.task_id).execute(&mut **tx).await.map_err(db)?;
         sqlx::query("UPDATE review_owner_budget SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton").bind(charge as i64).execute(&mut **tx).await.map_err(db)?;
         Ok(())
@@ -1000,6 +1010,11 @@ pub fn admin_routes(service: Arc<Service>) -> axum::Router<AppState> {
         .route("/api/reviews/decisions/{id}", get(inspect_http))
         .route("/api/reviews/decisions/{id}/resolve", post(resolve_http))
         .route("/api/reviews/decisions/{id}/cancel", post(cancel_http))
+        .route("/api/reviews/decisions/{id}/defer", post(view::defer_http))
+        .route(
+            "/api/reviews/decisions/{id}/evidence/{evidence}/viewed",
+            post(view::viewed_http),
+        )
         .merge(combined_http::routes())
         .layer(DefaultBodyLimit::max(16384))
         .layer(axum::Extension(service))
@@ -1009,7 +1024,7 @@ async fn inspect_http(
     axum::Extension(service): axum::Extension<Arc<Service>>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<axum::Json<serde_json::Value>> {
-    Ok(axum::Json(service.inspect(actor.id, id).await?))
+    Ok(axum::Json(service.decision_view(&actor, id).await?))
 }
 async fn resolve_http(
     crate::authz::RequireOwner(actor): crate::authz::RequireOwner,

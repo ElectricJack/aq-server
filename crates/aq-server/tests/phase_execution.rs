@@ -7,7 +7,7 @@ use aq_admission::{Digest, preparation_v2 as phase};
 use aq_server::profiled_execution::{phase_execution, policies};
 use axum::body::to_bytes;
 use common::native_offer::{self, Case};
-use fixture::{Prepared, assert_unissued, auth, prepared};
+use fixture::{Prepared, assert_unissued, auth, prepared, prepared_with_short_observation};
 use serde_json::Value;
 use uuid::Uuid;
 #[tokio::test]

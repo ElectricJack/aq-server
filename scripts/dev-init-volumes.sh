@@ -27,6 +27,7 @@ copy_private /dev-vault/config.toml /vault/config.toml
 copy_private /run/secrets/graph_token /run/aq-dev/graph_token
 copy_private /run/secrets/playbook_engine_keys /run/aq-dev/playbook_engine_keys
 copy_private /run/secrets/playbook_bridge_key /run/aq-dev/playbook_bridge_key
+copy_private /run/secrets/terminal_protection_key /run/aq-dev/terminal_protection_key
 if [ -f /dev-vault/playbooks.toml ]; then
     install -d -o 10001 -g 10001 -m 0700 /vault/settlement
     copy_private /dev-vault/playbooks.toml /vault/settlement/config.toml

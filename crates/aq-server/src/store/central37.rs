@@ -15,7 +15,11 @@ pub(super) fn corrupt() -> StoreError {
 }
 pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     let latest = include_str!("../../migrations/0049_supervisor_reservation_consumption.sql");
-    let source = if version >= 49 && latest.contains(&format!("FUNCTION {name}(")) {
+    // bold-stone-51: agent-sent supervisor mail extends the source proof.
+    let agent = include_str!("../../migrations/0084_agent_supervisor_mail.sql");
+    let source = if version >= 84 && agent.contains(&format!("FUNCTION {name}(")) {
+        agent
+    } else if version >= 49 && latest.contains(&format!("FUNCTION {name}(")) {
         latest
     } else {
         MIGRATION

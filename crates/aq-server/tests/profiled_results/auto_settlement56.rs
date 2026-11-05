@@ -336,3 +336,47 @@ async fn version_conflict_holds_and_never_overwrites() {
     assert_eq!(env.writes.load(Ordering::SeqCst), 1);
     assert!(env.holds_task().await);
 }
+
+#[tokio::test]
+async fn parked_suspension_holds_as_suspended_until_successor_ack() {
+    let env = auto_env("required", axum::http::StatusCode::OK).await;
+    let (checkpoint, validator) = (env.checkpoint.clone(), env.validator.clone());
+    env.check(env.source, &checkpoint, &validator, "passed")
+        .await;
+    env.delivery("published").await;
+    // H5: a recorded RetainedSuspended/Held parking report is neither success
+    // nor failure, even with otherwise complete evidence.
+    let pool = env.f.db.pool().await;
+    let continuation = Uuid::new_v4();
+    sqlx::query("INSERT INTO hibernation_suspensions(continuation_id,wait_id,predecessor_attempt_id,predecessor_node_id,intent,directive_packet,phase,parking,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','{}','parked_retained','{}',$5,$5)")
+        .bind(continuation).bind(Uuid::new_v4()).bind(env.report.binding.attempt_id)
+        .bind(env.f.node.node_id).bind(NOW as i64)
+        .execute(&pool).await.unwrap();
+    let s = env.settle().await;
+    env.assert_not_completed(&s, AutoDisposition::Held, "suspended")
+        .await;
+    assert_eq!(s.evidence["suspension"]["phase"], "parked_retained");
+    for phase in ["parked_held", "continued"] {
+        sqlx::query("UPDATE hibernation_suspensions SET phase=$2 WHERE continuation_id=$1")
+            .bind(continuation)
+            .bind(phase)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let s = env.settle().await;
+        env.assert_not_completed(&s, AutoDisposition::Held, "suspended")
+            .await;
+    }
+    // After the successor's exact BootstrapAck the successor owns the task;
+    // the predecessor's report still never settles it.
+    sqlx::query(
+        "UPDATE hibernation_suspensions SET phase='acknowledged',ack='{}' WHERE continuation_id=$1",
+    )
+    .bind(continuation)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let s = env.settle().await;
+    env.assert_not_completed(&s, AutoDisposition::Held, "continued_by_successor")
+        .await;
+}

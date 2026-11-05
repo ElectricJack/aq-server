@@ -90,7 +90,9 @@ pub fn classify(path: &str) -> Class {
     if path.starts_with("/v1/worker/profiled/source/")
         || matches!(
             path,
-            "/v1/worker/profiled/material" | "/v1/worker/profiled/artifact"
+            "/v1/worker/profiled/material"
+                | "/v1/worker/profiled/material/refresh"
+                | "/v1/worker/profiled/artifact"
         )
     {
         return Class::Bulk;

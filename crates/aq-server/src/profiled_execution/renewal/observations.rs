@@ -154,7 +154,13 @@ pub async fn collect(state: &AppState, p: &Pinned) -> Result<Observed, AppError>
             aq_selection::ExecutionTarget::Worker { node_id, .. } => node_id,
             _ => return Err(changed()),
         };
-        let fingerprint = private_read::verify(registry, p.material.clone(), node).await?;
+        let source = crate::profiled_execution::login_refresh::lease_source(
+            &state.store.pool,
+            &registry,
+            &p.material,
+        )
+        .await?;
+        let fingerprint = private_read::verify(registry, p.material.clone(), node, source).await?;
         let received = now(state)?;
         if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
             return Err(unavailable());

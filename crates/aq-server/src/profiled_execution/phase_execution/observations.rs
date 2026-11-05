@@ -316,16 +316,28 @@ async fn collect_with_lane(
     let file = async {
         let started = now(state)?;
         let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
+        let source = crate::profiled_execution::login_refresh::lease_source(
+            &state.store.pool,
+            &registry,
+            &input.material,
+        )
+        .await?;
         let file = if continuing {
             renewal::verify_continuing_material_backing(
                 registry,
                 input.material.clone(),
                 input.node()?,
+                source,
             )
             .await?
         } else {
-            renewal::verify_phase_material_backing(registry, input.material.clone(), input.node()?)
-                .await?
+            renewal::verify_phase_material_backing(
+                registry,
+                input.material.clone(),
+                input.node()?,
+                source,
+            )
+            .await?
         };
         let received = now(state)?;
         if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {

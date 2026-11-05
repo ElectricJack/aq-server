@@ -60,6 +60,7 @@ async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner
     config.intelligence = Some(Arc::new(
         IntelligenceConfig {
             accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
                 kind: Default::default(),

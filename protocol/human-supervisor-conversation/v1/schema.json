@@ -24,11 +24,18 @@
         },
         "context": {
           "type": "array",
-          "maxItems": 0
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ContextRef"
+          }
         },
         "attachments": {
           "type": "array",
-          "maxItems": 0
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/AttachmentRef"
+          },
+          "description": "Staged uploads pinned by id and content digest; ids are unique within a message."
         }
       },
       "required": [
@@ -71,24 +78,7 @@
           "additionalProperties": false
         },
         "runtime": {
-          "type": "object",
-          "properties": {
-            "state": {
-              "const": "unavailable"
-            },
-            "binding": {
-              "type": "null"
-            },
-            "reason": {
-              "const": "central_runtime_not_connected"
-            }
-          },
-          "required": [
-            "state",
-            "binding",
-            "reason"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/Runtime"
         },
         "limits": {
           "type": "object",
@@ -97,10 +87,10 @@
               "const": 16384
             },
             "context_refs": {
-              "const": 0
+              "const": 16
             },
             "attachments": {
-              "const": 0
+              "const": 4
             },
             "history_page": {
               "const": 16
@@ -152,24 +142,7 @@
           "additionalProperties": false
         },
         "runtime": {
-          "type": "object",
-          "properties": {
-            "state": {
-              "const": "unavailable"
-            },
-            "binding": {
-              "type": "null"
-            },
-            "reason": {
-              "const": "central_runtime_not_connected"
-            }
-          },
-          "required": [
-            "state",
-            "binding",
-            "reason"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/Runtime"
         },
         "direction": {
           "enum": [
@@ -312,7 +285,8 @@
             {
               "enum": [
                 "conversation_revision_changed",
-                "message_id_conflict"
+                "message_id_conflict",
+                "attachment_unavailable"
               ]
             },
             {
@@ -371,7 +345,8 @@
               "reason": {
                 "enum": [
                   "conversation_revision_changed",
-                  "message_id_conflict"
+                  "message_id_conflict",
+                  "attachment_unavailable"
                 ]
               }
             }
@@ -442,6 +417,24 @@
         },
         "agent_receipt": {
           "type": "null"
+        },
+        "context": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ContextRef"
+          },
+          "description": "Omitted when the message has no context refs."
+        },
+        "attachments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/AttachmentDescriptor"
+          },
+          "description": "Owner files bound to this message, in Create order. Omitted when the message has none."
         }
       },
       "required": [
@@ -932,6 +925,374 @@
         }
       ],
       "description": "Entry of the optional attachments array (at most 4, at most 65536 serialized bytes, unique nonnil draft/operation IDs) on POST /v1/supervisor/conversation/replies. The server derives every other History field."
+    },
+    "Runtime": {
+      "description": "X4: unavailable until an active central session serves this conversation; then bound to that session. Receipts keep the admission-time unavailable runtime.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            },
+            "binding": {
+              "type": "null"
+            },
+            "reason": {
+              "const": "central_runtime_not_connected"
+            }
+          },
+          "required": [
+            "state",
+            "binding",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "available"
+            },
+            "binding": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "session_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "actor_id",
+                "generation",
+                "session_id"
+              ],
+              "additionalProperties": false
+            },
+            "reason": {
+              "const": "central_session_active"
+            }
+          },
+          "required": [
+            "state",
+            "binding",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ContextRef": {
+      "type": "object",
+      "description": "X5: a pinned reference to an AQ entity. Unique by (type, id) within a message; the server checks shape only.",
+      "properties": {
+        "type": {
+          "enum": [
+            "project",
+            "task",
+            "result",
+            "review",
+            "knowledge",
+            "session",
+            "playbook_run"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "ReadMarker": {
+      "type": "object",
+      "description": "X6: the caller's monotonic read cursor. unread counts items after read_cursor not authored by the caller, capped at 100.",
+      "properties": {
+        "contract": {
+          "const": "human-supervisor-conversation-1"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "read_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unread": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "capped": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "count",
+            "capped"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "contract",
+        "conversation_id",
+        "principal_id",
+        "read_cursor",
+        "latest_cursor",
+        "unread"
+      ],
+      "additionalProperties": false
+    },
+    "ReadMarkerUpdate": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$"
+        }
+      },
+      "required": [
+        "cursor"
+      ],
+      "additionalProperties": false,
+      "description": "Moves the marker forward to cursor; an earlier cursor is a no-op and a cursor past latest_cursor is refused."
+    },
+    "AttachmentRef": {
+      "type": "object",
+      "description": "A reference from Create.attachments to a staged upload of the same owner and conversation.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "AttachmentDescriptor": {
+      "type": "object",
+      "description": "Metadata of one stored owner file. digest is sha256 over the exact stored bytes.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "x-utf8-maxBytes": 255,
+          "description": "One path segment: no control characters, slashes, backslashes, or leading/trailing whitespace; not . or .."
+        },
+        "media_type": {
+          "enum": [
+            "text/plain",
+            "text/markdown",
+            "text/csv",
+            "application/json",
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "AttachmentUpload": {
+      "type": "object",
+      "description": "Response to PUT .../attachments/{id}. A staged upload expires at expires_at_ms unless a Create binds it; an attached one lives as long as its message.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "x-utf8-maxBytes": 255,
+          "description": "One path segment: no control characters, slashes, backslashes, or leading/trailing whitespace; not . or .."
+        },
+        "media_type": {
+          "enum": [
+            "text/plain",
+            "text/markdown",
+            "text/csv",
+            "application/json",
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "enum": [
+            "staged",
+            "attached"
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "digest",
+        "conversation_id",
+        "created_at_ms",
+        "state",
+        "message_id",
+        "expires_at_ms"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "staged"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "message_id": {
+                "type": "null"
+              },
+              "expires_at_ms": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "message_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "expires_at_ms": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "oneOf": [
@@ -943,6 +1304,12 @@
     },
     {
       "$ref": "#/$defs/Receipt"
+    },
+    {
+      "$ref": "#/$defs/ReadMarker"
+    },
+    {
+      "$ref": "#/$defs/AttachmentUpload"
     }
   ]
 }

@@ -140,6 +140,14 @@ pub async fn issue_locked(
         registration,
     };
     save(tx, &current).await?;
+    // Bind the attempt's admitted private material to this permit only.
+    sqlx::query("UPDATE admission_material_leases SET permit_id=$1 WHERE admitted_attempt_id=$2 AND node_id=$3 AND state='admitted' AND permit_id IS NULL AND lease_id IN (SELECT lease_id FROM profiled_launch_materials WHERE attempt_id=$2)")
+        .bind(id)
+        .bind(q.attempt_id)
+        .bind(q.node.node_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
     remember(tx, auth.id(), q.operation_id, "issuance", q, &current).await
 }
 pub async fn upgrade_locked(

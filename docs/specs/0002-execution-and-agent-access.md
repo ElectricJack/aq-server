@@ -196,6 +196,43 @@ Task completion evaluates the pinned outcome contract and current policy against
 
 Cancellation and result acceptance follow the shared serialized ordering rule. Existing completion/publication intents are shown explicitly when a later cancellation cannot stop them. Pending operations and stale source remain inspectable and have explicit retention owners.
 
+### 7.1 Default coding binding `aq.coding` (as implemented, D9)
+
+`aq.coding` is the default playbook binding for coding work. `CodingPolicy` (`playbooks/coding.rs`) builds it, and the owner installs and activates it through `POST /api/playbooks/coding/default` ([architecture 0004 §5.2](../architecture/0004-session-operations-waits-and-notifications.md#52-owner-artifact-install-and-binding-activation-as-implemented-d9)). The artifacts use only the pinned Host7 catalog commands `work.ensure`, `check.request`, `candidate.prepare`, `candidate.publish` and `operation.get`, plus `decision.request` when a human decision is configured. Each artifact's registry is pruned to the contracts it uses. D3's `aq.default-completion.v1` remains the automatic-settlement policy ([architecture 0002 §7.1](../architecture/0002-execution-and-recovery.md)); `aq.coding` does not reroute settlement.
+
+**Policy.** `CodingPolicy { implementer_family, reviewer_family, checks, max_repairs, human_decision }`.
+
+- `checks` is a list of required checks. Each is pinned to an exact validator id, version and digest.
+- `CodingPolicy::project_default(checks)` uses an `anthropic` implementer, an `openai` reviewer, 2 repairs and no human decision.
+
+`build()` refuses a policy when:
+
+- either family is blank, or the two families are equal after trimming and case folding;
+- `max_repairs` is more than 8, there are more than 32 checks, or two checks share an id;
+- `human_decision` is set and the grant cannot hold `decision.request`. Host7 grants cannot, so `coding/default` currently refuses such a policy (`NotGranted`) rather than silently dropping the step. `build_for(granted)` builds it for a grant that includes the capability.
+
+**Artifacts.**
+
+| Artifact | Behaviour |
+| --- | --- |
+| `aq.coding.work` | One `work.ensure`, completed synchronously or through `accepted` followed by `aq.operation.updated`. Returns `accepted`, `rejected` or `escalated`. |
+| `aq.coding.check` | One `check.request`, completed synchronously or through `accepted` followed by `aq.check.receipted`. Returns `passed`, `failed` or `escalated`. |
+| `aq.coding.decision` | Present only with `human_decision`. One `decision.request` on the reviewed candidate, with choices `approved` / `rejected`, completed synchronously or through `aq.decision.completed`. Refused, expired or cancelled requests are not a human verdict and escalate. |
+| `aq.coding.attempt` | One attempt, in this order: work (implementation or repair), then `candidate.prepare`, then every required check, then the cross-family review (`work.ensure kind=review`), then the optional human decision, then `candidate.publish`. Returns `published`, `rework{reference}` or `escalated`. |
+| `aq.coding` (root) | Attempt 0 is the implementation. It is followed by up to `max_repairs` repair attempts, each given the previous attempt's failing `reference` as its `context`. Returns `published`, `exhausted{reference}` or `escalated`. |
+
+**Per-attempt evidence rules.**
+
+1. **Evidence belongs to one prepared candidate.** Every attempt prepares a new candidate. Every required check and the review run on that candidate's subject. Each evidence entry carries the candidate's revision. A subject change therefore invalidates all earlier evidence, and nothing is carried over between attempts.
+2. **Publish carries only this attempt's evidence.** The `candidate.publish` evidence is the attempt's check receipts in policy order, then its review reference, then its human decision reference if configured. The host's publication guard verifies each entry in its owning store.
+3. **Checks run before review, and review never substitutes for a check.** A failed check ends the attempt with `rework` naming that check receipt. Review is not requested for a candidate that failed a check.
+4. **Review is cross-family.** The review context names both families. The reviewer family must differ from the implementer family.
+5. **A human decision follows review and never replaces it.** The decision is requested only after the review accepts. `approved` publishes. `rejected` ends the attempt with `rework` naming the decision. Nothing auto-approves.
+6. **Every refusal is explicit.** These outcomes are `rework`: a rejected work result, a `candidate.prepare` conflict, a failed check, a rejected review, a rejected decision and a `candidate.publish` conflict. Each `rework` names the failing evidence as `reference`, which becomes the next repair's context. Every unexpected outcome is `escalated`. If the last permitted attempt also returns `rework`, the run returns `exhausted` with that reference and does not publish.
+7. **Retries are idempotent.** `CodingPolicy::input` gives each attempt `i` the logical keys `{key}/a{i}/work` and `{key}/a{i}/review`. A replayed attempt therefore ensures the same work and review operations instead of creating new ones.
+
+**Current limits.** The check `source` comes from the run input, because `candidate.prepare` does not return a source OID. Real Host7 `work.ensure` returns `ensured` without a completion, so runs escalate until the D5–D8 runtime emits `aq.operation.updated` / `completed`. Details are in the [D9 implementation notes](../implementation/D9.md).
+
 ## 8. Recovery and explanation API
 
 On daemon restart, reconstruct pending offers, grants, directives, graph deliveries and result dispositions before issuing conflicting new work. Use persisted deadlines and current time conservatively. A restart cannot extend a grant by replaying its previous response. Worker reconciliation reports process evidence and journaled operations; daemon responses select continue-under-new-authority, stop, retain, or retry-known-report actions.

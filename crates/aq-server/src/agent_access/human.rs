@@ -6,6 +6,7 @@ pub(crate) mod enqueue;
 pub(crate) mod graph_actions;
 mod overview;
 pub(crate) mod task_execution;
+mod work;
 use super::{Runtime, contract};
 use crate::{
     AppState,
@@ -98,6 +99,18 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/human/projects/{project}/tasks/{node}/graph",
             get(graph),
         )
+        .route(
+            "/api/human/projects/{project}/tasks/{node}/work",
+            get(work::work),
+        )
+        .route(
+            "/api/human/projects/{project}/tasks/{node}/history",
+            get(work::history),
+        )
+        .route(
+            "/api/human/projects/{project}/tasks/{node}/summary",
+            get(work::summary),
+        )
         .route("/api/human/projects/{project}/knowledge", get(knowledge))
         .route(
             "/api/human/projects/{project}/knowledge/{node}",
@@ -184,6 +197,80 @@ pub(crate) async fn authorize_task(
     detail(state, &runtime, actor.clone(), project, task, "task", None)
         .await
         .map(|_| ())
+}
+/// Bounded task title and direct downstream reach for decision views.
+#[derive(Clone, Debug)]
+pub(crate) struct TaskBrief {
+    pub title: Option<String>,
+    pub blocked_tasks: u32,
+    pub truncated: bool,
+}
+/// One authorized depth-1 outgoing context read of a task node. `blocks`
+/// edges run from the blocker (source) to the blocked task (target).
+pub(crate) async fn task_brief(
+    state: &AppState,
+    r: &ReadRuntime,
+    actor: &User,
+    project: Uuid,
+    task: Uuid,
+) -> Result<TaskBrief> {
+    if task.is_nil() {
+        return Err(invalid());
+    }
+    let a = access(state, r, actor.clone(), project).await?;
+    let w = a.record.binding.graph_workspace_id;
+    let raw = runtime(state)?
+        .human_get(
+            &format!("/v1/workspaces/{w}/nodes/{task}/context"),
+            &[
+                ("depth".into(), "1".into()),
+                ("limit".into(), "63".into()),
+                ("max_bytes".into(), "262144".into()),
+                ("direction".into(), "outgoing".into()),
+            ],
+            262144,
+        )
+        .await?;
+    if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(task) {
+        return Err(unavailable());
+    }
+    let root = node(&raw["node"], w, "task")?;
+    let blocked_tasks = blocked_by(&raw, w, task)?;
+    fence_records(r, &a.actor, std::slice::from_ref(&a.record)).await?;
+    Ok(TaskBrief {
+        title: root["title"].as_str().map(str::to_owned),
+        blocked_tasks,
+        truncated: raw["truncated"].as_bool().ok_or_else(unavailable)?,
+    })
+}
+/// Distinct live task targets of live `blocks` edges leaving `task`.
+fn blocked_by(raw: &Value, w: Uuid, task: Uuid) -> Result<u32> {
+    let mut live = std::collections::BTreeSet::new();
+    for n in raw["nodes"].as_array().ok_or_else(unavailable)? {
+        if n["workspace_id"] != json!(w) {
+            return Err(unavailable());
+        }
+        if n["kind"] == "task" && n["deleted"] == false {
+            live.insert(n["id"].as_str().ok_or_else(unavailable)?.to_owned());
+        }
+    }
+    let source = task.to_string();
+    let mut targets = std::collections::BTreeSet::new();
+    for e in raw["edges"].as_array().ok_or_else(unavailable)? {
+        if e["workspace_id"] != json!(w) {
+            return Err(unavailable());
+        }
+        let target = e["target"].as_str().ok_or_else(unavailable)?;
+        if e["edge_type"] == "blocks"
+            && e["deleted"] == false
+            && e["source"] == source.as_str()
+            && target != source
+            && live.contains(target)
+        {
+            targets.insert(target.to_owned());
+        }
+    }
+    u32::try_from(targets.len()).map_err(|_| unavailable())
 }
 async fn access(state: &AppState, r: &ReadRuntime, actor: User, project: Uuid) -> Result<Access> {
     if project.is_nil() {
@@ -448,7 +535,20 @@ async fn list(
         Some(c) => Some(r.cursors.encode(&binding, c, stamp(state))?),
         None => None,
     };
-    finish(state, r, a, json!({"items":items,"next_cursor":next})).await
+    let mut data = json!({"items":items,"next_cursor":next});
+    if kind == "task" {
+        let ids: Vec<Uuid> = items
+            .iter()
+            .map(|i| {
+                i["id"]
+                    .as_str()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or_else(unavailable)
+            })
+            .collect::<Result<_>>()?;
+        data["executions"] = json!(work::executions(&r.pool, project, &ids).await?);
+    }
+    finish(state, r, a, data).await
 }
 /// Internal sanitized search adapter; retains the same owner and binding fences.
 pub(crate) async fn search_display(
@@ -551,18 +651,14 @@ async fn document(
     let Query(q) = q.map_err(|_| invalid())?;
     detail(&s, &r, u, p, id, "knowledge", q.revision).await
 }
-async fn graph(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
-    Path((p, id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Envelope>> {
-    if id.is_nil() {
-        return Err(invalid());
-    }
-    let a = access(&s, &r, u, p).await?;
-    let w = a.record.binding.graph_workspace_id;
-    let raw = runtime(&s)?
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct GraphPage {
+    limit: Option<u16>,
+}
+/// Bounded depth-1 Context read shared by the graph and Work projections.
+async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
+    let raw = runtime(s)?
         .human_get(
             &format!("/v1/workspaces/{w}/nodes/{id}/context"),
             &[
@@ -577,34 +673,113 @@ async fn graph(
     if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(id) {
         return Err(unavailable());
     }
-    let root = node(&raw["node"], w, "task")?;
-    let mut nodes = vec![root];
-    let mut ids = std::collections::BTreeSet::from([id.to_string()]);
-    let mut truncated = raw["truncated"].as_bool().ok_or_else(unavailable)?;
-    for value in raw["nodes"].as_array().ok_or_else(unavailable)? {
-        if value["workspace_id"] != json!(w) {
+    for v in raw["nodes"].as_array().into_iter().flatten() {
+        if v["workspace_id"] != json!(w) {
             return Err(unavailable());
         }
-        if value["kind"] != "task" || value["deleted"] != false || nodes.len() >= 64 {
+    }
+    for e in raw["edges"].as_array().into_iter().flatten() {
+        if e["workspace_id"] != json!(w) {
+            return Err(unavailable());
+        }
+    }
+    Ok(raw)
+}
+/// Task-state bucket for omitted and summary counts; an unset state is `unknown`.
+fn bucket(state: &Value) -> &'static str {
+    match state.as_str() {
+        Some("draft") => "draft",
+        Some("active") => "active",
+        Some("completed") => "completed",
+        Some("canceled") => "canceled",
+        _ => "unknown",
+    }
+}
+fn buckets() -> serde_json::Map<String, Value> {
+    ["draft", "active", "completed", "canceled", "unknown"]
+        .into_iter()
+        .map(|k| (k.to_owned(), json!(0)))
+        .collect()
+}
+fn count(map: &mut serde_json::Map<String, Value>, state: &Value) {
+    let slot = map.entry(bucket(state)).or_insert(json!(0));
+    *slot = json!(slot.as_u64().unwrap_or(0) + 1);
+}
+/// Parent of `id` from a present `parent-child` edge (source is the parent).
+fn parent(raw: &Value, w: Uuid, id: Uuid) -> Result<Value> {
+    let Some(edge) = raw["edges"].as_array().into_iter().flatten().find(|e| {
+        e["edge_type"] == "parent-child" && e["deleted"] == false && e["target"] == json!(id)
+    }) else {
+        return Ok(Value::Null);
+    };
+    let pid = &edge["source"];
+    let found = raw["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|n| &n["id"] == pid && n["deleted"] == false);
+    Ok(match found {
+        Some(n) => {
+            let n = node(n, w, n["kind"].as_str().ok_or_else(unavailable)?)?;
+            json!({"id":pid,"kind":n["kind"],"title":n["title"],"task_state":n["task_state"],"edge_id":edge["id"]})
+        }
+        None => json!({"id":pid,"kind":null,"title":null,"task_state":null,"edge_id":edge["id"]}),
+    })
+}
+async fn graph(
+    State(s): State<AppState>,
+    Extension(r): Extension<Arc<ReadRuntime>>,
+    RequireOwner(u): RequireOwner,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    q: std::result::Result<Query<GraphPage>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<Envelope>> {
+    let Query(q) = q.map_err(|_| invalid())?;
+    let limit = q.limit.unwrap_or(63);
+    if id.is_nil() || !(1..=63).contains(&limit) {
+        return Err(invalid());
+    }
+    let a = access(&s, &r, u, p).await?;
+    let w = a.record.binding.graph_workspace_id;
+    let raw = context(&s, w, id).await?;
+    let root = node(&raw["node"], w, "task")?;
+    let upstream_truncated = raw["truncated"].as_bool().ok_or_else(unavailable)?;
+    let mut truncated = upstream_truncated;
+    let mut nodes = vec![root];
+    let mut ids = std::collections::BTreeSet::from([id.to_string()]);
+    let mut hidden = std::collections::BTreeSet::new();
+    let mut hidden_tasks = buckets();
+    let mut hidden_other = 0u64;
+    for value in raw["nodes"].as_array().ok_or_else(unavailable)? {
+        let vid = value["id"].as_str().ok_or_else(unavailable)?.to_owned();
+        if ids.contains(&vid) || hidden.contains(&vid) {
+            continue;
+        }
+        if value["kind"] != "task" || value["deleted"] != false {
             truncated = true;
+            hidden.insert(vid);
+            hidden_other += 1;
+            continue;
+        }
+        if nodes.len() > usize::from(limit) {
+            truncated = true;
+            hidden.insert(vid);
+            count(&mut hidden_tasks, &value["task_state"]);
             continue;
         }
         let n = node(value, w, "task")?;
-        if ids.insert(n["id"].as_str().ok_or_else(unavailable)?.into()) {
-            nodes.push(n)
-        }
+        ids.insert(vid);
+        nodes.push(n)
     }
     let mut edges = Vec::new();
+    let mut hidden_edges = 0u64;
     for edge in raw["edges"].as_array().ok_or_else(unavailable)? {
-        if edge["workspace_id"] != json!(w) {
-            return Err(unavailable());
-        }
         if edges.len() >= 256
             || edge["deleted"] != false
             || !ids.contains(edge["source"].as_str().ok_or_else(unavailable)?)
             || !ids.contains(edge["target"].as_str().ok_or_else(unavailable)?)
         {
             truncated = true;
+            hidden_edges += 1;
             continue;
         }
         let mut e = serde_json::Map::new();
@@ -629,11 +804,49 @@ async fn graph(
         }
         edges.push(Value::Object(e));
     }
+    let hidden_task_count: u64 = hidden_tasks.values().filter_map(Value::as_u64).sum();
+    let shown = (nodes.len() - 1) as u64;
+    let expansion = if hidden_task_count > 0 && u64::from(limit) < 63 {
+        json!({"limit": (shown + hidden_task_count).min(63).to_string()})
+    } else {
+        Value::Null
+    };
+    let parent = parent(&raw, w, id)?;
     finish(
         &s,
         &r,
         a,
-        json!({"root_id":id,"nodes":nodes,"edges":edges,"truncated":truncated}),
+        json!({"root_id":id,"parent":parent,"nodes":nodes,"edges":edges,"truncated":truncated,
+            "omitted":{"tasks":hidden_task_count.to_string(),
+                "tasks_by_state":hidden_tasks.into_iter().map(|(k,v)|(k,json!(v.as_u64().unwrap_or(0).to_string()))).collect::<serde_json::Map<_,_>>(),
+                "other_nodes":hidden_other.to_string(),"edges":hidden_edges.to_string(),
+                "exact":!upstream_truncated},
+            "expansion":expansion}),
     )
     .await
+}
+#[cfg(test)]
+mod brief_tests {
+    use super::*;
+    #[test]
+    fn downstream_counts_distinct_live_blocked_tasks_only() {
+        let w = Uuid::new_v4();
+        let t = Uuid::new_v4();
+        let (a, b, gone, doc) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let n = |id: Uuid, kind: &str, deleted: bool| json!({"id":id,"workspace_id":w,"kind":kind,"deleted":deleted});
+        let e = |s: Uuid, t: Uuid, ty: &str| json!({"workspace_id":w,"source":s,"target":t,"edge_type":ty,"deleted":false});
+        let raw = json!({
+            "nodes":[n(a,"task",false),n(b,"task",false),n(gone,"task",true),n(doc,"knowledge",false)],
+            "edges":[e(t,a,"blocks"),e(t,a,"blocks"),e(b,t,"blocks"),e(t,gone,"blocks"),e(t,doc,"blocks"),e(t,b,"relates_to")]
+        });
+        assert_eq!(blocked_by(&raw, w, t).unwrap(), 1);
+        let mut foreign = raw.clone();
+        foreign["edges"][0]["workspace_id"] = json!(Uuid::new_v4());
+        assert!(blocked_by(&foreign, w, t).is_err());
+    }
 }

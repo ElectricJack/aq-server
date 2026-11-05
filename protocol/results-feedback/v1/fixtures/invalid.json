@@ -97,7 +97,7 @@
     }
   },
   {
-    "name": "clips-explicitly-unsupported",
+    "name": "video-range-empty",
     "type": "Comment",
     "value": {
       "operation_id": "00000000-0000-4000-8000-000000000001",
@@ -107,7 +107,7 @@
         "kind": "video_range",
         "artifact_id": "00000000-0000-4000-8000-000000000007",
         "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "start_ms": 1,
+        "start_ms": 2,
         "end_ms": 2
       },
       "follow": true,

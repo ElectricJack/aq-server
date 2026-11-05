@@ -181,7 +181,20 @@ pub(crate) async fn migrate_fixture_profile(pool: &PgPool, supported: u32) -> Re
         .ok_or_else(|| StoreError::Corrupt("unknown fixture migration profile".into()))?;
     migrate_known(pool, &MIGRATIONS[..=last], supported).await
 }
+/// Test builds only: one migration transaction at a time per process. A fresh
+/// full migration holds ~2.5k locks until commit, and PostgreSQL's shared lock
+/// table is only `max_locks_per_transaction` (64) x backends (~8k slots), so a
+/// few concurrent fresh test databases overflow it (53200 out of shared
+/// memory). Release builds never compile this; production migrates once.
+#[cfg(any(test, feature = "test-support"))]
+static TEST_MIGRATION_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32) -> Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    let _slot = TEST_MIGRATION_SLOT
+        .acquire()
+        .await
+        .expect("test migration semaphore is never closed");
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(x'6167656e7471'::bigint)")
         .execute(&mut *tx)
@@ -374,7 +387,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         }
     }
     if supported >= 36 {
-        media36_storage_guard(&mut tx).await?;
+        media36_storage_guard(&mut tx, supported).await?;
     }
     if supported >= 37 {
         central37::central37_storage_guard(&mut tx, supported).await?;
@@ -717,6 +730,15 @@ impl Store {
             #[cfg(feature = "recovery-test-support")]
             recovery_test: std::sync::Arc::new(crate::execution::testing::Controls::default()),
         })
+    }
+
+    pub async fn find_user(&self, id: Uuid) -> Result<Option<User>> {
+        sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLS} FROM users WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(User::try_from)
+            .transpose()
     }
 
     pub async fn find_user_by_binding(&self, issuer: &str, subject: &str) -> Result<Option<User>> {

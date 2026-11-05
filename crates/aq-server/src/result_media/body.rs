@@ -32,6 +32,7 @@ impl AsRef<[u8]> for Chunk {
 struct MediaBody {
     lease: Arc<Lease>,
     offset: usize,
+    end: usize,
 }
 impl HttpBody for MediaBody {
     type Data = Bytes;
@@ -41,7 +42,7 @@ impl HttpBody for MediaBody {
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
         let this = self.get_mut();
-        let length = this.lease.content.bytes().len();
+        let length = this.end;
         if this.offset >= length {
             return Poll::Ready(None);
         }
@@ -56,26 +57,44 @@ impl HttpBody for MediaBody {
         Poll::Ready(Some(Ok(Frame::data(Bytes::from_owner(chunk)))))
     }
     fn is_end_stream(&self) -> bool {
-        self.offset >= self.lease.content.bytes().len()
+        self.offset >= self.end
     }
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact((self.lease.content.bytes().len() - self.offset) as u64)
+        SizeHint::with_exact((self.end - self.offset) as u64)
     }
 }
-pub(super) fn response(content: Content, admission: OwnedSemaphorePermit) -> Response<Body> {
+/// `range` is a validated half-open byte range of a clip render.
+pub(super) fn response(
+    content: Content,
+    admission: OwnedSemaphorePermit,
+    range: Option<Range<usize>>,
+) -> Response<Body> {
     let descriptor = content.descriptor.clone();
     let receipt = content.receipt_digest.clone();
+    let total = content.bytes().len();
+    let span = range.clone().unwrap_or(0..total);
     let body = MediaBody {
         lease: Arc::new(Lease {
             content,
             _admission: admission,
         }),
-        offset: 0,
+        offset: span.start,
+        end: span.end,
     };
-    Response::builder()
-        .status(200)
-        .header(header::CONTENT_TYPE, "image/png")
-        .header(header::CONTENT_LENGTH, descriptor.bytes.to_string())
+    let mut builder = Response::builder()
+        .status(if range.is_some() { 206 } else { 200 })
+        .header(header::CONTENT_TYPE, descriptor.mime.as_str());
+    if descriptor.mime == aq_result_media::Mime::Mp4 {
+        builder = builder.header(header::ACCEPT_RANGES, "bytes");
+    }
+    if range.is_some() {
+        builder = builder.header(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{total}", span.start, span.end - 1),
+        );
+    }
+    builder
+        .header(header::CONTENT_LENGTH, span.len().to_string())
         .header("aq-media-digest", descriptor.digest.as_str())
         .header("aq-media-receipt-digest", receipt.as_str())
         .header(header::CACHE_CONTROL, "private, no-store")
