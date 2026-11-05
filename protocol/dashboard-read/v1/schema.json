@@ -34,6 +34,26 @@
       ],
       "type": "string"
     },
+    "ArtifactSource": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
     "AttentionItem": {
       "additionalProperties": false,
       "properties": {
@@ -293,6 +313,30 @@
       "required": [
         "kind",
         "explanation"
+      ],
+      "type": "object"
+    },
+    "ContextSource": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactSource"
+        },
+        "delivery": {
+          "type": "string"
+        },
+        "provenance": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "artifact",
+        "provenance",
+        "delivery",
+        "required"
       ],
       "type": "object"
     },
@@ -768,6 +812,51 @@
           "$ref": "#/$defs/Coverage"
         },
         "data": {
+          "$ref": "#/$defs/SessionOperations"
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "pending_operations": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "server_time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "api_version",
+        "request_id",
+        "server_time",
+        "scope",
+        "data",
+        "observation",
+        "pending_operations",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "Envelope9": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/ApiVersion"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "data": {
           "$ref": "#/$defs/Page2"
         },
         "observation": {
@@ -853,6 +942,37 @@
       ],
       "type": "string"
     },
+    "InstructionProvenance": {
+      "additionalProperties": false,
+      "description": "Where the launch instructions came from; credentials are never projected.",
+      "properties": {
+        "agent_profile": {
+          "$ref": "#/$defs/ArtifactSource"
+        },
+        "catalog": {
+          "$ref": "#/$defs/ArtifactSource"
+        },
+        "context": {
+          "items": {
+            "$ref": "#/$defs/ContextSource"
+          },
+          "type": "array"
+        },
+        "modules": {
+          "items": {
+            "$ref": "#/$defs/ArtifactSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "catalog",
+        "agent_profile",
+        "modules",
+        "context"
+      ],
+      "type": "object"
+    },
     "Limits": {
       "additionalProperties": false,
       "properties": {
@@ -885,6 +1005,55 @@
         "max_page_size",
         "snapshot_members",
         "snapshot_ttl_ms"
+      ],
+      "type": "object"
+    },
+    "LineageUsage": {
+      "additionalProperties": false,
+      "description": "H2 task-lineage ledger totals; spend is a known lower bound unless complete.",
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ledger_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lineage_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "rate_card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateCardRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current configured rate-card revision for this session's provider and model."
+        },
+        "spent_microunits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "lineage_id",
+        "ledger_revision",
+        "complete"
       ],
       "type": "object"
     },
@@ -1049,6 +1218,48 @@
       ],
       "type": "object"
     },
+    "NudgeObservation": {
+      "additionalProperties": false,
+      "description": "H3 nudge (ladder or owner) and its F3 mailbox delivery.",
+      "properties": {
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "delivered_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delivery": {
+          "description": "`delivered`, `unknown`, `inbox_only` or `queued`.",
+          "type": "string"
+        },
+        "inbox_only": {
+          "type": "boolean"
+        },
+        "message_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source": {
+          "description": "`stall_ladder` or `owner`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "source",
+        "created_at",
+        "inbox_only",
+        "delivery"
+      ],
+      "type": "object"
+    },
     "Observation": {
       "additionalProperties": false,
       "properties": {
@@ -1208,6 +1419,22 @@
       ],
       "type": "object"
     },
+    "PermissionScope": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "resource"
+      ],
+      "type": "object"
+    },
     "Principal": {
       "additionalProperties": false,
       "properties": {
@@ -1308,6 +1535,19 @@
       "required": [
         "name",
         "revision"
+      ],
+      "type": "object"
+    },
+    "ProgressObservation": {
+      "additionalProperties": false,
+      "description": "Latest semantic progress (turn, tool, question or assistant text), never terminal output.",
+      "properties": {
+        "observed_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "observed_at"
       ],
       "type": "object"
     },
@@ -1445,6 +1685,214 @@
       ],
       "type": "string"
     },
+    "QuestionDelivery": {
+      "description": "How a recorded answer reached the agent: the waiting attempt's H4 wait, or\ntask-addressed mail for the continuation when the asking attempt had ended.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "task_mail",
+              "type": "string"
+            },
+            "message_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "QuestionInboxDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/QuestionInboxVersion"
+        },
+        "item": {
+          "$ref": "#/$defs/QuestionItem"
+        },
+        "server_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "api_version",
+        "server_time_ms",
+        "item"
+      ],
+      "type": "object"
+    },
+    "QuestionInboxPage": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/QuestionInboxVersion"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/QuestionItem"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "next_cursor": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_time_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "api_version",
+        "server_time_ms",
+        "items"
+      ],
+      "type": "object"
+    },
+    "QuestionInboxVersion": {
+      "description": "F5 question inbox (`question-inbox-1`): the owner's human read of agent\nquestions at `GET /api/questions/decisions[/{id}]`. Not a dashboard-read-1\nenvelope; it shares this schema so one pinned digest covers it.",
+      "enum": [
+        "question-inbox-1"
+      ],
+      "type": "string"
+    },
+    "QuestionItem": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "description": "Null while pending; answer, answered_at_ms and delivery are set together.",
+          "maxLength": 16384,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "answered_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "asked_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "decision_revision": {
+          "description": "The revision `question.answer` must target while pending.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuestionDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/QuestionKind"
+        },
+        "project_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "question": {
+          "description": "The agent's exact question text (1..4096 bytes).",
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/QuestionState"
+        },
+        "task_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "task_title": {
+          "description": "Graph task title; null when the graph is unavailable to this read.",
+          "maxLength": 4096,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "decision_id",
+        "decision_revision",
+        "state",
+        "project_id",
+        "workspace_id",
+        "task_id",
+        "question",
+        "asked_at_ms",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "QuestionKind": {
+      "enum": [
+        "question"
+      ],
+      "type": "string"
+    },
+    "QuestionState": {
+      "enum": [
+        "pending",
+        "answered"
+      ],
+      "type": "string"
+    },
     "QuotaState": {
       "enum": [
         "known",
@@ -1521,6 +1969,28 @@
         "unit",
         "state",
         "observation"
+      ],
+      "type": "object"
+    },
+    "RateCardRef": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "revision"
       ],
       "type": "object"
     },
@@ -1744,6 +2214,17 @@
               "type": "null"
             }
           ]
+        },
+        "last_output_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last terminal output the relay recorded for this session. Output is\nnot progress: repaints and heartbeats also advance it."
         },
         "lifecycle": {
           "anyOf": [
@@ -2017,6 +2498,110 @@
       },
       "type": "object"
     },
+    "SessionOperations": {
+      "additionalProperties": false,
+      "description": "Owner-only operations facts for one session (G10 Agents views).",
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "effective_permissions": {
+          "items": {
+            "$ref": "#/$defs/PermissionScope"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructionProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lineage_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineageUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nudges": {
+          "items": {
+            "$ref": "#/$defs/NudgeObservation"
+          },
+          "type": "array"
+        },
+        "requested_permissions": {
+          "items": {
+            "$ref": "#/$defs/PermissionScope"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "semantic_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgressObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "stall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StallState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalReplayRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "attempt_id",
+        "nudges"
+      ],
+      "type": "object"
+    },
     "SessionSummary": {
       "additionalProperties": false,
       "properties": {
@@ -2042,6 +2627,17 @@
         },
         "label": {
           "type": "string"
+        },
+        "last_output_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last terminal output the relay recorded for this session. Output is\nnot progress: repaints and heartbeats also advance it."
         },
         "lifecycle": {
           "anyOf": [
@@ -2192,6 +2788,114 @@
       ],
       "type": "object"
     },
+    "StallQuarantine": {
+      "additionalProperties": false,
+      "description": "H3 rung-5 quarantine: scoped to one session and its task lineage, never the worker.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "escalation": {
+          "type": "string"
+        },
+        "lineage_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "lineage_id",
+        "reason",
+        "escalation",
+        "at"
+      ],
+      "type": "object"
+    },
+    "StallState": {
+      "additionalProperties": false,
+      "description": "H3 stall-ladder episode for one attempt, with the evidence it last judged.",
+      "properties": {
+        "deferrals": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "explanation": {
+          "description": "Evidence the ladder has explained away (for example an open tool or a wait).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "incidents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notified": {
+          "type": "boolean"
+        },
+        "nudges": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_through": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Evidence the ladder has observed up to."
+        },
+        "quarantine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StallQuarantine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "description": "Episode compare-and-set revision; zero for a freshly opened episode.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rung": {
+          "type": "string"
+        },
+        "rung_since": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "rung",
+        "revision",
+        "rung_since",
+        "updated_at",
+        "nudges",
+        "deferrals",
+        "notified",
+        "incidents"
+      ],
+      "type": "object"
+    },
     "Supervisor": {
       "additionalProperties": false,
       "properties": {
@@ -2212,6 +2916,36 @@
       "required": [
         "status",
         "reason"
+      ],
+      "type": "object"
+    },
+    "TerminalReplayRef": {
+      "additionalProperties": false,
+      "description": "H7 terminal replay key: `GET /api/v1/terminals/{terminal_id}/output` serves the\nsnapshot and replay for exactly this terminal identity and epoch.",
+      "properties": {
+        "epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_output_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminal_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "epoch"
       ],
       "type": "object"
     },
@@ -2270,6 +3004,66 @@
       ],
       "type": "object"
     },
+    "WaitObservation": {
+      "additionalProperties": false,
+      "description": "H4 wait for this attempt; `observed_at` is the newest member check.",
+      "properties": {
+        "deadline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "next_due": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "revision"
+      ],
+      "type": "object"
+    },
     "WaitRef": {
       "additionalProperties": false,
       "properties": {
@@ -2321,6 +3115,15 @@
     },
     {
       "$ref": "#/$defs/Envelope8"
+    },
+    {
+      "$ref": "#/$defs/Envelope9"
+    },
+    {
+      "$ref": "#/$defs/QuestionInboxPage"
+    },
+    {
+      "$ref": "#/$defs/QuestionInboxDetail"
     }
   ],
   "title": "Response"

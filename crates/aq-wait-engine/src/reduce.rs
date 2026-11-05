@@ -197,7 +197,7 @@ impl Snapshot {
             replay: false,
         })
     }
-    pub(crate) fn registration(&self) -> &wire::WaitRegistration {
+    pub fn registration(&self) -> &wire::WaitRegistration {
         match &self.request.body.command {
             wire::Command::RegisterWait(v) => v,
             _ => unreachable!("validated registration"),
@@ -473,6 +473,38 @@ impl Snapshot {
             outcome: Box::new(outcome),
             resume,
         })
+    }
+    pub fn ids(&self) -> &StableIds {
+        &self.ids
+    }
+    pub fn policy(&self) -> &ResolvedPolicy {
+        &self.policy
+    }
+    pub fn inflight(&self) -> Option<&WorkTicket> {
+        self.inflight.as_ref()
+    }
+    pub fn hold_reason(&self) -> Option<&wire::Text> {
+        self.hold_reason.as_ref()
+    }
+    pub fn cycle(&self) -> &wire::CycleAssessment {
+        &self.cycle
+    }
+    /// Original committed install boundaries, present only once every member
+    /// is installed; aligned with the predicate's members.
+    pub fn boundaries(&self) -> Option<Vec<wire::SourceBoundary>> {
+        self.members.iter().map(|m| m.original.clone()).collect()
+    }
+    /// Latest observation per member, with its last check and verification times.
+    pub fn member_states(&self) -> Vec<MemberFreshness> {
+        self.members
+            .iter()
+            .map(|m| MemberFreshness {
+                state: m.last.clone(),
+                unavailable_reason: m.unavailable_reason.clone(),
+                last_checked_at_ms: m.last_checked_at,
+                last_verified_at_ms: m.last_verified_at,
+            })
+            .collect()
     }
     pub fn phase(&self) -> &Phase {
         &self.phase

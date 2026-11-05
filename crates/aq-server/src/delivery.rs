@@ -1,15 +1,24 @@
 //! Central delivery primitives. Deliberately not mounted on a worker HTTP router.
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
+mod policy;
 mod protocol;
+mod reconcile;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,
 };
+pub use policy::{
+    ChecksState, ClearFenceRequest, DeliverRequest, DeliveryOutcome, GitHubAdapter, GitHubError,
+    PublicationMode, PublicationPolicy, PublicationRefusal, PullRequest, PullRequestSpec,
+    RecoveryBlocked, RefusalReason, WaitForChecks,
+};
 pub use protocol::{
     CandidateResult, CandidateState, CommitMetadata, ConflictPath, GitError, OperationResult,
-    OperationStatus, PublishResult, Receipt, RetainedSource, RetryAdvice,
+    OperationStatus, PublishResult, Receipt, ReconcileResult, Resolution, RetainedSource,
+    RetryAdvice,
 };
 use protocol::{WireResult, decode};
+pub use reconcile::{ReconcileRequest, ResolveDisposition, ResolveRequest};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -19,6 +28,7 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, DeliveryError>;
+const CANDIDATE_NOT_READY: &str = "candidate is not ready";
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
     #[error("idempotency_conflict")]
@@ -311,7 +321,7 @@ impl DeliveryService {
             .ok()
             .filter(|v| v.state == CandidateState::Ready)
             .and_then(|v| v.candidate)
-            .ok_or(DeliveryError::InvalidInput("candidate is not ready"))?;
+            .ok_or(DeliveryError::InvalidInput(CANDIDATE_NOT_READY))?;
         let mut intent = if let Some(old) = old {
             old
         } else {

@@ -37,9 +37,15 @@ COPY protocol ./protocol
 # The registry and target directory are BuildKit cache mounts, so rebuilds
 # (another version or revision) recompile only the workspace crates. The
 # cached target directory is not part of the image: copy the binaries out.
+# The cache is shared by every build of this Dockerfile on the host (other
+# branches and worktrees), and their workspace crates have identical artifact
+# hashes, so cargo's mtime check can reuse another tree's build. Clean every
+# workspace crate (dependencies stay cached) so the image is built from this
+# context only.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/build/target \
-    cargo clean --release -p aq-server -p aq-release -p aq-protocol -p aq-worker-protocol \
+    cargo clean --release -p aq-protocol -p aq-worker-protocol \
+        $(for f in crates/*/Cargo.toml; do sed -n 's/^name *= *"\([^"]*\)".*/-p \1/p' "$f" | head -n 1; done) \
     && AQ_IMAGE_STATE_FORMAT="${AQ_STATE_FORMAT}" cargo build --locked --release --bin aq-server \
     && mkdir -p /out \
     && cp target/release/aq-server /out/

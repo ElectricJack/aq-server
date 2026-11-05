@@ -21,6 +21,58 @@ pub struct Placement {
     pub ceiling: Option<NodeCeiling>,
     /// A higher-preference eligible backend is online with free capacity.
     pub preferred_peer: Option<BackendKind>,
+    /// The node's advertised sandbox backend; drives confinement qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<BackendKind>,
+}
+
+/// Harness confinement the frozen launch manifest requires (exactly one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfinementMode {
+    /// `aq.harness.confined-worktree`
+    Native,
+    /// `aq.harness.container-confinement`
+    Container,
+}
+impl ConfinementMode {
+    pub fn capability(self) -> &'static str {
+        match self {
+            ConfinementMode::Native => "aq.harness.confined-worktree",
+            ConfinementMode::Container => "aq.harness.container-confinement",
+        }
+    }
+}
+
+/// Per template x backend confinement qualification, mirroring aq-worker
+/// `QualificationRecord`: docker-local is qualified container-only for every
+/// template; other backends have no container evidence and run native.
+pub fn container_only(backend: Option<BackendKind>) -> bool {
+    backend == Some(BackendKind::DockerLocal)
+}
+
+/// Admits the execution profile's confinement permission on the placement's
+/// backend before placement. A native-required profile is refused on a
+/// container-only backend, and container confinement needs explicit permit.
+pub fn admit_confinement(
+    placement: Option<&Placement>,
+    profile: &aq_profiles::ExecutionConfinement,
+) -> Result<ConfinementMode, (CandidateState, &'static str)> {
+    if !container_only(placement.and_then(|p| p.backend)) {
+        return Ok(ConfinementMode::Native);
+    }
+    if profile.require_native {
+        return Err((
+            CandidateState::Unsupported,
+            "execution_requires_native_confinement",
+        ));
+    }
+    if !profile.permit_container {
+        return Err((
+            CandidateState::PolicyDenied,
+            "container_confinement_not_permitted",
+        ));
+    }
+    Ok(ConfinementMode::Container)
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

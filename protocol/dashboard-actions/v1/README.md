@@ -148,6 +148,21 @@ same key and its ID is the actual project, decision or conversation UUID.
   `context` and `attachments` arrays. Confirmed means durable mailbox enqueue;
   native receipts still say host delivery `not_attempted`, with no agent receipt.
 
+- `session.message.send` durably enqueues an owner message into one session's
+  scoped mailbox. The subject is `{type:"session",id:<session UUID>}`; the
+  payload carries `operation_id`, `project_id`, a separate `message_id`, optional
+  `thread_id` (defaults to `message_id`), `expected_generation` (the decimal
+  `session_identity.assignment_generation`, also the subject revision and the
+  single `session` expected version) and a nonempty body of at most 16384 UTF-8
+  bytes. The recipient is derived from the session's unrevoked launch binding,
+  never from client scope; a missing, revoked or other-project binding is a
+  neutral 404. A stale generation is a `conflict` with `current_versions`
+  `{session:<live>}`. Confirmed means queued only: the receipt names the
+  `mailbox_operation` and the affected `message` at its mailbox cursor. Runner
+  delivery and harness input are not attempted here. Owner bootstrap advertises
+  `session.message.enqueue@1`; session detail lists `session.message.send` in
+  `permissions` when the slot is usable.
+
 ## Typed task and knowledge kinds
 
 Each typed payload carries `operation_id` (equal to the outer ID), `project_id`
@@ -180,6 +195,38 @@ subject revision and the single `expected_versions` entry (`task` or
 Graph writes use the idempotency key `aq-dashboard-action:{operation_id}` and a
 confirmed operation references the Graph change set and the exact new revision.
 
+## Playbook kinds
+
+Offered only when the playbook runtime is mounted and the principal is its
+namespace owner. Each kind has a bootstrap capability: `playbooks.runs.start`,
+`playbooks.runs.cancel`, `playbooks.activations.activate` and
+`playbooks.activations.rollback`. Payloads carry `operation_id` and the
+namespace's `project_id`; any other project returns 404.
+
+- `playbook.run.start`: subject `playbook_binding` at `expected_version`, the
+  binding's activation revision, which is also the single `expected_versions`
+  entry. The payload names `binding`, the active `artifact`, `entry` and up to
+  32 typed `inputs` (boolean, number, or text up to 4096 bytes). No inputs means
+  a `null` input. The run is admitted with the binding's grant and the engine
+  refuses it if the activation moved. The receipt is a `playbook_admission`, and
+  the affected entity is the `playbook_run`. If admission is not yet proven, the
+  operation reports `pending` or `unknown`, and a lookup reconciles the
+  retained admission.
+- `playbook.run.cancel`: subject `playbook_run` with no revision, empty
+  `expected_versions` and payload `run_id`. An optional envelope `reason` is
+  accepted. The engine's cancel is idempotent per run, and confirmation means
+  cancellation was requested, not that the run stopped.
+- `playbook.activation.activate` binds `artifact` to `binding` for new runs.
+- `playbook.activation.rollback` restores the binding's previous activation;
+  `artifact` must be the currently active one. With nothing to roll back to,
+  the operation is `rejected`.
+
+Both activation kinds use the same `playbook_binding@expected_version` subject.
+If the revision or artifact is stale, the result is `conflict` with
+`current_versions.playbook_binding`. Changes are idempotent per operation ID,
+and the receipt is `playbook_activation_operation`. The version check before
+activate or rollback is not atomic with the change.
+
 Legacy task-create, decision-resolve and supervisor-send HTTP handlers enter the
 same action admission path and retain their native response envelopes. A legacy
 message/decision handler racing an admitted operation before its native commit
@@ -209,3 +256,4 @@ Named acceptance tests:
 - `cargo test --locked -p aq-server --test dashboard_task_knowledge task_retry_creates_replacement_attempt`
 
 - `cargo test --locked --workspace supervisor_creates_graph_with_dependencies_idempotently`
+- `cargo test --locked -p aq-server --test dashboard_actions session_message_send_enqueues_to_bound_session_mailbox`

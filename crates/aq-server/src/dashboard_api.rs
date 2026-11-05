@@ -35,6 +35,12 @@ pub(crate) struct MountedOwners {
     pub(crate) notifications: bool,
     pub(crate) supervisor_conversation: bool,
     pub(crate) reviews: bool,
+    /// H4 owner waits inspection (`/api/waits`).
+    pub(crate) waits: bool,
+    /// G10 owner operations read (`/api/v1/sessions/{id}/operations`).
+    pub(crate) session_operations: bool,
+    /// F5 owner question inbox (`/api/questions/decisions`).
+    pub(crate) questions: bool,
     pub(crate) playbook_owner: Option<Uuid>,
     pub(crate) playbook_loaded_definitions: bool,
     pub(crate) playbook_catalog: Option<aq_playbook_host::CatalogSupport>,
@@ -151,18 +157,19 @@ impl ReadQuery {
 /// Runtime is created once per human router and shared by its clones. A
 /// dedicated two-connection pool cannot exhaust execution-control connections.
 pub fn routes(state: AppState) -> Router<AppState> {
-    routes_with_reviews(state, None)
+    routes_with_reviews(state, None, None)
 }
 pub(crate) fn routes_with_reviews(
     state: AppState,
     reviews: Option<Arc<crate::reviews::Service>>,
+    playbooks: Option<Arc<crate::playbooks::driver::Driver>>,
 ) -> Router<AppState> {
     let mut runtime = Runtime::new(&state);
     runtime.reviews = reviews.clone();
     let runtime = Arc::new(runtime);
     Router::new()
         .merge(actions::routes(Arc::new(actions::existing::registry(
-            &state, reviews,
+            &state, reviews, playbooks,
         ))))
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/overview", get(overview))
@@ -171,6 +178,7 @@ pub(crate) fn routes_with_reviews(
         .route("/api/v1/capacity", get(capacity))
         .route("/api/v1/sessions", get(sessions))
         .route("/api/v1/sessions/{id}", get(detail))
+        .route("/api/v1/sessions/{id}/operations", get(operations))
         .route("/api/v1/projects", get(projects))
         .layer(Extension(runtime))
 }
@@ -280,6 +288,23 @@ async fn sessions(
         tokio::time::timeout(
             Duration::from_secs(3),
             service::sessions(&state, &runtime, &user, query),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??,
+    )
+}
+async fn operations(
+    State(state): State<AppState>,
+    DashboardUser(user): DashboardUser,
+    Extension(runtime): Extension<Arc<Runtime>>,
+    SessionPath(id): SessionPath,
+    DashboardQuery(query): DashboardQuery,
+) -> Result<Json<Envelope<SessionOperations>>> {
+    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
+    bounded(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            service::operations(&state, &runtime, &user, id, query.scope()?),
         )
         .await
         .map_err(|_| Error::Unavailable)??,

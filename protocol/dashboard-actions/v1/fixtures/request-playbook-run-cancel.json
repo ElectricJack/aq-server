@@ -1,0 +1,15 @@
+{
+  "operation_id": "00000000-0000-4000-8000-000000000302",
+  "kind": "playbook.run.cancel",
+  "subject": {
+    "type": "playbook_run",
+    "id": "run-0000000000000001"
+  },
+  "expected_versions": {},
+  "reason": "Stop it",
+  "payload": {
+    "operation_id": "00000000-0000-4000-8000-000000000302",
+    "project_id": "00000000-0000-4000-8000-000000000010",
+    "run_id": "run-0000000000000001"
+  }
+}

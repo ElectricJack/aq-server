@@ -35,10 +35,13 @@ impl Owner {
     /// Callers pass bounded bytes already associated with the immutable intent;
     /// the owner checks both exact length and digest before disk work.
     pub async fn put(&self, actor: &User, id: Uuid, bytes: Vec<u8>) -> Result<media::UploadStatus> {
-        if bytes.len() > media::MAX_INPUT_BYTES {
+        if bytes.len() > media::MAX_INPUT_BYTES.max(media::MAX_CLIP_BYTES) {
             return Err(Error::Invalid);
         }
         let status = self.status(actor, id).await?;
+        if bytes.len() as u64 > status.media.max_input_bytes() {
+            return Err(Error::Invalid);
+        }
         if bytes.len() != status.input.bytes as usize
             || media::Digest::of(&bytes) != status.input.digest
         {
@@ -65,12 +68,13 @@ impl Owner {
         }
         let root = self.root.clone();
         let digest = row.request.input_digest.clone();
+        let kind = row.request.media;
         let (result, guard) = tokio::task::spawn_blocking(move || {
             // After a failed/canceled receive, replacement first proves removal
             // of the same uncommitted generation under its physical guard.
             let result = root
                 .remove(id, false)
-                .and_then(|()| root.receive(id, &bytes, &digest))
+                .and_then(|()| root.receive(id, kind, &bytes, &digest))
                 .and_then(|()| root.point("received_before_commit"));
             (result, guard)
         })
@@ -99,6 +103,16 @@ impl Owner {
             return Ok(status);
         }
         let (row, lease, guard) = self.job(actor, id, true).await?;
+        let kind = row.request.media;
+        // A clip's preview is a verified copy of a retained image's preview.
+        let poster = match (kind, row.request.poster_artifact_id) {
+            (media::MediaKind::Video, Some(poster)) => self.poster(&row, poster.as_uuid()).await?,
+            _ => None,
+        };
+        let poster_guard = match &poster {
+            Some((poster_id, _)) => Some(self.root.active(*poster_id, false)?),
+            None => None,
+        };
         let root = self.root.clone();
         let input = row.request.input_digest.clone();
         let size = row.request.input_bytes as usize;
@@ -106,18 +120,34 @@ impl Owner {
         let (prepared, guard) = tokio::task::spawn_blocking(move || {
             let result = (|| {
                 let published = root.generation(id, true).is_ok();
-                let bytes = root.input(id, published, size, &input)?;
-                let image = media::prepare_png(&bytes).map_err(|invalid| match invalid {
-                    media::Invalid::UnsupportedPng => {
-                        JobError::Reject(media::Rejection::UnsupportedPng)
+                let bytes = root.input(id, published, kind, size, &input)?;
+                let prepared = match kind {
+                    media::MediaKind::Image => Prepared::Image(prepare_image(&bytes, &limits)?),
+                    media::MediaKind::Video => {
+                        let header = prepare_clip(&bytes, &limits)?;
+                        let (poster_id, preview) =
+                            poster.ok_or(JobError::Reject(media::Rejection::PosterUnavailable))?;
+                        let preview_bytes = root
+                            .variant(poster_id, "preview.png", &preview)
+                            .map_err(|_| JobError::Reject(media::Rejection::PosterUnavailable))?;
+                        let render = media::Variant {
+                            digest: input.clone(),
+                            bytes: size as u64,
+                            mime: media::Mime::Mp4,
+                            width: header.width,
+                            height: header.height,
+                        };
+                        Prepared::Clip {
+                            header,
+                            render,
+                            preview,
+                            bytes,
+                            preview_bytes,
+                        }
                     }
-                    media::Invalid::MalformedPng => JobError::Reject(media::Rejection::InvalidPng),
-                    media::Invalid::Limit(_) => JobError::Reject(media::Rejection::ProcessingLimit),
-                    _ => JobError::Reject(media::Rejection::InvalidPng),
-                })?;
-                let r = image.render().descriptor();
-                let p = image.preview().descriptor();
-                if r.bytes > limits.max_render_bytes
+                };
+                let (r, p) = prepared.descriptors();
+                if r.bytes > limits.max_render_bytes.max(limits.max_clip_bytes)
                     || p.bytes > limits.max_preview_bytes
                     || u64::from(r.width) * u64::from(r.height) > limits.max_pixels
                     || r.width > limits.max_dimension
@@ -126,21 +156,29 @@ impl Owner {
                     return Err(JobError::Reject(media::Rejection::ProcessingLimit));
                 }
                 if published {
-                    root.variant(id, "render.png", r)?;
+                    root.variant(id, files::render_name(r.mime), r)?;
                     root.variant(id, "preview.png", p)?;
                     root.confirm_published(id)?;
                 } else {
                     root.remove_variants(id)?;
-                    root.variants(id, &image)?;
+                    match &prepared {
+                        Prepared::Image(image) => root.variants(id, image)?,
+                        Prepared::Clip {
+                            bytes,
+                            preview_bytes,
+                            ..
+                        } => root.clip_variants(id, bytes, preview_bytes)?,
+                    }
                     root.publish(id)?;
                 }
-                let charge = root.charge(id)?;
+                let charge = root.charge(id, kind)?;
                 if charge > 10_485_760 {
                     return Err(JobError::Reject(media::Rejection::StorageFailure));
                 }
                 root.point("before_receipt_commit")?;
-                Ok((image, charge))
+                Ok((prepared, charge))
             })();
+            drop(poster_guard);
             (result, guard)
         })
         .await
@@ -158,7 +196,18 @@ impl Owner {
                 sqlx::query("UPDATE result_media_intents SET state='rejected',rejection=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$3 WHERE operation_id=$1 AND lease_id=$4")
                     .bind(id).bind(super::json(&rejection)?.as_str().ok_or(Error::Owner)?).bind(at as i64).bind(lease).execute(&mut *tx).await.map_err(sql)?;
             }
-            Ok((image, charge)) => {
+            Ok((prepared, charge)) => {
+                let (render, preview) = prepared.descriptors();
+                let clip = match &prepared {
+                    Prepared::Image(_) => None,
+                    Prepared::Clip { header, .. } => Some(media::Clip {
+                        duration_ms: header.duration_ms,
+                        poster_artifact_id: current
+                            .request
+                            .poster_artifact_id
+                            .ok_or(Error::Owner)?,
+                    }),
+                };
                 let receipt = media::Receipt {
                     schema_version: 1,
                     artifact_id: media::Id::new(id).map_err(|_| Error::Owner)?,
@@ -170,11 +219,12 @@ impl Owner {
                         filename: current.request.filename.clone(),
                     },
                     capture: current.request.capture.clone(),
-                    rendering_policy: media::RenderingPolicy::Rgba8SrgbV1,
+                    rendering_policy: kind.policy(),
                     variants: media::Variants {
-                        render: image.render().descriptor().clone(),
-                        preview: image.preview().descriptor().clone(),
+                        render: render.clone(),
+                        preview: preview.clone(),
                     },
+                    clip,
                     retained_at_ms: at,
                     retain_until_ms: current.retain,
                 };
@@ -289,7 +339,11 @@ impl Owner {
                 (
                     root.variant(
                         id,
-                        if preview { "preview.png" } else { "render.png" },
+                        if preview {
+                            "preview.png"
+                        } else {
+                            files::render_name(expected.mime)
+                        },
                         &expected,
                     ),
                     Some(guard),
@@ -322,6 +376,81 @@ impl Owner {
             _guard: guard.ok_or(Error::Owner)?,
             descriptor,
             receipt_digest: receipt.digest().map_err(|_| Error::Owner)?,
+        })
+    }
+}
+enum Prepared {
+    Image(media::PreparedImage),
+    Clip {
+        header: media::ClipHeader,
+        render: media::Variant,
+        preview: media::Variant,
+        bytes: Vec<u8>,
+        preview_bytes: Vec<u8>,
+    },
+}
+impl Prepared {
+    fn descriptors(&self) -> (&media::Variant, &media::Variant) {
+        match self {
+            Self::Image(image) => (image.render().descriptor(), image.preview().descriptor()),
+            Self::Clip {
+                render, preview, ..
+            } => (render, preview),
+        }
+    }
+}
+fn prepare_image(
+    bytes: &[u8],
+    _limits: &media::Limits,
+) -> std::result::Result<media::PreparedImage, JobError> {
+    media::prepare_png(bytes).map_err(|invalid| match invalid {
+        media::Invalid::UnsupportedPng => JobError::Reject(media::Rejection::UnsupportedPng),
+        media::Invalid::Limit(_) => JobError::Reject(media::Rejection::ProcessingLimit),
+        _ => JobError::Reject(media::Rejection::InvalidPng),
+    })
+}
+fn prepare_clip(
+    bytes: &[u8],
+    limits: &media::Limits,
+) -> std::result::Result<media::ClipHeader, JobError> {
+    let header = media::preflight_mp4(bytes).map_err(|invalid| match invalid {
+        media::Invalid::UnsupportedVideo => JobError::Reject(media::Rejection::UnsupportedVideo),
+        media::Invalid::Limit(_) => JobError::Reject(media::Rejection::ProcessingLimit),
+        _ => JobError::Reject(media::Rejection::InvalidVideo),
+    })?;
+    if bytes.len() as u64 > limits.max_clip_bytes
+        || header.duration_ms > limits.max_clip_duration_ms
+    {
+        return Err(JobError::Reject(media::Rejection::ProcessingLimit));
+    }
+    Ok(header)
+}
+impl Owner {
+    /// The poster must be a live retained image on the same revision and store.
+    async fn poster(
+        &self,
+        row: &db::Intent,
+        poster: Uuid,
+    ) -> Result<Option<(Uuid, media::Variant)>> {
+        let mut tx = db::transaction(&self.state).await?;
+        let Some(found) = db::load_optional(&mut tx, poster).await? else {
+            return Ok(None);
+        };
+        tx.commit().await.map_err(sql)?;
+        let at = now(&self.state)?;
+        Ok(match found.receipt {
+            Some(receipt)
+                if found.binding == row.binding
+                    && found.storage == self.root.id
+                    && !found.withheld
+                    && found.cleanup == "none"
+                    && receipt.clip.is_none()
+                    && receipt.rendering_policy == media::RenderingPolicy::Rgba8SrgbV1
+                    && at < receipt.retain_until_ms =>
+            {
+                Some((poster, receipt.variants.preview))
+            }
+            _ => None,
         })
     }
 }

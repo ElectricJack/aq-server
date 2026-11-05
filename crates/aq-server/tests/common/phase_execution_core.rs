@@ -130,6 +130,18 @@ pub async fn setup_from_presence(
     v2: bool,
     extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
 ) -> (Case, phase::Proposal, AcceptRequest) {
+    setup_from_presence_observed(ready, v2, extra, None).await
+}
+/// `short_observation_ttl_ms` adds a second, node-scoped positive availability
+/// observation with that TTL before the offer is selected. It bounds the offer
+/// window below the longer operator observation, which keeps current health
+/// after the original proposal expires without a registry-changing new post.
+async fn setup_from_presence_observed(
+    ready: presence_fixture::Case,
+    v2: bool,
+    extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
+    short_observation_ttl_ms: Option<u64>,
+) -> (Case, phase::Proposal, AcceptRequest) {
     let mut c = ready.c;
     on_heap(|| configure(&mut c, extra)).await;
     if v2 {
@@ -166,6 +178,29 @@ pub async fn setup_from_presence(
     })
     .await;
     assert_eq!(status, 200, "{body}");
+    if let Some(ttl_ms) = short_observation_ttl_ms {
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
+                .fetch_one(&c.env.env.pool)
+                .await
+                .unwrap();
+        let mut observation = c.env.manual.clone();
+        observation["operation_id"] = serde_json::json!(Uuid::new_v4());
+        observation["expected_revision"] = serde_json::json!(revision);
+        observation["sequence"] = serde_json::json!(3);
+        observation["scope"]["node_id"] = serde_json::json!(c.env.env.node);
+        observation["ttl_ms"] = serde_json::json!(ttl_ms);
+        let (status, body) = on_heap(|| {
+            common::selection::call(
+                &admin,
+                "/api/intelligence/observations",
+                Some(observation),
+                "owner@localhost",
+            )
+        })
+        .await;
+        assert_eq!(status, 200, "{body}");
+    }
     let (status, body) = on_heap(|| native_offer::poll(&c)).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
@@ -248,6 +283,20 @@ pub fn prepared_with_config(
     extra: fn(&mut aq_server::profiled_execution::config::ProfiledConfig),
 ) -> impl std::future::Future<Output = Prepared> {
     Box::pin(prepare_with_optional_config(v2, Some(extra)))
+}
+/// A prepared case whose original offer is bounded by a short-lived positive
+/// observation, so the proposal can expire inside live health and preparation.
+#[allow(dead_code)] // Selected only by the proposal-expiry atomicity test.
+pub fn prepared_with_short_observation(
+    v2: bool,
+    ttl_ms: u64,
+) -> impl std::future::Future<Output = Prepared> {
+    Box::pin(async move {
+        let ready = on_heap(presence_fixture::setup).await;
+        let (c, p, q) =
+            on_heap(|| setup_from_presence_observed(ready, v2, |_| {}, Some(ttl_ms))).await;
+        prepare_from_parts(c, p, q).await
+    })
 }
 async fn prepare_with_optional_config(
     v2: bool,

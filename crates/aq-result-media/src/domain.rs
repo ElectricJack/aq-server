@@ -150,11 +150,89 @@ pub enum ReportCoverage {
 pub enum Mime {
     #[serde(rename = "image/png")]
     Png,
+    #[serde(rename = "video/mp4")]
+    Mp4,
+}
+impl Mime {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Mp4 => "video/mp4",
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderingPolicy {
     #[serde(rename = "aq.png.rgba8-srgb-v1")]
     Rgba8SrgbV1,
+    /// Structurally preflighted ISO-BMFF clip retained byte-for-byte; the
+    /// preview variant is the verified preview of a retained poster image.
+    #[serde(rename = "aq.mp4.passthrough-v1")]
+    Mp4PassthroughV1,
+}
+impl RenderingPolicy {
+    pub fn media(self) -> MediaKind {
+        match self {
+            Self::Rgba8SrgbV1 => MediaKind::Image,
+            Self::Mp4PassthroughV1 => MediaKind::Video,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rgba8SrgbV1 => "aq.png.rgba8-srgb-v1",
+            Self::Mp4PassthroughV1 => "aq.mp4.passthrough-v1",
+        }
+    }
+}
+/// Media kind of an upload intent. Image is the default and is omitted from
+/// canonical encodings so pre-clip requests and receipts are byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    #[default]
+    Image,
+    Video,
+}
+impl MediaKind {
+    pub fn is_image(&self) -> bool {
+        *self == Self::Image
+    }
+    pub fn policy(self) -> RenderingPolicy {
+        match self {
+            Self::Image => RenderingPolicy::Rgba8SrgbV1,
+            Self::Video => RenderingPolicy::Mp4PassthroughV1,
+        }
+    }
+    /// Static per-kind input bound before admission limits apply.
+    pub fn max_input_bytes(self) -> u64 {
+        match self {
+            Self::Image => MAX_INPUT_BYTES as u64,
+            Self::Video => MAX_CLIP_BYTES as u64,
+        }
+    }
+    pub fn admitted_input_bytes(self, limits: &Limits) -> u64 {
+        match self {
+            Self::Image => limits.max_input_bytes,
+            Self::Video => limits.max_clip_bytes,
+        }
+    }
+    pub fn input_mime(self) -> Mime {
+        match self {
+            Self::Image => Mime::Png,
+            Self::Video => Mime::Mp4,
+        }
+    }
+}
+/// Video request shape: a clip always names an already-retained poster image
+/// on the same report revision; images never name one.
+fn poster_shape(media: MediaKind, poster: Option<&Id>, own: &Id) -> Result<()> {
+    require(
+        match media {
+            MediaKind::Image => poster.is_none(),
+            MediaKind::Video => poster.is_some_and(|p| p != own),
+        },
+        "clip poster",
+    )
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "format", rename_all = "lowercase", deny_unknown_fields)]
@@ -239,9 +317,10 @@ pub struct Input {
     pub filename: String,
 }
 impl Validate for Input {
+    /// Kind-independent outer bound; owners apply the per-kind bound.
     fn validate(&self) -> Result<()> {
         require(
-            (1..=MAX_INPUT_BYTES as u64).contains(&self.bytes),
+            (1..=MAX_INPUT_BYTES.max(MAX_CLIP_BYTES) as u64).contains(&self.bytes),
             "input bytes",
         )?;
         filename(&self.filename)
@@ -256,6 +335,10 @@ pub struct UploadCreate {
     pub filename: String,
     #[serde(deserialize_with = "required_option")]
     pub capture: Option<Capture>,
+    #[serde(default, skip_serializing_if = "MediaKind::is_image")]
+    pub media: MediaKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_artifact_id: Option<Id>,
 }
 impl UploadCreate {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -265,7 +348,7 @@ impl UploadCreate {
         self.validate()?;
         limits.validate()?;
         require(
-            self.input_bytes <= limits.max_input_bytes,
+            self.input_bytes <= self.media.admitted_input_bytes(limits),
             "admitted input limit",
         )
     }
@@ -273,8 +356,13 @@ impl UploadCreate {
 impl Validate for UploadCreate {
     fn validate(&self) -> Result<()> {
         require(
-            (1..=MAX_INPUT_BYTES as u64).contains(&self.input_bytes),
+            (1..=self.media.max_input_bytes()).contains(&self.input_bytes),
             "input bytes",
+        )?;
+        poster_shape(
+            self.media,
+            self.poster_artifact_id.as_ref(),
+            &self.operation_id,
         )?;
         filename(&self.filename)?;
         if let Some(capture) = &self.capture {
@@ -308,11 +396,18 @@ pub struct Variant {
 impl Validate for Variant {
     fn validate(&self) -> Result<()> {
         rgba_len(self.width, self.height)?;
-        require(
-            (1..=MAX_RENDER_BYTES as u64).contains(&self.bytes),
-            "variant bytes",
-        )
+        let max = match self.mime {
+            Mime::Png => MAX_RENDER_BYTES,
+            Mime::Mp4 => MAX_CLIP_BYTES,
+        };
+        require((1..=max as u64).contains(&self.bytes), "variant bytes")
     }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clip {
+    pub duration_ms: u64,
+    pub poster_artifact_id: Id,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -334,8 +429,15 @@ pub struct Receipt {
     pub variants: Variants,
     pub retained_at_ms: u64,
     pub retain_until_ms: u64,
+    /// Present exactly for `aq.mp4.passthrough-v1`; omitted for images so
+    /// canonical image receipts (and their digests) are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<Clip>,
 }
 impl Receipt {
+    pub fn media(&self) -> MediaKind {
+        self.rendering_policy.media()
+    }
     pub fn digest(&self) -> Result<Digest> {
         self.validate()?;
         let bytes = canonical_bytes(self)?;
@@ -356,10 +458,28 @@ impl Validate for Receipt {
         let p = &self.variants.preview;
         let r = &self.variants.render;
         require(
-            p.bytes <= MAX_PREVIEW_BYTES as u64
-                && (p.width, p.height) == preview_dimensions(r.width, r.height)?,
+            p.mime == Mime::Png && p.bytes <= MAX_PREVIEW_BYTES as u64,
             "preview",
         )?;
+        match (self.rendering_policy, &self.clip) {
+            (RenderingPolicy::Rgba8SrgbV1, None) => require(
+                r.mime == Mime::Png
+                    && self.input.bytes <= MAX_INPUT_BYTES as u64
+                    && (p.width, p.height) == preview_dimensions(r.width, r.height)?,
+                "image variants",
+            )?,
+            (RenderingPolicy::Mp4PassthroughV1, Some(clip)) => require(
+                r.mime == Mime::Mp4
+                    && r.digest == self.input.digest
+                    && r.bytes == self.input.bytes
+                    && p.width <= PREVIEW_EDGE
+                    && p.height <= PREVIEW_EDGE
+                    && (1..=MAX_CLIP_DURATION_MS).contains(&clip.duration_ms)
+                    && clip.poster_artifact_id != self.artifact_id,
+                "clip variants",
+            )?,
+            _ => return Err(Invalid::Field("rendering policy")),
+        }
         timestamp(self.retained_at_ms)?;
         timestamp(self.retain_until_ms)?;
         require(
@@ -448,6 +568,17 @@ pub struct Limits {
     pub max_result_artifacts: u32,
     pub upload_ttl_ms: u64,
     pub retention_ms: u64,
+    /// Defaults keep limits stored before clip support decodable.
+    #[serde(default = "default_clip_bytes")]
+    pub max_clip_bytes: u64,
+    #[serde(default = "default_clip_duration_ms")]
+    pub max_clip_duration_ms: u64,
+}
+fn default_clip_bytes() -> u64 {
+    MAX_CLIP_BYTES as u64
+}
+fn default_clip_duration_ms() -> u64 {
+    MAX_CLIP_DURATION_MS
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -460,6 +591,8 @@ impl Default for Limits {
             max_result_artifacts: MAX_REPORT_ARTIFACTS as u32,
             upload_ttl_ms: MAX_UPLOAD_TTL_MS,
             retention_ms: MAX_RETENTION_MS,
+            max_clip_bytes: MAX_CLIP_BYTES as u64,
+            max_clip_duration_ms: MAX_CLIP_DURATION_MS,
         }
     }
 }
@@ -474,6 +607,8 @@ impl Validate for Limits {
                 && (1..=MAX_REPORT_ARTIFACTS as u32).contains(&self.max_result_artifacts)
                 && (1..=MAX_UPLOAD_TTL_MS).contains(&self.upload_ttl_ms)
                 && (1..=MAX_RETENTION_MS).contains(&self.retention_ms)
+                && (1..=MAX_CLIP_BYTES as u64).contains(&self.max_clip_bytes)
+                && (1..=MAX_CLIP_DURATION_MS).contains(&self.max_clip_duration_ms)
                 && self.upload_ttl_ms < self.retention_ms,
             "limits",
         )
@@ -519,6 +654,9 @@ pub enum Rejection {
     PixelLimit,
     ProcessingLimit,
     StorageFailure,
+    InvalidVideo,
+    UnsupportedVideo,
+    PosterUnavailable,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -541,6 +679,10 @@ pub struct UploadStatus {
     #[serde(deserialize_with = "required_option")]
     pub artifact: Option<Artifact>,
     pub limits: Limits,
+    #[serde(default, skip_serializing_if = "MediaKind::is_image")]
+    pub media: MediaKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_artifact_id: Option<Id>,
 }
 impl UploadStatus {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
@@ -553,8 +695,14 @@ impl Validate for UploadStatus {
         self.input.validate()?;
         self.limits.validate()?;
         require(
-            self.input.bytes <= self.limits.max_input_bytes,
+            self.input.bytes <= self.media.max_input_bytes()
+                && self.input.bytes <= self.media.admitted_input_bytes(&self.limits),
             "admitted input limit",
+        )?;
+        poster_shape(
+            self.media,
+            self.poster_artifact_id.as_ref(),
+            &self.operation_id,
         )?;
         if let Some(c) = &self.capture {
             c.validate()?;
@@ -582,6 +730,8 @@ impl Validate for UploadStatus {
                     && r.binding == self.binding
                     && r.input == self.input
                     && r.capture == self.capture
+                    && r.media() == self.media
+                    && r.clip.as_ref().map(|c| c.poster_artifact_id) == self.poster_artifact_id
                     && r.retained_at_ms >= self.created_at_ms
                     && r.retained_at_ms < self.upload_expires_at_ms
                     && r.retain_until_ms == self.retain_until_ms,
@@ -645,7 +795,12 @@ impl Validate for MediaPage {
                     self.server_time_ms < a.receipt.retain_until_ms
                         && r.bytes <= self.limits.max_render_bytes
                         && p.bytes <= self.limits.max_preview_bytes
-                        && a.receipt.input.bytes <= self.limits.max_input_bytes
+                        && a.receipt.input.bytes
+                            <= a.receipt.media().admitted_input_bytes(&self.limits)
+                        && a.receipt
+                            .clip
+                            .as_ref()
+                            .is_none_or(|c| c.duration_ms <= self.limits.max_clip_duration_ms)
                         && u64::from(r.width) * u64::from(r.height) <= self.limits.max_pixels
                         && r.width.max(r.height) <= self.limits.max_dimension,
                     "current media limits",

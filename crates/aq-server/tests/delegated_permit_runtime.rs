@@ -304,6 +304,16 @@ async fn exercise_phase(mode: u8) {
     let replay = request(state, "/v1/worker/profiled-v2/accept", &h, body.clone()).await;
     assert_eq!(replay.status(), 200);
     assert!(response.headers()["aq-permit-issuance"] == replay.headers()["aq-permit-issuance"]);
+    let (bound, total): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER (WHERE m.permit_id=$1), count(*) FROM admission_material_leases m JOIN profiled_launch_materials l ON l.lease_id=m.lease_id WHERE l.attempt_id=$2")
+        .bind(issued.permit.permit_id)
+        .bind(q.attempt_id)
+        .fetch_one(&f.c.env.env.pool)
+        .await
+        .unwrap();
+    assert!(
+        total > 0 && bound == total,
+        "issuance binds the attempt's private material to its permit"
+    );
     let mut changed = q.clone();
     changed.sandbox_id = Uuid::new_v4();
     h.insert(

@@ -5,16 +5,20 @@
     "state": "partial"
   },
   "data": {
-    "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+    "attempt_id": "cdb660c0-6ca1-47c9-8f24-cce83d0a14c2",
     "authority": "remote",
     "controller": {
       "label": null,
       "state": "unknown"
     },
     "execution_authority": "offered",
-    "id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4",
-    "label": "Remote session e63e39e7-c346-4ac0-9acc-ee6662e6d4b4",
+    "id": "507a303b-cb46-4854-b881-a95e4f65c183",
+    "label": "Remote session 507a303b-cb46-4854-b881-a95e4f65c183",
     "last_activity_at": null,
+    "lifecycle": {
+      "started_at": null,
+      "stopped_at": null
+    },
     "observation": {
       "fresh_until": "1970-01-01T00:16:40.000Z",
       "observed_at": "1970-01-01T00:16:40.000Z",
@@ -22,16 +26,16 @@
     },
     "observation_binding": {
       "attempt_generation": 1,
-      "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
+      "attempt_id": "cdb660c0-6ca1-47c9-8f24-cce83d0a14c2",
       "lineage_id": "aac06eab-3c76-5a50-830e-720fbe521fd8",
       "project_id": "00000000-0000-0000-0000-000000000001",
       "session": {
         "assignment_generation": 1,
-        "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
-        "boot_id": "1f64082a-2c00-45eb-ab7c-d0147a3ca441",
+        "attempt_id": "cdb660c0-6ca1-47c9-8f24-cce83d0a14c2",
+        "boot_id": "3e8e41d6-50d9-4e70-ac4c-52bcdb790363",
         "kind": "remote",
-        "node_id": "dcf6b4c0-eb69-423d-8077-49f3e06c8ead",
-        "session_id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4"
+        "node_id": "7c8df3ec-bb30-4ba3-8e87-a7ecd559fbad",
+        "session_id": "507a303b-cb46-4854-b881-a95e4f65c183"
       },
       "task_id": "00000000-0000-0000-0000-000000000003"
     },
@@ -64,11 +68,11 @@
     "record_revision": "1",
     "session_identity": {
       "assignment_generation": "1",
-      "attempt_id": "dcfb7a1e-7252-41f0-a508-5d4d6745abcd",
-      "boot_id": "1f64082a-2c00-45eb-ab7c-d0147a3ca441",
+      "attempt_id": "cdb660c0-6ca1-47c9-8f24-cce83d0a14c2",
+      "boot_id": "3e8e41d6-50d9-4e70-ac4c-52bcdb790363",
       "kind": "remote",
-      "node_id": "dcf6b4c0-eb69-423d-8077-49f3e06c8ead",
-      "session_id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4"
+      "node_id": "7c8df3ec-bb30-4ba3-8e87-a7ecd559fbad",
+      "session_id": "507a303b-cb46-4854-b881-a95e4f65c183"
     },
     "source_kind": "profiled_v1",
     "task": {
@@ -88,7 +92,7 @@
     "source": "aq_dashboard_read"
   },
   "pending_operations": [],
-  "request_id": "54334ec9-39e7-4e60-b881-0beb16c27b7b",
+  "request_id": "0e787998-5c42-4d2d-a9bb-b0d27a758c12",
   "scope": {
     "kind": "all_authorized"
   },

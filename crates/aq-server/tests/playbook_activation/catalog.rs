@@ -510,6 +510,10 @@ async fn no_startup_snapshot(app: &Router) {
         ("playbooks.catalog.read", true),
         ("playbooks.loaded-definitions.read", false),
         ("playbooks.inspect", true),
+        ("playbooks.runs.start", true),
+        ("playbooks.runs.cancel", true),
+        ("playbooks.activations.activate", true),
+        ("playbooks.activations.rollback", true),
         ("decisions.read", true),
     ] {
         assert_eq!(

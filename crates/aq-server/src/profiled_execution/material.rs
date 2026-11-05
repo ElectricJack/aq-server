@@ -1,6 +1,7 @@
 //! Private configured-file owner. No caller path, URL, command or secret value
 //! enters a lease request. Read outside SQL locks; the caller must subsequently
 //! fence current assignment, registry revision, lease and expiry before delivery.
+use super::login_refresh::HeadSource;
 use crate::intelligence::config::LoadedRegistry;
 use aq_admission::{MaterialLease, SessionIdentity};
 use std::{
@@ -28,12 +29,26 @@ impl ProtectedMaterial {
     pub fn bytes(&self) -> &[u8] {
         self.0.as_slice()
     }
+    pub(crate) fn owned(bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self(bytes)
+    }
 }
 
 pub fn read_for_lease(
     registry: &LoadedRegistry,
     lease: &MaterialLease,
     node_id: Uuid,
+) -> Result<ProtectedMaterial, MaterialError> {
+    read_for_lease_from(registry, lease, node_id, None)
+}
+/// As `read_for_lease`, serving a subscription-login lineage revision when the
+/// lease was issued from one. The configured file must still match its
+/// startup fingerprint either way, so an operator rotation is never masked.
+pub fn read_for_lease_from(
+    registry: &LoadedRegistry,
+    lease: &MaterialLease,
+    node_id: Uuid,
+    source: Option<&HeadSource>,
 ) -> Result<ProtectedMaterial, MaterialError> {
     lease.validate().map_err(|_| MaterialError::Scope)?;
     if !matches!(lease.binding.session,SessionIdentity::Remote {node_id:assigned,..} if assigned==node_id)
@@ -64,13 +79,28 @@ pub fn read_for_lease(
     {
         return Err(MaterialError::Scope);
     }
-    let bytes = read_configured(registry, index)?;
+    let bytes = source_or_configured(registry, index, source)?;
     if aq_admission::Digest::of(bytes.bytes()) != lease.material_digest
         || bytes.bytes().len() as u64 != lease.material_bytes
     {
         return Err(MaterialError::Changed);
     }
     Ok(bytes)
+}
+
+pub(crate) fn source_or_configured(
+    registry: &LoadedRegistry,
+    index: usize,
+    source: Option<&HeadSource>,
+) -> Result<ProtectedMaterial, MaterialError> {
+    let configured = read_configured(registry, index)?;
+    match source {
+        None => Ok(configured),
+        Some(s) => {
+            drop(configured);
+            super::login_refresh::store::read(&s.dir, s.revision_id, &s.digest, s.bytes)
+        }
+    }
 }
 
 fn read_configured(
@@ -197,6 +227,7 @@ mod tests {
     fn config(path: std::path::PathBuf, lease: &MaterialLease, node: Uuid) -> IntelligenceConfig {
         IntelligenceConfig {
             accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
                 kind: Default::default(),
@@ -364,4 +395,4 @@ mod tests {
 }
 
 mod issuance;
-pub use issuance::issue_for_selection;
+pub use issuance::{issue_for_selection, issue_for_selection_from};

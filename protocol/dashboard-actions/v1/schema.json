@@ -680,6 +680,267 @@
         {
           "properties": {
             "kind": {
+              "const": "playbook.activation.activate"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:playbook.activation.activate:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "description": "Activate: the artifact to make active. Rollback: the active artifact.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "binding": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_version": {
+                  "description": "The binding's activation revision, as shown in the catalog.",
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_version",
+                "binding",
+                "artifact"
+              ],
+              "title": "BindingChange",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "playbook.activation.rollback"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:playbook.activation.rollback:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "description": "Activate: the artifact to make active. Rollback: the active artifact.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "binding": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_version": {
+                  "description": "The binding's activation revision, as shown in the catalog.",
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_version",
+                "binding",
+                "artifact"
+              ],
+              "title": "BindingChange",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "playbook.run.cancel"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:playbook.run.cancel:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "run_id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "run_id"
+              ],
+              "title": "RunCancel",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "playbook.run.start"
+            },
+            "payload": {
+              "$defs": {
+                "Input": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "maxLength": 4096,
+                      "type": "string"
+                    }
+                  ],
+                  "description": "One scalar run input."
+                }
+              },
+              "$id": "urn:aq:dashboard-actions:1:playbook.run.start:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "description": "The binding's currently active artifact digest.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "binding": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "entry": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_version": {
+                  "description": "The binding's activation revision, as shown in the catalog.",
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "inputs": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Input"
+                  },
+                  "default": {},
+                  "maxProperties": 32,
+                  "type": "object"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_version",
+                "binding",
+                "artifact",
+                "entry"
+              ],
+              "title": "RunStart",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "question.answer"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:question.answer:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "answer": {
+                  "maxLength": 16000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "description": "The decision revision being answered, as returned when it was asked.",
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "expected_revision",
+                "answer"
+              ],
+              "title": "QuestionAnswer",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "result.comment"
             },
             "payload": {
@@ -934,16 +1195,180 @@
         {
           "properties": {
             "kind": {
+              "const": "session.message.send"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:session.message.send:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "body": {
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_generation": {
+                  "description": "The session's assignment generation, as projected in `session_identity`.",
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "message_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "thread_id": {
+                  "description": "Mailbox thread; a new thread named by `message_id` when omitted.",
+                  "format": "uuid",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "message_id",
+                "expected_generation",
+                "body"
+              ],
+              "title": "SessionMessage",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "session.nudge"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:session.nudge:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "H3 owner nudge: the same safe-boundary path as the stall ladder. Input that\nis unknown, or a pane a human controls, keeps it inbox-only.",
+              "properties": {
+                "body": {
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "expected_generation": {
+                  "description": "The session's assignment generation, as projected in `session_identity`.",
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_generation",
+                "body"
+              ],
+              "title": "SessionNudge",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "supervisor.message.send"
             },
             "payload": {
+              "$defs": {
+                "AttachmentRef": {
+                  "additionalProperties": false,
+                  "description": "A pinned reference from `Create.attachments` to a staged upload.",
+                  "properties": {
+                    "digest": {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "digest"
+                  ],
+                  "type": "object"
+                },
+                "ContextKind": {
+                  "enum": [
+                    "project",
+                    "task",
+                    "result",
+                    "review",
+                    "knowledge",
+                    "session",
+                    "playbook_run"
+                  ],
+                  "type": "string"
+                },
+                "ContextRef": {
+                  "additionalProperties": false,
+                  "description": "X5: a pinned reference to an AQ entity the owner attached to a message.\nThe server checks shape only; the supervisor resolves refs under its own\nauthority.",
+                  "properties": {
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "revision": {
+                      "description": "Required, nullable: an absent field is refused like the schema does.",
+                      "pattern": "^[1-9][0-9]{0,18}$",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "type": {
+                      "$ref": "#/$defs/ContextKind"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
               "$id": "urn:aq:dashboard-actions:1:supervisor.message.send:payload",
               "$schema": "https://json-schema.org/draft/2020-12/schema",
               "additionalProperties": false,
               "properties": {
                 "attachments": {
-                  "items": true,
-                  "maxItems": 0,
+                  "description": "agile-vault-27: staged uploads pinned by id and content digest.",
+                  "items": {
+                    "$ref": "#/$defs/AttachmentRef"
+                  },
+                  "maxItems": 4,
                   "type": "array"
                 },
                 "body": {
@@ -952,8 +1377,10 @@
                   "type": "string"
                 },
                 "context": {
-                  "items": true,
-                  "maxItems": 0,
+                  "items": {
+                    "$ref": "#/$defs/ContextRef"
+                  },
+                  "maxItems": 16,
                   "type": "array"
                 },
                 "expected_conversation_revision": {

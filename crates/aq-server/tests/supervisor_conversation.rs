@@ -653,10 +653,18 @@ async fn actual_mount_has_owner_caps_and_csrf_while_standalone_and_viewer_do_not
                 .unwrap()["enabled"],
             false
         );
+        // X4: a mounted owner sees the provisioned conversation, not yet live.
+        let global = &bootstrap["data"]["global_supervisor"];
         assert_eq!(
-            bootstrap["data"]["global_supervisor"]["status"],
-            "unconfigured"
+            global["status"],
+            if expected {
+                "unavailable"
+            } else {
+                "unconfigured"
+            },
+            "{global}"
         );
+        assert_eq!(global["conversation_id"].is_string(), expected, "{global}");
     }
     let (status, descriptor) = request(
         &mounted,

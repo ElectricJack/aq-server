@@ -40,10 +40,19 @@ def test_prepare_replay_preserves_private_credentials_and_config(tmp_path):
     assert config["auth"]["mode"] == "dev"
     assert config["agent_access"]["graph_url"] == "http://aq-graph:8741"
     assert config["source_retention"]["git_socket"] == "/run/aq-git/central.sock"
+    # Terminal watch/control need a protection keyring to mount on the dev stack.
+    protection = config["terminals"]["protection"]
+    assert protection["active_key_id"] == protection["keys"][0]["id"]
+    assert protection["keys"][0]["file"] == "/run/aq-dev/terminal_protection_key"
+    assert len((tmp_path / "secrets/terminal_protection_key").read_bytes()) == 32
+    init = (ROOT / "scripts/dev-init-volumes.sh").read_text()
+    assert "/run/secrets/terminal_protection_key /run/aq-dev/terminal_protection_key" in init
+    assert "terminal_protection_key:" in (ROOT / "compose.dev.yaml").read_text()
     assert command(tmp_path, "prepare").stdout == first.stdout
 
 
-@pytest.mark.parametrize("name", ["playbook_database_password", "playbook_engine_keys", "playbook_bridge_key"])
+@pytest.mark.parametrize("name", ["playbook_database_password", "playbook_engine_keys", "playbook_bridge_key",
+                                  "terminal_protection_key"])
 def test_settlement_credentials_are_private_retained_and_refuse_symlinks(tmp_path, name):
     first = command(tmp_path, "prepare")
     assert first.returncode == 0, first.stderr

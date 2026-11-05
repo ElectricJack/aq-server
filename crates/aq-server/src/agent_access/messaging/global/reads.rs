@@ -23,12 +23,12 @@ pub(super) async fn discovery(
     tx.commit().await.map_err(db)?;
     Ok(Json(Discovery {
         contract: CONTRACT,
+        runtime: live_runtime(&service.pool, conversation.id).await,
         conversation,
-        runtime: runtime(),
         limits: Limits {
             body_bytes: 16384,
-            context_refs: 0,
-            attachments: 0,
+            context_refs: writes::MAX_CONTEXT_REFS as u8,
+            attachments: attachments::MAX_ATTACHMENTS as u8,
             history_page: 16,
         },
     }))
@@ -55,6 +55,13 @@ struct Message {
     body: String,
     body_digest: String,
     created_at_ms: u64,
+    /// X5: pinned context refs; omitted when the message has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    context: Vec<writes::ContextRef>,
+    /// agile-vault-27: owner files bound to this message, in Create order;
+    /// omitted when the message has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<attachments::Descriptor>,
     logical_admission: &'static str,
     host_delivery: &'static str,
     agent_receipt: Option<Value>,
@@ -116,6 +123,8 @@ fn message(row: sqlx::postgres::PgRow, id: Uuid) -> Result<Message> {
     let cursor: i64 = row.get("cursor");
     let at: i64 = row.get("created_at_ms");
     let payload: String = row.get("payload_digest");
+    let context = writes::stored_context(row.get("context_refs"))?;
+    let attachments = attachments::stored(row.get("attachment_items"))?;
     let user = sender
         .get("user_id")
         .and_then(Value::as_str)
@@ -150,6 +159,8 @@ fn message(row: sqlx::postgres::PgRow, id: Uuid) -> Result<Message> {
         body_digest: hash(body.as_bytes()),
         body,
         created_at_ms: at as u64,
+        context,
+        attachments,
         logical_admission: "queued",
         host_delivery: "not_attempted",
         agent_receipt: None,
@@ -160,15 +171,15 @@ fn message(row: sqlx::postgres::PgRow, id: Uuid) -> Result<Message> {
 /// `(anchor, r)`, rendered `"anchor.r"`: `anchor` is the max cursor of the
 /// batch it answers and `r` (>= 1) its own reply-mailbox cursor. Replies sort
 /// after the owner message they answer and before the next one.
-type Position = (i64, i64);
-fn position(s: &str, zero: bool) -> Result<Position> {
+pub(super) type Position = (i64, i64);
+pub(super) fn position(s: &str, zero: bool) -> Result<Position> {
     match s.split_once('.') {
         Some((anchor, reply)) => Ok((positive(anchor)?, positive(reply)?)),
         None if zero => Ok((cursor(s)?, 0)),
         None => Ok((positive(s)?, 0)),
     }
 }
-fn render((at, reply): Position) -> String {
+pub(super) fn render((at, reply): Position) -> String {
     if reply == 0 {
         at.to_string()
     } else {
@@ -199,6 +210,8 @@ pub(super) async fn history(
         .map(|s| position(s, true))
         .transpose()?;
     let forward = after.is_some();
+    // Before the transaction: the pool is two connections wide.
+    let runtime = live_runtime(&service.pool, id).await;
     let mut tx = service.tx().await?;
     owner(&mut tx, &user).await?;
     let conversation = definition(&mut tx, Some(id), false).await?;
@@ -222,19 +235,22 @@ pub(super) async fn history(
         (None, Some(b)) => b,
         (None, None) => (i64::MAX, i64::MAX),
     };
+    // Owner mail only: agent-sent supervisor mail (bold-stone-51) is not yet
+    // rendered to humans; it reaches the supervisor through dispatch.
     let (human_sql, reply_sql) = if forward {
         (
-            "SELECT * FROM mailbox_messages WHERE mailbox_key=$1 AND (cursor,0::bigint)>($2,$3) AND cursor<=$4 ORDER BY cursor LIMIT $5",
+            "SELECT m.*,c.refs AS context_refs,{descriptors} AS attachment_items FROM mailbox_messages m LEFT JOIN global_supervisor_message_context c ON c.message_id=m.message_id WHERE m.mailbox_key=$1 AND m.sender->>'kind'='owner' AND (m.cursor,0::bigint)>($2,$3) AND m.cursor<=$4 ORDER BY m.cursor LIMIT $5",
             "SELECT * FROM (SELECT r.dispatch_id,r.attachments,d.host_operation_id,d.batch_digest,d.actor_id,d.generation,d.session_id,m.*,(SELECT max(mm.cursor) FROM central_supervisor_mail_members mm WHERE mm.actor_id=d.actor_id AND mm.reservation_id=d.reservation_id) AS anchor FROM central_supervisor_replies r JOIN central_supervisor_dispatches d ON d.dispatch_id=r.dispatch_id JOIN mailbox_messages m ON m.message_id=r.reply_message_id WHERE m.mailbox_key=$1) x WHERE (x.anchor,x.cursor)>($2,$3) AND x.anchor<=$4 ORDER BY x.anchor,x.cursor LIMIT $5",
         )
     } else {
         (
-            "SELECT * FROM mailbox_messages WHERE mailbox_key=$1 AND (cursor,0::bigint)<($2,$3) AND cursor<=$4 ORDER BY cursor DESC LIMIT $5",
+            "SELECT m.*,c.refs AS context_refs,{descriptors} AS attachment_items FROM mailbox_messages m LEFT JOIN global_supervisor_message_context c ON c.message_id=m.message_id WHERE m.mailbox_key=$1 AND m.sender->>'kind'='owner' AND (m.cursor,0::bigint)<($2,$3) AND m.cursor<=$4 ORDER BY m.cursor DESC LIMIT $5",
             "SELECT * FROM (SELECT r.dispatch_id,r.attachments,d.host_operation_id,d.batch_digest,d.actor_id,d.generation,d.session_id,m.*,(SELECT max(mm.cursor) FROM central_supervisor_mail_members mm WHERE mm.actor_id=d.actor_id AND mm.reservation_id=d.reservation_id) AS anchor FROM central_supervisor_replies r JOIN central_supervisor_dispatches d ON d.dispatch_id=r.dispatch_id JOIN mailbox_messages m ON m.message_id=r.reply_message_id WHERE m.mailbox_key=$1) x WHERE (x.anchor,x.cursor)<($2,$3) AND x.anchor<=$4 ORDER BY x.anchor DESC,x.cursor DESC LIMIT $5",
         )
     };
     let fetch = i64::from(limit) + 1;
-    let humans = sqlx::query(human_sql)
+    let human_sql = human_sql.replace("{descriptors}", attachments::DESCRIPTORS);
+    let humans = sqlx::query(&human_sql)
         .bind(&mailbox)
         .bind(anchor)
         .bind(at)
@@ -285,7 +301,7 @@ pub(super) async fn history(
     let mut result = History {
         contract: CONTRACT,
         conversation,
-        runtime: runtime(),
+        runtime,
         direction: if forward { "forward" } else { "backward" },
         through_cursor: through.to_string(),
         items: vec![],

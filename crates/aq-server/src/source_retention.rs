@@ -158,6 +158,10 @@ impl Runtime {
     fn path(&self, id: Uuid) -> PathBuf {
         self.config.staging_root.join(id.to_string())
     }
+    /// Bulk transport admission shared with lifecycle artifact retention.
+    pub(crate) fn bulk(&self) -> &Semaphore {
+        &self.bulk
+    }
 }
 fn runtime(s: &AppState) -> Result<Arc<Runtime>> {
     s.source_retention

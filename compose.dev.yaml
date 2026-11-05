@@ -38,7 +38,7 @@ services:
       - dev_auth:/run/aq-dev
       - dev_source:/var/lib/aq
       - dev_git_run:/run/aq-git
-    secrets: [graph_token, playbook_database_password, playbook_engine_keys, playbook_bridge_key]
+    secrets: [graph_token, playbook_database_password, playbook_engine_keys, playbook_bridge_key, terminal_protection_key]
     network_mode: none
     restart: 'no'
     read_only: true
@@ -221,3 +221,5 @@ secrets:
     file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/playbook_engine_keys
   playbook_bridge_key:
     file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/playbook_bridge_key
+  terminal_protection_key:
+    file: ${AQ_SECRETS_DIR:?run scripts/dev-up}/terminal_protection_key

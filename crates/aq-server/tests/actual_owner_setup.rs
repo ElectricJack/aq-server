@@ -52,6 +52,7 @@ fn input() -> ActualSetup {
                 currency: None,
                 require_hard_cost_enforcement: false,
             },
+            publication: None,
         },
         catalog_artifact_json: String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap(),
         graph: AgentAccessConfig {

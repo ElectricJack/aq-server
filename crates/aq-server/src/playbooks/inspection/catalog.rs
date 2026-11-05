@@ -278,7 +278,7 @@ fn source_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 fn current_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type":"boolean","const":true})
 }
-fn public_page(
+pub(super) fn public_page(
     namespace: &Namespace,
     kind: Kind,
     query: &runner::CatalogQuery,

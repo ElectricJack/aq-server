@@ -61,12 +61,15 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     fixture_response("sessions", &list);
     let row = &list["data"]["items"][0];
     assert_eq!(row["observation"]["state"], "unknown");
-    assert!(list["data"]["total"]["value"].is_null());
+    assert_eq!(list["data"]["total"], json!({"value":1,"accuracy":"exact"}));
     let id = row["id"].as_str().unwrap();
     let (status, detail) = read(&app, &format!("/api/v1/sessions/{id}"), "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["data"]["id"], id);
     fixture_response("session", &detail);
+    assert_eq!(row["last_output_at"], detail["data"]["last_activity_at"]);
+    // No launch binding: inspect only, no session message slot.
+    assert_eq!(detail["data"]["permissions"], json!(["session.inspect"]));
     assert_eq!(
         read(
             &app,

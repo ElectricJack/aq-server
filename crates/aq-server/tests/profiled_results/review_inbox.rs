@@ -6,6 +6,7 @@ fn query() -> InboxQuery {
     InboxQuery {
         project_id: None,
         state: InboxState::Open,
+        order: Default::default(),
         limit: 1,
         cursor: None,
     }
@@ -508,4 +509,231 @@ async fn overview_running_and_recovering_use_started_and_stopped_owners() {
         stopped["data"]["counts"]["recovering"]["value"], 1,
         "{stopped}"
     );
+}
+
+/// G11 X14–X19 contract over the actual owner: kind/payload/judgment,
+/// requester and submission time, open total and impact order, previous
+/// responses and change summary, the Defer choice, and evidence viewed state.
+#[tokio::test]
+async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
+    let env = review_env(1).await;
+    let f = &env.f;
+    let app = aq_server::build_admin_router_with_policy_owners(
+        f.state.clone(),
+        None,
+        Some(Arc::new(env.service.clone())),
+    );
+    let admit = || async {
+        let request = aq_review_protocol::DecisionRequest {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            decision_id: Uuid::new_v4(),
+            subject: env.prepared.subject().artifact().unwrap(),
+            eligible_owners: vec![f.actor],
+            eligibility_project_revision: 1,
+            review_policy: env.prepared.subject().validation_policy.clone(),
+            expires_at_ms: NOW + 30000,
+        };
+        env.service
+            .admit(f.actor, &env.prepared, &request)
+            .await
+            .unwrap();
+        request.decision_id
+    };
+    let first = admit().await;
+    let answer = json!({"schema_version":1,"operation_id":Uuid::new_v4(),"decision_id":first,"expected_decision_revision":1,"choice":"reject","comment":"Needs a test"});
+    let (code, body) = dashboard_call(
+        &app,
+        &format!("/api/reviews/decisions/{first}/resolve"),
+        Some(answer),
+    )
+    .await;
+    assert_eq!(code, 200, "{body}");
+    let second = admit().await;
+    let third = admit().await;
+
+    // X14/X15/X16 on the inbox item and page.
+    let page = env
+        .service
+        .inbox(
+            f.actor,
+            &InboxQuery {
+                limit: 50,
+                ..query()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.open_total, Some(2));
+    assert_eq!(page.items.len(), 2);
+    let item = &page.items[0];
+    assert_eq!(item.kind, aq_server::reviews::DecisionKind::Review);
+    assert_eq!(item.requested_by.user_id, f.actor);
+    assert_eq!(item.submitted_at_ms, Some(NOW));
+    assert_eq!(item.kind_payload.subject_profile, "code_review_v1");
+    assert_eq!(
+        item.kind_payload.criteria_count as usize,
+        env.prepared.subject().criteria.len()
+    );
+    // No graph runtime in this fixture: enrichment is null, never an error.
+    assert!(item.title.is_none() && item.impact.is_none());
+    assert!(
+        item.requested_judgment
+            .contains(&format!("task {}", item.task_id))
+    );
+    // X18: defer is non-final, per-owner, bounded by expiry, idempotent.
+    let op = Uuid::new_v4();
+    let defer = format!("/api/reviews/decisions/{second}/defer");
+    let late = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+30001});
+    assert_eq!(dashboard_call(&app, &defer, Some(late)).await.0, 400);
+    let body = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+20000});
+    let (code, deferred) = dashboard_call(&app, &defer, Some(body.clone())).await;
+    assert_eq!(code, 200, "{deferred}");
+    assert_eq!(deferred["deferred_until_ms"], NOW + 20000);
+    assert_eq!(dashboard_call(&app, &defer, Some(body)).await.0, 200);
+    let changed = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+10000});
+    assert_eq!(dashboard_call(&app, &defer, Some(changed)).await.0, 409);
+    let closed =
+        json!({"operation_id":Uuid::new_v4(),"expected_decision_revision":1,"until_ms":NOW+10000});
+    assert_eq!(
+        dashboard_call(
+            &app,
+            &format!("/api/reviews/decisions/{first}/defer"),
+            Some(closed)
+        )
+        .await
+        .0,
+        409
+    );
+    let impact = env
+        .service
+        .inbox(
+            f.actor,
+            &InboxQuery {
+                order: aq_server::reviews::InboxOrder::Impact,
+                ..query()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(impact.order, aq_server::reviews::InboxOrder::Impact);
+    assert!(!impact.order_complete);
+    assert_eq!(impact.open_total, Some(2));
+    // Equal (unknown) impact: the undeferred decision ranks first.
+    assert_eq!(impact.items[0].decision_id, third);
+    let mut more = query();
+    more.order = aq_server::reviews::InboxOrder::Impact;
+    more.cursor = impact.next_cursor.clone();
+    let rest = env.service.inbox(f.actor, &more).await.unwrap();
+    assert_eq!(rest.items[0].decision_id, second);
+    assert_eq!(rest.items[0].deferred_until_ms, Some(NOW + 20000));
+    assert!(rest.next_cursor.is_none());
+    // Cursors bind the order.
+    more.order = aq_server::reviews::InboxOrder::Decision;
+    assert!(env.service.inbox(f.actor, &more).await.is_err());
+    assert!(
+        env.service
+            .inbox(
+                f.actor,
+                &InboxQuery {
+                    state: InboxState::Closed,
+                    order: aq_server::reviews::InboxOrder::Impact,
+                    ..query()
+                },
+            )
+            .await
+            .is_err()
+    );
+
+    // X17/X18/X19 on the decision read.
+    let path = format!("/api/reviews/decisions/{second}");
+    let (code, view) = dashboard_call(&app, &path, None).await;
+    assert_eq!(code, 200, "{view}");
+    assert_eq!(view["kind"], "review");
+    assert_eq!(view["requested_by"]["user_id"], json!(f.actor));
+    assert_eq!(view["submitted_at_ms"], NOW);
+    assert_eq!(view["deferred_until_ms"], NOW + 20000);
+    let previous = view["previous_responses"].as_array().unwrap();
+    assert_eq!(previous.len(), 1, "{view}");
+    assert_eq!(previous[0]["decision_id"], json!(first));
+    assert_eq!(previous[0]["outcome"], "reject");
+    assert_eq!(previous[0]["has_comment"], true);
+    assert_eq!(previous[0]["responded_by"]["user_id"], json!(f.actor));
+    assert_eq!(
+        view["changes_since_previous"]["previous_decision_id"],
+        json!(first)
+    );
+    assert_eq!(view["changes_since_previous"]["changes"], json!([]));
+    assert!(
+        view["what_happens_next"]
+            .as_str()
+            .unwrap()
+            .contains("deferred")
+    );
+    let choices: Vec<_> = view["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["id"].as_str().unwrap(), c["final"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(
+        choices,
+        [
+            ("approve", true),
+            ("request_changes", true),
+            ("defer", false)
+        ]
+    );
+    let evidence = view["evidence"].as_array().unwrap();
+    let result = evidence
+        .iter()
+        .find(|e| e["evidence_id"] == "result_record")
+        .unwrap();
+    let report = env.report.report_id;
+    assert!(
+        result["link"]["href"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("/results/{report}/revisions/"))
+    );
+    assert!(result["viewed_at_ms"].is_null());
+    assert!(
+        evidence
+            .iter()
+            .find(|e| e["evidence_id"] == "task_context")
+            .unwrap()["link"]["href"]
+            == format!("/work/{}", env.prepared.subject().task.task_id)
+    );
+    let viewed = format!("/api/reviews/decisions/{second}/evidence/result_record/viewed");
+    let stale = json!({"ref_digest":"0".repeat(64)});
+    assert_eq!(dashboard_call(&app, &viewed, Some(stale)).await.0, 409);
+    let missing = format!("/api/reviews/decisions/{second}/evidence/nope/viewed");
+    let digest = json!({"ref_digest":result["ref"]["digest"]});
+    assert_eq!(
+        dashboard_call(&app, &missing, Some(digest.clone())).await.0,
+        404
+    );
+    let (code, seen) = dashboard_call(&app, &viewed, Some(digest.clone())).await;
+    assert_eq!(code, 200, "{seen}");
+    assert_eq!(seen["viewed_at_ms"], NOW);
+    f.time.store((NOW + 5) as i64, Ordering::SeqCst);
+    assert_eq!(
+        dashboard_call(&app, &viewed, Some(digest)).await.1["viewed_at_ms"],
+        NOW
+    );
+    let (_, view) = dashboard_call(&app, &path, None).await;
+    let result = view["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["evidence_id"] == "result_record")
+        .unwrap()
+        .clone();
+    assert_eq!(result["viewed_at_ms"], NOW);
+    // Clearing a deferral restores the plain pending view.
+    let clear =
+        json!({"operation_id":Uuid::new_v4(),"expected_decision_revision":1,"until_ms":null});
+    assert_eq!(dashboard_call(&app, &defer, Some(clear)).await.0, 200);
+    assert!(dashboard_call(&app, &path, None).await.1["deferred_until_ms"].is_null());
+    env.peer.abort();
 }

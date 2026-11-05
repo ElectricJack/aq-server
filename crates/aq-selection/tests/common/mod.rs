@@ -356,6 +356,26 @@ pub fn change_policy(
     }
     updated
 }
+pub fn change_confinement(
+    catalog: &ValidatedCatalog,
+    confinement: ExecutionConfinement,
+    input: &mut SelectionInputs,
+) -> ValidatedCatalog {
+    let mut definitions = catalog.artifact().catalog.clone();
+    definitions.execution[0].confinement = confinement;
+    let updated =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest =
+        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
+    for composition in &mut input.compositions {
+        composition.composition.catalog_digest = updated.digest().into();
+        composition.composition.execution_profile = updated
+            .source("execution", &input.project.execution_profile)
+            .unwrap();
+        composition.digest = aq_selection::digest(&composition.composition).unwrap();
+    }
+    updated
+}
 
 pub fn graph_context() -> serde_json::Value {
     serde_json::json!({"observed_at":"1970-01-01T00:00:01Z","projection":"authorized_scope","root_ids":[Uuid::from_u128(3)],"nodes":[{"id":Uuid::from_u128(3),"kind":"task","version":"1","content_revision":"1","title":"Synthetic task","body":"Bounded work","acceptance_criteria":"Verify","labels":[],"task_state":"active","verification":null,"content_type":null,"retired":false,"deleted":false}],"edges":[],"pinned_revisions":[],"coverage":{"status":"complete","complete_for":"authorized_projection","reasons":[]}})

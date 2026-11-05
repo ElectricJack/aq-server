@@ -95,3 +95,41 @@ for path, value in ((("nodes", 0, "eligibility", "reasons"), ["invented_reason"]
     target[path[-1]] = value
     assert not jsonschema.Draft202012Validator(schema).is_valid(invalid), path
 print("Capacity fixture and invalid eligibility/availability fields checked")
+
+# F5 question inbox (question-inbox-1): pending items carry no answer fields;
+# answered items carry all of them and a closed delivery route.
+validator = jsonschema.Draft202012Validator(schema)
+for name, state in (("question-inbox-open", "pending"), ("question-inbox-closed", "answered")):
+    page = json.loads((root / "fixtures" / f"{name}.json").read_text())
+    validator.validate(page)
+    assert page["api_version"] == "question-inbox-1" and page["items"]
+    for item in page["items"]:
+        assert item["kind"] == "question" and item["state"] == state
+        answered = (item["answer"], item["answered_at_ms"], item["delivery"])
+        if state == "pending":
+            assert answered == (None, None, None) and item["decision_revision"] == "1"
+        else:
+            assert None not in answered and item["decision_revision"] != "1"
+            assert item["delivery"]["kind"] in ("wait", "task_mail")
+detail = json.loads((root / "fixtures" / "question-detail.json").read_text())
+validator.validate(detail)
+assert detail["item"]["state"] == "answered"
+closed = json.loads((root / "fixtures" / "question-inbox-closed.json").read_text())
+assert {i["delivery"]["kind"] for i in closed["items"]} == {"wait", "task_mail"}
+for path, value in ((("items", 0, "state"), "expired"),
+                    (("items", 0, "decision_revision"), "0"),
+                    (("items", 0, "delivery"), {"kind": "task_mail"}),
+                    (("items", 0, "delivery"), {"kind": "discord"}),
+                    (("items", 0, "question"), ""),
+                    (("items", 0, "extra"), True),
+                    (("api_version",), "review-inbox-1")):
+    invalid = deepcopy(closed)
+    target = invalid
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert not validator.is_valid(invalid), path
+bootstrap = json.loads((root / "fixtures" / "bootstrap.json").read_text())
+names = {c["name"] for c in bootstrap["data"]["capabilities"]}
+assert {"questions.read", "questions.answer"} <= names
+print("Question inbox open/closed/detail fixtures and invalid question fields checked")

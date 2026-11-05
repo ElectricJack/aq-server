@@ -710,6 +710,10 @@ fn dashboard_action_schema_lists_task_and_knowledge_kinds() {
         "knowledge.verify",
         "knowledge.retire",
         "knowledge.restore",
+        "playbook.run.start",
+        "playbook.run.cancel",
+        "playbook.activation.activate",
+        "playbook.activation.rollback",
     ] {
         let schema = registry
             .schemas()

@@ -8,6 +8,17 @@ fn bounded(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.contains('\0')
 }
 impl Service {
+    /// D8 findings run on Monitoring6 and, since D11, on Host7/Host8 (catalog
+    /// 2.0.0/2.1.0 findings.reconcile is byte-identical to 1.0.0).
+    fn findings_profile(&self) -> Result<()> {
+        if !matches!(
+            self.profile,
+            CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
+        ) {
+            return Err(Error::Forbidden);
+        }
+        Ok(())
+    }
     pub(super) async fn capture_health_scan(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -15,7 +26,7 @@ impl Service {
         partition: &str,
         ttl_ms: i64,
     ) -> Result<BTreeMap<String, i64>> {
-        self.monitoring()?;
+        self.findings_profile()?;
         if !bounded(observation) || !bounded(partition) || !(1..=60_000).contains(&ttl_ms) {
             return Err(Error::Invalid);
         }
@@ -72,7 +83,7 @@ impl Service {
         evaluation: &str,
         complete: bool,
     ) -> Result<()> {
-        self.monitoring()?;
+        self.findings_profile()?;
         if !bounded(evaluation) {
             return Err(Error::Invalid);
         }
@@ -105,7 +116,7 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<HostResult> {
-        self.monitoring()?;
+        self.findings_profile()?;
         let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
@@ -308,7 +319,7 @@ impl Service {
         owner: &RuntimeOwner,
         limit: u32,
     ) -> Result<usize> {
-        self.monitoring()?;
+        self.findings_profile()?;
         if !(1..=32).contains(&limit) {
             return Err(Error::Invalid);
         }

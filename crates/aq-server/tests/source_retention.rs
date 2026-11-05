@@ -1094,3 +1094,5 @@ async fn credential_rotation_during_import_keeps_uncertain_intent_and_current_ke
 
 #[path = "source_retention/delivery.rs"]
 mod delivery;
+#[path = "source_retention/publication.rs"]
+mod publication;

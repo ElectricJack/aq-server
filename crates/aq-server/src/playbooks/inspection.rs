@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 pub mod catalog;
 pub mod definitions;
+pub mod playbook_view;
 
 pub const VERSION: &str = "playbooks-inspection-1";
 const MAX_BYTES: usize = 262144;
@@ -50,6 +51,50 @@ impl PageQuery {
             return Err(Error::Forbidden);
         }
         Ok(limit)
+    }
+}
+/// X34: the runs list with an optional admission time range. `since_ms` is
+/// inclusive and `until_ms` exclusive; either may be omitted.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunsQuery {
+    pub after: Option<String>,
+    #[schemars(range(min = 1, max = 25))]
+    pub limit: Option<usize>,
+    pub project_id: Option<Uuid>,
+    #[schemars(range(min = 0))]
+    pub since_ms: Option<i64>,
+    #[schemars(range(min = 1))]
+    pub until_ms: Option<i64>,
+}
+/// Engine pages examined by one ranged runs request; a sparse range returns a
+/// short page whose `next_cursor` resumes the scan.
+const RANGE_SCAN_PAGES: usize = 8;
+impl RunsQuery {
+    fn validate(&self) -> Result<()> {
+        if self.since_ms.is_some_and(|v| v < 0)
+            || self.until_ms.is_some_and(|v| v <= 0)
+            || self
+                .since_ms
+                .zip(self.until_ms)
+                .is_some_and(|(since, until)| until <= since)
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+    fn ranged(&self) -> bool {
+        self.since_ms.is_some() || self.until_ms.is_some()
+    }
+    fn contains(&self, at_ms: i64) -> bool {
+        self.since_ms.is_none_or(|v| at_ms >= v) && self.until_ms.is_none_or(|v| at_ms < v)
+    }
+    fn page(&self, after: Option<String>, limit: Option<usize>) -> PageQuery {
+        PageQuery {
+            after,
+            limit,
+            project_id: self.project_id,
+        }
     }
 }
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -94,6 +139,20 @@ pub struct RunView {
     pub dependencies: BTreeMap<String, String>,
     pub pending_kind: Option<String>,
     pub admitted_at_ms: i64,
+    /// X30/X31: null when the artifact has no AQ registry entry.
+    pub definition: Option<playbook_view::DefinitionView>,
+    /// X33: set while the pending effect is a human decision request.
+    pub waiting: Option<playbook_view::WaitingView>,
+    /// Binding the run was admitted on; null for runs not started through a
+    /// retained admission (children, event starts) or admitted before it was kept.
+    pub binding: Option<String>,
+    /// Activation revision the run was admitted at; null when not known.
+    pub activation_revision: Option<String>,
+    /// Effect intents the run waits on (a pending effect or join members);
+    /// private join keys for X33, never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) pending_intents: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct EffectView {
@@ -120,6 +179,9 @@ pub struct RunDetail {
     pub namespace: NamespaceView,
     pub server_time_ms: i64,
     pub run: RunView,
+    /// X32: ordered step graph of the run's pinned definition from its entry;
+    /// null when no public graph is registered for the artifact.
+    pub steps: Option<playbook_view::StepTimeline>,
     pub effects: Page<EffectView>,
     pub receipts: Page<ReceiptView>,
     pub observation_is_atomic: bool,
@@ -175,7 +237,30 @@ fn run(v: Value) -> Result<RunView> {
         dependencies,
         pending_kind: optional(&v["pending"], "kind")?,
         admitted_at_ms: v["admitted_at_ms"].as_i64().ok_or(Error::Unknown)?,
+        definition: None,
+        waiting: None,
+        binding: None,
+        activation_revision: None,
+        pending_intents: pending_intents(&v["pending"])?,
     })
+}
+fn pending_intents(pending: &Value) -> Result<Vec<String>> {
+    let intents: Vec<String> = match pending["kind"].as_str() {
+        Some("effect") => optional(pending, "intent")?.into_iter().collect(),
+        // Human decisions are awaited as owned-async join members.
+        Some("join") => {
+            serde_json::from_value(pending["members"].clone()).map_err(|_| Error::Unknown)?
+        }
+        _ => Vec::new(),
+    };
+    if intents.len() > 128
+        || intents
+            .iter()
+            .any(|s| s.is_empty() || s.len() > 512 || s.chars().any(char::is_control))
+    {
+        return Err(Error::Overloaded);
+    }
+    Ok(intents)
 }
 fn effect(v: Value) -> Result<EffectView> {
     Ok(EffectView {
@@ -249,9 +334,75 @@ impl Driver {
             next_cursor: raw.next,
         })
     }
-    pub async fn inspect_runs(&self, actor: Uuid, query: PageQuery) -> Result<Page<RunView>> {
-        self.public_page(actor, InspectionKind::Runs, None, query, run)
-            .await
+    pub async fn inspect_runs(&self, actor: Uuid, query: RunsQuery) -> Result<Page<RunView>> {
+        query.validate()?;
+        let mut page = if query.ranged() {
+            self.ranged_runs(actor, &query).await?
+        } else {
+            self.public_page(
+                actor,
+                InspectionKind::Runs,
+                None,
+                query.page(query.after.clone(), query.limit),
+                run,
+            )
+            .await?
+        };
+        self.enrich_runs(&mut page.items).await?;
+        self.service.authorize_inspection(actor).await?;
+        Ok(page)
+    }
+    /// Runs are ordered by id, not admission time, so a range is a bounded
+    /// filtered scan over engine pages.
+    async fn ranged_runs(&self, actor: Uuid, query: &RunsQuery) -> Result<Page<RunView>> {
+        let limit = query
+            .page(query.after.clone(), query.limit)
+            .validate(&self.service.namespace)?;
+        let mut after = query.after.clone();
+        let mut items: Vec<RunView> = Vec::new();
+        let mut header = None;
+        for _ in 0..RANGE_SCAN_PAGES {
+            let page = self
+                .public_page(
+                    actor,
+                    InspectionKind::Runs,
+                    None,
+                    query.page(after, None),
+                    run,
+                )
+                .await?;
+            after = page.next_cursor.clone();
+            let mut matched = page
+                .items
+                .iter()
+                .filter(|view| query.contains(view.admitted_at_ms))
+                .cloned();
+            let header = header.insert(Page {
+                items: Vec::new(),
+                next_cursor: None,
+                ..page
+            });
+            for view in matched.by_ref() {
+                if items.len() == limit {
+                    // A further match exists: resume after the last returned run.
+                    return Ok(Page {
+                        next_cursor: items.last().map(|v| v.id.clone()),
+                        items,
+                        ..header.clone()
+                    });
+                }
+                items.push(view);
+            }
+            if after.is_none() {
+                break;
+            }
+        }
+        // Either the scan ended or its budget is spent and `after` resumes it.
+        Ok(Page {
+            items,
+            next_cursor: after,
+            ..header.ok_or(Error::Unknown)?
+        })
     }
     pub async fn inspect_run_timeline(
         &self,
@@ -276,7 +427,10 @@ impl Driver {
                 run,
             )
             .await?;
-        let run = runs.items.into_iter().next().ok_or(Error::Forbidden)?;
+        let mut found = runs.items;
+        self.enrich_runs(&mut found).await?;
+        let run = found.into_iter().next().ok_or(Error::Forbidden)?;
+        let steps = self.step_timeline(&run).await?;
         let effects = self
             .public_page(
                 actor,
@@ -299,6 +453,7 @@ impl Driver {
             namespace: runs.namespace,
             server_time_ms: self.service.current_time(),
             run,
+            steps,
             effects,
             receipts,
             observation_is_atomic: false,
@@ -354,7 +509,7 @@ async fn read_gate(
 async fn runs(
     RequireOwner(actor): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<RunsQuery>,
 ) -> Result<Json<Page<RunView>>> {
     bounded(d.inspect_runs(actor.id, q).await?)
 }
@@ -418,6 +573,39 @@ mod tests {
         );
     }
     #[test]
+    fn runs_time_range_is_half_open_and_validated() {
+        let q = |since_ms, until_ms| RunsQuery {
+            since_ms,
+            until_ms,
+            ..Default::default()
+        };
+        assert!(q(None, None).validate().is_ok() && !q(None, None).ranged());
+        assert!(q(Some(-1), None).validate().is_err());
+        assert!(q(None, Some(0)).validate().is_err());
+        assert!(q(Some(10), Some(10)).validate().is_err());
+        let range = q(Some(10), Some(20));
+        assert!(range.validate().is_ok() && range.ranged());
+        assert!(range.contains(10) && range.contains(19));
+        assert!(!range.contains(9) && !range.contains(20));
+        assert!(serde_json::from_value::<RunsQuery>(serde_json::json!({"from": 1})).is_err());
+    }
+    #[test]
+    fn run_projection_keeps_pending_effect_intent_private() {
+        let v = serde_json::json!({"id":"r1","artifact":"a","entry":"main","step":"review","status":"waiting","outcome":null,"reason":null,"root":"r1","parent":null,"children":[],"dependencies":{},"pending":{"kind":"effect","intent":"i-7"},"admitted_at_ms":5});
+        let view = run(v.clone()).unwrap();
+        assert_eq!(view.pending_kind.as_deref(), Some("effect"));
+        assert_eq!(view.pending_intents, ["i-7"]);
+        assert!(!serde_json::to_string(&view).unwrap().contains("i-7"));
+        let mut join = v.clone();
+        join["pending"] = serde_json::json!({"kind":"join","members":["i-8","i-9"],"mode":"all"});
+        let view = run(join).unwrap();
+        assert_eq!(view.pending_intents, ["i-8", "i-9"]);
+        assert!(!serde_json::to_string(&view).unwrap().contains("i-8"));
+        let mut event = v;
+        event["pending"] = serde_json::json!({"kind":"event","intent":"x"});
+        assert!(run(event).unwrap().pending_intents.is_empty());
+    }
+    #[test]
     fn public_receipt_projection_excludes_values_and_private_diagnostics() {
         let v = serde_json::json!({"sequence":9007199254740992_u64,"step":"send","at_ms":1,"kind":"command_result","detail":{"operation":"op","outcome":"queued","public":{"body":"private-canary"},"reason":"secret"}});
         let s = serde_json::to_string(&receipt(v).unwrap()).unwrap();
@@ -430,6 +618,7 @@ mod tests {
 #[allow(dead_code)]
 struct Contract {
     query: PageQuery,
+    runs_query: RunsQuery,
     runs: Page<RunView>,
     detail: RunDetail,
     admissions: Page<AdmissionView>,

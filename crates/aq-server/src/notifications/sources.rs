@@ -199,6 +199,29 @@ impl Policy {
         self.observe(e).await
     }
 
+    /// H3 rung 3: one `session.stalled` episode per stalled attempt. The
+    /// source is the ladder action ID, so a retried notify is idempotent.
+    pub async fn observe_stall(
+        &self,
+        source: Uuid,
+        scope: Scope,
+        attempt: Uuid,
+        title: String,
+    ) -> Result<Value> {
+        if source.is_nil() || attempt.is_nil() {
+            return Err(Error::Invalid);
+        }
+        let mut e = event(
+            source,
+            Kind::SessionStalled,
+            scope,
+            attempt.to_string(),
+            true,
+        );
+        e.title = title;
+        self.observe(e).await
+    }
+
     /// Failure claims and held/rework default-policy settlements need attention.
     /// This never promotes a process outcome to a Graph task-state transition.
     /// Latest retained result across attempts wins, so later success resolves.

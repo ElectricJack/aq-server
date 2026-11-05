@@ -346,3 +346,37 @@ fn optional_dependency_failure_and_budget_omission_remove_dependents_and_grants(
     assert!(out.composition_valid);
     assert!(out.explanation.effective_permissions.is_empty());
 }
+#[test]
+fn execution_confinement_defaults_to_deny_container_and_keeps_identities() {
+    let c = seed();
+    let e = &c.artifact().catalog.execution[0];
+    assert_eq!(e.confinement, ExecutionConfinement::default());
+    assert!(!e.confinement.permit_container && !e.confinement.require_native);
+    // Default is omitted, so pre-existing catalog identities are unchanged.
+    assert!(
+        serde_json::to_value(e)
+            .unwrap()
+            .get("confinement")
+            .is_none()
+    );
+    let same = modified(&c, |_, _| {}).unwrap();
+    assert_eq!(same.digest(), c.digest());
+    let permitted = modified(&c, |a, _| {
+        a.execution[0].confinement.permit_container = true
+    })
+    .unwrap();
+    assert_ne!(permitted.digest(), c.digest());
+    let value = serde_json::to_value(&permitted.artifact().catalog.execution[0]).unwrap();
+    assert_eq!(
+        value["confinement"],
+        serde_json::json!({"permit_container":true,"require_native":false})
+    );
+    assert!(
+        modified(&c, |a, _| a.execution[0].confinement =
+            ExecutionConfinement {
+                permit_container: true,
+                require_native: true,
+            })
+        .is_err()
+    );
+}

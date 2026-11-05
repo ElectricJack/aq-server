@@ -18,6 +18,12 @@ pub const MAX_REPORT_ARTIFACTS: usize = 8;
 pub const MAX_UPLOAD_TTL_MS: u64 = 1_800_000;
 pub const MAX_RETENTION_MS: u64 = 604_800_000;
 pub const MAX_SAFE_MILLIS: u64 = 9_007_199_254_740_991;
+/// Clips are retained as a verified passthrough copy (no transcode), so input,
+/// render copy and poster preview must fit the unchanged 10 MiB reservation.
+pub const MAX_CLIP_BYTES: usize = 4_194_304;
+pub const MAX_CLIP_DURATION_MS: u64 = 60_000;
+/// Bound on ISO-BMFF boxes walked during structural preflight.
+pub const MAX_MP4_BOXES: usize = 4096;
 
 pub fn rgba_len(width: u32, height: u32) -> Result<usize> {
     if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {

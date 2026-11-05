@@ -18,7 +18,12 @@ use sqlx::{Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod delivery_port;
+mod integration;
+mod messages;
 mod requests;
+pub use delivery_port::*;
+pub use integration::*;
 pub use requests::*;
 
 /// External ports. Authority never comes from here: it comes from the grant.
@@ -29,6 +34,8 @@ pub struct HostPorts {
     pub checks: Option<Arc<dyn CheckExecutor>>,
     /// D6 judgment provider; `None` refuses `no_permitted_profile`.
     pub judgments: Option<Arc<dyn JudgmentProvider>>,
+    /// D7 integration port (D1 delivery); `None` refuses `unavailable`.
+    pub integration: Option<Arc<dyn Integration>>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -90,8 +97,9 @@ pub const HOST5_COMMANDS: [&str; 5] = [
     "operation.cancel",
     "findings.reconcile",
 ];
-/// Catalog 2.0.0 adds asynchronous judgments/checks and operation.get.
-pub const HOST7_COMMANDS: [&str; 7] = [
+/// Catalog 2.0.0 adds asynchronous judgments/checks and operation.get. D11
+/// registers every catalog command: exactly the registry's twelve.
+pub const HOST7_COMMANDS: [&str; 12] = [
     "context.read",
     "work.ensure",
     "work.change",
@@ -99,6 +107,11 @@ pub const HOST7_COMMANDS: [&str; 7] = [
     "judgment.request",
     "check.request",
     "operation.get",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
 ];
 const WORK_REF: &str = "aq.playbook.work/";
 const ATTEMPT_REF: &str = "aq.execution.attempt/";
@@ -130,7 +143,10 @@ impl Service {
     fn ports(&self) -> Result<&HostPorts> {
         if !matches!(
             self.profile,
-            CatalogProfile::Host5 | CatalogProfile::Monitoring6 | CatalogProfile::Host7
+            CatalogProfile::Host5
+                | CatalogProfile::Monitoring6
+                | CatalogProfile::Host7
+                | CatalogProfile::Host8
         ) {
             return Err(Error::Forbidden);
         }
@@ -155,6 +171,13 @@ impl Service {
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
             "check.request" => self.check_request(owner, id, revision, intent).await,
             "operation.get" => self.host_operation_get(owner, id, revision, intent).await,
+            "candidate.prepare" => self.candidate_prepare(owner, id, revision, intent).await,
+            "candidate.publish" => self.candidate_publish(owner, id, revision, intent).await,
+            "message.send" => self.host_message_send(owner, id, revision, intent).await,
+            "decision.request" => {
+                self.host_decision_request(owner, id, revision, intent)
+                    .await
+            }
             _ => Err(Error::Invalid),
         }
     }
@@ -186,7 +209,7 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile == CatalogProfile::Host7 {
+        let commands: &[&str] = if self.profile.is_host2() {
             &HOST7_COMMANDS
         } else {
             &HOST5_COMMANDS
@@ -416,6 +439,7 @@ impl Service {
         identity: &str,
         result: HostResult,
     ) -> Result<HostResult> {
+        let (result, work) = self.work_accepted(intent, result)?;
         self.validated(intent, &result.outcome, &result.output)?;
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
@@ -446,10 +470,8 @@ impl Service {
             .bind(&result.output)
             .execute(&mut *tx)
             .await?;
-        if matches!(result.outcome.as_str(), "ensured" | "changed") {
-            self.work_event(&mut tx, intent, &result.outcome, &result.output)
-                .await?;
-        }
+        self.effect_event(&mut tx, intent, &result, work.as_ref())
+            .await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -466,6 +488,7 @@ impl Service {
         identity: &str,
         result: HostResult,
     ) -> Result<HostResult> {
+        let (result, work) = self.work_accepted(intent, result)?;
         self.record(
             &mut tx,
             id,
@@ -476,12 +499,52 @@ impl Service {
             &result.output,
         )
         .await?;
-        if matches!(result.outcome.as_str(), "ensured" | "changed") {
-            self.work_event(&mut tx, intent, &result.outcome, &result.output)
-                .await?;
-        }
+        self.effect_event(&mut tx, intent, &result, work.as_ref())
+            .await?;
         self.commit_fresh(tx, id, intent).await?;
         Ok(result)
+    }
+
+    /// Catalog profile 7 work.ensure is asynchronous: an ensured node is
+    /// returned as `accepted` with the durable operation handle, and the
+    /// ensured work output is carried separately to be tracked. Every other
+    /// profile and outcome is unchanged.
+    fn work_accepted(
+        &self,
+        intent: &Intent,
+        result: HostResult,
+    ) -> Result<(HostResult, Option<Value>)> {
+        if !self.profile.is_host2()
+            || intent.command.name != "work.ensure"
+            || result.outcome != "ensured"
+        {
+            return Ok((result, None));
+        }
+        let accepted = HostResult {
+            outcome: "accepted".into(),
+            output: json!({"handle": self.operation(intent)?.to_string()}),
+        };
+        Ok((accepted, Some(result.output)))
+    }
+
+    /// The outbox event (and, for accepted Host7 work, the running operation
+    /// row) that commits with a final effect row.
+    async fn effect_event(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        intent: &Intent,
+        result: &HostResult,
+        work: Option<&Value>,
+    ) -> Result<()> {
+        if let Some(work) = work {
+            self.track_work(tx, intent, work).await?;
+            return self.work_event(tx, intent, "ensured", work).await;
+        }
+        if matches!(result.outcome.as_str(), "ensured" | "changed") {
+            self.work_event(tx, intent, &result.outcome, &result.output)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn namespace_work(&self, tx: &mut Transaction<'_, Postgres>, task: Uuid) -> Result<bool> {
@@ -866,20 +929,31 @@ impl Service {
                 plan
             }
             Stage::Fresh => {
-                // Dispatch only by server-owned handle; never a caller route.
-                let attempt = if let Some(raw) = handle.strip_prefix(ATTEMPT_REF) {
-                    match Uuid::parse_str(raw) {
-                        Ok(attempt) => {
-                            let project: Option<Uuid> = sqlx::query_scalar("SELECT o.project_id FROM execution_attempts a JOIN profiled_launches l USING(attempt_id) JOIN admission_source_observations o ON o.observation_id=l.source_observation_id WHERE a.attempt_id=$1 AND a.kind='profiled_v1'")
+                // A catalog 2.0.0 check operation handle (judgments are not
+                // cancellable and fall through to refused).
+                if self.profile.is_host2()
+                    && let Some((check, subject)) = self.check_target(&handle).await?
+                {
+                    let plan = json!({"check": check, "subject": subject});
+                    self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
+                        .await?;
+                    self.commit_fresh(tx, id, intent).await?;
+                    plan
+                } else {
+                    // Dispatch only by server-owned handle; never a caller route.
+                    let attempt = if let Some(raw) = handle.strip_prefix(ATTEMPT_REF) {
+                        match Uuid::parse_str(raw) {
+                            Ok(attempt) => {
+                                let project: Option<Uuid> = sqlx::query_scalar("SELECT o.project_id FROM execution_attempts a JOIN profiled_launches l USING(attempt_id) JOIN admission_source_observations o ON o.observation_id=l.source_observation_id WHERE a.attempt_id=$1 AND a.kind='profiled_v1'")
                                 .bind(attempt)
                                 .fetch_optional(&mut *tx)
                                 .await?;
-                            (project == Some(self.namespace.project_id)).then_some(attempt)
+                                (project == Some(self.namespace.project_id)).then_some(attempt)
+                            }
+                            Err(_) => None,
                         }
-                        Err(_) => None,
-                    }
-                } else if let Some(raw) = handle.strip_prefix(WORK_REF) {
-                    match Uuid::parse_str(raw) {
+                    } else if let Some(raw) = handle.strip_prefix(WORK_REF) {
+                        match Uuid::parse_str(raw) {
                         Ok(task) if self.namespace_work(&mut tx, task).await? => {
                             sqlx::query_scalar::<_, Uuid>("SELECT attempt_id FROM execution_attempts WHERE task_id=$1 AND holds_task AND kind='profiled_v1'")
                                 .bind(task)
@@ -888,21 +962,38 @@ impl Service {
                         }
                         _ => None,
                     }
-                } else {
-                    None
-                };
-                let Some(attempt) = attempt else {
-                    return self
-                        .settle_fresh(tx, id, revision, intent, &identity, refused(0))
-                        .await;
-                };
-                let plan = json!({"attempt": attempt, "operation": self.operation(intent)?});
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-                    .await?;
-                self.commit_fresh(tx, id, intent).await?;
-                plan
+                    } else {
+                        None
+                    };
+                    let Some(attempt) = attempt else {
+                        return self
+                            .settle_fresh(tx, id, revision, intent, &identity, refused(0))
+                            .await;
+                    };
+                    let plan = json!({"attempt": attempt, "operation": self.operation(intent)?});
+                    self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
+                        .await?;
+                    self.commit_fresh(tx, id, intent).await?;
+                    plan
+                }
             }
         };
+        if !plan["check"].is_null() {
+            // The executor stop alone completes the check; an ambiguous
+            // executor cancel leaves the plan pending for a resumed dispatch.
+            let check: Uuid = serde_json::from_value(plan["check"].clone())?;
+            let outcome = self.cancel_check(check).await?;
+            return self
+                .finish(
+                    intent,
+                    &identity,
+                    HostResult {
+                        outcome: outcome.into(),
+                        output: json!({"reference": handle, "subject": plan["subject"]}),
+                    },
+                )
+                .await;
+        }
         let attempt: Uuid = serde_json::from_value(plan["attempt"].clone())?;
         let operation: Uuid = serde_json::from_value(plan["operation"].clone())?;
         use crate::profiled_execution::cancellation::{Disposition, cancel};
@@ -1026,7 +1117,12 @@ impl Service {
                     None => ("incomplete", subject_id.clone(), 0, String::new(), false),
                 }
             }
-            "health_observations" if self.profile == CatalogProfile::Monitoring6 => {
+            "health_observations"
+                if matches!(
+                    self.profile,
+                    CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
+                ) =>
+            {
                 if input["page"].as_u64() != Some(0) {
                     ("incomplete", subject_id.clone(), 0, String::new(), false)
                 } else {

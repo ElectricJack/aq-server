@@ -1,6 +1,26 @@
 //! Private generated files only; no external path/URL or result authority.
 use super::{Error, Result};
-use aq_result_media::Digest;
+use aq_result_media::{Digest, MediaKind, Mime};
+
+const FILES: [&str; 5] = [
+    "input.png",
+    "input.mp4",
+    "render.png",
+    "render.mp4",
+    "preview.png",
+];
+pub(super) fn input_name(media: MediaKind) -> &'static str {
+    match media {
+        MediaKind::Image => "input.png",
+        MediaKind::Video => "input.mp4",
+    }
+}
+pub(super) fn render_name(mime: Mime) -> &'static str {
+    match mime {
+        Mime::Png => "render.png",
+        Mime::Mp4 => "render.mp4",
+    }
+}
 use nix::{
     errno::Errno,
     fcntl::{Flock, FlockArg, OFlag, RenameFlags, openat, renameat2},
@@ -264,14 +284,14 @@ impl Root {
         private(&dir, true)?;
         Ok(dir)
     }
-    pub fn receive(&self, id: Uuid, bytes: &[u8], digest: &Digest) -> Result<()> {
+    pub fn receive(&self, id: Uuid, media: MediaKind, bytes: &[u8], digest: &Digest) -> Result<()> {
         self.check()?;
-        if bytes.len() > aq_result_media::MAX_INPUT_BYTES || Digest::of(bytes) != *digest {
+        if bytes.len() as u64 > media.max_input_bytes() || Digest::of(bytes) != *digest {
             return Err(Error::Integrity);
         }
         let dir = child(&self.staging, &id.to_string())?;
-        self.write_once(&dir, "input.png", bytes)?;
-        named_read(&dir, "input.png", bytes.len(), digest)?;
+        self.write_once(&dir, input_name(media), bytes)?;
+        named_read(&dir, input_name(media), bytes.len(), digest)?;
         self.check()
     }
     fn write_once(&self, dir: &File, name: &str, bytes: &[u8]) -> Result<()> {
@@ -293,14 +313,15 @@ impl Root {
         &self,
         id: Uuid,
         published: bool,
+        media: MediaKind,
         size: usize,
         digest: &Digest,
     ) -> Result<Vec<u8>> {
-        if size > aq_result_media::MAX_INPUT_BYTES {
+        if size as u64 > media.max_input_bytes() {
             return Err(Error::Invalid);
         }
         let dir = self.generation(id, published)?;
-        let bytes = named_read(&dir, "input.png", size, digest)?;
+        let bytes = named_read(&dir, input_name(media), size, digest)?;
         self.check()?;
         Ok(bytes)
     }
@@ -310,9 +331,16 @@ impl Root {
         self.write_once(&dir, "preview.png", image.preview().bytes())?;
         self.check()
     }
+    /// A clip render is the verified input bytes; its preview is the poster's.
+    pub fn clip_variants(&self, id: Uuid, render: &[u8], preview: &[u8]) -> Result<()> {
+        let dir = self.generation(id, false)?;
+        self.write_once(&dir, "render.mp4", render)?;
+        self.write_once(&dir, "preview.png", preview)?;
+        self.check()
+    }
     pub fn remove_variants(&self, id: Uuid) -> Result<()> {
         let dir = self.generation(id, false)?;
-        for name in ["render.png", "preview.png"] {
+        for name in FILES[2..].iter().copied() {
             match unlinkat(Some(dir.as_raw_fd()), name, UnlinkatFlags::NoRemoveDir) {
                 Ok(()) | Err(Errno::ENOENT) => {}
                 Err(_) => return Err(Error::Storage),
@@ -326,7 +354,7 @@ impl Root {
         self.point("probe")?;
         let dir = self.generation(id, true)?;
         for (name, variant) in [
-            ("render.png", &variants.render),
+            (render_name(variants.render.mime), &variants.render),
             ("preview.png", &variants.preview),
         ] {
             let file = member(&dir, name.as_ref(), OFlag::O_RDONLY)?;
@@ -380,9 +408,13 @@ impl Root {
         variant: &aq_result_media::Variant,
     ) -> Result<Vec<u8>> {
         self.point("content_read")?;
-        if !matches!(name, "render.png" | "preview.png")
-            || variant.bytes > aq_result_media::MAX_RENDER_BYTES as u64
-        {
+        let bound = match variant.mime {
+            Mime::Png => aq_result_media::MAX_RENDER_BYTES,
+            Mime::Mp4 => aq_result_media::MAX_CLIP_BYTES,
+        };
+        let named =
+            name == render_name(variant.mime) || name == "preview.png" && variant.mime == Mime::Png;
+        if !named || variant.bytes > bound as u64 {
             return Err(Error::Invalid);
         }
         let dir = self.generation(id, true)?;
@@ -396,10 +428,14 @@ impl Root {
         self.check()?;
         Ok(bytes)
     }
-    pub fn charge(&self, id: Uuid) -> Result<u64> {
+    pub fn charge(&self, id: Uuid, media: MediaKind) -> Result<u64> {
         let dir = self.generation(id, true)?;
         let mut total = io(dir.metadata())?.blocks() * 512;
-        for name in ["input.png", "render.png", "preview.png"] {
+        let render = match media {
+            MediaKind::Image => "render.png",
+            MediaKind::Video => "render.mp4",
+        };
+        for name in [input_name(media), render, "preview.png"] {
             let file = member(&dir, name.as_ref(), OFlag::O_RDONLY)?;
             let m = private(&file, false)?;
             total = total
@@ -439,7 +475,7 @@ impl Root {
             }
         };
         private(&dir, true)?;
-        for file in ["input.png", "render.png", "preview.png"] {
+        for file in FILES {
             match unlinkat(Some(dir.as_raw_fd()), file, UnlinkatFlags::NoRemoveDir) {
                 Ok(()) | Err(Errno::ENOENT) => {}
                 Err(_) => return Err(Error::Storage),

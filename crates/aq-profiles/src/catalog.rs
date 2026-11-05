@@ -94,6 +94,26 @@ pub struct Execution {
     pub context_limit_bytes: u64,
     pub permissions: Vec<Permission>,
     pub credential_profile_references: Vec<String>,
+    /// Harness-confinement permission, delivered to the worker inside the
+    /// retained execution-profile definition. Omitted when default (deny
+    /// container), so existing catalog identities are unchanged.
+    #[serde(default, skip_serializing_if = "ExecutionConfinement::is_default")]
+    pub confinement: ExecutionConfinement,
+}
+/// Mirrors aq-worker `runner::sandbox::confinement::ExecutionConfinement`.
+/// Default: native confinement only, container confinement denied.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionConfinement {
+    #[serde(default)]
+    pub permit_container: bool,
+    #[serde(default)]
+    pub require_native: bool,
+}
+impl ExecutionConfinement {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -406,6 +426,10 @@ pub fn validate(
                 && e.context_limit_bytes > 0
                 && e.context_limit_bytes <= 1_048_576,
             "execution bounds",
+        )?;
+        ensure(
+            !(e.confinement.permit_container && e.confinement.require_native),
+            "execution confinement contradictory",
         )?;
         insert(
             "execution",

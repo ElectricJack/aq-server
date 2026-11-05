@@ -12,8 +12,8 @@
   },
   "limits": {
     "body_bytes": 16384,
-    "context_refs": 0,
-    "attachments": 0,
+    "context_refs": 16,
+    "attachments": 4,
     "history_page": 16
   }
 }

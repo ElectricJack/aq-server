@@ -26,7 +26,8 @@ def validate(kind, value):
         if a['kind'] == 'image_region':
             assert a['width'] > 0 and a['height'] > 0
             assert a['x'] + a['width'] <= 1 and a['y'] + a['height'] <= 1
-        assert a['kind'] != 'video_range', 'unsupported_media_kind'
+        if a['kind'] == 'video_range':
+            assert 0 <= a['start_ms'] < a['end_ms'] <= 60000
     if kind == 'FeedbackDraft':
         assert value['title'].strip() and 1 <= len(value['title']) <= 200
         assert not any(ord(c) < 32 for c in value['title'])

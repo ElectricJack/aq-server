@@ -9,8 +9,11 @@ pub mod delegated_permits;
 pub mod delivery;
 pub mod error;
 pub mod execution;
+pub mod execution_permits;
+pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
+pub mod lifecycle_artifacts;
 pub mod node_storage;
 pub mod notifications;
 pub mod observations;
@@ -21,12 +24,14 @@ pub mod project_bindings;
 pub mod protected_storage;
 pub mod provider_accounts;
 pub mod readiness;
+pub mod repository_onboarding;
 pub mod result_media;
 pub mod results_feedback;
 pub mod reviews;
 pub mod row_retention;
 pub mod session_access;
 pub mod source_retention;
+pub mod stall;
 pub mod store;
 pub mod templates;
 pub mod terminal;
@@ -96,6 +101,13 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The D1 delivery service over the configured aq-git socket, if source
+    /// retention (which owns that socket) is configured.
+    pub fn delivery(&self) -> Option<delivery::DeliveryService> {
+        self.source_retention
+            .as_ref()
+            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config))
+    }
     pub(crate) fn terminal_read_view(&self) -> Self {
         Self {
             store: self.store.terminal_read_view(),
@@ -242,6 +254,9 @@ pub fn build_admin_router_with_optional_owners(
         notifications: true,
         supervisor_conversation: true,
         reviews: reviews.is_some(),
+        waits: true,
+        session_operations: true,
+        questions: true,
         playbook_loaded_definitions: playbooks
             .as_ref()
             .is_some_and(|driver| driver.loaded_definitions_available()),
@@ -273,7 +288,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(media_routes)
         .merge(admin_api::admin_routes())
         .merge(
-            dashboard_api::routes_with_reviews(state.clone(), reviews)
+            dashboard_api::routes_with_reviews(state.clone(), reviews, playbooks.clone())
                 .layer(axum::Extension(playbooks)),
         )
         .merge(agent_access::human::routes(&state))
@@ -287,8 +302,10 @@ pub fn build_admin_router_with_optional_owners(
         .merge(terminal::api::human_routes(state.clone()))
         .merge(profile_catalog::admin_routes())
         .merge(project_bindings::admin_routes())
+        .merge(repository_onboarding::admin_routes())
         .merge(intelligence::admin_routes())
         .merge(agent_access::admin_routes(state.clone()))
+        .merge(hibernation::admin_routes())
         .merge(source_retention::admin_routes())
         .merge(execution::api::admin_routes(state.clone()))
         .route("/healthz", get(healthz))
@@ -360,6 +377,9 @@ fn build_worker_router_inner(
         .merge(profiled_execution::stopped::routes(state.clone()))
         .merge(profiled_execution::results::routes(state.clone()))
         .merge(profiled_execution::material_api::routes(state.clone()))
+        .merge(profiled_execution::login_refresh::api::routes(
+            state.clone(),
+        ))
         .merge(profiled_execution::artifact_api::routes(state.clone()))
         .merge(profiled_execution::source_api::routes(state.clone()))
         .merge(node_storage::routes(state.clone()))
@@ -367,11 +387,14 @@ fn build_worker_router_inner(
         .merge(observations::api::transport_routes(state.clone()))
         .merge(intelligence::worker_routes())
         .merge(agent_access::machine_routes(state.clone()))
+        .merge(hibernation::routes(state.clone()))
         .merge(agent_access::supervisor_conversation::supervisor_routes(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
         .merge(source_retention::machine_routes(state.clone()))
+        .merge(lifecycle_artifacts::routes(state.clone()))
+        .merge(execution_permits::routes(state.clone()))
         .merge(execution::api::worker_routes(state.clone()))
         .merge(terminal::api::worker_routes(state.clone()))
         .route("/healthz", get(healthz))
@@ -451,8 +474,11 @@ async fn run_with_listeners_and_dashboard(
     ));
     let terminal_task = tokio::spawn(terminal::runtime::run(state.clone(), rx.clone()));
     let retention_task = tokio::spawn(row_retention::run(state.clone(), rx.clone()));
+    let waits_task = tokio::spawn(agent_access::waits::run(state.clone(), rx.clone()));
+    let wakes_task = tokio::spawn(agent_access::wakes::run(state.clone(), rx.clone()));
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
+    let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
     tokio::spawn(async move {
         shutdown.await;
         let _ = tx.send(true);
@@ -488,6 +514,10 @@ async fn run_with_listeners_and_dashboard(
     );
     retention_task.abort();
     let _ = retention_task.await;
+    waits_task.abort();
+    let _ = waits_task.await;
+    wakes_task.abort();
+    let _ = wakes_task.await;
     terminal_task.abort();
     let _ = terminal_task.await;
     notification_task.abort();
@@ -496,6 +526,8 @@ async fn run_with_listeners_and_dashboard(
     let _ = source_gc_task.await;
     expiry_task.abort();
     let _ = expiry_task.await;
+    stall_task.abort();
+    let _ = stall_task.await;
     let policy_shutdown = match policy_runtime {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
@@ -529,6 +561,30 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
+/// Builds the runtime state shared by `serve` and one-shot owner commands.
+pub async fn build_state(
+    config: Config,
+    store: Store,
+    http: reqwest::Client,
+) -> anyhow::Result<AppState> {
+    let agent_access = match &config.agent_access {
+        Some(settings) => Some(Arc::new(agent_access::Runtime::new(settings).await?)),
+        None => None,
+    };
+    let source_retention = match &config.source_retention {
+        Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
+        None => None,
+    };
+    Ok(AppState {
+        agent_access,
+        source_retention,
+        identity: identity::verifier_from_config(&config.auth, http),
+        config: Arc::new(config),
+        store,
+        clock: system_clock(),
+    })
+}
+
 /// Binds both listeners and serves until SIGTERM or ctrl-c.
 pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
     let dashboard = std::env::var_os("AQ_DASHBOARD_DIR")
@@ -542,21 +598,6 @@ pub async fn run(config: Config, store: Store) -> anyhow::Result<()> {
     let admin = tokio::net::TcpListener::bind(config.server.admin_bind).await?;
     let worker = tokio::net::TcpListener::bind(config.server.worker_bind).await?;
     tracing::info!(admin = %admin.local_addr()?, worker = %worker.local_addr()?, "listening");
-    let agent_access = match &config.agent_access {
-        Some(settings) => Some(Arc::new(agent_access::Runtime::new(settings).await?)),
-        None => None,
-    };
-    let source_retention = match &config.source_retention {
-        Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
-        None => None,
-    };
-    let state = AppState {
-        agent_access,
-        source_retention,
-        identity: identity::verifier_from_config(&config.auth, http),
-        config: Arc::new(config),
-        store,
-        clock: system_clock(),
-    };
+    let state = build_state(config, store, http).await?;
     run_with_listeners_and_dashboard(state, admin, worker, shutdown_signal(), dashboard).await
 }

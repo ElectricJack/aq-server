@@ -344,20 +344,17 @@ mod tests {
 
     #[tokio::test]
     async fn cosign_timeout_kills_and_is_unavailable() {
-        use std::os::unix::fs::PermissionsExt;
         // A stand-in that ignores its arguments and hangs.
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("hang");
         let pidfile = dir.path().join("pid");
-        std::fs::write(
+        crate::test_support::write_stub(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\necho $$ > {}\nexec sleep 30\n",
                 pidfile.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let mut c = cosign(script.to_str().unwrap());
         c.timeout = Duration::from_millis(300);
         let started = std::time::Instant::now();

@@ -73,8 +73,51 @@ pub enum PublishResult {
         observed_at: String,
         caused_by_this_operation: bool,
     },
+    /// `target_moved` carries the observed remote OID; other reasons may not.
     Rejected {
         reason: String,
+        #[serde(default)]
+        observed_target: Option<ObjectId>,
+        #[serde(default)]
+        observed_at: Option<String>,
+    },
+}
+/// aq-git §10.3 `operation.reconcile` / `operation.resolve` reply. Exactly one of
+/// a settling `resolution` or a still-ambiguous `outcome: "indeterminate"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReconcileResult {
+    pub target_operation_id: Uuid,
+    #[serde(default)]
+    pub resolution: Option<Resolution>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub observed_target: Option<ObjectId>,
+    #[serde(default)]
+    pub observed_at: Option<String>,
+    #[serde(default)]
+    pub observation_error: Option<String>,
+}
+impl ReconcileResult {
+    /// Observed presence or an explicit owner resolution. Never `applied`:
+    /// historical remote effect of the original dispatch stays unknown.
+    pub fn is_settled(&self) -> bool {
+        self.resolution.is_some()
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Resolution {
+    AlreadyPresent {
+        observed_target: ObjectId,
+        observed_at: String,
+        caused_by_this_operation: bool,
+    },
+    Resolved {
+        disposition: String,
+        reason: String,
+        evidence: Value,
+        resolved_at: String,
     },
 }
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -216,7 +259,63 @@ impl WireResult for PublishResult {
                     && !observed_target.hex.bytes().all(|b| b == b'0')
                     && chrono::DateTime::parse_from_rfc3339(observed_at).is_ok()
             }
-            Self::Rejected { reason } => !reason.is_empty(),
+            Self::Rejected {
+                reason,
+                observed_target,
+                observed_at,
+            } => {
+                !reason.is_empty()
+                    && observed_target
+                        .as_ref()
+                        .is_none_or(|o| o.validate().is_ok())
+                    && observed_at
+                        .as_ref()
+                        .is_none_or(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
+            }
+        }
+    }
+}
+impl WireResult for ReconcileResult {
+    fn validate(&self, _: &OperationContext, operation: &str, params: &Value) -> bool {
+        if params["target_operation_id"] != self.target_operation_id.to_string()
+            || self
+                .observed_target
+                .as_ref()
+                .is_some_and(|o| o.validate().is_err())
+        {
+            return false;
+        }
+        match (&self.resolution, self.outcome.as_deref()) {
+            (None, Some("indeterminate")) => operation == "operation.reconcile",
+            (
+                Some(Resolution::AlreadyPresent {
+                    observed_target,
+                    observed_at,
+                    caused_by_this_operation,
+                }),
+                None,
+            ) => {
+                operation == "operation.reconcile"
+                    && !caused_by_this_operation
+                    && observed_target.validate().is_ok()
+                    && !observed_target.hex.bytes().all(|b| b == b'0')
+                    && chrono::DateTime::parse_from_rfc3339(observed_at).is_ok()
+            }
+            (
+                Some(Resolution::Resolved {
+                    disposition,
+                    reason,
+                    resolved_at,
+                    ..
+                }),
+                None,
+            ) => {
+                operation == "operation.resolve"
+                    && params["disposition"] == *disposition
+                    && params["reason"] == *reason
+                    && chrono::DateTime::parse_from_rfc3339(resolved_at).is_ok()
+            }
+            _ => false,
         }
     }
 }

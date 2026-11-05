@@ -17,6 +17,10 @@ class SessionMailbox(TypedDict):
     attempt_id: str
     generation: int
 
+class SupervisorMailbox(TypedDict):
+    kind: Literal['global_supervisor']
+    conversation_id: str
+
 class MessageSend(TypedDict):
     operation_id: str
     message_id: str
@@ -66,6 +70,13 @@ class OwnerMessageSender(TypedDict):
 class SessionMessageSender(TypedDict):
     kind: Literal['session']
     binding: Binding
+
+class SupervisorMessageSender(TypedDict):
+    kind: Literal['central_supervisor']
+    actor_id: str
+    generation: int
+    session_id: str
+    conversation_id: str
 
 class MailboxMessage(TypedDict):
     message_id: str
@@ -563,8 +574,8 @@ class RecoveryResponse(TypedDict):
 EdgeType: TypeAlias = Literal['blocks', 'parent-child', 'references', 'motivated_by', 'produces', 'supports', 'contradicts', 'supersedes']
 InformationalEdgeType: TypeAlias = Literal['references', 'motivated_by', 'produces', 'supports', 'contradicts', 'supersedes']
 Capability: TypeAlias = Literal['read.get', 'read.revision', 'read.history', 'read.search', 'read.context', 'read.relationships', 'write.finding', 'write.correct', 'write.proposal', 'write.relationships', 'write.task_content', 'message.send', 'message.read', 'message.ack']
-MailboxRecipient: TypeAlias = Union[TaskMailbox, SessionMailbox]
-MessageSender: TypeAlias = Union[OwnerMessageSender, SessionMessageSender]
+MailboxRecipient: TypeAlias = Union[TaskMailbox, SessionMailbox, SupervisorMailbox]
+MessageSender: TypeAlias = Union[OwnerMessageSender, SessionMessageSender, SupervisorMessageSender]
 MailboxEntry: TypeAlias = Union[MailboxMessage, OmittedMailboxMessage]
 NodeKind: TypeAlias = Literal['task', 'knowledge']
 ContentType: TypeAlias = Literal['fact', 'decision', 'policy', 'procedure', 'incident', 'reference', 'note']

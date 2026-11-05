@@ -1,17 +1,27 @@
 use super::{Result, StoreError};
 use sqlx::{Postgres, Transaction};
 
-pub(super) async fn media36_storage_guard(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub(super) async fn media36_storage_guard(
+    tx: &mut Transaction<'_, Postgres>,
+    version: u32,
+) -> Result<()> {
     // A surviving function OID/name is insufficient after CREATE OR REPLACE.
     // Compare the installed body with the exact frozen migration body too.
     let migration = include_str!("../../migrations/0036_result_media_owner.sql");
+    let clips = include_str!("../../migrations/0075_result_media_clips.sql");
     for name in [
         "guard_result_media_storage",
         "guard_result_media_budget",
         "guard_result_media_intent",
     ] {
-        let expected = migration
-            .split_once(&format!("CREATE FUNCTION {name}()"))
+        // 0075 replaces the intent guard to admit video clips.
+        let (source, marker) = if version >= 75 && name == "guard_result_media_intent" {
+            (clips, format!("CREATE OR REPLACE FUNCTION {name}()"))
+        } else {
+            (migration, format!("CREATE FUNCTION {name}()"))
+        };
+        let expected = source
+            .split_once(&marker)
             .and_then(|(_, tail)| tail.split_once("AS $$"))
             .and_then(|(_, tail)| tail.split_once("$$;"))
             .map(|(body, _)| body)

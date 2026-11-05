@@ -1,5 +1,5 @@
 mod common;
-use aq_profiles::{FallbackReason, UnknownCostPolicy};
+use aq_profiles::{ExecutionConfinement, FallbackReason, UnknownCostPolicy};
 use aq_selection::*;
 use common::*;
 use uuid::Uuid;
@@ -822,6 +822,7 @@ fn sandbox_placement(input: &SelectionInputs, harness_version: &str) -> Placemen
         }],
         ceiling: None,
         preferred_peer: None,
+        backend: None,
     }
 }
 fn all_traces_refuse(out: &SelectionOutcome, state: CandidateState, reason: &str) {
@@ -911,6 +912,56 @@ fn node_at_spend_ceiling_refuses_with_reason_in_trace() {
     json.as_object_mut().unwrap().remove("placement");
     let old: SelectionInputs = serde_json::from_value(json).unwrap();
     assert!(old.placement.is_none());
+}
+#[test]
+fn container_only_backend_admits_only_permitted_container_confinement() {
+    let (catalog, mut input) = fixture();
+    let mut placement = sandbox_placement(&input, "fixture-1");
+    placement.backend = Some(BackendKind::DockerLocal);
+    input.placement = Some(placement);
+    // Default execution profile denies container confinement.
+    let out = select(&catalog, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::PolicyDenied,
+        "container_confinement_not_permitted",
+    );
+    let native = ExecutionConfinement {
+        permit_container: false,
+        require_native: true,
+    };
+    let required = change_confinement(&catalog, native, &mut input);
+    let out = select(&required, &input).unwrap();
+    all_traces_refuse(
+        &out,
+        CandidateState::Unsupported,
+        "execution_requires_native_confinement",
+    );
+    let permit = ExecutionConfinement {
+        permit_container: true,
+        require_native: false,
+    };
+    let permitted = change_confinement(&catalog, permit, &mut input);
+    assert!(select(&permitted, &input).unwrap().resolved.is_some());
+    assert_eq!(
+        admit_confinement(input.placement.as_ref(), &permit),
+        Ok(ConfinementMode::Container)
+    );
+    // Non-container-only backends (and nodes without a sandbox) stay native,
+    // including for native-required profiles.
+    for backend in [Some(BackendKind::Boat), None] {
+        input.placement.as_mut().unwrap().backend = backend;
+        assert_eq!(
+            admit_confinement(input.placement.as_ref(), &native),
+            Ok(ConfinementMode::Native)
+        );
+    }
+    assert_eq!(
+        admit_confinement(None, &ExecutionConfinement::default()),
+        Ok(ConfinementMode::Native)
+    );
+    let required = change_confinement(&catalog, native, &mut input);
+    assert!(select(&required, &input).unwrap().resolved.is_some());
 }
 type PlacementMutation = (fn(&mut Placement), &'static str);
 

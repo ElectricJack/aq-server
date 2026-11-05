@@ -151,6 +151,8 @@ async fn actual_http_reserves_replays_retains_lists_and_stream_frames_hold_all_g
         input_bytes: input.len() as u64,
         filename: "human-large.png".into(),
         capture: None,
+        media: Default::default(),
+        poster_artifact_id: None,
     })
     .unwrap();
     let base = format!(

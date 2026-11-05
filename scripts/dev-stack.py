@@ -78,6 +78,7 @@ def prepare():
     private_file(secret / "playbook_engine_keys", json.dumps(dict(active_key_id="dev-engine-1",
         keys={"dev-engine-1": secrets.token_hex(32)})).encode())
     private_file(secret / "playbook_bridge_key", secrets.token_bytes(32))
+    private_file(secret / "terminal_protection_key", secrets.token_bytes(32))
     config = (ROOT / "vault.example/config.toml").read_text()
     config += '''
 [agent_access]
@@ -88,6 +89,11 @@ mutation_actor_id = "dev-service"
 staging_root = "/var/lib/aq/source-staging"
 git_root = "/var/lib/aq/git"
 git_socket = "/run/aq-git/central.sock"
+[terminals.protection]
+active_key_id = "dev-terminal-1"
+[[terminals.protection.keys]]
+id = "dev-terminal-1"
+file = "/run/aq-dev/terminal_protection_key"
 '''
     target = vault / "config.toml"
     if target.exists() and target.read_text() != config:

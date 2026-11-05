@@ -56,6 +56,12 @@ pub struct IntelligenceConfig {
     /// selection registry digest, which covers credentials and harnesses.
     #[serde(default)]
     pub accounting: AccountingCatalog,
+    /// C5b runtime-writable store for stored subscription-login versions: an
+    /// absolute, owner-only (0700) directory. Without it, write-back and
+    /// operator import are refused. Excluded
+    /// from the registry digest (a local path, not selection policy).
+    #[serde(default)]
+    pub material_store: Option<PathBuf>,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +165,11 @@ impl IntelligenceConfig {
             {
                 return Err("credential file must be absolute".into());
             }
+        }
+        if let Some(path) = &self.material_store
+            && !path.is_absolute()
+        {
+            return Err("material_store must be absolute".into());
         }
         Ok(())
     }

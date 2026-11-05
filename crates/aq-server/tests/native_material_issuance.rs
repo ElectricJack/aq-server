@@ -18,6 +18,7 @@ async fn selected_account_node_and_current_private_bytes_are_required() {
     let choice = &f.selection.choice;
     let registry = IntelligenceConfig {
         accounting: Default::default(),
+        material_store: None,
         revision: 1,
         credentials: vec![CredentialConfig {
             kind: Default::default(),
@@ -114,6 +115,7 @@ async fn restricted_backend_cannot_issue_material_lease() {
         let choice = &f.selection.choice;
         let registry = IntelligenceConfig {
             accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
                 kind,

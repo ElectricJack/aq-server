@@ -4,7 +4,7 @@ use aq_server::delivery::{
     OperationContext, PublishRequest, PublishResult,
 };
 
-fn service(h: &Harness) -> DeliveryService {
+pub(super) fn service(h: &Harness) -> DeliveryService {
     let config = SourceRetentionConfig {
         keep_per_task: 2,
         max_age: 30 * 86400,
@@ -18,14 +18,14 @@ fn service(h: &Harness) -> DeliveryService {
     };
     DeliveryService::new(h.pool.clone(), &config)
 }
-fn context(h: &Harness) -> OperationContext {
+pub(super) fn context(h: &Harness) -> OperationContext {
     OperationContext {
         operation_id: Uuid::new_v4(),
         repository_id: h.manifest.source.repository_id,
         binding_generation: 1,
     }
 }
-fn candidate(h: &Harness, receipt: Uuid) -> CandidateRequest {
+pub(super) fn candidate(h: &Harness, receipt: Uuid) -> CandidateRequest {
     CandidateRequest {
         context: context(h),
         base: h.manifest.source.base.clone(),
@@ -37,7 +37,7 @@ fn candidate(h: &Harness, receipt: Uuid) -> CandidateRequest {
         },
     }
 }
-async fn retain(h: &Harness) -> Uuid {
+pub(super) async fn retain(h: &Harness) -> Uuid {
     let op = Uuid::new_v4();
     let m = &h.manifest;
     let ack = json!({"receiver_installation_id":Uuid::new_v4(),"repository_id":m.source.repository_id,"binding_generation":1,"transfer_id":m.artifact_id,"source":m.checkpoint,"retention_handle":m.artifact_id,"manifest_digest":m.manifest_digest,"retention_state":"active","historical":false});
@@ -46,10 +46,10 @@ async fn retain(h: &Harness) -> Uuid {
         .bind(m.transfer_id).bind(m.attempt.attempt_id).bind(h.identity.node_id).bind(m.source.repository_id).bind(m.artifact_id).bind(op).bind(json!(m)).bind(receipt).bind(ack).execute(&h.pool).await.unwrap();
     op
 }
-async fn peer(h: &Harness, result: Value) -> tokio::task::JoinHandle<Value> {
+pub(super) async fn peer(h: &Harness, result: Value) -> tokio::task::JoinHandle<Value> {
     response_peer(h, json!({"ok":true,"result":result})).await
 }
-async fn response_peer(h: &Harness, mut reply: Value) -> tokio::task::JoinHandle<Value> {
+pub(super) async fn response_peer(h: &Harness, mut reply: Value) -> tokio::task::JoinHandle<Value> {
     let listener = tokio::net::UnixListener::bind(h.dir.path().join("git.sock")).unwrap();
     let pool = h.pool.clone();
     tokio::spawn(async move {
@@ -81,7 +81,7 @@ async fn response_peer(h: &Harness, mut reply: Value) -> tokio::task::JoinHandle
         req
     })
 }
-fn ready(h: &Harness, id: Uuid) -> Value {
+pub(super) fn ready(h: &Harness, id: Uuid) -> Value {
     json!({"candidate_id":id,"state":"ready","candidate":h.manifest.checkpoint,"clean_prefix":h.manifest.checkpoint,"retention_handle":id,"conflict_step":null,"conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false})
 }
 #[tokio::test]

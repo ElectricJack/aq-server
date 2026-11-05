@@ -244,6 +244,13 @@ async fn artifact(state: &AppState, p: &Pin, id: Uuid, digest: &str) -> Result<V
     }
     Ok(v)
 }
+fn unsupported_kind() -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unsupported_media_kind",
+        "The anchor kind does not match the cited artifact's media",
+    )
+}
 async fn anchor(state: &AppState, p: &Pin, a: &Anchor) -> Result<()> {
     match a {
         Anchor::Result => Ok(()),
@@ -265,16 +272,32 @@ async fn anchor(state: &AppState, p: &Pin, a: &Anchor) -> Result<()> {
             {
                 return Err(invalid());
             }
-            artifact(state, p, *artifact_id, digest).await?;
+            let receipt = artifact(state, p, *artifact_id, digest).await?;
+            if receipt["rendering_policy"] != "aq.png.rgba8-srgb-v1" {
+                return Err(unsupported_kind());
+            }
             Ok(())
         }
-        // The configured owner only retains PNG. Video anchors cannot refer to
-        // fabricated metadata; a future clip owner must supply duration proof.
-        Anchor::VideoRange { .. } => Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "unsupported_media_kind",
-            "Video evidence is not supported by this media store",
-        )),
+        // A range cites the retained clip's receipt duration, never
+        // client-supplied metadata; image artifacts have no timeline.
+        Anchor::VideoRange {
+            artifact_id,
+            digest,
+            start_ms,
+            end_ms,
+        } => {
+            let receipt = artifact(state, p, *artifact_id, digest).await?;
+            let Some(duration) = receipt["clip"]["duration_ms"].as_u64() else {
+                return Err(unsupported_kind());
+            };
+            if receipt["rendering_policy"] != "aq.mp4.passthrough-v1"
+                || start_ms >= end_ms
+                || *end_ms > duration
+            {
+                return Err(invalid());
+            }
+            Ok(())
+        }
     }
 }
 pub(super) async fn effect(state: &AppState, user: &User, id: Uuid) -> Result<Option<Outcome>> {
@@ -518,7 +541,7 @@ pub(super) async fn detail(state: &AppState, user: &User, p: &Pin) -> Result<Det
     .fetch_all(&state.store.pool)
     .await?;
     let now = (state.clock)().timestamp_millis();
-    let artifacts=sqlx::query("SELECT operation_id,input_digest,capture FROM result_media_intents WHERE report_id=$1 AND report_revision=$2 AND state='retained' AND cleanup_state='none' AND withheld_at_ms IS NULL AND retain_until_ms>$3 ORDER BY operation_id").bind(p.report).bind(&p.revision).bind(now).fetch_all(&state.store.pool).await?;
+    let artifacts=sqlx::query("SELECT operation_id,input_digest,capture,rendering_policy FROM result_media_intents WHERE report_id=$1 AND report_revision=$2 AND state='retained' AND cleanup_state='none' AND withheld_at_ms IS NULL AND retain_until_ms>$3 ORDER BY operation_id").bind(p.report).bind(&p.revision).bind(now).fetch_all(&state.store.pool).await?;
     let mut requirements = Vec::new();
     for r in &p.policy.requirements {
         let waiver:Option<Uuid>=sqlx::query_scalar("SELECT operation_id FROM result_evidence_waivers WHERE report_id=$1 AND report_revision=$2 AND requirement_id=$3 AND policy_revision=$4").bind(p.report).bind(&p.revision).bind(&r.id).bind(&r.policy_revision).fetch_optional(&state.store.pool).await?;
@@ -526,8 +549,11 @@ pub(super) async fn detail(state: &AppState, user: &User, p: &Pin) -> Result<Det
             .iter()
             .filter(|a| {
                 let c: Value = a.get("capture");
-                r.kind == "image"
-                    && c["scenario"] == r.scenario
+                let policy: &str = a.get("rendering_policy");
+                matches!(
+                    (r.kind.as_str(), policy),
+                    ("image", "aq.png.rgba8-srgb-v1") | ("video", "aq.mp4.passthrough-v1")
+                ) && c["scenario"] == r.scenario
                     && c["environment"] == r.environment
                     && c["viewport"] == json!(r.viewport)
                     && c["claimed_source"] == json!(m.source_base)
@@ -800,7 +826,7 @@ pub(super) async fn feed(
 ) -> Result<Vec<(Uuid, String)>> {
     principal(state, user).await?;
     let now = (state.clock)().timestamp_millis();
-    let rows=sqlx::query("SELECT p.* FROM result_revision_pins p WHERE NOT EXISTS(SELECT 1 FROM profiled_result_reports newer WHERE newer.supersedes=p.report_id) AND ($1::uuid IS NULL OR p.project_id=$1) AND ($2::uuid IS NULL OR p.task_id=$2) AND ($3::bigint IS NULL OR p.submitted_at_ms>=$3) AND ($4::bigint IS NULL OR p.submitted_at_ms<=$4) AND ($5='any' OR ($5='image')=EXISTS(SELECT 1 FROM result_media_intents m WHERE m.report_id=p.report_id AND m.report_revision=p.report_revision AND m.state='retained' AND m.cleanup_state='none' AND m.withheld_at_ms IS NULL AND m.retain_until_ms>$6)) AND ($7<>'following' OR EXISTS(SELECT 1 FROM result_follows f WHERE f.result_id=p.result_id AND f.actor_id=$8 AND f.following) OR EXISTS(SELECT 1 FROM result_thread_follows f JOIN result_threads t ON t.id=f.thread_id JOIN result_revision_pins old ON old.report_id=t.report_id WHERE old.result_id=p.result_id AND f.actor_id=$8 AND f.following)) ORDER BY p.submitted_at_ms DESC,p.report_id DESC LIMIT 1001")
+    let rows=sqlx::query("SELECT p.* FROM result_revision_pins p WHERE NOT EXISTS(SELECT 1 FROM profiled_result_reports newer WHERE newer.supersedes=p.report_id) AND ($1::uuid IS NULL OR p.project_id=$1) AND ($2::uuid IS NULL OR p.task_id=$2) AND ($3::bigint IS NULL OR p.submitted_at_ms>=$3) AND ($4::bigint IS NULL OR p.submitted_at_ms<=$4) AND ($5='any' OR ($5<>'none')=EXISTS(SELECT 1 FROM result_media_intents m WHERE m.report_id=p.report_id AND m.report_revision=p.report_revision AND m.state='retained' AND m.cleanup_state='none' AND m.withheld_at_ms IS NULL AND m.retain_until_ms>$6 AND ($5='none' OR m.rendering_policy=CASE $5 WHEN 'video' THEN 'aq.mp4.passthrough-v1' ELSE 'aq.png.rgba8-srgb-v1' END))) AND ($7<>'following' OR EXISTS(SELECT 1 FROM result_follows f WHERE f.result_id=p.result_id AND f.actor_id=$8 AND f.following) OR EXISTS(SELECT 1 FROM result_thread_follows f JOIN result_threads t ON t.id=f.thread_id JOIN result_revision_pins old ON old.report_id=t.report_id WHERE old.result_id=p.result_id AND f.actor_id=$8 AND f.following)) ORDER BY p.submitted_at_ms DESC,p.report_id DESC LIMIT 1001")
  .bind(project).bind(task).bind(since).bind(until).bind(media).bind(now).bind(mode).bind(user.id).fetch_all(&state.store.pool).await?;
     if rows.len() > 1000 {
         return Err(ApiError::new(

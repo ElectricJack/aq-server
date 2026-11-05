@@ -212,6 +212,19 @@ pub async fn collect(
     outboxes(pool, now, batch, &mut report).await?;
     terminals(pool, now, batch, &mut report).await?;
     mail(pool, now, batch, &mut report).await?;
+    // Staged owner attachments never bound to a message expire after 24h.
+    // Bound rows follow their append-only owner message (ON DELETE CASCADE).
+    report.insert(
+        "global_supervisor_attachments",
+        statement(
+            pool,
+            "DELETE FROM global_supervisor_attachments WHERE attachment_id IN (SELECT attachment_id FROM global_supervisor_attachments WHERE message_id IS NULL AND created_at_ms<=$2 ORDER BY created_at_ms LIMIT $3)",
+            now,
+            now - DAY,
+            batch,
+        )
+        .await?,
+    );
     // Observation rows are latest per scope/source, and expire in <=1 hour.
     // Keep worker evidence until its original task has settled for 30 days.
     let query = format!(

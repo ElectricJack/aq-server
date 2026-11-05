@@ -1,14 +1,14 @@
 {
   "source_repository": "aq-worker",
-  "source_revision": "7617866dd8beeb759aa6eadd7e9229d352c1c344",
+  "source_revision": "7eb513803f9c2db6cbc8af2a98526d4ccaa8d60f",
   "package": "aq-session-protocol",
   "version": "0.1.0",
   "archive": "aq-session-protocol-0.1.0.crate",
-  "archive_sha256": "479778d8ea76f0605b9a20460e0bd3fda73b699337b1e80783ada0d291a68090",
+  "archive_sha256": "33ab907dddc7c47809ea3d212838a8670a6addbd96e68494bc5f46d7d116f0c9",
   "files": [
     {
       "path": ".cargo_vcs_info.json",
-      "sha256": "811343d11ae685d566fb21a924d0ec3fdcae60e305f6abf09cf049b061360e30"
+      "sha256": "2b02e434332890ab49d2ae5837723a8181c51bccb46584c926dfa03d7a4996e5"
     },
     {
       "path": "Cargo.lock",
@@ -32,19 +32,19 @@
     },
     {
       "path": "artifacts/fixtures.json",
-      "sha256": "cf24fc767dbbdc437d211b4b59d60f699c2248cbd65b9f078fb88f2818161609"
+      "sha256": "05f40d1314a80c6694cd3fd7a1d15263ebddd6fb31755624e11b61acd5dfcaf6"
     },
     {
       "path": "examples/export.rs",
-      "sha256": "b90a4f0cd3d5d3930349b264bdde6875afb805ab842a24f34347c87936031cb6"
+      "sha256": "68cbc46af6cc396ed6ea1b39d304874bbcbb7431afc3241cb9e585b25affc6dd"
     },
     {
       "path": "src/lib.rs",
-      "sha256": "667c73b2055d65b11f10e47229cb7ebdf998040fddf9d0dd7ecb226ca5833200"
+      "sha256": "1f402c7385501fd0b162c938c6b239fbf6429f5b2fd5354146dc9b23bfa85dbe"
     },
     {
       "path": "tests/conformance.rs",
-      "sha256": "027627bea220e4d99abc78bab019ebefc71d05cb9c05fff5d663a1ff59e10b22"
+      "sha256": "669a094d878eab22aeef3e841d7952713525d3041f1fbc279d5311bad685a0fc"
     }
   ]
 }

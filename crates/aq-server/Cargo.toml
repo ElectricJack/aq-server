@@ -23,6 +23,8 @@ zeroize = "1"
 aq-accounting = { path = "../aq-accounting", version = "=0.1.0" }
 aq-notifications = { path = "../aq-notifications", version = "=0.1.0" }
 aq-lifecycle-api = { path = "../aq-lifecycle-api", version = "=0.1.0" }
+aq-session-host.workspace = true
+aq-wait-engine = { path = "../aq-wait-engine", version = "=0.1.0" }
 # Frozen installed endpoints retain 0.1.11; B2 can use the delegated contract.
 aq-admission = { path = "../aq-admission", version = "=0.1.11" }
 aq-admission-sandbox = { package = "aq-admission", path = "../../vendor/aq-admission-0.3.3", version = "=0.3.3" }

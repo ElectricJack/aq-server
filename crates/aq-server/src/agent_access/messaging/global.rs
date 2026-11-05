@@ -1,5 +1,7 @@
 //! Human global-conversation admission over AQ-11 mail, never runtime delivery.
+mod attachments;
 pub mod dispatch;
+mod marker;
 mod reads;
 pub mod reply;
 pub mod reservations;
@@ -24,8 +26,8 @@ use uuid::Uuid;
 pub(crate) use writes::action::SendMessage;
 type Result<T> = std::result::Result<T, AppError>;
 const CONTRACT: &str = "human-supervisor-conversation-1";
-const MAX_OPERATIONS: i64 = 4096;
-const MAX_BYTES: i64 = 64 * 1024 * 1024;
+pub(super) const MAX_OPERATIONS: i64 = 4096;
+pub(super) const MAX_BYTES: i64 = 64 * 1024 * 1024;
 const PAGE_BYTES: usize = 262144;
 fn invalid() -> AppError {
     AppError::BadRequest("invalid bounded supervisor conversation request".into())
@@ -81,6 +83,18 @@ fn runtime() -> Runtime {
         reason: "central_runtime_not_connected".into(),
     }
 }
+/// X4: owner reads report the active central session bound to this
+/// conversation. Admission receipts keep the admission-time [`runtime`].
+async fn live_runtime(pool: &PgPool, conversation: Uuid) -> Runtime {
+    match dispatch::binding(pool, Some(conversation)).await {
+        Some(b) => Runtime {
+            state: "available".into(),
+            binding: Some(json!(b)),
+            reason: "central_session_active".into(),
+        },
+        None => runtime(),
+    }
+}
 pub(crate) struct Service {
     pool: PgPool,
     gate: Semaphore,
@@ -121,6 +135,16 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/human/conversations/{conversation}/operations/{operation}",
             get(writes::lookup),
         )
+        .route(
+            "/api/human/conversations/{conversation}/read-marker",
+            get(marker::read).put(marker::write),
+        )
+        .route(
+            "/api/human/conversations/{conversation}/attachments/{attachment}",
+            get(attachments::download)
+                .put(attachments::upload)
+                .layer(DefaultBodyLimit::max(attachments::MAX_SIZE)),
+        )
         .layer(DefaultBodyLimit::max(131072))
         .layer(Extension(service.clone()))
         .layer(middleware::from_fn_with_state(service, gate))
@@ -131,6 +155,10 @@ pub fn supervisor_routes(state: &AppState) -> Router<AppState> {
     let service = Arc::new(Service::new(state));
     Router::new()
         .route("/v1/supervisor/conversation/replies", post(reply::reply))
+        .route(
+            "/v1/supervisor/conversation/attachments/{attachment}",
+            get(attachments::supervisor_download),
+        )
         .layer(DefaultBodyLimit::max(131072))
         .layer(Extension(service.clone()))
         .layer(middleware::from_fn_with_state(service, gate))

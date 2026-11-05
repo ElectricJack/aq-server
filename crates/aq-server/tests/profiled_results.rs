@@ -1563,6 +1563,26 @@ async fn protected_engine_question_waits_for_real_owner_and_exact_completion_eve
     .fetch_one(&pool)
     .await
     .unwrap();
+    // G11 X33: the runs view names the pending decision and its review task.
+    let task: Uuid = sqlx::query_scalar("SELECT s.task_id FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) WHERE d.decision_id=$1")
+        .bind(decision)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let runs = driver
+        .inspect_runs(f.actor, Default::default())
+        .await
+        .unwrap();
+    let waiting = runs
+        .items
+        .iter()
+        .find(|item| item.id == run)
+        .and_then(|item| item.waiting.clone())
+        .expect("pending human decision view");
+    assert_eq!(waiting.kind, "decision");
+    assert_eq!(waiting.decision_id, decision);
+    assert_eq!(waiting.decision_state.as_deref(), Some("pending"));
+    assert_eq!(waiting.related_task_ids, vec![task]);
     let cancelled: Uuid = sqlx::query_scalar(
         "SELECT (receipt->>'handle')::uuid FROM playbook_effects WHERE run_id=$1",
     )
@@ -1838,5 +1858,15 @@ mod media_http;
 
 #[path = "profiled_results/auto_settlement56.rs"]
 mod auto_settlement56;
+#[path = "profiled_results/operations.rs"]
+mod operations;
+#[path = "profiled_results/question_inbox.rs"]
+mod question_inbox;
+#[path = "profiled_results/questions.rs"]
+mod questions;
 #[path = "profiled_results/settlement_owner39.rs"]
 mod settlement_owner39;
+#[path = "profiled_results/waits.rs"]
+mod waits;
+#[path = "profiled_results/wakes.rs"]
+mod wakes;

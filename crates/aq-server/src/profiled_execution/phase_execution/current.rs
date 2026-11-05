@@ -206,12 +206,13 @@ pub(super) async fn fence_locked(
             .ok_or_else(refused)?
             .allowed_node_ids
             .contains(&node)
-        || loaded
-            .fingerprints
-            .get(index)
-            .and_then(Option::as_ref)
-            .map(String::as_str)
-            != Some(material.material_digest.as_str())
+    {
+        return Err(refused());
+    }
+    // C5b: a refreshed version of the same login is continuity; an operator
+    // replace or a rotated configured file is not (credential identity).
+    if !crate::profiled_execution::login_refresh::continuous_locked(tx, loaded, index, material)
+        .await?
     {
         return Err(refused());
     }

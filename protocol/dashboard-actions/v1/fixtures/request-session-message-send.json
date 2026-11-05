@@ -1,0 +1,19 @@
+{
+  "expected_versions": {
+    "session": "1"
+  },
+  "kind": "session.message.send",
+  "operation_id": "6a0f4f0e-3c55-4b5e-9a57-3f1b8f0c2d11",
+  "payload": {
+    "body": "Please rebase onto main before the next push.",
+    "expected_generation": "1",
+    "message_id": "0b9e7d4c-8f1a-4e2b-b6c3-5d7a9e1f2c34",
+    "operation_id": "6a0f4f0e-3c55-4b5e-9a57-3f1b8f0c2d11",
+    "project_id": "00000000-0000-0000-0000-000000000001"
+  },
+  "subject": {
+    "id": "e63e39e7-c346-4ac0-9acc-ee6662e6d4b4",
+    "revision": "1",
+    "type": "session"
+  }
+}

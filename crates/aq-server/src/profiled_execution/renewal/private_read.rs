@@ -17,6 +17,7 @@ struct Input {
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
+    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
     #[cfg(test)]
     gate: Option<Arc<tests::Gate>>,
 }
@@ -94,7 +95,12 @@ impl Readers {
     }
 }
 fn read(input: &Input) -> Result<Fingerprint, material::MaterialError> {
-    let material = material::read_for_lease(&input.registry, &input.lease, input.node)?;
+    let material = material::read_for_lease_from(
+        &input.registry,
+        &input.lease,
+        input.node,
+        input.source.as_ref(),
+    )?;
     Ok(Fingerprint {
         digest: Digest::of(material.bytes()),
         bytes: material.bytes().len() as u64,
@@ -108,37 +114,41 @@ pub async fn verify(
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
+    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
 ) -> Result<Fingerprint, AppError> {
     static READERS: OnceLock<Result<Readers, ()>> = OnceLock::new();
     let readers = READERS
         .get_or_init(Readers::start)
         .as_ref()
         .map_err(|_| unavailable())?;
-    verify_with(readers, registry, lease, node).await
+    verify_with(readers, registry, lease, node, source).await
 }
 /// Separate initial-phase pool; initial Grant work never consumes renewal reserve.
 pub(crate) async fn verify_phase(
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
+    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
 ) -> Result<Fingerprint, AppError> {
     static READERS: OnceLock<Result<Readers, ()>> = OnceLock::new();
     let readers = READERS
         .get_or_init(Readers::start_phase)
         .as_ref()
         .map_err(|_| unavailable())?;
-    verify_with(readers, registry, lease, node).await
+    verify_with(readers, registry, lease, node, source).await
 }
 async fn verify_with(
     readers: &Readers,
     registry: Arc<LoadedRegistry>,
     lease: MaterialLease,
     node: Uuid,
+    source: Option<crate::profiled_execution::login_refresh::HeadSource>,
 ) -> Result<Fingerprint, AppError> {
     let reply = readers.submit(Input {
         registry,
         lease,
         node,
+        source,
         #[cfg(test)]
         gate: None,
     })?;
@@ -185,6 +195,7 @@ mod tests {
         let profile = artifact("test-account");
         let registry = IntelligenceConfig {
             accounting: Default::default(),
+            material_store: None,
             revision: 1,
             credentials: vec![CredentialConfig {
                 kind: Default::default(),
@@ -246,6 +257,7 @@ mod tests {
                 registry: Arc::new(registry),
                 lease,
                 node,
+                source: None,
                 gate: None,
             },
         )
@@ -349,7 +361,7 @@ mod tests {
             let lease = input.lease.clone();
             let fingerprint = tokio::time::timeout(
                 Duration::from_millis(500),
-                verify(input.registry, lease, input.node),
+                verify(input.registry, lease, input.node, None),
             )
             .await
             .unwrap()

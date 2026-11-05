@@ -14,15 +14,42 @@
     },
     "runs": {
       "$ref": "#/$defs/Page"
+    },
+    "runs_query": {
+      "$ref": "#/$defs/RunsQuery"
     }
   },
   "required": [
     "query",
+    "runs_query",
     "runs",
     "detail",
     "admissions"
   ],
   "$defs": {
+    "ActiveDefinitionView": {
+      "type": "object",
+      "properties": {
+        "activation_revision": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "binding": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "artifact",
+        "version",
+        "activation_revision"
+      ]
+    },
     "AdmissionView": {
       "type": "object",
       "properties": {
@@ -60,6 +87,56 @@
         "request_id",
         "status",
         "created_at_ms"
+      ]
+    },
+    "DefinitionView": {
+      "description": "X30/X31. `version` is AQ's per-name install ordinal (\"1\", \"2\", ...): the\nengine has no definition version.",
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "The activation new runs of this definition use: the pinned one when it\nis still active, otherwise the highest registered version.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveDefinitionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "pinned_is_active": {
+          "description": "Whether a current activation of this definition name still selects the\nrun's pinned artifact. Null when the current catalog could not be read\nin this observation (never guessed).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "Edge": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "to"
       ]
     },
     "EffectView": {
@@ -375,6 +452,17 @@
         "server_time_ms": {
           "type": "integer",
           "format": "int64"
+        },
+        "steps": {
+          "description": "X32: ordered step graph of the run's pinned definition from its entry;\nnull when no public graph is registered for the artifact.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepTimeline"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -390,6 +478,13 @@
     "RunView": {
       "type": "object",
       "properties": {
+        "activation_revision": {
+          "description": "Activation revision the run was admitted at; null when not known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "admitted_at_ms": {
           "type": "integer",
           "format": "int64"
@@ -397,11 +492,29 @@
         "artifact": {
           "type": "string"
         },
+        "binding": {
+          "description": "Binding the run was admitted on; null for runs not started through a\nretained admission (children, event starts) or admitted before it was kept.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "children": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "definition": {
+          "description": "X30/X31: null when the artifact has no AQ registry entry.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefinitionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "dependencies": {
           "type": "object",
@@ -447,6 +560,17 @@
         },
         "step": {
           "type": "string"
+        },
+        "waiting": {
+          "description": "X33: set while the pending effect is a human decision request.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingView"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -459,6 +583,149 @@
         "children",
         "dependencies",
         "admitted_at_ms"
+      ]
+    },
+    "RunsQuery": {
+      "description": "X34: the runs list with an optional admission time range. `since_ms` is\ninclusive and `until_ms` exclusive; either may be omitted.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "maximum": 25,
+          "minimum": 1
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "since_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": 0
+        },
+        "until_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "StepNode": {
+      "type": "object",
+      "properties": {
+        "edges": {
+          "description": "Labelled successors in label order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "invoke, decide, wait, for_each, call, join or return.",
+          "type": "string"
+        },
+        "on_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "Command (invoke) or event (wait) contract name, or `dependency/entry`\n(call). Never inputs, expressions or values.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "edges"
+      ]
+    },
+    "StepTimeline": {
+      "description": "X32: steps reachable from the run's entry in breadth-first order from\n`start` (successors by edge label, then `on_error`).",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StepNode"
+          }
+        }
+      },
+      "required": [
+        "entry",
+        "start",
+        "steps"
+      ]
+    },
+    "WaitingView": {
+      "description": "X33: the run's pending effect is a human `decision.request`.",
+      "type": "object",
+      "properties": {
+        "decision_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "decision_state": {
+          "description": "`pending`, `answered`, `expired` or `cancelled`; null if unrecorded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Always `decision` in this version.",
+          "type": "string"
+        },
+        "related_task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "intent",
+        "decision_id",
+        "related_task_ids"
       ]
     }
   }
