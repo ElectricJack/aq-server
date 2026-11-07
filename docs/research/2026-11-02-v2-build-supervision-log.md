@@ -1675,3 +1675,8 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - owner availability is sticky, with a dashboard toggle;
     - machines enrolled with the single-use code are allowed automatically.
   - The aq-ms1 measurement expires at 2026-11-08 01:34:47Z. Dispatched a refresh, plus a runbook or script so it can be repeated until phase 1 automates re-measurement.
+- **22:11:** refreshed the aq-ms1 measurement.
+  - It is now profiled revision 17, `observed_at` 22:09:50Z, expiring 2026-11-08T22:09:50Z. Revision 17 differs from 16 only in the measurement.
+  - The token now reaches the container through stdin and is never written to a file.
+  - The runbook is `~/.local/share/aq-ms1/remeasure.sh` (`check` / `measure` / full) plus MS1.md (cfd9cbbf).
+  - The supervisor's monitor now prints the hours left and flags a refresh under 4 h. Phase 1 S8 automates this.
