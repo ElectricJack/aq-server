@@ -107,6 +107,39 @@ unexpired node credential bindings for the account's profiles: `unknown` with
 `/api/workers` rows carry the latest storage report flattened (`disk_*_bytes`,
 `preserved_*`, `storage_used_bps`, `storage_observed_at`), absent when unreported.
 
+`swarm.read@1` advertises owner-only GET `/api/v1/swarm` (`swarm.json`); `limit`
+and `cursor` are refused. The read groups worker nodes into machines. Nodes that
+report the same `machine.key` (worker-machine/v1) form one machine; a node with
+no report or no key is its own machine with id `node:<node uuid>`. A machine is
+`cloud` when its report says so, or when it has no report and its backend is
+`boat`; otherwise `local`. Revoked nodes are left out. A machine is `offline`
+when none of its nodes is online, `stopped` when every online node reports
+`stopped`, `holding` when any online node holds, and `online` otherwise. A
+machine's `load` and `hardware` come from the newest report of its online nodes
+and are absent when it is offline or has no report; `load.fresh` means the
+report was received within 60 s, and the 15-minute figures are means of the
+samples received in the last 15 minutes. `agent_max` is the sum of the node slot
+totals, and absent when any total is unknown.
+
+A node's `holding` lists why placement would refuse it now: capability
+unreported or expired, node spend ceiling, unaccounted spend, disk pressure, a
+missing or expired context measurement for a natively registered node, and
+`worker_stopped` or `worker_draining` from the worker service state. Offline and
+revoked workers show as state, and a full concurrency ceiling shows as no free
+slots, so neither appears as a hold. A node's `slots.total` is absent when the
+worker has not reported one; the read never turns that into zero free slots.
+`cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
+reserved for placement and are not produced yet. Each `agents` entry is a running
+session of the node; its `intelligence_class` is derived from the model name
+(`haiku`, `mini`, `spark` or `flash` fast, `sonnet` standard, `opus` deep) and is
+absent otherwise. `waiting.reasons` says why new work cannot start now:
+`no_machine_online` when no machine is online, holding or stopped,
+`no_eligible_machine` (naming each machine's first reason) when no online node
+is free of holds, and `no_free_slot` when every eligible node has no idle slot.
+`waiting.agents` is empty until placement reports per-agent waits. Coverage is
+partial when the capacity read is partial or more than 64 agents run. Nothing
+here grants placement.
+
 `questions.read@1` advertises the owner-only F5 question inbox (`question-inbox-1`,
 also covered by this schema): GET `/api/questions/decisions?state=open|closed&limit=1..50[&project_id=uuid][&cursor=opaque]`
 and GET `/api/questions/decisions/{decision_id}`. `state=open` lists pending

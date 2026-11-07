@@ -48,6 +48,64 @@ pub struct NodeExtra {
     pub measurement: Option<HoldCode>,
 }
 
+/// Upper bound of running agents resolved per read.
+pub const MAX_AGENTS: usize = 64;
+
+impl NodeExtra {
+    /// Version, sandbox templates and measurement state of each node.
+    pub async fn load(
+        conn: &mut sqlx::PgConnection,
+        ids: &[Uuid],
+        windows: &[MeasuredWindow],
+        now_ms: u64,
+    ) -> sqlx::Result<Vec<Self>> {
+        use serde_json::Value;
+        use sqlx::Row;
+        let rows = sqlx::query("SELECT n.id, n.worker_version, b.registration->'backend'->'templates' AS templates, e.state->'native'->'request'->'runtime' AS runtime, e.state->'native'->'qualification' AS qualification FROM nodes n LEFT JOIN delegated_node_boots b ON b.node_id=n.id LEFT JOIN execution_nodes e ON e.node_id=n.id WHERE n.id = ANY($1)")
+            .bind(ids)
+            .fetch_all(conn)
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let get = |c: &str| {
+                    r.get::<Option<Value>, _>(c)
+                        .and_then(|v| serde_json::from_value::<ArtifactRef>(v).ok())
+                };
+                let registered = get("runtime").zip(get("qualification"));
+                let templates = r.get::<Option<Value>, _>("templates");
+                Self {
+                    id: r.get("id"),
+                    worker_version: r.get("worker_version"),
+                    sandbox_templates: templates
+                        .iter()
+                        .filter_map(Value::as_array)
+                        .flatten()
+                        .filter_map(|t| t["digest"].as_str().map(|d| format!("sha256:{d}")))
+                        .collect(),
+                    measurement: measurement(
+                        windows,
+                        registered.as_ref().map(|(r, q)| (r, q)),
+                        now_ms,
+                    ),
+                }
+            })
+            .collect())
+    }
+}
+
+/// `(session, node)` of task-holding attempts, one more than `MAX_AGENTS`
+/// so the caller can tell the read was cut.
+pub async fn running(
+    conn: &mut sqlx::PgConnection,
+    ids: &[Uuid],
+) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
+    sqlx::query_as("SELECT session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY node_id, session_id LIMIT 65")
+        .bind(ids)
+        .fetch_all(conn)
+        .await
+}
+
 pub struct SwarmInput {
     pub now_ms: u64,
     pub server: SwarmServer,

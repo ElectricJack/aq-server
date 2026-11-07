@@ -134,3 +134,17 @@ names = {c["name"] for c in bootstrap["data"]["capabilities"]}
 assert {"questions.read", "questions.answer"} <= names
 assert {"tasks.comments.read", "tasks.comments.write"} <= names
 print("Question inbox open/closed/detail fixtures and invalid question fields checked")
+
+# Swarm read: machines group worker nodes; states and hold codes are closed.
+swarm = json.loads((root / "fixtures" / "swarm.json").read_text())
+jsonschema.validate(swarm, schema)
+assert swarm["data"]["machines"][0]["load"]["source"] == "windows_host"
+for path, value in ((("machines", 0, "state"), "sleeping"),
+                    (("machines", 0, "extra"), True)):
+    invalid = deepcopy(swarm)
+    target = invalid["data"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert not jsonschema.Draft202012Validator(schema).is_valid(invalid), path
+print("swarm fixture and 2 invalid cases checked")

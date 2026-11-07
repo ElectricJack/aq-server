@@ -17,6 +17,7 @@ mod dashboard_mounts;
 mod dashboard_notifications;
 mod dashboard_read;
 mod dashboard_search;
+mod dashboard_swarm;
 mod dashboard_task_knowledge;
 mod dashboard_usage;
 mod human_graph;
