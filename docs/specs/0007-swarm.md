@@ -1,6 +1,6 @@
 # 0007: The swarm (always-on workers, cloud VMs and swarm controls)
 
-**Status:** Draft, from the owner's brainstorming session on 2026-11-07, with the builder-check answers folded in. Awaiting owner approval.
+**Status:** Approved by the owner on 2026-11-07 (brainstorming session; builder-check answers folded in). Cloudflare §7.5 follows the recommendation (manual tokens).
 **Repositories:** aq-server, aq-worker, aq-dashboard.
 **Mockup:** `aq-dashboard/.superpowers/brainstorm/2382938-1794083621/content/swarm-tree-v3.html` (React Flow plus dagre, the same libraries as v1's graph).
 
@@ -225,3 +225,15 @@ Until the deferred design (§3):
 - **Install script:** distribution and update path.
 - **Boat:** VM image, region and size defaults.
 - **Live updates:** how the page streams load and terminal data.
+
+## 10. Delivery phases
+
+Each phase has its own implementation plan in `docs/superpowers/plans/`. Phases are ordered by dependency; phases 1 and 2 can run in parallel.
+
+| Phase | Work | Depends on |
+| --- | --- | --- |
+| 1. Workers as services | A multi-slot `aq-worker run` that actually takes docker-local work, a Linux/WSL2 systemd service, enrollment by install script and single-use code, start/stop/drain from the server, a fresh attempt from saved work after a restart, automatic re-measurement | — |
+| 2. Swarm page (read-only) | Server swarm read model (machines, nodes, agents, live CPU/RAM including the WSL2 Windows probe, holding reasons), the dashboard tree page (React Flow and dagre), the properties pane and the agent terminal | — |
+| 3. Controls and placement | Swarm settings (provider and VM maximums, per-machine limits and thresholds), sliders replacing per-project pool sizes, the placement rules of §7.1, waiting reasons, the burn gauge | 1, 2 |
+| 4. Cloud VMs | The server starts one boat VM per attempt, the boat agent launch, the in-VM channel proxy, the Codex restriction, the cloud Access token | 1, 3 |
+| 5. macOS | launchd service, multi-arch templates and `aqv2`, a proven Docker Desktop channel transport | 1 |
