@@ -1663,3 +1663,15 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - Cloudflare uses hand-made node and cloud tokens; AQ holds no Cloudflare API credential.
   - Throttling near plan limits is deferred to a later brainstorm.
   - There are five phases. Dispatched plan writers for phase 1 (workers as services) and phase 2 (swarm page, read-only) in parallel. Execution is by subagents once the plans are in.
+- **22:00:** the spec 0007 phase 1 and phase 2 plans are on main.
+  - **Phase 2 (swarm page)** is executing as three Sonnet lanes:
+    - server `swarm-p2/server` S1–S5;
+    - worker `swarm-p2/worker` W1–W3;
+    - dashboard `swarm-p2/dashboard` D1–D7.
+    - Each lane PR gets an Opus review. The SDD ledger is in `.superpowers/sdd/2026-11-07-swarm-p2-swarm-page/`.
+  - **Phase 1 (workers as services)** waits for the phase 2 server merge, then gets a plan alignment pass. Both phases define machine identity, both use migration 0100 and both need lib-ratchet headroom.
+  - **Owner answers on phase 1:**
+    - an owner-triggered stop or handoff is exempt from the retry budget and the lineage limit;
+    - owner availability is sticky, with a dashboard toggle;
+    - machines enrolled with the single-use code are allowed automatically.
+  - The aq-ms1 measurement expires at 2026-11-08 01:34:47Z. Dispatched a refresh, plus a runbook or script so it can be repeated until phase 1 automates re-measurement.
