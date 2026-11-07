@@ -1240,10 +1240,14 @@
       "description": "Live machine load in basis points (0-10000).",
       "properties": {
         "cpu_avg_15m_bps": {
+          "description": "Mean of the samples in the last 15 minutes; null when there are none.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "cpu_busy_bps": {
           "format": "uint16",
@@ -1261,7 +1265,10 @@
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "memory_used_bps": {
           "format": "uint16",
@@ -1286,8 +1293,6 @@
         "host_probe",
         "cpu_busy_bps",
         "memory_used_bps",
-        "cpu_avg_15m_bps",
-        "memory_avg_15m_bps",
         "samples_15m",
         "observed_at",
         "fresh"

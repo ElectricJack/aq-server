@@ -211,8 +211,8 @@ fn facts(key: &str, cpu: u16, received_at_ms: u64) -> MachineFacts {
     MachineFacts {
         report,
         received_at_ms,
-        cpu_avg_15m_bps: cpu,
-        memory_avg_15m_bps: 4000,
+        cpu_avg_15m_bps: Some(cpu),
+        memory_avg_15m_bps: Some(4000),
         samples_15m: 3,
     }
 }
@@ -267,23 +267,20 @@ fn codes(h: &[HoldReason]) -> Vec<HoldCode> {
 
 #[test]
 fn class_table_maps_model_families() {
-    assert_eq!(
-        intelligence_class("claude-sonnet-5-5"),
-        Some(IntelligenceClass::Standard)
-    );
-    assert_eq!(
-        intelligence_class("claude-opus-5-5"),
-        Some(IntelligenceClass::Deep)
-    );
-    assert_eq!(
-        intelligence_class("claude-haiku-4-5"),
-        Some(IntelligenceClass::Fast)
-    );
-    assert_eq!(
-        intelligence_class("gpt-5.1-codex-mini"),
-        Some(IntelligenceClass::Fast)
-    );
-    assert_eq!(intelligence_class("gpt-5-codex"), None);
+    use IntelligenceClass::*;
+    for (model, class) in [
+        ("claude-sonnet-5-5", Standard),
+        ("claude-opus-5-5", Deep),
+        ("claude-haiku-4-5", Fast),
+        ("gpt-5.1-codex-mini", Fast),
+        ("gpt-5-mini", Fast),
+        ("o4-mini", Fast),
+        ("gemini-2.5-flash", Fast),
+        ("gemini-2.5-pro", Standard),
+        ("gpt-5-codex", Standard),
+    ] {
+        assert_eq!(intelligence_class(model), class, "{model}");
+    }
 }
 #[test]
 fn measurement_unavailable_expired_and_fresh() {
@@ -467,6 +464,21 @@ fn unknown_slot_total_gives_no_free_slot_reason() {
     .unwrap();
     assert!(s.waiting.reasons.is_empty());
     assert_eq!(s.machines[0].agent_max, None);
+}
+#[test]
+fn zero_samples_gives_null_averages() {
+    let mut i = input(vec![node(1, "a", WorkerHealth::Online, Some(1), 0, vec![])]);
+    let mut f = facts("desktop", 2350, NOW);
+    f.cpu_avg_15m_bps = None;
+    f.memory_avg_15m_bps = None;
+    f.samples_15m = 0;
+    i.machines.insert(uid(1), f);
+    let load = assemble(i).unwrap().machines[0].load.clone().unwrap();
+    assert_eq!(load.cpu_avg_15m_bps, None);
+    assert_eq!(load.memory_avg_15m_bps, None);
+    assert_eq!(load.samples_15m, 0);
+    let json = serde_json::to_value(&load).unwrap();
+    assert!(json["cpu_avg_15m_bps"].is_null());
 }
 #[test]
 fn load_freshness_boundary() {

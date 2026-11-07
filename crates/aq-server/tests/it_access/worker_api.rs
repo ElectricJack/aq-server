@@ -504,7 +504,7 @@ async fn machine_report_records_latest_and_window() {
         .await
         .unwrap();
     let f = &facts[&r.node_id];
-    assert_eq!(f.cpu_avg_15m_bps, 6200);
+    assert_eq!(f.cpu_avg_15m_bps, Some(6200));
     assert_eq!(f.samples_15m, 2);
     assert_eq!(f.report.cpu_busy_bps, 6300);
 }
@@ -555,4 +555,39 @@ async fn machine_report_requires_credential() {
     )
     .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+async fn samples_after_gaps(gaps_ms: [i64; 2]) -> (i64, i64) {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (mut at, mut last) = (0, 0);
+    for (gap, cpu) in gaps_ms.into_iter().zip([6100, 6300]) {
+        at += gap;
+        *h.now.lock().unwrap() = t0() + Duration::milliseconds(at);
+        let (s, v) = post_machine(&h, &r.credential, machine_report(cpu)).await;
+        assert_eq!((s, v), (StatusCode::OK, json!({"recorded": true})));
+        last = cpu as i64;
+    }
+    let pool = h._db.pool().await;
+    let rows = sqlx::query_scalar("SELECT count(*) FROM node_machine_samples")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let cpu =
+        sqlx::query_scalar("SELECT (report->>'cpu_busy_bps')::bigint FROM node_machine_reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(cpu, last, "the latest report is always updated");
+    (rows, cpu)
+}
+
+#[tokio::test]
+async fn machine_reports_one_second_apart_store_one_sample() {
+    assert_eq!(samples_after_gaps([1_000, 1_000]).await.0, 1);
+}
+
+#[tokio::test]
+async fn machine_reports_six_seconds_apart_store_two_samples() {
+    assert_eq!(samples_after_gaps([1_000, 6_000]).await.0, 2);
 }

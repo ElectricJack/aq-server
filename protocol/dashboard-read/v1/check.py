@@ -139,6 +139,7 @@ print("Question inbox open/closed/detail fixtures and invalid question fields ch
 swarm = json.loads((root / "fixtures" / "swarm.json").read_text())
 jsonschema.validate(swarm, schema)
 assert swarm["data"]["machines"][0]["load"]["source"] == "windows_host"
+assert [m["load"]["cpu_avg_15m_bps"] is None for m in swarm["data"]["machines"]] == [False, True]
 for path, value in ((("machines", 0, "state"), "sleeping"),
                     (("machines", 0, "extra"), True)):
     invalid = deepcopy(swarm)

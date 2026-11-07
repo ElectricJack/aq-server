@@ -641,6 +641,12 @@ pub fn catalog() -> Vec<CommandSpec> {
             "/api/v1/capacity",
         ),
         owner(
+            "dashboard.swarm",
+            "dashboard.read",
+            "Swarm: machines, worker nodes and running agents",
+            "/api/v1/swarm",
+        ),
+        owner(
             "dashboard.provider_usage",
             "dashboard.read",
             "Provider usage and quota",

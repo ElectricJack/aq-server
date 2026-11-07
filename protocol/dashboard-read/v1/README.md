@@ -118,7 +118,9 @@ when none of its nodes is online, `stopped` when every online node reports
 machine's `load` and `hardware` come from the newest report of its online nodes
 and are absent when it is offline or has no report; `load.fresh` means the
 report was received within 60 s, and the 15-minute figures are means of the
-samples received in the last 15 minutes. `agent_max` is the sum of the node slot
+samples received in the last 15 minutes, and are `null` when no sample
+fell in that window (`samples_15m` is 0). Samples are stored at most once per
+5 s per node. `agent_max` is the sum of the node slot
 totals, and absent when any total is unknown.
 
 A node's `holding` lists why placement would refuse it now: capability

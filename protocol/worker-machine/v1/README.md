@@ -35,7 +35,8 @@ The worker posts every 15 s.
 
 ## Server use
 
-A report is fresh when received within 60 s. The 15-minute average is the mean
+A report is fresh when received within 60 s. A sample is stored only when the
+node's newest sample is at least 5 s older; the latest report is always updated. The 15-minute average is the mean
 of the samples received in the last 900 000 ms. Memory is stored as basis
 points of used over total.
 

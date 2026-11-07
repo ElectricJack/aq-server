@@ -92,7 +92,6 @@
     {"path": "/api/v1/feedback-tasks/{id}/recover", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/v1/results/{id}/evidence-waivers", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/v1/results/{id}/follow", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
-    {"path": "/api/v1/swarm", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/v1/terminals/{terminal}/access", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/v1/terminals/{terminal}/mutations", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/v1/threads/{id}/resolve", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},

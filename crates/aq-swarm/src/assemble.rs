@@ -245,7 +245,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
                 provider: s.profile.provider.clone(),
                 model: s.profile.model.clone(),
                 harness: s.profile.harness.clone(),
-                intelligence_class: s.profile.model.as_deref().and_then(intelligence_class),
+                intelligence_class: s.profile.model.as_deref().map(intelligence_class),
                 terminal: s.terminal.clone(),
                 started_at: s.lifecycle.as_ref().and_then(|l| l.started_at.clone()),
             })

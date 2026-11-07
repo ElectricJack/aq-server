@@ -11,6 +11,8 @@ use uuid::Uuid;
 pub const SAMPLE_WINDOW_MS: u64 = 900_000;
 /// A report received within this long is fresh.
 pub const FRESH_MS: u64 = 60_000;
+/// A newer sample within this gap of the previous one is not stored.
+pub const MIN_SAMPLE_GAP_MS: u64 = 5_000;
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -102,14 +104,17 @@ pub async fn record(
     .bind(received)
     .execute(&mut *tx)
     .await?;
+    // At most one sample per MIN_SAMPLE_GAP_MS, so a chatty worker cannot skew the average.
     sqlx::query(
         "INSERT INTO node_machine_samples (node_id, received_at_ms, cpu_busy_bps, memory_used_bps) \
-         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+         SELECT $1,$2,$3,$4 WHERE NOT EXISTS (SELECT 1 FROM node_machine_samples \
+           WHERE node_id=$1 AND received_at_ms > $2 - $5) ON CONFLICT DO NOTHING",
     )
     .bind(node_id)
     .bind(received)
     .bind(report.cpu_busy_bps as i16)
     .bind(report.memory_used_bps() as i16)
+    .bind(MIN_SAMPLE_GAP_MS as i64)
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM node_machine_samples WHERE node_id=$1 AND received_at_ms < $2")
@@ -124,8 +129,9 @@ pub async fn record(
 pub struct MachineFacts {
     pub report: MachineReport,
     pub received_at_ms: u64,
-    pub cpu_avg_15m_bps: u16,
-    pub memory_avg_15m_bps: u16,
+    /// None when no sample fell in the window.
+    pub cpu_avg_15m_bps: Option<u16>,
+    pub memory_avg_15m_bps: Option<u16>,
     pub samples_15m: u32,
 }
 
@@ -151,15 +157,17 @@ pub async fn latest(
     Ok(rows
         .iter()
         .filter_map(|r| {
+            let samples = r.get::<i32, _>("samples").max(0) as u32;
+            let avg = |n: u32, v: i32| (n > 0).then(|| v.clamp(0, 10_000) as u16);
             let report = serde_json::from_value(r.get("report")).ok()?;
             Some((
                 r.get("node_id"),
                 MachineFacts {
                     report,
                     received_at_ms: r.get::<i64, _>("received_at_ms").max(0) as u64,
-                    cpu_avg_15m_bps: r.get::<i32, _>("cpu_avg").clamp(0, 10_000) as u16,
-                    memory_avg_15m_bps: r.get::<i32, _>("mem_avg").clamp(0, 10_000) as u16,
-                    samples_15m: r.get::<i32, _>("samples").max(0) as u32,
+                    cpu_avg_15m_bps: avg(samples, r.get("cpu_avg")),
+                    memory_avg_15m_bps: avg(samples, r.get("mem_avg")),
+                    samples_15m: samples,
                 },
             ))
         })

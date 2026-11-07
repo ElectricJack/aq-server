@@ -77,8 +77,9 @@ pub struct MachineLoad {
     pub host_probe: HostProbe,
     pub cpu_busy_bps: u16,
     pub memory_used_bps: u16,
-    pub cpu_avg_15m_bps: u16,
-    pub memory_avg_15m_bps: u16,
+    /// Mean of the samples in the last 15 minutes; null when there are none.
+    pub cpu_avg_15m_bps: Option<u16>,
+    pub memory_avg_15m_bps: Option<u16>,
     pub samples_15m: u32,
     pub observed_at: Timestamp,
     pub fresh: bool,

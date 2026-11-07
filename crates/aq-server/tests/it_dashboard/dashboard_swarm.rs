@@ -99,11 +99,28 @@ async fn swarm_groups_nodes_reports_load_and_lists_running_agents() {
             .await
             .unwrap();
     }
+    // A machine whose report has no sample in the window: averages are null.
+    let quiet = add_node(&pool, "quiet", Some(now)).await;
+    let mut report = windows_report();
+    report.machine.key = Some("quiet-box".into());
+    report.machine.label = Some("quiet-box".into());
+    sqlx::query("INSERT INTO node_machine_reports(node_id,report,received_at_ms) VALUES($1,$2,$3)")
+        .bind(quiet)
+        .bind(serde_json::to_value(&report).unwrap())
+        .bind(now as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
     let app = aq_server::build_admin_router(f.state.clone());
     let (status, body) = read(&app, "/api/v1/swarm").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let machines = body["data"]["machines"].as_array().unwrap();
-    assert_eq!(machines.len(), 1, "{body}");
+    assert_eq!(machines.len(), 2, "{body}");
+    let q = &machines[1];
+    assert_eq!(q["label"], "quiet-box");
+    assert_eq!(q["load"]["samples_15m"], 0);
+    assert!(q["load"]["cpu_avg_15m_bps"].is_null());
+    assert!(q["load"]["memory_avg_15m_bps"].is_null());
     let machine = &machines[0];
     assert_eq!(machine["label"], "desktop");
     assert_eq!(machine["nodes"].as_array().unwrap().len(), 2);
