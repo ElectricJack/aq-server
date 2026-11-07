@@ -1394,3 +1394,66 @@ defects):
 - The `aq-ms1` stack is left running for the owner.
 
 Owner verification: pending
+
+## Refreshing the context measurement (every 24 hours)
+
+The profiled configuration carries a context qualification built from three
+bounded Claude calls (`~/.local/share/aq-ms1/measure`). It expires 24 hours
+after `measure/observed_at_ms` (`QUALIFICATION_TTL_MS` in
+`scripts/ms1-profiled.py`). After that, `context_budget::evaluate` refuses
+every candidate, every profiled poll that would carry an offer gets HTTP 409,
+and the stack makes no offers. Until spec 0007 phase 1 automates it, someone
+re-measures before expiry:
+
+```sh
+~/.local/share/aq-ms1/remeasure.sh check   # what the running server loaded, and its expiry
+~/.local/share/aq-ms1/remeasure.sh         # re-measure, bump the revision, `up.sh profiled`, check
+~/.local/share/aq-ms1/remeasure.sh measure # the three calls and validation only; installs nothing
+```
+
+`remeasure.sh` does what the 0006 P6 proof did (aq-worker
+`docs/implementation/0006-P6.md`, "Re-measurement"):
+
+1. **Preflight.** The token file is a 0600 regular file. The server is
+   healthy. No MS1 attempt or sandbox is running, because the server is
+   recreated. A rebuild of the current revision must equal `configure.json`,
+   so the new revision differs only by the measurement
+   (`AQ_MS1_ALLOW_DRIFT=1` overrides this check).
+2. **Measure.** One `docker -H unix:///run/user/1000/aq-sandbox/podman.sock
+   run --rm -i --pids-limit 512` of the node's template
+   (`worker/node.json`, `docker_local.templates[0]`) runs the three calls.
+   - Each call: `/opt/aq/bin/claude -p --output-format stream-json --verbose
+     --input-format text --model claude-sonnet-5-5 --permission-mode
+     bypassPermissions --setting-sources user --settings … --strict-mcp-config
+     --no-session-persistence --disable-slash-commands < PROMPT`.
+   - The env and settings are the runner's: `HOME`/`CLAUDE_CONFIG_DIR=/home/agent/.aq/claude`,
+     telemetry, autoupdate and auto memory off, cwd `/aq/work`.
+   - `observed_at_ms` is taken in the sandbox just before the calls.
+   - The token file goes to the container on stdin. It becomes
+     `CLAUDE_CODE_OAUTH_TOKEN` of each claude process only. It is never in
+     argv, a container's env or config, a copied file or a log.
+3. **Validate.** `ms1-profiled.py`'s own `measured()` checks every call:
+   success, model `claude-sonnet-5-5`, a single context window, and total
+   input within the counting bound. The output files are also scanned for the
+   token.
+4. **Install.** Every overwritten file is first copied to `*.bak-YYYYMMDD`:
+   - `measure/*.jsonl` and `observed_at_ms`;
+   - `revision`, `intelligence.toml`, `configure.json` and `catalog-rev2.json`;
+   - `node/config/*.json`;
+   - `evidence/profiled-*.json`.
+
+   Then the script installs the new outputs and bumps `revision` by one. A
+   changed body needs a new version.
+5. **Apply.** `up.sh profiled` writes the configuration, recreates the server
+   on it, and activates the catalog and the project binding.
+6. **Check.** The script reads `[profiled_execution]` back from the server's
+   vault file and prints the revision, `observed_at_ms` and `expires_at_ms`.
+   No server read reports the qualification itself. The eligibility read
+   answers `node_not_eligible` while no node runs, before and after.
+
+The log is at `evidence/remeasure-<UTC>.log`.
+
+First run, 2026-11-07:
+- Revision 16 to 17, catalog revision 8, project binding revision 7.
+- `observed_at_ms` 1794089390110 (22:09:50Z).
+- Expires 2026-11-08T22:09:50Z.
