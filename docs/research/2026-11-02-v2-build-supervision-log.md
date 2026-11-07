@@ -1649,3 +1649,17 @@ Each entry records what was observed, the action taken, and anything waiting on 
     3. remove the client from aq-worker;
     4. unmount `/v1/agent/*` while keeping its handlers reachable in-process.
   - **Open:** the report says aq-server CI has no musl job for `aqv2`, which conflicts with #104's claim that it does; to be checked. Host packaging still ships `aq-agent` until checklist step 1.
+- **21:24:** owner brainstorm, then approval of spec 0007, the swarm (`docs/specs/0007-swarm.md`).
+  - **What it covers:**
+    - always-on workers as services;
+    - one boat VM per agent, started by the server;
+    - Agents › Swarm as a React Flow and dagre tree, with the server at the root;
+    - sliders replacing per-project pool sizes, with maximums in Settings;
+    - per-machine agent maximums and CPU and memory thresholds, with holding-back shown on the page;
+    - clicking an agent opens its terminal with control taken;
+    - an install script with enrollment;
+    - stopping a worker saves the work and starts a fresh attempt elsewhere;
+    - Linux and macOS, Intel and Apple silicon, on Docker Desktop.
+  - Cloudflare uses hand-made node and cloud tokens; AQ holds no Cloudflare API credential.
+  - Throttling near plan limits is deferred to a later brainstorm.
+  - There are five phases. Dispatched plan writers for phase 1 (workers as services) and phase 2 (swarm page, read-only) in parallel. Execution is by subagents once the plans are in.
