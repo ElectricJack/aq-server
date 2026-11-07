@@ -1,6 +1,8 @@
 //! Swarm read model (spec 0007): capacity assembly, machine reports and the
 //! pure swarm assembly. aq-server gathers the inputs and serves the result.
 pub mod capacity;
+pub mod machine;
+pub mod service;
 
 use aq_dashboard_contract::{Accuracy, Timestamp, Total};
 use chrono::{DateTime, SecondsFormat, Utc};

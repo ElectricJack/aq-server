@@ -27,6 +27,7 @@ pub fn worker_routes(state: AppState) -> Router<AppState> {
             Router::new()
                 .route("/v1/worker/heartbeat", post(heartbeat))
                 .route("/v1/worker/probe", post(probe))
+                .route("/v1/worker/machine", post(machine))
                 .with_state(state.control_view()),
         )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -213,6 +214,22 @@ async fn heartbeat(
         server_version: version_info().server_version,
         heartbeat_interval_secs: state.config.workers.heartbeat_interval_secs,
     }))
+}
+
+async fn machine(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(report): ApiJson<aq_swarm::machine::MachineReport>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    report
+        .validate()
+        .map_err(|r| bad(&format!("invalid machine report: {r}")))?;
+    let node = authenticate(&state, &headers).await?;
+    let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
+    aq_swarm::machine::record(&state.store.pool, node.id, &report, now)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    Ok(Json(serde_json::json!({"recorded": true})))
 }
 
 async fn probe(

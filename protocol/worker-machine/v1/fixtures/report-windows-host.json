@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "machine": {
+    "key": "desktop",
+    "label": "desktop",
+    "kind": "local"
+  },
+  "observed_at_ms": 1794100000000,
+  "source": "windows_host",
+  "host_probe": "fresh",
+  "logical_cpus": 24,
+  "memory_total_bytes": 68719476736,
+  "memory_used_bytes": 39857296998,
+  "cpu_busy_bps": 6100,
+  "disk_total_bytes": 2000398934016,
+  "disk_free_bytes": 315680000000
+}

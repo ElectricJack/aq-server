@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MachineReport",
+  "description": "One machine load report. Load and memory are the machine's own (the\nWindows host's when `source` is `windows_host`); `cpu_busy_bps` is 0-10000.",
+  "type": "object",
+  "properties": {
+    "cpu_busy_bps": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 10000,
+      "minimum": 0
+    },
+    "disk_free_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "disk_total_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "host_probe": {
+      "$ref": "#/$defs/HostProbe"
+    },
+    "logical_cpus": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "machine": {
+      "$ref": "#/$defs/MachineIdentity"
+    },
+    "memory_total_bytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "memory_used_bytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "observed_at_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source": {
+      "$ref": "#/$defs/LoadSource"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "machine",
+    "observed_at_ms",
+    "source",
+    "host_probe",
+    "logical_cpus",
+    "memory_total_bytes",
+    "memory_used_bytes",
+    "cpu_busy_bps"
+  ],
+  "$defs": {
+    "HostProbe": {
+      "type": "string",
+      "enum": [
+        "not_applicable",
+        "fresh",
+        "stale",
+        "missing"
+      ]
+    },
+    "LoadSource": {
+      "type": "string",
+      "enum": [
+        "linux",
+        "windows_host"
+      ]
+    },
+    "MachineIdentity": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/MachineKind"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "MachineKind": {
+      "type": "string",
+      "enum": [
+        "local",
+        "cloud"
+      ]
+    }
+  }
+}

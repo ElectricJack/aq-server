@@ -463,3 +463,96 @@ async fn oversized_body_rejected() {
     .await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+fn machine_report(cpu: u16) -> Value {
+    let mut v: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/worker-machine/v1/fixtures/report-windows-host.json"
+    ))
+    .unwrap();
+    v["cpu_busy_bps"] = json!(cpu);
+    v
+}
+
+async fn post_machine(h: &Harness, credential: &str, body: Value) -> (StatusCode, Value) {
+    send(
+        &h.worker,
+        "POST",
+        "/v1/worker/machine",
+        Some(credential),
+        Some(body),
+    )
+    .await
+}
+
+fn now_ms(h: &Harness) -> u64 {
+    h.now.lock().unwrap().timestamp_millis() as u64
+}
+
+#[tokio::test]
+async fn machine_report_records_latest_and_window() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    for (secs, cpu) in [(15, 6100), (30, 6300)] {
+        *h.now.lock().unwrap() = t0() + Duration::seconds(secs);
+        let (s, v) = post_machine(&h, &r.credential, machine_report(cpu)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v, json!({"recorded": true}));
+    }
+    let pool = h._db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    let facts = aq_swarm::machine::latest(&mut conn, &[r.node_id], now_ms(&h))
+        .await
+        .unwrap();
+    let f = &facts[&r.node_id];
+    assert_eq!(f.cpu_avg_15m_bps, 6200);
+    assert_eq!(f.samples_15m, 2);
+    assert_eq!(f.report.cpu_busy_bps, 6300);
+}
+
+#[tokio::test]
+async fn machine_samples_older_than_window_are_pruned() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, _) = post_machine(&h, &r.credential, machine_report(6100)).await;
+    assert_eq!(s, StatusCode::OK);
+    *h.now.lock().unwrap() = t0() + Duration::minutes(16);
+    let (s, _) = post_machine(&h, &r.credential, machine_report(6300)).await;
+    assert_eq!(s, StatusCode::OK);
+    let pool = h._db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    let facts = aq_swarm::machine::latest(&mut conn, &[r.node_id], now_ms(&h))
+        .await
+        .unwrap();
+    assert_eq!(facts[&r.node_id].samples_15m, 1);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM node_machine_samples")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn machine_report_rejects_invalid_and_unknown_fields() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, _) = post_machine(&h, &r.credential, machine_report(10_001)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let mut extra = machine_report(100);
+    extra["extra"] = json!(1);
+    let (s, _) = post_machine(&h, &r.credential, extra).await;
+    assert!(s.is_client_error(), "{s}");
+}
+
+#[tokio::test]
+async fn machine_report_requires_credential() {
+    let h = harness().await;
+    let (s, _) = send(
+        &h.worker,
+        "POST",
+        "/v1/worker/machine",
+        None,
+        Some(machine_report(100)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
