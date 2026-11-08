@@ -10,10 +10,10 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
-#[path = "native_offers/history_caps.rs"]
-mod history_caps;
 #[path = "native_offers/handoff.rs"]
 mod handoff;
+#[path = "native_offers/history_caps.rs"]
+mod history_caps;
 #[path = "native_offers/lost.rs"]
 mod lost;
 

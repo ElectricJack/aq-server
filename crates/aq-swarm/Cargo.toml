@@ -6,6 +6,7 @@ publish = false
 description = "Swarm read model (spec 0007): capacity assembly, machine reports, swarm assembly"
 
 [dependencies]
+aq-history-caps = { path = "../aq-history-caps", version = "=0.1.0" }
 aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-selection = { path = "../aq-selection", version = "=0.1.5" }

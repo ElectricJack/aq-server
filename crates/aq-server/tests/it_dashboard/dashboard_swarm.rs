@@ -472,3 +472,44 @@ async fn renewed_node_has_no_measurement_hold() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(measurement_holds(&body).is_empty(), "{body}");
 }
+
+#[tokio::test]
+async fn swarm_shows_the_offer_rate_hold_on_the_node() {
+    let now = common::profiled::NOW;
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(f.node.node_id)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    common::sealed::offers(
+        &pool,
+        f.node.node_id,
+        f.selection.lineage.project_id,
+        now as i64 - 1_000,
+        30,
+    )
+    .await;
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let node = body["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .find(|n| n["node"]["id"] == json!(f.node.node_id.to_string()))
+        .unwrap();
+    assert!(
+        node["holding"].as_array().unwrap().contains(&json!({
+            "code": "history_rate_limited",
+            "message": "Offer rate limit reached: 30 offers in the last hour (limit 30)",
+            "remedy": "Wait for the hour to pass; if this repeats, look for a task that fails in a loop"
+        })),
+        "{node}"
+    );
+}

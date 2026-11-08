@@ -955,7 +955,9 @@
         "agent_maximum_reached",
         "no_machine_online",
         "no_eligible_machine",
-        "no_free_slot"
+        "no_free_slot",
+        "history_rate_limited",
+        "history_cap_reached"
       ],
       "type": "string"
     },

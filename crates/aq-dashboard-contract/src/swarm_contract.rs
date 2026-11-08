@@ -246,6 +246,10 @@ pub enum HoldCode {
     NoMachineOnline,
     NoEligibleMachine,
     NoFreeSlot,
+    // Spec 0008: an offer or inventory report rate limit holds new work.
+    HistoryRateLimited,
+    // Spec 0008: a live sealed-history cap holds new work.
+    HistoryCapReached,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -280,6 +284,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(HoldCode::NoFreeSlot).unwrap(),
             "no_free_slot"
+        );
+        assert_eq!(
+            serde_json::to_value(HoldCode::HistoryRateLimited).unwrap(),
+            "history_rate_limited"
+        );
+        assert_eq!(
+            serde_json::to_value(HoldCode::HistoryCapReached).unwrap(),
+            "history_cap_reached"
         );
         assert_eq!(
             serde_json::to_value(IntelligenceClass::Deep).unwrap(),
