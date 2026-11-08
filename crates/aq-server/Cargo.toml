@@ -53,6 +53,7 @@ aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }
 aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 aq-swarm = { path = "../aq-swarm", version = "=0.1.0" }
+aq-history-caps = { path = "../aq-history-caps", version = "=0.1.0" }
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
 aq-protocol.workspace = true
 aq-worker-protocol.workspace = true

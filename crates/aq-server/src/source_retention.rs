@@ -394,7 +394,9 @@ async fn begin(
             "source transfer count limit exceeded".into(),
         ));
     }
-    let used:i64=sqlx::query_scalar("SELECT (COALESCE((SELECT sum((manifest->>'manifest_bytes')::bigint+(manifest->>'bundle_bytes')::bigint) FROM source_transfers WHERE NOT staging_released),0)+COALESCE((SELECT sum(reserved_bytes) FROM source_bases),0)+COALESCE((SELECT sum(charged_bytes) FROM profiled_source_exports),0))::bigint").fetch_one(&mut *tx).await.map_err(internal)?;
+    let used = aq_history_caps::staging_used(&mut tx)
+        .await
+        .map_err(internal)?;
     if (used as u64)
         .saturating_add(r.manifest.manifest_bytes)
         .saturating_add(r.manifest.bundle_bytes)
@@ -912,7 +914,9 @@ async fn provision_base(
             .execute(&mut *tx)
             .await
             .map_err(internal)?;
-        let used:i64=sqlx::query_scalar("SELECT (COALESCE((SELECT sum((manifest->>'manifest_bytes')::bigint+(manifest->>'bundle_bytes')::bigint) FROM source_transfers WHERE NOT staging_released),0)+COALESCE((SELECT sum(reserved_bytes) FROM source_bases),0)+COALESCE((SELECT sum(charged_bytes) FROM profiled_source_exports),0))::bigint").fetch_one(&mut *tx).await.map_err(internal)?;
+        let used = aq_history_caps::staging_used(&mut tx)
+            .await
+            .map_err(internal)?;
         let reserved = rt.config.max_bundle_bytes + 1024 * 1024;
         if (used as u64).saturating_add(reserved) > rt.config.max_staging_bytes {
             return Err(AppError::PayloadTooLarge(

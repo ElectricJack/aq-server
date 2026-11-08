@@ -62,13 +62,11 @@ pub(super) async fn quota(
     .await
     .map_err(db)?;
     let q = super::preparation::retained_quota_locked(tx, node).await?;
-    let counts: (i64, i64) = sqlx::query_as(
-        "SELECT count(*),count(*) FILTER(WHERE node_id=$1) FROM profiled_v2_proposals",
-    )
-    .bind(node)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(db)?;
+    let kind = aq_history_caps::Kind::V2Proposals;
+    let p = aq_history_caps::usage(&mut **tx, kind, Some(node), 0)
+        .await
+        .map_err(db)?;
+    let counts = (p.total_rows, p.scope_rows);
     if (new_proposal && (counts.0 >= 4096 || counts.1 >= 256))
         || q.0 >= 4096
         || q.1 >= 256

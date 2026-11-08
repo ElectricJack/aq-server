@@ -148,7 +148,11 @@ pub(crate) async fn for_attempt_locked(
     let current = registration::admitted_runtime_locked(tx, node_id, boot_id).await?;
     let history = capture_locked(tx, &current).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-native-attempt-registration-link-v1',0))").execute(&mut **tx).await.map_err(database)?;
-    let quota:(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(logical_bytes)::BIGINT,0),count(*) FILTER(WHERE node_id=$1),COALESCE((sum(logical_bytes) FILTER(WHERE node_id=$1))::BIGINT,0) FROM profiled_launch_registrations").bind(node_id).fetch_one(&mut **tx).await.map_err(database)?;
+    let kind = aq_history_caps::Kind::LaunchRegistrations;
+    let u = aq_history_caps::usage(&mut **tx, kind, Some(node_id), 0)
+        .await
+        .map_err(database)?;
+    let quota = (u.total_rows, u.total_bytes, u.scope_rows, u.scope_bytes);
     if quota.0 >= 4096 || quota.1 + 64 > 262144 || quota.2 >= 256 || quota.3 + 64 > 16384 {
         return Err(AppError::Conflict(
             "native attempt registration link capacity exhausted".into(),

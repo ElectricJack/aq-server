@@ -634,6 +634,7 @@ dependencies = [
  "aq-context-renewal",
  "aq-dashboard-contract",
  "aq-environment-templates",
+ "aq-history-caps",
  "aq-human-cursor",
  "aq-human-work",
  "aq-intelligence-config",

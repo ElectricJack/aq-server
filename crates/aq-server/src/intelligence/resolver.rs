@@ -337,15 +337,18 @@ async fn resolve_with_principal(
         tx.rollback().await.map_err(db)?;
         return Ok(decision);
     }
-    let row=sqlx::query("SELECT count(*) AS entries,COALESCE(sum(pg_column_size(decision)),0)::BIGINT AS bytes FROM intelligence_decisions").fetch_one(&mut *tx).await.map_err(db)?;
+    let kind = aq_history_caps::Kind::IntelligenceDecisions;
+    let row = aq_history_caps::usage(&mut tx, kind, None, decision.inputs.now_ms)
+        .await
+        .map_err(db)?;
     let incoming: i64 = sqlx::query_scalar("SELECT pg_column_size($1::jsonb)::BIGINT")
         .bind(&encoded)
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-    if row.get::<i64, _>("entries") >= 1024
+    if row.total_rows >= 1024
         || row
-            .get::<i64, _>("bytes")
+            .total_bytes
             .checked_add(incoming)
             .is_none_or(|n| n > 64 * 1024 * 1024)
     {
