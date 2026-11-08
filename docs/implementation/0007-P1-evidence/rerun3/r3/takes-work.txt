@@ -1,0 +1,4 @@
+seeded 21:46:22, offered 21:47:10
+54754ce2-6c32-538b-a0c3-9b7b2e04fe79|863c386e-d38b-49a7-88c1-42bee4d9e4dc
+artifact rows now: 536 live: 232
+aq-863c386ed38b49a788c142bee4d9e4dc-54754ce26c32538ba0c39b7b2e04fe79 Up Less than a second

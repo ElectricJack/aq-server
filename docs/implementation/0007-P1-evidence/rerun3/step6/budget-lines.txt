@@ -1,0 +1,5 @@
+task_id=e0a20000-0000-4000-8000-0000000007d1 predecessor=54754ce2-6c32-538b-a0c3-9b7b2e04fe79 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007d1 predecessor=5f2a9151-748e-5c8f-9ba8-4b821b600524 attempts_started=2 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007d2 predecessor=267e6630-df41-53b2-b30f-0252bfafad32 attempts_started=3 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007d2 predecessor=42d7b3ee-8993-5f04-9290-b2d72d0267ba attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007d2 predecessor=a90e7eb4-9dfd-5fd6-a928-6413795d9c07 attempts_started=2 lineage_elapsed_ms=0 sandbox_ms_charged=0

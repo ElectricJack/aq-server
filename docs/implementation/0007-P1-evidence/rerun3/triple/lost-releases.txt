@@ -1,0 +1,2 @@
+{"attempt_id": "bdd7e0f7-ba98-5aeb-9e10-93892b19af4e", "proof_kind": "cgroup_teardown", "reason": "lost_after_crash", "charged": true, "held_reason": null, "recorded_at": "2026-11-08T22:10:40.132107+00:00"}
+{"attempt_id": "c2540fad-e5d0-565b-ab45-5ecb936bfe08", "proof_kind": "cgroup_teardown", "reason": "lost_after_crash", "charged": true, "held_reason": null, "recorded_at": "2026-11-08T22:12:14.027425+00:00"}

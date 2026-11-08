@@ -1,0 +1,39 @@
+2026-11-08T22:04:28.006855Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=5de38d72da10405a8bd0f94ed24f5c18 unit=aq-node@ms1.service
+2026-11-08T22:04:28.250936Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:28.251752Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:28.251755Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:28.270775Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="c4866715-2513-46e0-8a67-ffe4e2d6cdf6"
+2026-11-08T22:04:28.272677Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="ff5dd1a5-e7b7-4ea6-8123-bb178d22b403"
+thread 'tokio-rt-worker' (1901418) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1901471 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901472 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901473 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901478 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 2.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:04:39.251825Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=04400005c9ca49899a7b503fca555950 unit=aq-node@ms1.service
+2026-11-08T22:04:39.500808Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:39.501344Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:39.501352Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:39.521756Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="0178d35d-13c3-4d2c-a14f-123fa2f7b3b1"
+2026-11-08T22:04:39.521750Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="1fcdfeee-b8c0-406e-a05c-e9e5ec7f2b73"
+thread 'tokio-rt-worker' (1901746) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1901777 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901778 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901779 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901780 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 3.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:04:50.337018Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=c89de187578d4038b867f2f8ad35961a unit=aq-node@ms1.service
+2026-11-08T22:04:50.578130Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:50.578668Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:50.578813Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:50.595382Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarna

@@ -1,0 +1,8 @@
+# 2026-11-08T21:46:07Z
+admission_artifacts total rows: 512
+admission_artifacts project rows: 512
+sealed_history_usage('admission_artifacts', project, now):
+208|428957|208|428957
+sealed_history_usage('source_exports', project, now):
+11|39556|11|39556
+caps: admission_artifacts 512/project 4096 total (0104); offer rate 30/node/h, 240/project/h, 960/h (0105)

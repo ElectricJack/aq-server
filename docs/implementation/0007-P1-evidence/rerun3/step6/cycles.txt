@@ -1,0 +1,14 @@
+task e0a20000-0000-4000-8000-0000000007d2 decisions at start=111 21:57:29
+cycle 1: attempt 42d7b3ee-8993-5f04-9290-b2d72d0267ba running; attempts=1 decisions=114 at 21:58:13
+submitted Stop worker at 2026-11-08T21:58:21.150Z
+submitted Start worker at 2026-11-08T21:58:47.669Z
+cycle 1: successor offered at 21:58:51; decisions=117
+cycle 2: attempt a90e7eb4-9dfd-5fd6-a928-6413795d9c07 running; attempts=2 decisions=117 at 21:59:31
+submitted Stop worker at 2026-11-08T21:59:39.608Z
+submitted Start worker at 2026-11-08T22:00:04.047Z
+cycle 2: successor offered at 22:00:11; decisions=119
+cycle 3: attempt 267e6630-df41-53b2-b30f-0252bfafad32 running; attempts=3 decisions=119 at 22:00:47
+submitted Stop worker at 2026-11-08T22:00:55.915Z
+submitted Start worker at 2026-11-08T22:01:19.613Z
+cycle 3: successor offered at 22:01:26; decisions=122
+done

@@ -1,0 +1,1 @@
+aq-node@ms1 is-active=inactive is-enabled=disabled; aq-worker@local=active
