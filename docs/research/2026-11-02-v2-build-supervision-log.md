@@ -1680,3 +1680,8 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - The token now reaches the container through stdin and is never written to a file.
   - The runbook is `~/.local/share/aq-ms1/remeasure.sh` (`check` / `measure` / full) plus MS1.md (cfd9cbbf).
   - The supervisor's monitor now prints the hours left and flags a refresh under 4 h. Phase 1 S8 automates this.
+- **00:04:** swarm phase 2. All three lane PRs went through an Opus review, then fix round 1, then a clean scoped re-review:
+  - worker #47: 2 important findings, the probe's battery defaults and a bad `machine.json` stopping the worker;
+  - dashboard #85: 6 important, the phone shell on `/agents/sessions`, auto-control on Reconnect and on remount, a non-panel-scoped read, a self-recorded acceptance with 6 px text, and keyboard focus;
+  - server #112: the ratchet handling, plus minors (gemini classed as fast, null averages, a sample rate limit, registry command `dashboard.swarm`).
+- Squash-merged aq-server #112 (f68684fb), which settles the per-commit ratchet failures; the ratchet is 109568. The dashboard and worker re-pin to f68684fb before their merges.
