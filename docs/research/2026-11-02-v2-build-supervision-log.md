@@ -1685,3 +1685,9 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - dashboard #85: 6 important, the phone shell on `/agents/sessions`, auto-control on Reconnect and on remount, a non-panel-scoped read, a self-recorded acceptance with 6 px text, and keyboard focus;
   - server #112: the ratchet handling, plus minors (gemini classed as fast, null averages, a sample rate limit, registry command `dashboard.swarm`).
 - Squash-merged aq-server #112 (f68684fb), which settles the per-commit ratchet failures; the ratchet is 109568. The dashboard and worker re-pin to f68684fb before their merges.
+- **00:19:** swarm phase 2 is fully merged:
+  - aq-server #112 (f68684fb, squash);
+  - aq-worker #47 (05390a5f, re-pinned to f68684fb);
+  - aq-dashboard #85 (9664a5e6, re-pinned to f68684fb).
+- Dispatched A1 live acceptance on aq-ms1 (rebuild server, dashboard and worker; browser at 1440 and 390; one real agent attempt for the terminal check). The Windows host-load probe is NOT installed pending owner approval.
+- aq-dashboard `RouteError.test` "a failed chunk reloads once automatically" flaked twice in CI on #85. Per W78, dispatched a root-cause fix (`fix/routeerror-flake`).
