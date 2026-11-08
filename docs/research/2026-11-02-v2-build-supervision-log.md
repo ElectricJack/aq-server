@@ -1780,3 +1780,10 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - **Round 3:** health now filters by node, and a demoted switcher's switch reads unset.
   - Deferred follow-ups: N1/N2, availability-switch lock ordering and contention.
   - The dashboard re-pin and PR are dispatched, then worker #49.
+- **09:49:** merged aq-worker #49 (b95b1089), swarm phase 1 worker.
+  - The dashboard rebase and re-pin to 7529e623 is in progress.
+  - **W13 step 1 probe** (real Claude 2.1.318 in the pinned template, `--input-format stream-json`): streaming input works in print mode. A second message keeps context, a mid-turn line folds into the running turn, and closing stdin ends cleanly. So Q9 (full interactive mode) is not needed.
+  - **W13 is blocked:** `aq-session-host`'s `native_exec` profile refuses `input_enabled`; only named read-only images allow input. Asked the owner to choose:
+    - A: add a native-exec-interactive profile (recommended);
+    - B: make the driver a named read-only image;
+    - C: keep Claude watch-only.
