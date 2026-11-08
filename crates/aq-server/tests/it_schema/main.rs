@@ -24,5 +24,6 @@ mod schema32_phase_execution;
 mod schema33_phase_terminal;
 mod schema41_compute;
 mod schema43_cancellation;
+mod sealed_history_live;
 mod settlement_migration;
 mod store;

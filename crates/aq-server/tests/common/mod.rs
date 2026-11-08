@@ -144,6 +144,8 @@ pub mod closure;
 
 /// Shared source-only presence fixture; independent of phase protocol profile.
 pub mod presence;
+/// Spec 0008 relational-only seeding for sealed history counting tests.
+pub mod sealed;
 
 /// Runs a test body on its own thread with a large stack and a current-thread
 /// runtime (as `#[tokio::test]` uses). For bodies whose debug-build async poll

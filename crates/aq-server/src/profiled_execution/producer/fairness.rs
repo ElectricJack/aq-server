@@ -5,7 +5,7 @@ use crate::error::AppError;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-pub use aq_profiled_state::fairness::{AGING_MS, Candidate, STARVATION_MS, order};
+pub use aq_profiled_state::fairness::{Candidate, order};
 
 /// First store format carrying `profiled_project_schedule` (migration 52).
 pub const SCHEDULE_FORMAT: u32 = 52;
