@@ -1767,3 +1767,16 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - the claim comes before destroy, with the node or settle doing the destroy;
   - the enroll and resume hardening.
 - The aq-server #114 Opus review found C1, a critical defect: the sticky-availability keeper rewrote observation rows every 20 s, which breaks the grant fence. It is fixed by synthesizing availability from the switch generation. It also found 8 important defects (unverified exempt handoffs, the Stop/poll TOCTOU, revoke/mint and key-adoption races, S9 starvation, the silent S11 override, unbounded renewals, untested S7 wiring). Fix round 1 is with Opus.
+- **09:37:** **merged aq-server #114 (7529e623, squash), swarm phase 1 server S0–S13.** It took three Opus fix rounds.
+  - **Round 1:**
+    - C1: the keeper rewrote rows and broke the grant fence; replaced with an attestation synthesized from the switch generation;
+    - I1: exempt handoffs verified against the server's desired state and capped at 5 per lineage;
+    - I2: Stop is re-checked inside publication;
+    - I3/I4: per-key locks and no key adoption;
+    - I5: refused successors skipped;
+    - I6: a startup warning for overridden lists, and "enrolled" verified;
+    - I7: renewal limits.
+  - **Round 2:** C1 had broken phase-execution health on ms1 (no rows with the switch on); fixed.
+  - **Round 3:** health now filters by node, and a demoted switcher's switch reads unset.
+  - Deferred follow-ups: N1/N2, availability-switch lock ordering and contention.
+  - The dashboard re-pin and PR are dispatched, then worker #49.
