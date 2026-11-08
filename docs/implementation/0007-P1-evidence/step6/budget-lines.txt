@@ -1,0 +1,3 @@
+task_id=e0a20000-0000-4000-8000-0000000007c1 predecessor=d314be1a-c6a6-5535-b938-f67b240d3fd8 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007c2 predecessor=da0d5b91-d816-5e99-9bed-5e930932a3dd attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0
+task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0

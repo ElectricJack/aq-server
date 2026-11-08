@@ -1,0 +1,2 @@
+2026-11-08T16:42:16.287197Z  INFO aq_agent_channel: agent channel closed attempt_id=8d502ade-46f7-577b-a7bf-90479e7b111a reason="stopped by the node"
+2026-11-08T16:42:29.006013Z  INFO aq_worker::client: probe succeeded

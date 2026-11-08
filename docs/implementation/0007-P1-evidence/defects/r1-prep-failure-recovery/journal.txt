@@ -1,0 +1,15 @@
+2026-11-08T16:34:04.003352Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/artifact status=503 Service Unavailable body={"error":"overloaded","message":"request capacity exhausted; retry the same operation"}
+2026-11-08T16:34:04.275173Z  WARN aq_node_service::supervisor: the attempt stays in current for recovery slot=2
+2026-11-08T16:34:04.275244Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 503 Service Unavailable slot=2
+2026-11-08T16:34:35.723865Z  WARN aq_node_service::supervisor: recovery failed, retrying in 60s: missing or mixed exact phase execution slot=2
+2026-11-08T16:35:38.268234Z  WARN aq_node_service::supervisor: recovery failed, retrying in 120s: missing or mixed exact phase execution slot=2
+2026-11-08T16:37:43.017986Z  WARN aq_node_service::supervisor: recovery failed, retrying in 240s: missing or mixed exact phase execution slot=2
+2026-11-08T16:41:52.247829Z  WARN aq_node_service::supervisor: recovery failed, retrying in 300s: missing or mixed exact phase execution slot=2
+2026-11-08T16:47:03.781001Z  WARN aq_node_service::supervisor: recovery failed, retrying in 300s: missing or mixed exact phase execution slot=2
+2026-11-08T16:52:12.503062Z  INFO aq_agent_channel: agent channel closed attempt_id=5cc6a724-286d-5afd-9338-500427139954 reason="stopped by the node"
+2026-11-08T16:52:15.483354Z  WARN aq_node_service::supervisor: recovery failed, retrying in 300s: missing or mixed exact phase execution slot=2
+2026-11-08T16:57:27.386917Z  WARN aq_node_service::supervisor: recovery failed, retrying in 300s: missing or mixed exact phase execution slot=2
+2026-11-08T16:58:58.879833Z  WARN aq_node_service::supervisor: recovery failed, retrying in 30s: missing or mixed exact phase execution slot=2
+2026-11-08T16:59:30.394819Z  WARN aq_node_service::supervisor: recovery failed, retrying in 60s: missing or mixed exact phase execution slot=2
+2026-11-08T17:00:14.704068Z  WARN aq_node_service::supervisor: recovery failed, retrying in 30s: missing or mixed exact phase execution slot=2
+2026-11-08T17:00:46.210741Z  WARN aq_node_service::supervisor: recovery failed, retrying in 60s: missing or mixed exact phase execution slot=2

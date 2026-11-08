@@ -1,0 +1,15 @@
+Stopping aq-node@ms1.service - AQ worker service (ms1)...
+Stopped aq-node@ms1.service - AQ worker service (ms1).
+aq-node@ms1.service: Consumed 9.695s CPU time, 32.1M memory peak, 0B memory swap peak.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T17:03:47.090786Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=364e902441594299b8e8cb7b9650b49e unit=aq-node@ms1.service
+2026-11-08T17:03:47.374044Z  INFO aq_worker::measure: a measurement is running; its sandbox is not swept
+2026-11-08T17:03:47.374400Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T17:03:58.214439Z  INFO aq_worker::client: probe succeeded
+2026-11-08T17:03:58.431034Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T17:03:58.458222Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 409 Conflict slot=1
+2026-11-08T17:04:02.337322Z  INFO aq_worker::client: probe succeeded
+2026-11-08T17:04:02.559070Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T17:04:02.581005Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 409 Conflict slot=2
+2026-11-08T17:04:34.148439Z  INFO aq_worker::client: probe succeeded

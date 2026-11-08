@@ -1,0 +1,30 @@
+commit 3240d52fbb4d0ae237664ecd3afa570fc0334b91
+Author: AQ Worker <worker@invalid>
+Date:   Sun Nov 8 16:31:49 2026 +0000
+
+    Retained execution checkpoint
+
+ p1-rerun/r1/step1.txt | 1 +
+ p1-rerun/r1/step2.txt | 1 +
+ 2 files changed, 2 insertions(+)
+
+commit 9b0bdd0b1d52529ebd30e5076fba3b50cd29a0c5
+Author: AQ Worker <worker@invalid>
+Date:   Sun Nov 8 16:31:50 2026 +0000
+
+    Retained execution checkpoint
+
+ p1-rerun/r2/step1.txt | 1 +
+ p1-rerun/r2/step2.txt | 1 +
+ 2 files changed, 2 insertions(+)
+
+commit 095339dfaf2314cfb45c708ba26d1a12dbb654d4
+Author: AQ Worker <worker@invalid>
+Date:   Sun Nov 8 16:42:17 2026 +0000
+
+    Retained execution checkpoint
+
+ p1-rerun/r2/step3.txt | 1 +
+ p1-rerun/r2/step4.txt | 1 +
+ 2 files changed, 2 insertions(+)
+

@@ -1,0 +1,1 @@
+2026-11-08T17:02:10.083384Z ERROR aq_node_service::supervisor: the server refused this machine's credential (revoked from the Swarm page?); all slots are paused. Uninstall the service or enroll the machine again

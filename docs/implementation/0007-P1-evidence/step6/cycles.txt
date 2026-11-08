@@ -1,0 +1,5 @@
+task e0a20000-0000-4000-8000-0000000007c3 decisions at start=82 16:51:20
+cycle 1: attempt 5cc6a724-286d-5afd-9338-500427139954 running; attempts=1 decisions=82 at 16:51:47
+submitted Stop worker at 2026-11-08T16:51:55.128Z
+submitted Start worker at 2026-11-08T16:52:23.326Z
+(cycle 1's successor was never offered: every poll after Start was refused by the project's admission artifact quota, see defects/r3-artifact-quota; cycles 2 and 3 could not run)

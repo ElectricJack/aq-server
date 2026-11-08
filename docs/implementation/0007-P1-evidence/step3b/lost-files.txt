@@ -1,0 +1,4 @@
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261108T163353Z-fcd3/lost-48ba8b42-918f-55dd-8d23-cb1ad22fc73f.json
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261108T163353Z-fcd3/lost-proof-48ba8b42-918f-55dd-8d23-cb1ad22fc73f.json
+~/.local/state/agent-q/service/ms1/slots/2/archive/20261108T163354Z-e531/lost-5bd4bb55-4679-5f9b-9d0a-3036324c11c9.json
+~/.local/state/agent-q/service/ms1/slots/2/archive/20261108T163354Z-e531/lost-proof-5bd4bb55-4679-5f9b-9d0a-3036324c11c9.json

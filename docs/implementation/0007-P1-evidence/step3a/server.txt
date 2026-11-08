@@ -1,0 +1,10 @@
+2026-11-08T16:28:37.612268Z  WARN aq_intelligence_config: intelligence credential owner-claude-subscription lists allowed_node_ids, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node may use it; set allow_enrolled_nodes = false on the credential to keep only the listed nodes
+2026-11-08T16:28:38.034098Z  WARN aq_machine_control: project binding e0000000-0000-4000-8000-000000000002 lists allowed_node_ids or allowed_worker_groups, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node is eligible; set allow_enrolled_nodes = false in the binding to keep only the listed n
+2026-11-08T16:28:57.743383Z  WARN aq_server::error: API request refused status=404 code=not_found
+2026-11-08T16:28:58.193124Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=7fab09bc-f66a-42e4-90ea-a07226f6c0ae status=503 code=unavailable
+2026-11-08T16:29:35.745495Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=a6125823-bfa8-4c0b-889a-f4c04b37ad5b status=503 code=unavailable
+2026-11-08T16:30:34.705025Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=59682aac-7b23-42e4-a9e1-3257c3a605fb status=503 code=unavailable
+2026-11-08T16:32:02.391460Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c1 predecessor=d314be1a-c6a6-5535-b938-f67b240d3fd8 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400
+2026-11-08T16:32:06.350162Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c2 predecessor=da0d5b91-d816-5e99-9bed-5e930932a3dd attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400
+2026-11-08T16:32:27.540399Z  WARN aq_server::error: API request refused status=500 code=terminal_output_poll_failed
+2026-11-08T16:32:27.642277Z  WARN aq_server::error: API request refused status=500 code=terminal_output_poll_failed

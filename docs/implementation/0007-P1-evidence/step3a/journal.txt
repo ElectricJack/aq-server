@@ -1,0 +1,15 @@
+2026-11-08T16:31:33.064451Z  INFO aq_agent_channel: agent credential rotated attempt_id=d314be1a-c6a6-5535-b938-f67b240d3fd8 version=2
+Stopping aq-node@ms1.service - AQ worker service (ms1)...
+2026-11-08T16:31:38.043416Z  INFO aq_agent_channel: agent credential rotated attempt_id=da0d5b91-d816-5e99-9bed-5e930932a3dd version=2
+2026-11-08T16:31:47.810901Z  INFO aq_agent_channel: agent channel closed attempt_id=d314be1a-c6a6-5535-b938-f67b240d3fd8 reason="stopped by the node"
+2026-11-08T16:31:48.796824Z  INFO aq_agent_channel: agent channel closed attempt_id=da0d5b91-d816-5e99-9bed-5e930932a3dd reason="stopped by the node"
+Stopped aq-node@ms1.service - AQ worker service (ms1).
+aq-node@ms1.service: Consumed 2min 18.158s CPU time.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T16:31:57.190507Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=8aaca35999084b39bb381fa7d1d99abd unit=aq-node@ms1.service
+2026-11-08T16:31:57.460269Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T16:32:02.108212Z  INFO aq_worker::client: probe succeeded
+2026-11-08T16:32:06.284767Z  INFO aq_worker::client: probe succeeded
+2026-11-08T16:32:11.423959Z  INFO aq_agent_channel: agent channel open attempt_id=48ba8b42-918f-55dd-8d23-cb1ad22fc73f
+2026-11-08T16:32:15.158642Z  INFO aq_agent_channel: agent channel open attempt_id=5bd4bb55-4679-5f9b-9d0a-3036324c11c9

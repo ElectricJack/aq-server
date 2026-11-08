@@ -1,0 +1,25 @@
+$ up.sh status   (2026-11-08T17:05:06Z)
+aq-ms1-server-1	Up 6 minutes (healthy)	127.0.0.1:28080->8080/tcp, 127.0.0.1:28081->8081/tcp
+aq-ms1-aq-git-1	Up 36 minutes (healthy)	8080-8081/tcp
+aq-ms1-aq-graph-1	Up 2 days (healthy)	127.0.0.1:28741->8741/tcp
+aq-ms1-postgres-1	Up 2 days (healthy)	5432/tcp
+worker e0-local-development 9975d20c-6a26-497a-95b0-128b16c3f494 offline None
+worker ms1-node 188de335-4fc9-4e85-b15b-138f01999775 offline 2026-11-08T00:39:16.396409Z
+worker ms1-node-spare 085affc7-71d7-417c-8978-d5b18c1e51fe offline None
+worker ms1-desktop b1225fe8-604a-46a9-a88d-3b040cc6ba4e offline 2026-11-08T10:41:53.191354Z
+worker DESKTOP-EB8UOME 9fff722b-49ec-41e9-ac72-560c990988c1 revoked 2026-11-08T10:49:42.877652Z
+worker DESKTOP-EB8UOME#2 26e56176-2f27-41f1-9936-d74ded3187ea revoked 2026-11-08T10:49:26.270203Z
+worker DESKTOP-EB8UOME bc162c83-8695-48e0-b175-934eeae45eb8 revoked 2026-11-08T10:59:50.104391Z
+worker DESKTOP-EB8UOME#2 31ba7e6d-8a63-4a22-bb9a-03494c115dfa revoked 2026-11-08T10:51:24.092034Z
+worker DESKTOP-EB8UOME d94b6dd7-5daa-4189-b953-9200f754b6c6 revoked 2026-11-08T11:06:53.665765Z
+worker DESKTOP-EB8UOME#2 bd5cece7-01e7-421f-809a-288f96d5727f revoked 2026-11-08T11:02:37.140050Z
+worker DESKTOP-EB8UOME 37d67aa8-d3d6-47ae-bd95-0a4ac36449fe revoked 2026-11-08T11:31:42.266932Z
+worker DESKTOP-EB8UOME#2 3763fb5f-501e-45d1-b7cc-93b729b6098c revoked 2026-11-08T11:30:11.606352Z
+worker DESKTOP-EB8UOME 06b87ad1-2750-4acf-82bf-05fac118265b revoked 2026-11-08T11:40:02.991522Z
+worker DESKTOP-EB8UOME#2 666dc53a-17c5-4ed2-858e-994bb53f5965 revoked 2026-11-08T11:39:52.885693Z
+worker DESKTOP-EB8UOME f85cc3e1-a0f7-4aa8-9e53-02cee8aef93a revoked 2026-11-08T17:01:55.071238Z
+worker DESKTOP-EB8UOME#2 480dc9a2-9e87-47fe-bf6f-1e81e474effb revoked 2026-11-08T16:34:03.141403Z
+worker DESKTOP-EB8UOME 863c386e-d38b-49a7-88c1-42bee4d9e4dc online 2026-11-08T17:05:06.126399Z
+worker DESKTOP-EB8UOME#2 1e1ec4e3-822a-41f0-809f-cb625a1dd08f offline 2026-11-08T17:04:02.338286Z
+sandboxes on /run/user/1000/aq-sandbox/podman.sock: 2
+dashboard: http://127.0.0.1:28080/   worker API: http://127.0.0.1:28081   graph: http://127.0.0.1:28741
