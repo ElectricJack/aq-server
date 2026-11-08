@@ -218,6 +218,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-environment-templates"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.1.12",
+ "aq-profiles",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+]
+
+[[package]]
 name = "aq-human-cursor"
 version = "0.1.0"
 dependencies = [
@@ -549,6 +562,7 @@ dependencies = [
  "aq-central-authority",
  "aq-command-registry",
  "aq-dashboard-contract",
+ "aq-environment-templates",
  "aq-human-cursor",
  "aq-human-work",
  "aq-intelligence-config",
