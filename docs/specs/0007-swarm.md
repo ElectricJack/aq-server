@@ -49,7 +49,7 @@ These would count as failure even if everything technically works:
 Agents › Swarm becomes the Agents landing page **(owner)**:
 
 1. **Controls bar** at the top (§5.3).
-2. **Swarm tree** below it, with a **properties pane** on the right (§5.4).
+2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
 
 ### 5.2 The tree
 
@@ -131,7 +131,7 @@ Settings gains a **Swarm** section **(owner: maximums live in Settings)**:
   - the VM size.
 - **Per machine:**
   - maximum agents **(owner)**;
-  - CPU threshold and memory threshold, above which no new agents start there **(owner)**. On the WSL2 desktop these measure **Windows host load**, not only the WSL VM, so a game running on Windows counts. That needs a small Windows-side probe **(my call)**;
+  - CPU threshold and memory threshold, above which no new agents start there **(owner)**. On the WSL2 desktop these measure load inside the WSL VM, where agents and builds run. Windows host load is not measured: when the owner wants the machine, they stop the worker from the dashboard **(owner, 2026-11-07; replaces the earlier Windows-probe call)**;
   - a display name.
 - **Add machine:** shows the one-line install command with a single-use enrollment code **(my call)**.
 
