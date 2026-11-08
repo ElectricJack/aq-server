@@ -6,7 +6,6 @@ pub mod config {
 pub(crate) mod availability_action;
 mod feedback;
 mod inventory;
-pub mod keeper;
 pub mod login_import;
 mod principal;
 mod registry;
@@ -144,57 +143,23 @@ async fn observe(
         if row.get::<String,_>("payload_digest")!=payload.as_str(){return Err(conflict("operation ID reused with changed observation"));}
         return Ok(Json(row.get("response")));
     }
-    let observation = record_operator_observation(
-        &state,
-        &mut tx,
-        user.id,
-        request.scope,
-        request.state,
-        request.ttl_ms,
-        request.cooldown_ms,
-        Some(request.sequence),
-        Some(request.expected_revision),
-    )
-    .await?;
-    let response = serde_json::to_value(&observation).map_err(|_| AppError::Internal)?;
-    sqlx::query("INSERT INTO intelligence_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)").bind(user.id).bind(request.operation_id).bind(payload.as_str()).bind(&response).execute(&mut *tx).await.map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    Ok(Json(response))
-}
-
-/// The shared core of `observe()`: registry check, credential and node checks,
-/// sequence fence, revision bump, quota, upsert. The caller's transaction holds
-/// advisory lock 712009. `sequence: None` means max(previous + 1, now);
-/// `expected_revision: Some(r)` refuses unless the registry revision is r.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn record_operator_observation(
-    state: &AppState,
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor: Uuid,
-    scope: ObservationScope,
-    availability: Availability,
-    ttl_ms: u64,
-    cooldown_ms: u64,
-    sequence: Option<u64>,
-    expected_revision: Option<u64>,
-) -> Result<AvailabilityObservation> {
-    let registered = registry::check_current(state, tx).await?;
-    let credential = loaded(state)?
+    let registered = registry::check_current(&state, &mut tx).await?;
+    let credential = loaded(&state)?
         .credentials
         .iter()
         .find(|c| {
-            c.profile == scope.credential_profile
-                && c.revision == scope.credential_revision
-                && c.provider == scope.provider
-                && c.account_reference == scope.account_reference
-                && c.endpoint_reference == scope.endpoint_reference
+            c.profile == request.scope.credential_profile
+                && c.revision == request.scope.credential_revision
+                && c.provider == request.scope.provider
+                && c.account_reference == request.scope.account_reference
+                && c.endpoint_reference == request.scope.endpoint_reference
         })
         .ok_or_else(|| bad("unknown exact credential scope"))?;
     if !credential.enabled {
         return Err(conflict("credential disabled"));
     }
-    if let Some(node) = scope.node_id {
-        let entry = loaded(state)?
+    if let Some(node) = request.scope.node_id {
+        let entry = loaded(&state)?
             .config
             .credentials
             .iter()
@@ -205,58 +170,58 @@ pub(crate) async fn record_operator_observation(
         }
     }
     let source = ObservationSource::Operator {
-        principal_id: actor,
+        principal_id: user.id,
     };
-    let key = aq_selection::digest(&(&scope, &source)).map_err(|_| bad("scope digest"))?;
+    let key = aq_selection::digest(&(&request.scope, &source)).map_err(|_| bad("scope digest"))?;
     let previous: Option<i64> = sqlx::query_scalar(
         "SELECT sequence FROM intelligence_observations WHERE scope_source_digest=$1",
     )
     .bind(key.as_str())
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db)?;
-    if expected_revision.is_some_and(|r| r != registered) {
+    if registered != request.expected_revision {
         return Err(conflict("registry revision changed"));
     }
-    let received = now(state)?;
-    let sequence =
-        sequence.unwrap_or_else(|| previous.map_or(received, |v| (v as u64 + 1).max(received)));
-    if previous.is_some_and(|v| sequence <= v as u64) {
+    if previous.is_some_and(|v| request.sequence <= v as u64) {
         return Err(conflict(
             "observation sequence must increase; expired rows retain replay fence",
         ));
     }
+    let received = now(&state)?;
     let revision = registered
         .checked_add(1)
         .filter(|v| *v <= i64::MAX as u64)
         .ok_or(AppError::Internal)?;
     let observation = AvailabilityObservation {
         observation_id: Uuid::new_v4(),
-        scope,
+        scope: request.scope,
         source,
-        sequence,
+        sequence: request.sequence,
         revision,
-        state: availability,
+        state: request.state,
         received_at_ms: received,
         expires_at_ms: received
-            .checked_add(ttl_ms)
+            .checked_add(request.ttl_ms)
             .ok_or_else(|| bad("expiry overflow"))?,
         cooldown_until_ms: received
-            .checked_add(cooldown_ms)
+            .checked_add(request.cooldown_ms)
             .ok_or_else(|| bad("cooldown overflow"))?,
     };
     observation
         .validate()
         .map_err(|_| bad("invalid observation scope"))?;
     let response = serde_json::to_value(&observation).map_err(|_| AppError::Internal)?;
-    registry::quota(tx, previous.is_none(), &response).await?;
-    sqlx::query("INSERT INTO intelligence_observations(scope_source_digest,sequence,observation) VALUES($1,$2,$3) ON CONFLICT(scope_source_digest) DO UPDATE SET sequence=excluded.sequence,observation=excluded.observation").bind(key.as_str()).bind(sequence as i64).bind(&response).execute(&mut **tx).await.map_err(db)?;
+    registry::quota(&mut tx, previous.is_none(), &response).await?;
+    sqlx::query("INSERT INTO intelligence_observations(scope_source_digest,sequence,observation) VALUES($1,$2,$3) ON CONFLICT(scope_source_digest) DO UPDATE SET sequence=excluded.sequence,observation=excluded.observation").bind(key.as_str()).bind(request.sequence as i64).bind(&response).execute(&mut *tx).await.map_err(db)?;
     sqlx::query("UPDATE intelligence_registry SET revision=$1 WHERE singleton=TRUE")
         .bind(revision as i64)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await
         .map_err(db)?;
-    Ok(observation)
+    sqlx::query("INSERT INTO intelligence_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)").bind(user.id).bind(request.operation_id).bind(payload.as_str()).bind(&response).execute(&mut *tx).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]

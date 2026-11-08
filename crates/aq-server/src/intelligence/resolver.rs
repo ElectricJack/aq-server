@@ -80,6 +80,22 @@ pub(super) fn relevant(
         })
         .collect()
 }
+/// Spec 0007 Q2: the owner's switch, while on, attests the credentials at
+/// `now_ms` (`aq_intelligence_config::owner_attestations`); its generation is
+/// the only fact a fence compares, so a later flip refuses the admission.
+async fn attested(
+    conn: &mut sqlx::PgConnection,
+    credentials: &[AuthorizedCredential],
+    observed: &[AvailabilityObservation],
+    revision: u64,
+    now_ms: u64,
+) -> Result<Vec<AvailabilityObservation>> {
+    let switch = aq_machine_control::owner_switch(conn).await;
+    Ok(match switch.map_err(|_| AppError::Internal)? {
+        Some(on) => config::owner_attestations(credentials, observed, on, revision, now_ms),
+        None => vec![],
+    })
+}
 /// Internal authenticated-caller service, never a grant. Task/context arguments
 /// must be obtained from their real owners. Replays retain their original result;
 /// new observations need a new operation ID. No provider calls occur here.
@@ -158,8 +174,27 @@ async fn resolve_with_principal(
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
-    let observations = relevant(observations, &credentials, node_id);
+    let mut observations = relevant(observations, &credentials, node_id);
     let time = now(state)?;
+    let registry_revision = sqlx::query_scalar::<_, i64>(
+        "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
+    )
+    .fetch_optional(&state.store.pool)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| conflict("intelligence registry has not been installed"))?
+        as u64;
+    let mut conn = state.store.pool.acquire().await.map_err(db)?;
+    let owner = attested(
+        &mut conn,
+        &credentials,
+        &observations,
+        registry_revision,
+        time,
+    )
+    .await?;
+    observations.extend(owner);
+    drop(conn);
     let count = attempts(state, &request.lineage).await?;
     let replacement = match request.replacement.take() {
         Some(r)
@@ -251,14 +286,7 @@ async fn resolve_with_principal(
         node,
         credentials,
         observations,
-        registry_revision: sqlx::query_scalar::<_, i64>(
-            "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
-        )
-        .fetch_optional(&state.store.pool)
-        .await
-        .map_err(db)?
-        .ok_or_else(|| conflict("intelligence registry has not been installed"))?
-            as u64,
+        registry_revision,
         // Legacy attempts are counted conservatively. No latest stop/retention/
         // reconciliation or provider ledger authority is invented for them.
         budget: BudgetSnapshot {
@@ -564,7 +592,11 @@ async fn fence_snapshot(
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
-    if digest(&relevant(observations, &credentials, node_id)).map_err(|_| AppError::Internal)?
+    let mut expected = relevant(observations, &credentials, node_id);
+    let (revision, at) = (decision.inputs.registry_revision, decision.inputs.now_ms);
+    let owner = attested(tx, &credentials, &expected, revision, at).await?;
+    expected.extend(owner);
+    if digest(&expected).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.observations).map_err(|_| AppError::Internal)?
     {
         return Err(conflict("relevant availability changed"));

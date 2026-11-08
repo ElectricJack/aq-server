@@ -341,35 +341,18 @@ async fn owner_rows(pool: &PgPool) -> Vec<Value> {
         .unwrap()
 }
 
+/// Spec 0007 Q2 (fix round 1, C1): the switch writes no observation row;
+/// selection synthesizes the owner's attestation from it, so nothing ages.
 #[tokio::test]
-async fn availability_on_records_an_operator_observation_per_enabled_credential() {
+async fn availability_switch_writes_no_observation_rows() {
     let (_f, pool, app) = with_registry().await;
-    let (s, v) = act(&app, "owner@localhost", &availability(true, "1")).await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
-    let rows = owner_rows(&pool).await;
-    let accounts: Vec<&Value> = rows
-        .iter()
-        .map(|o| &o["scope"]["account_reference"])
-        .collect();
-    assert_eq!(
-        accounts,
-        [&json!("account-a-account"), &json!("account-b-account")]
-    );
-    for o in &rows {
-        assert_eq!(o["state"], "available");
-        assert!(
-            o["scope"]["model"].is_null() && o["scope"]["node_id"].is_null(),
-            "{o}"
-        );
-        assert_eq!(
-            o["expires_at_ms"].as_u64().unwrap() - o["received_at_ms"].as_u64().unwrap(),
-            3_600_000
-        );
+    let before = owner_rows(&pool).await;
+    for (on, generation) in [(true, "1"), (false, "2"), (true, "3")] {
+        let (s, v) = act(&app, "owner@localhost", &availability(on, generation)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+        assert_eq!(owner_rows(&pool).await, before);
     }
-    let (_, v) = act(&app, "owner@localhost", &availability(false, "2")).await;
-    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
-    assert_eq!(owner_rows(&pool).await, rows, "off records nothing");
 }
 
 #[tokio::test]

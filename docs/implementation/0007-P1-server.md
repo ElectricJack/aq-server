@@ -38,8 +38,9 @@ own repos.
   (`POST /v1/worker/qualifications`). Renewals are merged into offer budgeting
   and the swarm read.
 - **S13.** Sticky owner availability (Q2): the `swarm.availability.set` action,
-  a keeper that refreshes the owner's `available` observations every 10 s, and
-  an offer gate while the switch is off.
+  an attestation that selection synthesizes from the switch while it is on,
+  and an offer gate while the switch is off. (Fix round 1 replaced the
+  original keeper, which rewrote observation rows every 10 s.)
 
 ## The machine key model
 
@@ -107,10 +108,17 @@ Swarm read fields:
 - **Q1 (no wedged polls).** A refused successor is skipped and other work is
   offered (S9). The pinned-policy pre-check and the workflow backstop both end
   in "no offer this poll", never in a 409.
-- **Q2 (sticky availability).** While the switch is on, the keeper rewrites
-  the owner's `available` observations once they are 15 s old. It never
-  refreshes over an unexpired non-operator negative for the same credential.
-  While the switch is off, polls make no offer and run no selection.
+- **Q2 (sticky availability).** While the switch is on, selection adds a
+  synthesized owner `available` attestation, received at the selection's
+  `now_ms`, for every authorized credential
+  (`aq_intelligence_config::owner_attestations`). No observation row is
+  written. A credential with unexpired negative feedback in the node's
+  relevant observations gets no attestation, so the feedback still holds it
+  off. The offer, preparation, initial-grant and grant-replay fences recompute
+  the attestation from the decision's own `now_ms` and the switch's current
+  generation, so they refuse only when the owner flipped the switch. While
+  the switch is off, polls make no offer and run no selection. When it was
+  never set, the old attestation rules apply.
 - **Q3 (enrolled nodes are allowed).** `allow_enrolled_nodes` defaults to on.
   Turning it off for a credential changes its digest (a new
   `Placement::Restricted`), and that needs a revision bump.
@@ -130,9 +138,9 @@ count stays 81.
 
 ## Limits
 
-- **The keeper race (S13).** If the keeper rewrites an observation between a
-  poll's selection snapshot and its offer fence, that one poll is refused with
-  "relevant availability changed". The next poll offers.
+- **Phase execution health.** The synthesized attestation applies to
+  selection and its admission fences. The phase-execution health check still
+  reads observation rows only.
 - **Sealed history caps.** Every offered attempt writes two
   `intelligence_decisions` rows. One is linked to the attempt's sealed launch
   and is kept forever, by the AQ-08 rule that referenced rows are pinned. The

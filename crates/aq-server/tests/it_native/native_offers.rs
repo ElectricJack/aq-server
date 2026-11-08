@@ -459,8 +459,8 @@ async fn owner_availability_off_makes_no_offer_and_no_decision() {
     assert_eq!(poll_offers(&body).len(), 1, "{body}");
 }
 
-/// Spec 0007 Q2 (owner request): the switch alone keeps the owner available
-/// after the last attestation is older than the 30 s observation window.
+/// Spec 0007 Q2 (owner request; fix round 1, C1): the switch alone keeps the
+/// owner available, with no attestation row at all and no keeper.
 #[tokio::test]
 async fn owner_availability_on_outlives_the_attestation_window() {
     let c = setup().await;
@@ -469,32 +469,22 @@ async fn owner_availability_on_outlives_the_attestation_window() {
         .execute(pool)
         .await
         .unwrap();
-    set_availability(&c, true, "1").await;
-    let now = (c.env.env.state.clock)().timestamp_millis();
-    // The switch's attestation is 45 s old and nothing new was posted.
-    sqlx::query("UPDATE intelligence_observations SET observation = observation || jsonb_build_object('received_at_ms', $1::bigint, 'cooldown_until_ms', $1::bigint, 'expires_at_ms', $1::bigint + 3600000)")
-        .bind(now - 45_000)
-        .execute(pool)
-        .await
-        .unwrap();
     let (status, body) = poll(&c).await;
     assert!(
-        status == 409 || (status == 200 && poll_offers(&body).is_empty()),
-        "a 45 s old attestation alone no longer selects: {status} {body}"
+        poll_offers_or_none(status, &body),
+        "unset and no attestation: no offer: {status} {body}"
     );
-    let state = &c.env.env.state;
-    let refreshed = aq_server::intelligence::keeper::refresh_once(state, now as u64)
+    set_availability(&c, true, "1").await;
+    // The switch was turned on an hour ago and nothing was posted since.
+    sqlx::query("UPDATE owner_availability SET updated_at = updated_at - interval '1 hour'")
+        .execute(pool)
         .await
         .unwrap();
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM intelligence_observations")
         .fetch_one(pool)
         .await
         .unwrap();
-    assert_eq!(
-        i64::from(refreshed),
-        rows,
-        "every owner row of the switch is refreshed"
-    );
+    assert_eq!(rows, 0, "the switch writes no observation row");
     let (status, body) = poll(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(poll_offers(&body).len(), 1, "{body}");

@@ -1,6 +1,6 @@
 //! `swarm.availability.set` (spec 0007 Q2): the owner's sticky availability
-//! switch. On records an owner `available` observation for every enabled
-//! credential, which the keeper then keeps fresh; off stops new offers.
+//! switch. While on, selection synthesizes the owner's attestation from the
+//! switch (no observation row is written); off stops new offers.
 use crate::AppState;
 use crate::dashboard_api::{
     actions::{ActionKind, ActionRequest, Operation, Outcome, Registry, existing},
@@ -11,7 +11,6 @@ use crate::error::AppError;
 use crate::machine_actions::{generation, lookup, unavailable};
 use crate::store::User;
 use aq_machine_control as mc;
-use aq_selection::Availability;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use schemars::JsonSchema;
@@ -43,9 +42,6 @@ fn confirmed(operation_id: Uuid, generation: u64) -> Outcome {
         vec![receipt],
         vec![existing::entity(SUBJECT.0, SUBJECT.1, g())],
     )
-}
-fn other<E>(_: E) -> mc::Error {
-    mc::Error::Invalid("availability")
 }
 
 #[async_trait]
@@ -110,39 +106,11 @@ impl ActionKind for SetAvailability {
             return Outcome::unknown();
         };
         let run = async {
-            if p.available {
-                super::registry::register(state).await.map_err(other)?;
-            }
             let mut tx = state.store.pool.begin().await?;
             let (available, actor, now) = (p.available, user.id, (state.clock)());
-            let set = mc::set_owner_availability(
-                &mut tx,
-                available,
-                expected,
-                actor,
-                p.operation_id,
-                now,
-            )
-            .await?;
-            if p.available {
-                sqlx::query("SELECT pg_advisory_xact_lock(712009)")
-                    .execute(&mut *tx)
-                    .await?;
-                for c in super::loaded(state)
-                    .map_err(other)?
-                    .credentials
-                    .iter()
-                    .filter(|c| c.enabled)
-                {
-                    let scope = super::config::credential_scope(c);
-                    let on = Availability::Available;
-                    super::record_operator_observation(
-                        state, &mut tx, actor, scope, on, 3_600_000, 0, None, None,
-                    )
-                    .await
-                    .map_err(other)?;
-                }
-            }
+            let op = p.operation_id;
+            let set = mc::set_owner_availability(&mut tx, available, expected, actor, op, now);
+            let set = set.await?;
             tx.commit().await?;
             Ok::<_, mc::Error>(set.generation)
         };
