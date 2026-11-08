@@ -804,7 +804,7 @@ async fn machine_control_generation_conflicts_and_idempotent_handoffs() {
         let pool = pool.clone();
         async move {
             aq_machine_control::set_desired(
-                &mut *pool.acquire().await.unwrap(),
+                &mut pool.acquire().await.unwrap(),
                 "desk",
                 aq_machine_control::DesiredState::Stopped,
                 expected,

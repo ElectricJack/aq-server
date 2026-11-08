@@ -256,6 +256,7 @@ pub struct Collector {
     cells: Arc<Mutex<BTreeMap<(String, String), Cell>>>,
 }
 impl Collector {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
