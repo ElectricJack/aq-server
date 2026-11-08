@@ -471,6 +471,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-provider-quota"
+version = "0.1.0"
+dependencies = [
+ "aq-dashboard-contract",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "nix",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "aq-release"
 version = "0.1.0"
 dependencies = [
@@ -576,6 +595,7 @@ dependencies = [
  "aq-profiled-state",
  "aq-profiles",
  "aq-protocol",
+ "aq-provider-quota",
  "aq-release",
  "aq-result-media",
  "aq-review-protocol",

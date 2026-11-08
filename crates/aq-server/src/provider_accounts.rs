@@ -5,15 +5,7 @@ use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct Account {
-    pub provider: String,
-    pub account_reference: String,
-    pub enabled: bool,
-    /// Startup key-presence fact only; not authentication/model readiness.
-    pub provisionable: bool,
-    pub credential_profiles: u32,
-}
+pub use aq_provider_quota::Account;
 #[derive(Debug, Serialize)]
 pub struct Accounts {
     pub schema_version: u32,

@@ -46,6 +46,7 @@ aq-phase-terminal-protocol = { path = "../aq-phase-terminal-protocol", version =
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 aq-row-retention = { path = "../aq-row-retention" }
+aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }
 aq-selection = { path = "../aq-selection", version = "=0.1.4" }
 aq-swarm = { path = "../aq-swarm", version = "=0.1.0" }
