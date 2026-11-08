@@ -27,3 +27,4 @@ mod schema43_cancellation;
 mod sealed_history_live;
 mod settlement_migration;
 mod store;
+mod task_holds_migration;

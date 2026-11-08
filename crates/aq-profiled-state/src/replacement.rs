@@ -12,6 +12,16 @@ pub const MAX_SANDBOX_MS: u64 = 240 * 60_000;
 /// Replacement evidence is a fresh observation, matching the budget snapshot.
 pub const EVIDENCE_TTL_MS: u64 = 2_000;
 
+/// Mirrors aq-selection `global_budget` for a successor's charged attempts.
+pub fn pinned_block(limits: (u32, u64), charged: u32, elapsed_ms: u64) -> Option<&'static str> {
+    if charged >= limits.0 {
+        Some("replacement_policy_retry_budget_exhausted")
+    } else if elapsed_ms >= limits.1 {
+        Some("replacement_policy_time_budget_exhausted")
+    } else {
+        None
+    }
+}
 /// The B4 successor's evidence of `r`, fresh for `EVIDENCE_TTL_MS` (None if that overflows).
 pub fn evidence(
     r: &Replacement,
@@ -206,6 +216,19 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pinned_block_mirrors_the_policy_retry_and_time_limits() {
+        let limits = (2, 3_600_000);
+        assert_eq!(pinned_block(limits, 1, 3_599_999), None);
+        assert_eq!(
+            pinned_block(limits, 2, 0),
+            Some("replacement_policy_retry_budget_exhausted")
+        );
+        assert_eq!(
+            pinned_block(limits, 1, 3_600_000),
+            Some("replacement_policy_time_budget_exhausted")
+        );
+    }
     #[test]
     fn evidence_carries_the_predecessor_receipts_for_its_ttl() {
         let receipt = |id: &str| ArtifactRef {

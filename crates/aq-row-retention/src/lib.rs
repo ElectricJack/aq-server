@@ -13,7 +13,18 @@ pub type Report = BTreeMap<&'static str, u64>;
 /// A genuinely new Graph observation. Errors and missing tasks retain all rows.
 #[async_trait::async_trait]
 pub trait TaskState: Send + Sync {
-    async fn completed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool>;
+    /// The task's validated Graph node.
+    async fn node(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<serde_json::Value>;
+    /// Completed, and neither deleted nor retired.
+    async fn completed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool> {
+        let n = self.node(workspace, task).await?;
+        Ok(n["task_state"] == "completed" && n["deleted"] == false && n["retired"] == false)
+    }
+    /// No longer active work: closed (any state but active), retired or deleted.
+    async fn closed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool> {
+        let n = self.node(workspace, task).await?;
+        Ok(n["task_state"] != "active" || n["deleted"] != false || n["retired"] != false)
+    }
 }
 
 async fn refresh(pool: &PgPool, tasks: &dyn TaskState, now: i64, batch: i64) -> anyhow::Result<()> {
@@ -433,6 +444,12 @@ async fn mail(pool: &PgPool, now: i64, batch: i64, report: &mut Report) -> anyho
 
 #[async_trait::async_trait]
 impl<T: TaskState + ?Sized> TaskState for Option<std::sync::Arc<T>> {
+    async fn node(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<serde_json::Value> {
+        match self {
+            Some(rt) => rt.node(workspace, task).await,
+            None => anyhow::bail!("no Graph runtime"),
+        }
+    }
     async fn completed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool> {
         match self {
             Some(rt) => rt.completed(workspace, task).await,
@@ -449,8 +466,9 @@ mod tests {
     struct Always(bool);
     #[async_trait::async_trait]
     impl TaskState for Always {
-        async fn completed(&self, _: Uuid, _: Uuid) -> anyhow::Result<bool> {
-            Ok(self.0)
+        async fn node(&self, _: Uuid, _: Uuid) -> anyhow::Result<serde_json::Value> {
+            let state = if self.0 { "completed" } else { "active" };
+            Ok(serde_json::json!({"task_state":state,"deleted":false,"retired":false}))
         }
     }
 
@@ -459,5 +477,11 @@ mod tests {
         let (w, t) = (Uuid::nil(), Uuid::nil());
         assert!(Some(Arc::new(Always(true))).completed(w, t).await.unwrap());
         assert!(!None::<Arc<Always>>.completed(w, t).await.unwrap());
+        assert!(Some(Arc::new(Always(true))).closed(w, t).await.unwrap());
+        assert!(!Some(Arc::new(Always(false))).closed(w, t).await.unwrap());
+        assert!(
+            None::<Arc<Always>>.closed(w, t).await.is_err(),
+            "no observation"
+        );
     }
 }

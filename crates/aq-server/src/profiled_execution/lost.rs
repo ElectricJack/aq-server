@@ -136,6 +136,8 @@ async fn retry(
     .await
     .map_err(database)?;
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
+    let mc = super::super::machine_api::mapped;
+    let seen = holds::attempts_in(&mut tx, task).await.map_err(mc)?;
     let (release, held) = match holding {
         false => (None, None),
         true => match replacement::assess_task_in(&mut tx, task, now).await? {
@@ -144,18 +146,23 @@ async fn retry(
             _ => (None, Some("lost_attempt_release_not_admitted")),
         },
     };
-    let mc = super::super::machine_api::mapped;
     lost::record_held(&mut tx, attempt, held)
         .await
         .map_err(mc)?;
     // R6: the hold is the task's too (its work view and the swarm read), named once.
     let (at, project) = ((state.clock)(), project.and_then(|p| p.parse().ok()));
     let noted = match (held, project) {
-        (Some(why), Some(p)) => {
-            let comment = Some(lost::hold_comment_id(attempt));
-            holds::note(&mut tx, p, task, why, Some(attempt), comment, at)
-                .await
-                .map_err(mc)?
+        (Some(why), Some(project)) => {
+            let d = holds::Decision {
+                project,
+                task,
+                reason: why,
+                seen,
+                attempt: Some(attempt),
+            };
+            let body = lost::hold_comment_body(attempt, reason, why);
+            let comment = Some((lost::hold_comment_id(attempt), body));
+            holds::note(&mut tx, &d, comment, at).await.map_err(mc)?
         }
         _ => None,
     };
@@ -163,16 +170,15 @@ async fn retry(
     if let Some(r) = release {
         replacement::release(state, task, &r).await?;
     }
-    if let (Some(why), Some(project_id), Some(noted)) = (held, project, noted) {
+    if let (Some(project_id), Some(noted)) = (project, noted) {
         if noted.new {
-            tracing::info!(%attempt, %task, held = why, "lost attempt failed; its task stays held");
+            tracing::info!(%attempt, %task, held = noted.reason, "lost attempt failed; its task stays held");
         }
         let thread = aq_task_comments::Thread {
             project_id,
             task_id: task,
         };
-        let body = lost::hold_comment_body(attempt, reason, why);
-        holds::post(&state.store.pool, &noted, thread, &body, at).await;
+        holds::post(&state.store.pool, &noted, thread, at).await;
     }
     Ok(LostAttemptReleased {
         schema_version: 1,

@@ -99,20 +99,7 @@ pub(crate) async fn pinned_limits(
         .ok()
         .map(|p| (p.max_attempts, p.max_lineage_elapsed_ms)))
 }
-/// Mirrors aq-selection `global_budget` for a successor's charged attempts.
-pub(crate) fn pinned_block(
-    limits: (u32, u64),
-    charged: u32,
-    elapsed_ms: u64,
-) -> Option<&'static str> {
-    if charged >= limits.0 {
-        Some("replacement_policy_retry_budget_exhausted")
-    } else if elapsed_ms >= limits.1 {
-        Some("replacement_policy_time_budget_exhausted")
-    } else {
-        None
-    }
-}
+pub(crate) use aq_profiled_state::replacement::pinned_block;
 pub(crate) async fn load_locked(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,
@@ -185,19 +172,6 @@ mod tests {
         assert!(decode(reference.clone(), &body, budget.clone()).is_err());
         budget.elapsed_ms = Some(u64::MAX);
         assert!(decode(reference, &body, budget).is_err());
-    }
-    #[test]
-    fn pinned_block_mirrors_the_policy_retry_and_time_limits() {
-        let limits = (2, 3_600_000);
-        assert_eq!(pinned_block(limits, 1, 3_599_999), None);
-        assert_eq!(
-            pinned_block(limits, 2, 0),
-            Some("replacement_policy_retry_budget_exhausted")
-        );
-        assert_eq!(
-            pinned_block(limits, 1, 3_600_000),
-            Some("replacement_policy_time_budget_exhausted")
-        );
     }
     #[test]
     fn mismatched_definition_and_unsupported_legacy_policy_never_get_defaults() {

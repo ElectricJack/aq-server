@@ -12,8 +12,13 @@ const START: i64 = 100 * DAY;
 struct Tasks(AtomicBool);
 #[async_trait::async_trait]
 impl TaskState for Tasks {
-    async fn completed(&self, _workspace: Uuid, _task: Uuid) -> anyhow::Result<bool> {
-        Ok(self.0.load(Ordering::SeqCst))
+    async fn node(&self, _workspace: Uuid, _task: Uuid) -> anyhow::Result<serde_json::Value> {
+        let state = if self.0.load(Ordering::SeqCst) {
+            "completed"
+        } else {
+            "active"
+        };
+        Ok(json!({"task_state":state,"deleted":false,"retired":false}))
     }
 }
 struct Env {

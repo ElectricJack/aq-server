@@ -32,7 +32,7 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7.
+    /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task.
     pub second_task: Uuid,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -113,6 +113,10 @@ pub async fn setup() -> Case {
             if mode == 5 {
                 node["metadata"] = json!({"private_daemon_note":"not part of startup"});
             }
+            if mode == 8 {
+                // The owner closed the task in Graph.
+                node["task_state"] = json!("canceled");
+            }
             let value = if uri.path().ends_with("/ready") {
                 let items = match mode {
                     3 => vec![],
@@ -124,6 +128,8 @@ pub async fn setup() -> Case {
                 && uri.path().contains(&second_task.to_string())
             {
                 json!({"node":second,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false})
+            } else if uri.path().ends_with(&format!("/nodes/{task}")) {
+                node
             } else if uri.path().ends_with("/context") {
                 if mode == 1 {
                     node["version"] = json!(2);

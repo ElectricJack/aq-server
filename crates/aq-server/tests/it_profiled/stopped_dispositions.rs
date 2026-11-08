@@ -295,3 +295,71 @@ async fn admitted_automatic_completion_cannot_be_terminally_disposed() {
         assert!(held(&f, attempt).await);
     }
 }
+
+/// R6, W83: an operator release of the task's claim (here the owner's disposition of its
+/// stopped attempt) clears the task's hold in the task view and the swarm read alike.
+#[tokio::test]
+async fn an_owner_disposition_clears_the_tasks_hold_in_both_reads() {
+    use aq_machine_control::holds;
+    let (mut f, start) = setup(true).await;
+    let auth = context(&f).await;
+    started::record(&f.state, &auth, &start).await.unwrap();
+    let attempt = start.binding.attempt_id;
+    stopped::record(&f.state, &auth, &stop_request(&start))
+        .await
+        .unwrap();
+    let pool = f.db.pool().await;
+    let (project, task) = (f.selection.lineage.project_id, f.selection.lineage.task_id);
+    let seen = holds::attempts(&pool, task).await.unwrap();
+    let d = holds::Decision {
+        project,
+        task,
+        reason: "lineage_retry_budget_exhausted",
+        seen,
+        attempt: Some(attempt),
+    };
+    let at = (f.state.clock)();
+    holds::hold(&pool, Some(d), at).await;
+    let both = || async {
+        let view = holds::current(&pool, project, task).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let swarm = holds::counts(&mut conn, &[project]).await.unwrap();
+        (
+            view.map(|h| h.reason),
+            swarm.iter().map(|(_, _, n)| n).sum::<i64>(),
+        )
+    };
+    assert_eq!(
+        both().await,
+        (Some("lineage_retry_budget_exhausted".to_owned()), 1)
+    );
+    // A refused disposition releases nothing and clears nothing.
+    let refused = call(
+        &f,
+        attempt,
+        "POST",
+        json!({"operation_id":Uuid::new_v4(),"reason":""}),
+        "owner@localhost",
+    )
+    .await;
+    assert_ne!(refused.0, 200, "{refused:?}");
+    assert_eq!(both().await.1, 1);
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = None;
+    f.state.config = std::sync::Arc::new(config);
+    let (status, receipt) = call(&f, attempt, "POST", json!(request()), "owner@localhost").await;
+    assert_eq!(status, 200, "{receipt}");
+    assert!(!held(&f, attempt).await);
+    assert_eq!(
+        both().await,
+        (None, 0),
+        "the release clears the hold in both reads"
+    );
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT cleared_by FROM task_holds WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(by.as_deref(), Some("claim_released"));
+}

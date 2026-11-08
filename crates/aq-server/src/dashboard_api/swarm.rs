@@ -58,8 +58,7 @@ pub(super) async fn swarm(
     let history =
         aq_history_caps::swarm_holds(&mut tx, &online, &projects_of(state), now, staging).await?;
     // R6: tasks a server-side hold keeps from being offered, per project and reason.
-    let at = (state.clock)();
-    let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state), at).await;
+    let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state)).await;
     let task_holds = task_holds.map_err(|_| Error::Unavailable)?;
     let mut held = Vec::new();
     // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.

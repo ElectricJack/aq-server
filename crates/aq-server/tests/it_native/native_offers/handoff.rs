@@ -301,19 +301,21 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
 }
 
 /// #116 I1, M1: a handoff successor is exempt from the lineage budgets, so a refused one would be
-/// skipped forever. After `STUCK_SKIPS` consecutive refused polls (and not before) the task is
-/// held visibly as `handoff_successor_stuck`: recorded once, one system comment, its work view.
-/// AQ keeps trying it.
+/// skipped forever. Once it has been refused on every poll for `STUCK_MINUTES` and at least
+/// `STUCK_SKIPS` times (and not before), the task is held visibly as `handoff_successor_stuck`:
+/// recorded once, one system comment, its work view. AQ keeps trying it. Observing the task
+/// closed clears the hold.
 #[tokio::test]
-async fn a_handoff_successor_refused_on_every_poll_is_held_after_stuck_skips_not_before() {
+async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before() {
     use aq_machine_control::holds;
+    use std::sync::atomic::Ordering;
     let (c, predecessor) = handed_off().await;
     let pool = &c.env.env.pool;
     sqlx::query("UPDATE attempt_handoffs SET candidate_operation_id=$2,candidate_oid=$3 WHERE attempt_id=$1")
         .bind(predecessor).bind(handoff::candidate_operation(predecessor)).bind("7".repeat(40))
         .execute(pool).await.unwrap();
     let task = c.env.lineage.task_id;
-    let hold_comment = Uuid::new_v5(&task, b"aq.task-hold/1");
+    let hold_comment = Uuid::new_v5(&task, b"aq.task-hold/1/0");
     let skips = || async {
         sqlx::query_scalar::<_, i32>(
             "SELECT skips FROM successor_skips WHERE task_id=$1 AND predecessor=$2",
@@ -331,38 +333,52 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_after_stuck_skips_not
             .await
             .unwrap()
     };
-    for n in 1..=holds::STUCK_SKIPS {
+    let refused_poll = || async {
         let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(status, 200, "poll {n}: {body}");
+        assert_eq!(status, 200, "{body}");
         let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
         else {
             panic!("{body}")
         };
         assert!(page.offers.is_empty(), "{body}");
+    };
+    // The case clock stands still: 20 skips within a moment are not stuck.
+    for n in 1..=holds::STUCK_SKIPS {
+        refused_poll().await;
         assert_eq!(skips().await, Some(n));
-        if n < holds::STUCK_SKIPS {
-            assert!(
-                super::holds::hold_rows(&c, task).await.is_empty(),
-                "not held after {n} skips"
-            );
-            assert_eq!(posted().await, 0);
-        }
+        assert!(
+            super::holds::hold_rows(&c, task).await.is_empty(),
+            "not held after {n} skips"
+        );
+        assert_eq!(posted().await, 0);
     }
+    // The skips began ten minutes ago (one per poll since): the next refusal holds it.
+    sqlx::query(
+        "UPDATE successor_skips SET first_at=first_at-interval '10 minutes' WHERE task_id=$1",
+    )
+    .bind(task)
+    .execute(pool)
+    .await
+    .unwrap();
+    refused_poll().await;
     let readiness = super::holds::work(&c, task).await;
     assert_eq!(readiness["state"], "held", "{readiness}");
-    let reasons = readiness["reasons"].to_string();
-    assert!(
-        reasons.contains("\"hold_reason\":\"handoff_successor_stuck\""),
-        "{readiness}"
+    assert_eq!(
+        super::holds::held_reason(&readiness).as_deref(),
+        Some("handoff_successor_stuck")
     );
     assert_eq!(
         super::holds::hold_rows(&c, task).await,
-        [("handoff_successor_stuck".to_owned(), hold_comment, true)]
+        [(
+            "handoff_successor_stuck".to_owned(),
+            hold_comment,
+            true,
+            None
+        )]
     );
     // AQ keeps trying it; the hold and its one comment stay as they are.
-    let (status, body) = native_offer::poll(&c).await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 1));
+    refused_poll().await;
+    assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 2));
     assert_eq!(posted().await, 1);
     let comments = super::holds::system_comments(&c, task).await;
     let held: Vec<_> = comments
@@ -373,7 +389,17 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_after_stuck_skips_not
     assert!(
         held[0]
             .1
-            .contains("its handoff successor was refused on 20 polls in a row"),
+            .contains("its handoff successor was refused on every poll for 10 minutes"),
         "{held:?}"
     );
+    assert_eq!(super::holds::agree(&c, &[task]).await, 1);
+    // The owner closes the task in Graph: the work view observes it and the hold clears there
+    // and in the swarm read.
+    c.mode.store(8, Ordering::SeqCst);
+    let readiness = super::holds::work(&c, task).await;
+    assert_eq!(readiness["state"], "canceled", "{readiness}");
+    assert_eq!(super::holds::held_reason(&readiness), None);
+    assert!(super::holds::swarm(&c).await.is_empty());
+    let rows = super::holds::hold_rows(&c, task).await;
+    assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
 }

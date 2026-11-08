@@ -206,9 +206,28 @@ pub fn attested_index_rows() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The R6 trigger (migration 0106) that clears a task's hold when the task gets a new attempt
+/// or its claim is released, and its function, whose body is the migration's own.
+pub fn attested_trigger_rows() -> Vec<serde_json::Value> {
+    const SQL: &str = include_str!("../../aq-server/migrations/0106_task_holds.sql");
+    const HEAD: &str = "task_holds_clear() RETURNS trigger LANGUAGE plpgsql AS $$";
+    let body = (SQL
+        .split_once(HEAD)
+        .and_then(|(_, rest)| rest.split_once("$$")))
+    .map_or("", |(body, _)| body);
+    vec![
+        serde_json::json!({"kind": "trigger", "name": "execution_attempts.execution_attempts_clear_task_holds",
+            "body": {"definition": "CREATE TRIGGER execution_attempts_clear_task_holds AFTER INSERT OR UPDATE OF holds_task ON public.execution_attempts FOR EACH ROW EXECUTE FUNCTION task_holds_clear()",
+            "enabled": "O", "type": 21, "deferrable": false, "deferred": false}}),
+        serde_json::json!({"kind": "function", "name": "task_holds_clear", "body": {"set": false, "args": "",
+            "body": body, "kind": "f", "config": null, "strict": false, "returns": "trigger",
+            "language": "plpgsql", "parallel": "u", "volatility": "v", "security_definer": false}}),
+    ]
+}
+
 /// Whether the attested catalog equals the expected one. From format 103 the
-/// expected rows include `ATTESTED_INDEXES`; both sides are compared in
-/// (kind, name) order, so the database collation does not matter.
+/// expected rows include `ATTESTED_INDEXES`, and from 106 the task holds trigger; both sides
+/// are compared in (kind, name) order, so the database collation does not matter.
 pub fn catalog_matches(
     expected: &mut serde_json::Value,
     actual: &mut serde_json::Value,
@@ -220,6 +239,9 @@ pub fn catalog_matches(
         (Some(expected), Some(actual)) => {
             if supported >= 103 {
                 expected.extend(attested_index_rows());
+            }
+            if supported >= 106 {
+                expected.extend(attested_trigger_rows());
             }
             expected.sort_by_key(key);
             actual.sort_by_key(key);
@@ -459,6 +481,16 @@ pub async fn swarm_holds(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_task_holds_trigger_function_body_is_read_from_its_migration() {
+        let rows = attested_trigger_rows();
+        let body = rows[1]["body"]["body"].as_str().unwrap();
+        assert!(
+            body.starts_with("\nBEGIN\n") && body.ends_with("END "),
+            "{body:?}"
+        );
+        assert!(body.contains("cleared_by = 'claim_released'"));
+    }
     use super::*;
 
     fn hold(code: Code, kind: &str, scope: Scope, bytes: bool, used: i64, limit: i64) -> Hold {

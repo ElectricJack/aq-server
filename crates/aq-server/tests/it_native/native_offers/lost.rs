@@ -190,6 +190,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     .unwrap();
     assert_eq!(ids, [rows[0].1]);
     assert!(rows[0].2, "marked on record");
+    assert_eq!(super::holds::agree(&c, &[task, c.second_task]).await, 1);
     let readiness = super::holds::work(&c, task).await;
     assert!(
         readiness["reasons"]
@@ -205,4 +206,45 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     .await
     .unwrap();
     assert_eq!(reason.as_deref(), Some("lineage_retry_budget_exhausted"));
+}
+
+/// W83: a lost-path hold for a quarantine is counted by the swarm read exactly as the task views
+/// show it, with its one comment, while the node takes other work.
+#[tokio::test]
+async fn a_quarantined_lost_hold_is_counted_as_the_task_views_show_it() {
+    let (mut c, offer) = native_offer::published().await;
+    let task = c.env.lineage.task_id;
+    let attempt = running(&mut c, &offer).await;
+    let pool = c.env.env.pool.clone();
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'test quarantine','owner','{}',$3,1)")
+        .bind(attempt).bind(task).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+    let released = crash_release(&c, attempt).await;
+    assert_eq!(
+        released.held.as_deref(),
+        Some("stall_quarantined"),
+        "{released:?}"
+    );
+    let rows = super::holds::hold_rows(&c, task).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "stall_quarantined");
+    assert_eq!(
+        rows[0].1,
+        aq_machine_control::lost::hold_comment_id(attempt)
+    );
+    c.mode.store(7, Ordering::SeqCst);
+    let (status, body) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let offered: Vec<Uuid> = (offers(&body).iter())
+        .map(|o| o.offered.offer.manifest.bindings.task_id)
+        .collect();
+    assert_eq!(offered, [c.second_task], "{body}");
+    assert_eq!(super::holds::agree(&c, &[task, c.second_task]).await, 1);
+    let comments = super::holds::system_comments(&c, task).await;
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert!(
+        comments[0]
+            .1
+            .contains("and the stall ladder quarantined it"),
+        "{comments:?}"
+    );
 }

@@ -17,6 +17,9 @@ pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<
                     Ok(report)=>for (table,rows_deleted) in report {tracing::info!(table,rows_deleted,"row retention completed");},
                     Err(_)=>tracing::warn!("row retention deferred; retained rows will retry"),
                 }
+                // R6: a held task closed or retired in Graph is no longer held.
+                let swept=aq_machine_control::holds::sweep(&state.store.pool,&state.agent_access,(state.clock)()).await;
+                if let Err(e)=swept {tracing::warn!(error=?e,"task hold sweep deferred");}
             }
         }
     }

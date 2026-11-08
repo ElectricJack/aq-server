@@ -140,10 +140,12 @@ live sealed-history cap holds new offers. On a node they apply to that node; in
 starting `Server:` to all.
 `tasks_held` (R6, `waiting.reasons` only) says a project has tasks that a server-side hold
 keeps from being offered: an exhausted retry, time or cost budget, a lost attempt whose
-retry was not admitted, or a successor refused on 20 polls in a row. Its message is
-`Project <id>: <n> task(s) held (<reason code> <count>, ...)`, counting holds a poll saw in
-the last 15 minutes. Each held task names its hold in its work view
-(`readiness.reasons`, code `task_held`, human-graph-1) and in one system comment.
+retry was not admitted, a quarantine, or a successor refused on every poll for 10 minutes.
+Its message is `Project <id>: <n> task(s) held (<reason code> <count>, ...)`. It counts
+exactly the tasks whose work view shows a `task_held` reason (human-graph-1): both read the
+same current holds. A hold clears when the task gets a new attempt, its claim is released,
+or AQ observes it closed or retired in Graph (its work view, or a sweep every 10 minutes).
+Each hold is named in one system comment.
 A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are

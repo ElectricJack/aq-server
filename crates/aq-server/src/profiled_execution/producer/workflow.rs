@@ -232,27 +232,15 @@ fn skips_spent(skipped: &std::collections::BTreeSet<Uuid>) -> bool {
 async fn refused_successor(
     state: &AppState,
     decision: &resolver::Decision,
-    task: &aq_admission::TaskRevision,
-    replacement: Option<&replacement::Replacement>,
+    successor: Option<holds::Successor>,
     skipped: &mut std::collections::BTreeSet<Uuid>,
 ) -> bool {
-    let (None, Some(r)) = (&decision.outcome.resolved, replacement) else {
+    let (None, Some(s)) = (&decision.outcome.resolved, successor) else {
         return false;
     };
-    let (project, reasons) = (
-        decision.inputs.project.lineage.project_id,
-        &decision.outcome.reason_codes,
-    );
-    let refused = holds::selection_refused(
-        &state.store.pool,
-        project,
-        task.task_id,
-        r.predecessor,
-        reasons,
-        (state.clock)(),
-    );
-    refused.await;
-    skipped.insert(task.task_id)
+    let (pool, reasons) = (&state.store.pool, &decision.outcome.reason_codes);
+    holds::selection_refused(pool, s, reasons, (state.clock)()).await;
+    skipped.insert(s.task)
 }
 /// The commit frozen into the export operation key. An immutable policy keeps
 /// its historical key; a named ref adds the commit it resolved to at offer
@@ -500,10 +488,19 @@ async fn offers(
             let (revision, project) = (record.revision, policy.project_id);
             if let Some((task, assessment)) = on_heap(|| {
                 first_eligible_task(&ready, &skipped, |task| async move {
+                    let (pool, at) = (&state.store.pool, (state.clock)());
+                    let seen = holds::attempts(pool, task).await;
                     let a = replacement::assess_task_for_revision(state, task, polled_at, revision);
-                    let (a, pool) = (a.await?, &state.store.pool);
-                    if let Assessment::Blocked(why) = a {
-                        holds::hold(pool, project, task, why, None, (state.clock)()).await;
+                    let a = a.await?;
+                    if let Assessment::Blocked(reason) = a {
+                        let d = seen.map(|seen| holds::Decision {
+                            project,
+                            task,
+                            reason,
+                            seen,
+                            attempt: None,
+                        });
+                        holds::hold(pool, d, at).await;
                     }
                     Ok(a)
                 })
@@ -518,6 +515,16 @@ async fn offers(
             return Ok(page);
         };
         let replacement = assessment.replacement().cloned();
+        // R6: a successor's hold is recorded against the attempt count read before its refusal.
+        let successor = match &replacement {
+            Some(r) => Some(holds::Successor {
+                project: policy.project_id,
+                task: task.task_id,
+                predecessor: r.predecessor,
+                seen: holds::attempts(&state.store.pool, task.task_id).await,
+            }),
+            None => None,
+        };
         if let Some(replacement) = &replacement {
             tracing::info!(
                 task_id = %task.task_id,
@@ -559,7 +566,7 @@ async fn offers(
                 .node,
         )?;
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
-        if refused_successor(state, &decision, &task, replacement.as_ref(), &mut skipped).await {
+        if refused_successor(state, &decision, successor, &mut skipped).await {
             continue;
         }
         let selected = decision
@@ -651,12 +658,12 @@ async fn offers(
             .await;
             match fresh {
                 // Q1 (live acceptance D5): a refused handoff export skips the task.
-                // #116 I1, M1: a counted skip, held as `handoff_successor_stuck` after 20.
+                // #116 I1, M1: a counted skip; held as `handoff_successor_stuck` once stuck.
                 Err(error @ AppError::Conflict(_)) if handoff.is_some() => {
-                    let p = handoff.as_ref().map_or(Uuid::nil(), |b| b.predecessor);
                     let why = format!("handoff successor export refused: {error:?}");
-                    let (pool, at) = (&state.store.pool, (state.clock)());
-                    holds::skipped(pool, policy.project_id, task.task_id, p, &why, at).await;
+                    if let Some(s) = successor {
+                        holds::skipped(&state.store.pool, s, &why, (state.clock)()).await;
+                    }
                     skipped.insert(task.task_id);
                     continue;
                 }
@@ -695,7 +702,7 @@ async fn offers(
         let compiled =
             on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
-        if refused_successor(state, &decision, &task, replacement.as_ref(), &mut skipped).await {
+        if refused_successor(state, &decision, successor, &mut skipped).await {
             continue;
         }
         if replacement.is_some() {
