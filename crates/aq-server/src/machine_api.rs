@@ -37,6 +37,7 @@ fn mapped(e: McError) -> AppError {
         McError::KeyInUse => AppError::Conflict("machine key is in use by another machine; revoke it from the Swarm page or choose another key".into()),
         McError::Invalid(m) => AppError::BadRequest(m.into()),
         McError::Refused(m) => AppError::Conflict(m.into()),
+        e @ McError::MachineNode(_) => AppError::Conflict(e.to_string()),
         McError::Conflict { .. } => AppError::Conflict("generation".into()),
         McError::NotFound | McError::Db(_) => AppError::Internal,
     }

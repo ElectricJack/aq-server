@@ -430,7 +430,10 @@ async fn key_is_not_adopted_while_a_sibling_lives() {
     let mut c = pool.acquire().await.unwrap();
     for id in &ids {
         let r = mc::revoke_machine(&mut c, &format!("node:{id}"), now()).await;
-        assert!(matches!(r, Err(Error::Refused(m)) if m == mc::MACHINE_NODE));
+        assert!(
+            matches!(r, Err(Error::MachineNode(ref k)) if k == "desk"),
+            "{r:?}"
+        );
     }
     // Slot 1 revoked by older code: its live siblings still hold the key.
     sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1")
@@ -481,6 +484,33 @@ async fn publishing_node_lock_after_a_committed_stop_is_a_hold() {
         !mc::lock_publishing_node(&mut publish, ids[0])
             .await
             .unwrap()
+    );
+}
+
+/// Fix round 2 (I4): a `node:` revoke racing the node's own key claim waits
+/// for it and then refuses (the node is now a machine slot); it never revokes
+/// slot 1 alone.
+#[tokio::test]
+async fn node_revoke_racing_a_key_claim_refuses() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let n = node(&pool, "desk").await;
+    let mut claim = pool.begin().await.unwrap();
+    mc::claim_key(&mut claim, n, "desk").await.unwrap();
+    let revoke = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            mc::revoke_machine(&mut tx, &format!("node:{n}"), now()).await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!revoke.is_finished(), "the revoke waits for the claim");
+    claim.commit().await.unwrap();
+    let r = revoke.await.unwrap();
+    assert!(
+        matches!(&r, Err(Error::MachineNode(k)) if k == "desk"),
+        "{r:?}"
     );
 }
 

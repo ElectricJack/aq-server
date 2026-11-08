@@ -205,25 +205,23 @@ async fn revoke_worker(
     let id: Uuid = id
         .parse()
         .map_err(|_| AppError::BadRequest("worker id must be a UUID".to_string()))?;
-    let mut conn = state
+    // Review I4: a slot of a service machine is revoked with its whole machine;
+    // the check and the revoke are one transaction under the node row lock.
+    let mut tx = state
         .store
         .pool
-        .acquire()
+        .begin()
         .await
         .map_err(|_| AppError::Internal)?;
-    // Review I4: a slot of a service machine is revoked with its whole machine.
-    if let Some(key) = aq_machine_control::live_machine_key(&mut conn, id)
-        .await
-        .ok()
-        .flatten()
-    {
-        return Err(AppError::Conflict(format!(
-            "{}: worker.revoke {key}",
-            aq_machine_control::MACHINE_NODE
-        )));
-    }
-    drop(conn);
-    if state.store.revoke_node(id, (state.clock)()).await? {
+    let node = format!("node:{id}");
+    let n = match aq_machine_control::revoke_machine(&mut tx, &node, (state.clock)()).await {
+        Err(e @ aq_machine_control::Error::MachineNode(_)) => {
+            Err(AppError::Conflict(e.to_string()))
+        }
+        r => r.map_err(|_| AppError::Internal),
+    }?;
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    if n == 1 {
         return Ok(StatusCode::NO_CONTENT);
     }
     // Either unknown or already revoked; revoking twice is idempotent.

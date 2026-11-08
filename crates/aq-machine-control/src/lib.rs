@@ -25,6 +25,9 @@ pub enum Error {
     /// A typed refusal (409); the text starts with its code.
     #[error("refused: {0}")]
     Refused(&'static str),
+    /// Review I4: the node is a slot of this machine; revoke the machine.
+    #[error("{MACHINE_NODE}: worker.revoke {0}")]
+    MachineNode(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -730,8 +733,18 @@ pub async fn revoke_machine(
 ) -> Result<u32, Error> {
     if let Some(id) = machine.strip_prefix("node:") {
         let id: Uuid = id.parse().map_err(|_| Error::Invalid("machine"))?;
-        if live_machine_key(tx, id).await?.is_some() {
-            return Err(Error::Refused(MACHINE_NODE));
+        // Fix round 2: under the node row lock, so a racing slot claim (which
+        // locks this row first) is seen or waits for the revocation.
+        if has_format(tx).await? {
+            let key: Option<Option<String>> = sqlx::query_scalar(
+                "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(Some(key)) = key {
+                return Err(Error::MachineNode(key));
+            }
         }
         let n = sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL")
             .bind(id)
