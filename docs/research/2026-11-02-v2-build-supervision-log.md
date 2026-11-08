@@ -1739,3 +1739,14 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - The lib is 108970/109566.
     - S10–S11 are running, with S11 allow_enrolled_nodes on by default.
   - Freed about 50 G by deleting the build dirs of 6 finished worktrees.
+- **04:13:** swarm phase 1 server lane S0–S13 done.
+  - S12: qualification renewal, with the counting bound enforced server-side.
+  - S13: sticky owner availability, with `swarm.availability.set` and `server.owner_availability`.
+  - The lib is 109441/109566.
+- **Major finding while implementing S16 (decision retention), so S16 is blocked for the owner.** v2's sealed attempt history is never pruned, by design (AQ-08: referenced rows are pinned; history growth refuses new work until a maintenance policy exists). Its caps stop an always-on swarm after about 256 attempts per node or project:
+  - registrations 256 per node;
+  - source exports 256 per project;
+  - closures 256 per node;
+  - decisions 1024.
+- S14 proceeds without S16.
+- The worker PR #49 is in fix round 3: the node-side destroy must skip preserved sandboxes.
