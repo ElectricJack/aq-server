@@ -1834,3 +1834,9 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - Before the stop, v1 had no tasks in progress. aq-platform had 7 blocked, 7 paused and 10 ready tasks; aq-worker had 2 blocked, 2 paused and 2 ready.
   - The 15-minute v1 monitor job is cancelled. From now on, PR merges and these logs are handled as subagents report.
   - Left running because they aren't v1: the v2 `aq-worker@local` and `aq-sandbox-podman` services, and an unrelated quilt-trader server on :8000.
+
+- **2026-11-08 — Ruling C pair merged.**
+  - aq-server#117 squash-merged as 25740842. Main CI is green.
+  - aq-worker#51 then squash-merged as 915afc77.
+  - The round-6 re-reviews found only Minor items, which are parked in the SDD ledger. On the server: the hold-comment wording for non-budget reasons, and pool connections used inside the release transaction. On the worker: an engine-group kill on a failed git start, plus test preconditions.
+  - The phase 1 live acceptance rerun is dispatched on aq-ms1. Terminal control (Step 2) is pending the owner's W13 decision.
