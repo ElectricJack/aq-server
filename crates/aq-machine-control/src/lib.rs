@@ -804,6 +804,27 @@ pub async fn owner_attested(
     })
 }
 
+/// Fix round 2 (review I2): the publication's first lock, on its node row. A
+/// serialization failure here means a machine change (Stop, Drain) committed
+/// after the transaction began: `Ok(false)`, which publishes no offer.
+pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
+    let locked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .execute(&mut *tx)
+        .await;
+    match locked {
+        Ok(_) => Ok(true),
+        Err(e) if is_serialization_failure(&e) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+/// SQLSTATE 40001 (serialization failure) or 40P01 (deadlock).
+pub fn is_serialization_failure(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|c| c == "40001" || c == "40P01")
+}
+
 /// Spec 0007 Q2: `(principal, generation)` of the owner's switch while it is
 /// on; None when unset or off, and below 101. Selection synthesizes the
 /// owner's attestation from it, so the admission fences change only when the

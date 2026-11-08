@@ -22,7 +22,7 @@ pub async fn publish(
     export: &source_exports::ReservedExport,
     fact: &VerifiedExport,
     inspection: &RetentionObservation,
-) -> Result<NativeOffer, AppError> {
+) -> Result<Option<NativeOffer>, AppError> {
     let mut digests = built
         .native
         .offered
@@ -50,12 +50,20 @@ pub async fn publish(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
-    // Review I2: a Stop, Drain or availability off after the poll's gate.
-    let hold = aq_machine_control::offer_hold(&mut tx, auth.id()).await;
-    if hold.map_err(|_| refused())?.is_some() {
-        return Err(refused());
+    // Review I2: a Stop, Drain or availability off after the poll's gate (or
+    // racing this transaction) publishes no offer, as the early gate does.
+    let mc = |_| refused();
+    if !aq_machine_control::lock_publishing_node(&mut tx, auth.id())
+        .await
+        .map_err(mc)?
+        || aq_machine_control::offer_hold(&mut tx, auth.id())
+            .await
+            .map_err(mc)?
+            .is_some()
+    {
+        return Ok(None);
     }
+    crate::worker_api::lock_current_node(&mut tx, auth).await?;
     let (node, boot) = match built.decision.inputs.node.target {
         ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
         _ => return Err(refused()),
@@ -215,6 +223,8 @@ pub async fn publish(
         return Err(refused());
     }
     super::load_original_offer_locked(&mut tx, binding.attempt_id).await?;
-    tx.commit().await.map_err(db)?;
-    Ok(native)
+    match tx.commit().await {
+        Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(None),
+        done => done.map(|_| Some(native)).map_err(db),
+    }
 }

@@ -451,6 +451,39 @@ async fn key_is_not_adopted_while_a_sibling_lives() {
     );
 }
 
+/// Fix round 2 (I2): a publication whose SERIALIZABLE snapshot predates a
+/// committed Stop cannot lock its node row: a hold (no offer), not an error.
+#[tokio::test]
+async fn publishing_node_lock_after_a_committed_stop_is_a_hold() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let ids = machine(&pool, 1).await;
+    let who = owner(&pool).await;
+    let begin = || async {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1").execute(&mut *tx).await.unwrap();
+        tx
+    };
+    let mut quiet = begin().await;
+    assert!(mc::lock_publishing_node(&mut quiet, ids[0]).await.unwrap());
+    drop(quiet);
+    let mut publish = begin().await;
+    let mut stop = pool.acquire().await.unwrap();
+    let stopped = DesiredState::Stopped;
+    mc::set_desired(&mut stop, "desk", stopped, 1, who, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    assert!(
+        !mc::lock_publishing_node(&mut publish, ids[0])
+            .await
+            .unwrap()
+    );
+}
+
 /// Review minor: of two racing slot-1 claims of one key, the loser gets
 /// KeyInUse (a 409), never a database error.
 #[tokio::test]

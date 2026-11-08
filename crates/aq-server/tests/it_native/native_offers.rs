@@ -519,7 +519,9 @@ async fn stop_committed_after_the_gate_publishes_no_offer() {
         c.observation_resume.add_permits(1);
     };
     let ((status, body), ()) = tokio::join!(poll(&c), stop);
-    assert!(poll_offers_or_none(status, &body), "{status} {body}");
+    // Fix round 2: the same empty 200 as the early gate, not a refusal.
+    assert_eq!(status, 200, "{body}");
+    assert!(poll_offers(&body).is_empty(), "{body}");
     let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
         .fetch_one(pool)
         .await
@@ -601,4 +603,59 @@ async fn startup_warns_for_bindings_whose_lists_enrolled_nodes_override() {
             .await
             .is_empty()
     );
+}
+
+/// Fix round 2 (I2): a Stop that is still open while the poll runs (the poll
+/// waits on the node row it holds) and commits then: the poll answers the early
+/// gate's empty 200. The serialization-failure branch of the same race is
+/// `machine_store::publishing_node_lock_after_a_committed_stop_is_a_hold`.
+#[tokio::test]
+async fn stop_open_during_the_poll_answers_an_empty_page() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let mut conn = pool.acquire().await.unwrap();
+    let node = c.request.identity.node_id;
+    aq_machine_control::claim_key(&mut conn, node, "desk")
+        .await
+        .unwrap();
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    c.mode.store(6, Ordering::SeqCst);
+    let race = async {
+        c.observation_entered.acquire().await.unwrap().forget();
+        c.mode.store(0, Ordering::SeqCst);
+        let mut stop = pool.begin().await.unwrap();
+        let (stopped, now) = (
+            aq_machine_control::DesiredState::Stopped,
+            (c.env.env.state.clock)(),
+        );
+        aq_machine_control::set_desired(&mut stop, "desk", stopped, 1, owner, Uuid::new_v4(), now)
+            .await
+            .unwrap();
+        c.observation_resume.add_permits(1);
+        let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes WHERE id=$1%')";
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !sqlx::query_scalar::<_, bool>(waiting)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the poll waits on the node row the Stop holds");
+        stop.commit().await.unwrap();
+    };
+    let ((status, body), ()) = tokio::join!(poll(&c), race);
+    assert_eq!(status, 200, "{body}");
+    assert!(poll_offers(&body).is_empty(), "{body}");
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
 }
