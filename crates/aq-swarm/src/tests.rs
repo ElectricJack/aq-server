@@ -615,3 +615,22 @@ fn reason_notes_a_cut_candidate_list() {
     assert_eq!(reason(None, 3, false), None);
     assert!(reason(None, 3, true).unwrap().contains("128 most recent"));
 }
+#[test]
+fn busy_node_is_not_held_for_a_lapsed_capability_report() {
+    let lapsed = vec![IneligibleReason::CapabilityExpired];
+    let mut i = input(vec![
+        node(1, "busy", WorkerHealth::Online, None, 1, lapsed.clone()),
+        node(2, "idle", WorkerHealth::Online, None, 0, lapsed),
+    ]);
+    i.machines.insert(uid(1), facts("desktop", 1, NOW));
+    i.machines.insert(uid(2), facts("laptop", 1, NOW));
+    let s = assemble(i).unwrap();
+    let state = |label: &str| s.machines.iter().find(|m| m.label == label).unwrap();
+    assert_eq!(state("desktop").state, MachineState::Online);
+    assert!(state("desktop").holding.is_empty());
+    assert_eq!(state("laptop").state, MachineState::Holding);
+    assert_eq!(
+        codes(&state("laptop").holding),
+        vec![HoldCode::CapabilityExpired]
+    );
+}
