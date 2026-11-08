@@ -1758,3 +1758,12 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - It replaces AQ-08's "never deleted". Measured on aq-ms1, a sealed history is about 170 KB per run (11 runs, 1.9 MB), so the caps were never about storage.
   - A spec is to be written right after phase 1 merges; S16 is superseded.
 - aq-server #114 (phase 1 server) CI failures: four from the stale `vendor/aq-protocol-0.1.0` worker-candidate path after S1 vendored 0.1.1, plus fmt/clippy. They are with the lane agent.
+- **05:18:** owner decisions:
+  - no Windows host probe (thresholds use WSL VM load; the owner stops the worker manually);
+  - the swarm page opens with the whole tree fitted (aq-dashboard #89 merged, 52c8b763).
+- Spec 0007 is updated (b43df262).
+- aq-worker #49 (phase 1 worker) is review-clean after 3 fix rounds:
+  - preserved sandboxes are never destroyed;
+  - the claim comes before destroy, with the node or settle doing the destroy;
+  - the enroll and resume hardening.
+- The aq-server #114 Opus review found C1, a critical defect: the sticky-availability keeper rewrote observation rows every 20 s, which breaks the grant fence. It is fixed by synthesizing availability from the switch generation. It also found 8 important defects (unverified exempt handoffs, the Stop/poll TOCTOU, revoke/mint and key-adoption races, S9 starvation, the silent S11 override, unbounded renewals, untested S7 wiring). Fix round 1 is with Opus.
