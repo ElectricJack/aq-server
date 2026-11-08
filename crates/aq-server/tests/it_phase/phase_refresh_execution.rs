@@ -378,3 +378,92 @@ async fn owner_switch_off_or_unset_refuses_prepare_without_an_observation() {
         fixture::assert_unissued(&f.c).await;
     }
 }
+
+/// One fixture observation row, kept as a template before `switched` deletes them.
+async fn template(f: &Prepared) -> Value {
+    sqlx::query_scalar("SELECT observation FROM intelligence_observations LIMIT 1")
+        .fetch_one(&f.c.env.env.pool)
+        .await
+        .unwrap()
+}
+/// Fresh worker `quota_unavailable` feedback from `node` on the chosen credential.
+async fn negative_from(f: &Prepared, mut o: Value, node: Uuid) {
+    let now = (f.c.env.env.state.clock)().timestamp_millis();
+    o["observation_id"] = json!(Uuid::new_v4());
+    o["scope"]["node_id"] = json!(node);
+    o["scope"]["model"] = json!(f.p.choice.model.model);
+    o["source"] = json!({"kind":"worker","node_id":node,"boot_id":Uuid::new_v4(),"attempt_id":Uuid::new_v4(),"selection_digest":aq_selection::Digest::of(b"s")});
+    o["state"] = json!("quota_unavailable");
+    o["received_at_ms"] = json!(now);
+    o["expires_at_ms"] = json!(now + 60_000);
+    o["cooldown_until_ms"] = json!(0);
+    sqlx::query("INSERT INTO intelligence_observations(scope_source_digest,sequence,observation) VALUES($1,1,$2)")
+        .bind(format!("worker-{node}"))
+        .bind(o)
+        .execute(&f.c.env.env.pool)
+        .await
+        .unwrap();
+}
+
+/// Fix round 3: the switch's attestation is held off only by this node's
+/// feedback (as in selection): another node's negative on the credential does
+/// not refuse this node's Prepare; this node's own negative does. The issued
+/// attestation carries the registry revision.
+#[tokio::test]
+async fn only_this_nodes_feedback_holds_the_switch_attestation_off() {
+    let f = prepared(true).await;
+    let o = template(&f).await;
+    switched(&f, Some(true)).await;
+    negative_from(&f, o.clone(), Uuid::new_v4()).await;
+    issue(&f).await;
+    let provenance: Value = serde_json::from_slice(&stored(&f).await.2).unwrap();
+    let registry: i64 = sqlx::query_scalar("SELECT revision FROM intelligence_registry")
+        .fetch_one(&f.c.env.env.pool)
+        .await
+        .unwrap();
+    let attested = provenance["availability"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["sequence"].as_u64().unwrap() >= 1 << 62)
+        .expect("the switch's attestation is in the provenance");
+    assert_eq!(attested["revision"], json!(registry));
+    drop(f);
+    let f = prepared(true).await;
+    let o = template(&f).await;
+    switched(&f, Some(true)).await;
+    negative_from(&f, o, auth(&f.c).await.id()).await;
+    assert!(refused(&f).await, "this node's own negative holds it off");
+    fixture::assert_unissued(&f.c).await;
+}
+
+/// Fix round 3: at the 1,024-row observation cap the attestation would be the
+/// 1,025th entry; Prepare is refused cleanly and nothing is issued. (The
+/// provenance byte bound already refuses a table this large; the cap check
+/// keeps the stored availability within the history bound regardless.)
+#[tokio::test]
+async fn full_observation_table_refuses_cleanly_with_the_switch_on() {
+    let f = prepared(true).await;
+    let pool = &f.c.env.env.pool;
+    sqlx::query("INSERT INTO intelligence_observations(scope_source_digest,sequence,observation) SELECT 'pad-'||g, 1, o.observation || jsonb_build_object('observation_id', gen_random_uuid(), 'scope', o.observation->'scope' || jsonb_build_object('model', 'pad-'||g)) FROM generate_series(1, 1024 - (SELECT count(*) FROM intelligence_observations)::int) g, (SELECT observation FROM intelligence_observations LIMIT 1) o")
+        .execute(pool)
+        .await
+        .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM intelligence_observations")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1024);
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let now = (f.c.env.env.state.clock)();
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::set_owner_availability(&mut c, true, 1, owner, Uuid::new_v4(), now)
+        .await
+        .unwrap();
+    drop(c);
+    assert!(refused(&f).await, "1,024 rows plus the attestation");
+    fixture::assert_unissued(&f.c).await;
+}

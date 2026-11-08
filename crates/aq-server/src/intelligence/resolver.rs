@@ -61,7 +61,7 @@ async fn attempts(
         .check_retry_bound()
 }
 
-pub(super) fn relevant(
+pub(crate) fn relevant(
     observations: Vec<AvailabilityObservation>,
     credentials: &[AuthorizedCredential],
     node: Uuid,

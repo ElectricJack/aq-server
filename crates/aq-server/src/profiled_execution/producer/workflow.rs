@@ -689,7 +689,6 @@ async fn offers(
         let offer =
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
                 .await?;
-        // A Stop, Drain or availability off during publication: no offer.
         let Some(offer) = offer else { return Ok(page) };
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);
