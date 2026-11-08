@@ -215,7 +215,8 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
         .execute(&mut *occupied)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT gen_random_uuid(),$1 FROM generate_series(1,16)").bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
+    // Spec 0008: capacity counts live attempts only, so the occupants hold their tasks.
+    sqlx::query("WITH a AS (INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),TRUE,'{}'::jsonb FROM generate_series(1,16) RETURNING attempt_id) INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT attempt_id,$1 FROM a").bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
     occupied.commit().await.unwrap();
     let result = phase_execution::prepare(
         &f.c.env.env.state,
@@ -231,6 +232,33 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
     fixture::assert_unissued(&f.c).await;
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_phase_terminal_capacity),(SELECT count(*) FROM profiled_owner_journals WHERE phase<>'reserved')").fetch_one(pool).await.unwrap();
     assert_eq!(counts, (16, 0));
+}
+
+#[tokio::test]
+async fn settled_terminal_capacity_does_not_block_a_new_grant() {
+    // The current store: the frozen 32 fixture lacks tables the grant path reads today.
+    let f = prepared(true).await;
+    let pool = &f.c.env.env.pool;
+    // Relational-only occupied capacity, not executable grants or scheduler slots.
+    // The subsequently attempted grant below is through the actual phase owner.
+    let mut occupied = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role='replica'")
+        .execute(&mut *occupied)
+        .await
+        .unwrap();
+    // Spec 0008: settled attempts (released and finished) no longer count.
+    sqlx::query("WITH a AS (INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),FALSE,'{\"status\":\"finished\"}'::jsonb FROM generate_series(1,16) RETURNING attempt_id) INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT attempt_id,$1 FROM a").bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
+    occupied.commit().await.unwrap();
+    let result = phase_execution::prepare(
+        &f.c.env.env.state,
+        &auth(&f.c).await,
+        &f.prepared,
+        Uuid::new_v4(),
+    )
+    .await;
+    assert!(result.is_ok(), "settled capacity is not live: {result:?}");
+    let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_phase_terminal_capacity),(SELECT count(*) FROM profiled_owner_journals WHERE phase<>'reserved')").fetch_one(pool).await.unwrap();
+    assert_eq!(counts.0, 17);
 }
 
 #[path = "schema33_phase_terminal/legacy_parent.rs"]

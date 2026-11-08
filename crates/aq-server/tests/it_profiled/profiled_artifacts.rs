@@ -442,3 +442,46 @@ async fn assigned_native_http_ranges_require_exact_sealed_binding_and_live_offer
             .contains_key(artifact_api::RETENTION_HEADER)
     );
 }
+
+#[tokio::test]
+async fn orphaned_and_settled_artifacts_do_not_count_toward_the_project_cap() {
+    let f = fixture().await;
+    let project = f.selection.lineage.project_id;
+    let pool = f.db.pool().await;
+    let now = NOW as i64;
+    // 600 unlinked rows older than the 10-minute pending window: orphans.
+    let mut tx = crate::common::sealed::replica(&pool).await;
+    for _ in 0..600 {
+        crate::common::sealed::artifact(&mut tx, project, now - 700_000).await;
+    }
+    tx.commit().await.unwrap();
+    let retain = |name: &str| {
+        let a = artifact(name, b"x");
+        let state = f.state.clone();
+        async move {
+            artifacts::retain(
+                &state,
+                Retain {
+                    artifact_id: Uuid::new_v4(),
+                    project_id: project,
+                    owner: OwnerKind::GraphSnapshot,
+                    artifact: a,
+                    kind: ArtifactKind::Context,
+                    bytes: b"x",
+                    retain_until_ms: NOW + 60_000,
+                },
+            )
+            .await
+        }
+    };
+    retain("live-cap-context-1")
+        .await
+        .expect("orphans are not live");
+    // 511 pending rows plus the one just retained make 512 live rows.
+    let mut tx = crate::common::sealed::replica(&pool).await;
+    for _ in 0..511 {
+        crate::common::sealed::artifact(&mut tx, project, now - 1_000).await;
+    }
+    tx.commit().await.unwrap();
+    assert!(retain("live-cap-context-2").await.is_err());
+}
