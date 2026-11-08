@@ -298,3 +298,28 @@ characters and is an upper bound). Revisions are positive decimal strings.
 - Replaying an operation ID returns its retained disposition (journal), and the
   comment store keeps one record per operation so lookup can reconcile an
   interrupted dispatch. A different request under the same ID is 409.
+
+## Worker control
+
+Owner-only kinds on a service machine (spec 0007 phase 1). The subject is
+`{type:"machine",id:<SwarmMachine.id>}` with **no** revision and empty
+`expected_versions`; the compare-and-swap value travels in the payload. Owner
+bootstrap advertises `swarm.worker.control@1` (these kinds) and
+`swarm.worker.enroll@1` (adding a machine), which also require
+`dashboard.actions`.
+
+- `worker.start`, `worker.stop`, `worker.drain`: payload `{operation_id,
+  machine, expected_generation}`. `machine` is a machine key (a service
+  machine's `SwarmMachine.id`); `expected_generation` is the `control.generation`
+  the page last read, a positive decimal string. `worker.stop` also requests a
+  handoff of every attempt running on the machine. Each is `confirmed` with
+  receipt `[{type:"machine_control",id:<operation id>,revision:<new generation>}]`
+  and affected entity `{type:"machine",id,revision:<new generation>}`. A stale
+  generation is `conflict` with `current_versions {machine:<live generation>}`;
+  nothing is written.
+- `worker.revoke`: payload `{operation_id, machine}`, where `machine` is a key or
+  `node:<uuid>`. It revokes every node of the machine and is idempotent: revoking
+  a machine whose nodes are all revoked is `confirmed` again. Its receipt is
+  `[{type:"machine_revocation",id:<operation id>}]` with no revision.
+
+An unknown machine key is a neutral 404. `reason` is optional for all four kinds.

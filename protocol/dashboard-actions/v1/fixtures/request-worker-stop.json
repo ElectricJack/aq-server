@@ -1,0 +1,15 @@
+{
+  "operation_id": "5b0c2a9e-1f1e-4c55-9d7e-000000000001",
+  "kind": "worker.stop",
+  "subject": {
+    "type": "machine",
+    "id": "desktop"
+  },
+  "expected_versions": {},
+  "reason": "Stop the desktop for gaming",
+  "payload": {
+    "operation_id": "5b0c2a9e-1f1e-4c55-9d7e-000000000001",
+    "machine": "desktop",
+    "expected_generation": "1"
+  }
+}

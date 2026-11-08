@@ -380,6 +380,16 @@ pub(super) async fn bootstrap(
         ),
         capability("swarm.read", a.owner, "The swarm requires an owner account"),
         capability(
+            "swarm.worker.control",
+            a.owner,
+            "Worker control requires an owner account",
+        ),
+        capability(
+            "swarm.worker.enroll",
+            a.owner,
+            "Adding a machine requires an owner account",
+        ),
+        capability(
             "supervisor.history.read",
             mounted.supervisor_conversation && a.owner,
             "Global supervisor history requires an owner account and mounted conversation owner",

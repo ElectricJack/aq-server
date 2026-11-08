@@ -15,6 +15,7 @@ pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
 pub mod lifecycle_artifacts;
+pub mod machine_actions;
 pub mod machine_api;
 pub mod node_storage;
 pub mod notifications;
