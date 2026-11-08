@@ -68,21 +68,6 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         // Inspection reads have their own queued gate, not the work budget.
         .merge(super::inspection::routes(driver))
 }
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
-        let code = self.to_string();
-        let unknown = self == Error::Unknown;
-        let retryable = self == Error::Overloaded;
-        let status = match self {
-            Error::Invalid => StatusCode::BAD_REQUEST,
-            Error::Forbidden => StatusCode::NOT_FOUND,
-            Error::Conflict | Error::Fenced => StatusCode::CONFLICT,
-            Error::Overloaded => StatusCode::TOO_MANY_REQUESTS,
-            Error::Unknown => StatusCode::SERVICE_UNAVAILABLE,
-        };
-        (status,Json(json!({"code":code,"disposition":if unknown{"unknown"}else{"refused"},"retryable":retryable}))).into_response()
-    }
-}
 fn owner(driver: &Driver, id: Uuid) -> Result<()> {
     if driver.service.namespace.owner_user_id != id {
         return Err(Error::Forbidden);
