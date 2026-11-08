@@ -351,6 +351,18 @@ async fn offers(
     if request.available.slots == 0 {
         return Ok(page);
     }
+    let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
+    if aq_machine_control::has_format(&mut gate)
+        .await
+        .map_err(|_| refused())?
+        && !aq_machine_control::accepts_new_work(&mut gate, auth.id())
+            .await
+            .map_err(|_| refused())?
+    {
+        tracing::info!(node_id = %auth.id(), "machine is not running (draining or stopped); no new offers");
+        return Ok(page);
+    }
+    drop(gate);
     // Redelivery precedes new scheduling. Preparing/granted rows are not offers;
     // those require their independently fenced control/reconciliation owners.
     if let Some(native) = on_heap(|| super::redelivery::existing(state, auth, request)).await? {

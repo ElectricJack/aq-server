@@ -196,7 +196,7 @@ async fn set_hot(pool: &PgPool, attempt: Uuid, hot: &HotState) {
 }
 
 /// A held, granted, running profiled attempt on the fixture's node.
-async fn granted(f: &crate::common::profiled::Fixture) -> (Uuid, PgPool, HotState) {
+pub(crate) async fn granted(f: &crate::common::profiled::Fixture) -> (Uuid, PgPool, HotState) {
     let attempt = insert_offered(f, NOW).await;
     let pool = f.db.pool().await;
     let mut hot = HotState::from_compat(&f.profiled).unwrap();

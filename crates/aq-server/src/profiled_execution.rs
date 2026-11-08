@@ -8,6 +8,7 @@ pub(crate) mod compute;
 pub mod config;
 pub mod context_budget;
 pub mod context_projection;
+pub mod context_renewal;
 pub mod expiry;
 pub mod journal;
 pub mod login_refresh;

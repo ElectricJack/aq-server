@@ -293,3 +293,53 @@ async fn startup_context_carries_the_task_thread() {
         .unwrap();
     assert!(task < thread, "{order:?}");
 }
+
+#[tokio::test]
+async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let who: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    aq_machine_control::claim_key(&mut conn, c.env.env.node, "desk")
+        .await
+        .unwrap();
+    let now = chrono::Utc::now();
+    aq_machine_control::set_desired(
+        &mut conn,
+        "desk",
+        aq_machine_control::DesiredState::Stopped,
+        1,
+        who,
+        Uuid::new_v4(),
+        now,
+    )
+    .await
+    .unwrap();
+    let offers = |body: Value| {
+        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+        else {
+            panic!("{body}")
+        };
+        page.offers.len()
+    };
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offers(body), 0);
+    aq_machine_control::set_desired(
+        &mut conn,
+        "desk",
+        aq_machine_control::DesiredState::Running,
+        2,
+        who,
+        Uuid::new_v4(),
+        now,
+    )
+    .await
+    .unwrap();
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offers(body), 1);
+}
