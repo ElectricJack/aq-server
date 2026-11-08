@@ -31,7 +31,7 @@ async fn replay(
     .bind(request.operation_id)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|_| AppError::Internal)?;
+    .map_err(storage::db)?;
     if used {
         return Err(changed());
     }
@@ -152,7 +152,7 @@ pub async fn record(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(|_|AppError::Internal)?;
+    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(storage::db)?;
     let revision = if let Some(old) = old {
         if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
             && old.get::<i64, _>("sequence") as u64 >= request.sequence
@@ -198,7 +198,7 @@ pub async fn record(
     }
     let digest = aq_admission::Digest::of(&bytes);
     let value = serde_json::to_value(&snapshot).map_err(|_| AppError::Internal)?;
-    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(auth.id()).bind(request.identity.boot_id).bind(request.sequence as i64).bind(revision as i64).bind(&value).execute(&mut *tx).await.map_err(|_|AppError::Internal)?;
+    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(auth.id()).bind(request.identity.boot_id).bind(request.sequence as i64).bind(revision as i64).bind(&value).execute(&mut *tx).await.map_err(storage::db)?;
     let recorded = now(state)?;
     if recorded < observed
         || recorded >= observed.checked_add(2000).ok_or_else(unavailable)?
@@ -221,7 +221,7 @@ pub async fn record(
         expires_at_ms: expires,
     };
     storage::retain_inventory(&mut tx, request, &receipt, epoch).await?;
-    sqlx::query("INSERT INTO execution_receipts(node_id,operation_id,kind,payload_digest,response) VALUES($1,$2,'scoped_inventory_v2',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(request.digest().map_err(|_|changed())?.as_str()).bind(serde_json::to_value(&receipt).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(|_|AppError::Internal)?;
+    sqlx::query("INSERT INTO execution_receipts(node_id,operation_id,kind,payload_digest,response) VALUES($1,$2,'scoped_inventory_v2',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(request.digest().map_err(|_|changed())?.as_str()).bind(serde_json::to_value(&receipt).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(storage::db)?;
     let final_time = now(state)?;
     if final_time < recorded
         || final_time >= observed.checked_add(2000).ok_or_else(unavailable)?

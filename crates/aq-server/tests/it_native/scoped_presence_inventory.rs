@@ -250,3 +250,27 @@ async fn immutable_operation_bytes_and_derived_head_revisions_cannot_be_retimed_
         first.inventory.snapshot_digest
     );
 }
+/// Live acceptance D11: inventory-v2 answered an unlogged 500 while a
+/// concurrent owner (a renewal reads the snapshot row FOR SHARE) held the
+/// node's snapshot row. A lock timeout is a retryable 503, never a 500.
+#[tokio::test]
+async fn snapshot_row_lock_timeout_is_retryable_not_internal() {
+    let c = setup().await;
+    record(&c, &c.request).await;
+    let pool = &c.c.env.env.pool;
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM intelligence_node_snapshots WHERE node_id=$1 FOR SHARE")
+        .bind(c.request.identity.node_id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let mut next = c.request.clone();
+    next.operation_id = Uuid::new_v4();
+    next.sequence += 1;
+    let error = inventory::record(&c.c.env.env.state, &auth(&c).await, &next)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), 503, "{error:?}");
+    holder.rollback().await.unwrap();
+    record(&c, &next).await;
+}

@@ -41,6 +41,10 @@ impl IntoResponse for Error {
                 _ => FailureCode::Unavailable,
             }
         };
+        // Live acceptance D10: the typed failure is redacted on the wire, so
+        // the server logs each refusal with its code and owner's reason.
+        let reason = self.0.to_api_error();
+        tracing::warn!(status = status.as_u16(), ?code, error = %reason.error, reason = %reason.message, "native control request refused");
         let mut reply = (
             status,
             Json(ControlReply::Failure(Failure {
