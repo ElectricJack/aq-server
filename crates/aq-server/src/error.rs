@@ -163,7 +163,8 @@ impl From<IdentityError> for AppError {
 }
 
 impl From<aq_machine_control::Error> for AppError {
-    fn from(_: aq_machine_control::Error) -> Self {
+    fn from(error: aq_machine_control::Error) -> Self {
+        tracing::warn!(%error, "machine control store error");
         AppError::Internal
     }
 }

@@ -548,6 +548,32 @@ pub async fn handoff_of(
     }))
 }
 
+/// Live acceptance D5: the project, repository and binding generation of
+/// `attempt`'s own source export, which its handoff candidate must share.
+pub async fn export_scope(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, Uuid, u64)>, Error> {
+    let row = sqlx::query(
+        "SELECT e.project_id, (q.v->>'repository_id')::uuid AS repository, \
+         (q.v->>'binding_generation')::bigint AS generation \
+         FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id), \
+         LATERAL (SELECT convert_from(e.request_bytes,'UTF8')::jsonb AS v) q \
+         WHERE x.attempt_id=$1 LIMIT 1",
+    )
+    .bind(attempt)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let generation = u64::try_from(row.try_get::<i64, _>("generation")?)
+        .map_err(|_| Error::Invalid("source export scope"))?;
+    Ok(Some((
+        row.try_get("project_id")?,
+        row.try_get("repository")?,
+        generation,
+    )))
+}
+
 /// Only fills NULL columns; equal values are a no-op.
 pub async fn set_handoff_candidate(
     conn: &mut PgConnection,

@@ -5,7 +5,7 @@ use aq_admission::{
     ArtifactRef, Digest, MaterialReceipt, Text,
     control::InitialGrantDelivery,
     startup::NativeOffer,
-    transport::{ArtifactReceipt, PreparationPlan, Prepare},
+    transport::{PreparationPlan, Prepare},
 };
 use aq_server::{
     profiled_execution::initial_grant,
@@ -41,88 +41,7 @@ async fn setup() -> Prepared {
     setup_from(case, offer).await
 }
 async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
-    let accepted = native_offer::acceptance(&case, &offer);
-    let plan = native_offer::accept(&case, &accepted).await.original;
-    let clock = Arc::new(AtomicI64::new(plan.clock.server_time_ms as i64 + 1));
-    let at = clock.clone();
-    case.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
-    });
-    let mut artifacts = offer
-        .offered
-        .artifacts
-        .iter()
-        .map(|a| ArtifactReceipt {
-            artifact: a.artifact.clone(),
-            bytes: a.bytes,
-            digest: a.artifact.digest.clone(),
-        })
-        .collect::<Vec<_>>();
-    let transfer: Value =
-        sqlx::query_scalar("SELECT manifest FROM source_bases WHERE attempt_id=$1")
-            .bind(plan.binding.attempt_id)
-            .fetch_one(&case.env.env.pool)
-            .await
-            .unwrap();
-    let transfer: aq_worker_protocol::TransferManifest = serde_json::from_value(transfer).unwrap();
-    for (name, hash, bytes) in [
-        (
-            "manifest",
-            transfer.manifest_digest.as_str(),
-            transfer.manifest_bytes,
-        ),
-        (
-            "bundle",
-            transfer.bundle_digest.as_deref().unwrap(),
-            transfer.bundle_bytes,
-        ),
-    ] {
-        let digest: Digest = serde_json::from_value(json!(hash)).unwrap();
-        artifacts.push(ArtifactReceipt {
-            artifact: ArtifactRef {
-                id: Text::new(format!("aq.source-{name}/{}", transfer.transfer_id)).unwrap(),
-                version: Text::new("1").unwrap(),
-                digest: digest.clone(),
-            },
-            bytes,
-            digest,
-        });
-    }
-    let materials = plan
-        .materials
-        .iter()
-        .map(|l| MaterialReceipt {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            lease_id: l.lease_id,
-            binding: l.binding.clone(),
-            material_digest: l.material_digest.clone(),
-            private_binding: ArtifactRef {
-                id: Text::new(format!("aq.private-material/{}", l.lease_id)).unwrap(),
-                version: Text::new("1").unwrap(),
-                digest: Digest::of(
-                    b"synthetic opaque installer record: no physical worker qualification",
-                ),
-            },
-            received_at_ms: plan.clock.server_time_ms,
-        })
-        .collect();
-    let request = Prepare {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: accepted.identity,
-        binding: plan.binding.clone(),
-        reservation: plan.reservation.clone(),
-        guardian_id: plan.guardian_id,
-        launch_id: plan.launch_id,
-        journal_revision: accepted.journal_revision + 1,
-        journal_digest: Digest::of(b"synthetic durable Prepared intent"),
-        artifacts,
-        materials,
-    };
-    aq_admission::transport::TransportDocument::Prepare(request.clone())
-        .validate()
-        .unwrap();
+    let (_, plan, request, clock) = native_offer::prepare_request(&mut case, &offer).await;
     Prepared {
         case,
         offer,

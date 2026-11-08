@@ -433,3 +433,59 @@ async fn worst_case_pending_metadata_is_bounded_and_original_replay_remains_avai
         Reservation::Pending(_)
     ));
 }
+
+/// Moved from the lib's unit tests (the lib line ratchet): the export request
+/// identity is exact and the synthetic token fabricates no execution binding.
+mod request_identity {
+    use aq_admission::{ArtifactRef, Digest};
+    use aq_server::profiled_execution::source_exports::{Request, synthetic_reserved_export};
+    use aq_worker_protocol::{ObjectAlgorithm, ObjectId};
+    use uuid::Uuid;
+    fn request() -> Request {
+        Request {
+            schema_version: 1,
+            operation_id: Uuid::from_u128(1),
+            project_id: Uuid::from_u128(2),
+            project_revision: 1,
+            repository_id: Uuid::from_u128(3),
+            logical_identity: "fixture-repository".into(),
+            binding_generation: 1,
+            base: ObjectId {
+                algorithm: ObjectAlgorithm::Sha1,
+                hex: "a".repeat(40),
+            },
+            source_retention_handle: Uuid::from_u128(4),
+            source_observation: ArtifactRef {
+                id: aq_admission::Text::new("synthetic-observation").unwrap(),
+                version: aq_admission::Text::new("1").unwrap(),
+                digest: Digest::of(b"observation"),
+            },
+        }
+    }
+    #[test]
+    fn export_identity_is_exact_and_no_execution_binding_is_fabricated() {
+        let r = request();
+        let token = synthetic_reserved_export(r.clone(), 2_097_152).unwrap();
+        assert_eq!(token.request_digest(), &r.digest().unwrap());
+        assert_eq!(token.reserved_bytes(), 2_097_152);
+        let mut changed = r.clone();
+        changed.project_revision += 1;
+        assert_ne!(r.digest().unwrap(), changed.digest().unwrap());
+        changed = r.clone();
+        changed.base.hex = "A".repeat(40);
+        assert!(changed.validate().is_err());
+        changed = r.clone();
+        changed.base.hex = "0".repeat(40);
+        assert!(changed.validate().is_err());
+        changed = r.clone();
+        changed.operation_id = Uuid::nil();
+        assert!(changed.validate().is_err());
+        changed = r;
+        changed.logical_identity = "x\n".into();
+        assert!(changed.validate().is_err());
+        assert!(
+            serde_json::from_str::<Request>("{\"schema_version\":1,\"chosen_path\":\"x\"}")
+                .is_err()
+        );
+    }
+}

@@ -23,7 +23,8 @@ pub(super) struct Head {
     pub epoch: u64,
     pub binding_set: Option<serde_json::Value>,
 }
-fn db(e: sqlx::Error) -> AppError {
+/// Lock and statement timeouts are retryable (503); anything else is a logged 500.
+pub(super) fn db(e: sqlx::Error) -> AppError {
     if e.as_database_error().is_some_and(|e| {
         matches!(
             e.code().as_deref(),
@@ -32,6 +33,7 @@ fn db(e: sqlx::Error) -> AppError {
     }) {
         unavailable()
     } else {
+        tracing::warn!(error = %e, "scoped presence store error");
         AppError::Internal
     }
 }

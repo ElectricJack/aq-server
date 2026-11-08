@@ -94,57 +94,6 @@ pub fn synthetic_reserved_export(
         reserved_bytes,
     })
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn request() -> Request {
-        Request {
-            schema_version: 1,
-            operation_id: Uuid::from_u128(1),
-            project_id: Uuid::from_u128(2),
-            project_revision: 1,
-            repository_id: Uuid::from_u128(3),
-            logical_identity: "fixture-repository".into(),
-            binding_generation: 1,
-            base: ObjectId {
-                algorithm: ObjectAlgorithm::Sha1,
-                hex: "a".repeat(40),
-            },
-            source_retention_handle: Uuid::from_u128(4),
-            source_observation: ArtifactRef {
-                id: aq_admission::Text::new("synthetic-observation").unwrap(),
-                version: aq_admission::Text::new("1").unwrap(),
-                digest: Digest::of(b"observation"),
-            },
-        }
-    }
-    #[test]
-    fn export_identity_is_exact_and_no_execution_binding_is_fabricated() {
-        let r = request();
-        let token = synthetic_reserved_export(r.clone(), 2_097_152).unwrap();
-        assert_eq!(token.request_digest(), &r.digest().unwrap());
-        assert_eq!(token.reserved_bytes(), 2_097_152);
-        let mut changed = r.clone();
-        changed.project_revision += 1;
-        assert_ne!(r.digest().unwrap(), changed.digest().unwrap());
-        changed = r.clone();
-        changed.base.hex = "A".repeat(40);
-        assert!(changed.validate().is_err());
-        changed = r.clone();
-        changed.base.hex = "0".repeat(40);
-        assert!(changed.validate().is_err());
-        changed = r.clone();
-        changed.operation_id = Uuid::nil();
-        assert!(changed.validate().is_err());
-        changed = r;
-        changed.logical_identity = "x\n".into();
-        assert!(changed.validate().is_err());
-        assert!(
-            serde_json::from_str::<Request>("{\"schema_version\":1,\"chosen_path\":\"x\"}")
-                .is_err()
-        );
-    }
-}
 
 pub enum Reservation {
     Pending(ReservedExport),
@@ -155,8 +104,16 @@ pub enum Reservation {
         canonical_verified: Vec<u8>,
     },
 }
+#[track_caller]
 fn unavailable() -> crate::error::AppError {
+    tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     crate::error::AppError::Conflict("source export ownership unavailable or inconsistent".into())
+}
+/// A refusal of a fresh export's policy or observation, logged with its code
+/// (live acceptance D10: these refusals were silent).
+fn refused(reason: &'static str) -> crate::error::AppError {
+    tracing::warn!(reason, "source export refused");
+    unavailable()
 }
 fn database(_: sqlx::Error) -> crate::error::AppError {
     crate::error::AppError::Internal
@@ -293,12 +250,10 @@ pub async fn reserve(
         }
         aq_admission::SourceSelection::Immutable { .. } => None,
     };
-    if !configured.enabled
-        || (configured.retention_handle != request.source_retention_handle
-            && head_handle != Some(request.source_retention_handle))
-        || canonical(&configured)? != canonical(&installed)?
-    {
-        return Err(unavailable());
+    let policy_handle = configured.retention_handle == request.source_retention_handle
+        || head_handle == Some(request.source_retention_handle);
+    if !configured.enabled || canonical(&configured)? != canonical(&installed)? {
+        return Err(refused("source_export_policy_not_installed"));
     }
     let observation_id:Uuid=sqlx::query_scalar("SELECT artifact_id FROM admission_artifacts WHERE owner_key=$1 AND owner_kind='source_retention' AND descriptor->>'kind'='context' AND descriptor->'artifact'=$2 ORDER BY artifact_id LIMIT 1").bind(request.project_id.to_string()).bind(serde_json::to_value(&request.source_observation).map_err(|_|unavailable())?).fetch_optional(&mut *tx).await.map_err(database)?.ok_or_else(unavailable)?;
     let retained = super::artifacts::load_locked(&mut tx, observation_id).await?;
@@ -311,6 +266,25 @@ pub async fn reserve(
     }
     let value: serde_json::Value =
         serde_json::from_slice(&retained.bytes).map_err(|_| unavailable())?;
+    // Spec 0007 S7 (D5): a handoff successor exports its predecessor's recorded
+    // handoff candidate, held by the candidate handle, as an immutable source.
+    let predecessor = value["evidence"]["handoff"]["predecessor"].as_str();
+    let scope = (
+        request.project_id,
+        request.repository_id,
+        request.binding_generation,
+    );
+    let handoff = match predecessor.and_then(|p| Uuid::parse_str(p).ok()) {
+        Some(p) => {
+            super::handoff::export_is_handoff(&mut tx, p, &request).await?
+                && aq_machine_control::export_scope(&mut tx, p).await? == Some(scope)
+        }
+        None => false,
+    };
+    if !policy_handle && !handoff {
+        return Err(refused("source_export_handle_not_configured"));
+    }
+    use aq_admission::SourceSelection::Immutable;
     let observation: aq_admission::SourceAdmission =
         serde_json::from_value(value["admission"].clone()).map_err(|_| unavailable())?;
     observation.validate().map_err(|_| unavailable())?;
@@ -321,11 +295,14 @@ pub async fn reserve(
         || observation.policy != configured.artifact().map_err(|_| unavailable())?
         || observation.resolved_object.format != aq_admission::ObjectFormat::Sha1
         || observation.resolved_object.hex != request.base.hex
-        || serde_json::to_value(&observation.selection).map_err(|_| unavailable())?
-            != serde_json::to_value(&configured.source).map_err(|_| unavailable())?
+        || (!handoff
+            && serde_json::to_value(&observation.selection).map_err(|_| unavailable())?
+                != serde_json::to_value(&configured.source).map_err(|_| unavailable())?)
+        || (handoff
+            && !matches!(&observation.selection, Immutable { object } if object.hex == request.base.hex))
         || value["retention_handle"] != serde_json::json!(request.source_retention_handle)
     {
-        return Err(unavailable());
+        return Err(refused("source_export_observation_mismatch"));
     }
     // Same shared owner lock as legacy transfers/bases; unknown exports remain
     // fully charged. No I/O or file reading occurs inside this transaction.

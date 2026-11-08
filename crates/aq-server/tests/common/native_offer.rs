@@ -23,6 +23,8 @@ use std::sync::{
 };
 use tower::ServiceExt;
 use uuid::Uuid;
+/// The commit the synthetic aq-git peer creates for every `candidate.create`.
+pub const HANDOFF_CANDIDATE: &str = "6666666666666666666666666666666666666666";
 pub struct Case {
     pub env: SelectionFixture,
     pub request: Poll,
@@ -327,13 +329,21 @@ pub async fn setup() -> Case {
     .unwrap();
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let root = git.clone();
-    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();tokio::spawn(async move{
+    // Retained handles the peer created: export transfers and handoff
+    // candidates (`candidate.create`), each with the commit it retains.
+    let retained = Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::<
+        String,
+        (bool, String),
+    >::new()));
+    tasks.push(tokio::spawn(async move{use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};loop{let (stream,_)=listener.accept().await.unwrap();let root=root.clone();let retained=retained.clone();tokio::spawn(async move{
         let mut reader=BufReader::new(stream);let mut line=vec![];reader.read_until(b'\n',&mut line).await.unwrap();let r:Value=serde_json::from_slice(&line).unwrap();
         let result=match r["operation"].as_str().unwrap(){
             "repo.show"=>json!({"repository_id":repository,"binding_generation":1,"identity":"synthetic-native-repository","mode":"central","object_format":"sha1"}),
-            "inspect"=>json!({"oid":{"algorithm":"sha1","hex":"a".repeat(40)},"tree":{"algorithm":"sha1","hex":"b".repeat(40)}}),
-            "retention.inspect"=>{let id=r["params"]["handle_id"].as_str().unwrap();if id==handle.to_string(){json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":1,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/synthetic","oid":"a".repeat(40)}],"release_operation":null,"release_reason":null})}else{json!({"version":1,"id":id,"repository_id":repository,"binding_generation":1,"generation":1,"resource":"transfer","refs":[{"name":format!("refs/aq-git/transfers/{id}"),"oid":"a".repeat(40)}],"state":"active","dependencies":[],"release_operation":null,"release_reason":null})}},
-            "artifact.export"=>{let op=r["operation_id"].as_str().unwrap();let dir=root.join("artifacts").join(op);std::fs::create_dir_all(&dir).unwrap();let bundle=b"synthetic bytes, not a qualified Git bundle";let manifest=json!({"format_version":1,"repository_id":repository,"repository_identity":"synthetic-native-repository","binding_generation":1,"transfer_id":op,"object_format":"sha1","base":r["params"]["base"],"source":r["params"]["source"],"prerequisites":[],"bundle_size":bundle.len(),"bundle_sha256":Digest::of(bundle),"producer_installation_id":producer,"reference_only":false,"caller_correlation":r["params"]["caller_correlation"]});std::fs::write(dir.join("objects.bundle"),bundle).unwrap();std::fs::write(dir.join("manifest.json"),serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();json!({"artifact_handle":op,"retention_handle":op,"manifest":manifest})},
+            "inspect"=>{let hex=if r["params"]["oid"]["hex"]==HANDOFF_CANDIDATE{HANDOFF_CANDIDATE.to_owned()}else{"a".repeat(40)};json!({"oid":{"algorithm":"sha1","hex":hex},"tree":{"algorithm":"sha1","hex":"b".repeat(40)}})},
+            "retention.inspect"=>{let id=r["params"]["handle_id"].as_str().unwrap();if id==handle.to_string(){json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":1,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/synthetic","oid":"a".repeat(40)}],"release_operation":null,"release_reason":null})}else if let Some((true,oid))=retained.lock().unwrap().get(id).cloned(){json!({"version":1,"id":id,"repository_id":repository,"binding_generation":1,"generation":1,"state":"active","refs":[{"name":format!("refs/aq-git/candidates/{id}/prefix/0"),"oid":oid}],"release_operation":null,"release_reason":null})}else{let oid=retained.lock().unwrap().get(id).map_or_else(||"a".repeat(40),|(_,oid)|oid.clone());json!({"version":1,"id":id,"repository_id":repository,"binding_generation":1,"generation":1,"resource":"transfer","refs":[{"name":format!("refs/aq-git/transfers/{id}"),"oid":oid}],"state":"active","dependencies":[],"release_operation":null,"release_reason":null})}},
+            "artifact.export"=>{let op=r["operation_id"].as_str().unwrap();retained.lock().unwrap().insert(op.to_owned(),(false,r["params"]["base"]["hex"].as_str().unwrap().to_owned()));let dir=root.join("artifacts").join(op);std::fs::create_dir_all(&dir).unwrap();let bundle=b"synthetic bytes, not a qualified Git bundle";let manifest=json!({"format_version":1,"repository_id":repository,"repository_identity":"synthetic-native-repository","binding_generation":1,"transfer_id":op,"object_format":"sha1","base":r["params"]["base"],"source":r["params"]["source"],"prerequisites":[],"bundle_size":bundle.len(),"bundle_sha256":Digest::of(bundle),"producer_installation_id":producer,"reference_only":false,"caller_correlation":r["params"]["caller_correlation"]});std::fs::write(dir.join("objects.bundle"),bundle).unwrap();std::fs::write(dir.join("manifest.json"),serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();json!({"artifact_handle":op,"retention_handle":op,"manifest":manifest})},
+            // Spec 0007 S7: the predecessor's saved checkpoint becomes a ready candidate.
+            "candidate.create"=>{let op=r["operation_id"].clone();retained.lock().unwrap().insert(op.as_str().unwrap().to_owned(),(true,HANDOFF_CANDIDATE.to_owned()));json!({"candidate_id":op,"state":"ready","candidate":{"algorithm":"sha1","hex":HANDOFF_CANDIDATE},"clean_prefix":{"algorithm":"sha1","hex":HANDOFF_CANDIDATE},"retention_handle":op,"conflict_step":null,"conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false})},
             other=>panic!("unexpected private Git operation {other}"),
         };
         let mut response=json!({"protocol_version":1,"request_id":r["request_id"],"ok":true,"result":result});if let Some(op)=r.get("operation_id"){response["operation_id"]=op.clone();}let mut bytes=serde_json::to_vec(&response).unwrap();bytes.push(b'\n');if let Err(error)=reader.into_inner().write_all(&bytes).await {
@@ -511,6 +521,105 @@ pub async fn published() -> (Case, aq_admission::startup::NativeOffer) {
     page.validate_for(&c.request).unwrap();
     assert_eq!(page.offers.len(), 1);
     (c, page.offers.remove(0))
+}
+/// Accepts `offer` and builds its exact `Prepare` (full artifact and material
+/// receipts). The case clock is then fixed one millisecond after the plan's
+/// server time; the returned counter moves it.
+pub async fn prepare_request(
+    case: &mut Case,
+    offer: &aq_admission::startup::NativeOffer,
+) -> (
+    aq_admission::transport::Accept,
+    aq_admission::transport::PreparationPlan,
+    aq_admission::transport::Prepare,
+    Arc<std::sync::atomic::AtomicI64>,
+) {
+    use aq_admission::{MaterialReceipt, Text, transport::ArtifactReceipt};
+    let accepted = acceptance(case, offer);
+    let plan = accept(case, &accepted).await.original;
+    let clock = Arc::new(std::sync::atomic::AtomicI64::new(
+        plan.clock.server_time_ms as i64 + 1,
+    ));
+    let at = clock.clone();
+    case.env.env.state.clock = Arc::new(move || {
+        chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
+    });
+    let mut artifacts = offer
+        .offered
+        .artifacts
+        .iter()
+        .map(|a| ArtifactReceipt {
+            artifact: a.artifact.clone(),
+            bytes: a.bytes,
+            digest: a.artifact.digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    let transfer: Value =
+        sqlx::query_scalar("SELECT manifest FROM source_bases WHERE attempt_id=$1")
+            .bind(plan.binding.attempt_id)
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+    let transfer: aq_worker_protocol::TransferManifest = serde_json::from_value(transfer).unwrap();
+    for (name, hash, bytes) in [
+        (
+            "manifest",
+            transfer.manifest_digest.as_str(),
+            transfer.manifest_bytes,
+        ),
+        (
+            "bundle",
+            transfer.bundle_digest.as_deref().unwrap(),
+            transfer.bundle_bytes,
+        ),
+    ] {
+        let digest: Digest = serde_json::from_value(json!(hash)).unwrap();
+        artifacts.push(ArtifactReceipt {
+            artifact: ArtifactRef {
+                id: Text::new(format!("aq.source-{name}/{}", transfer.transfer_id)).unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: digest.clone(),
+            },
+            bytes,
+            digest,
+        });
+    }
+    let materials = plan
+        .materials
+        .iter()
+        .map(|l| MaterialReceipt {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            lease_id: l.lease_id,
+            binding: l.binding.clone(),
+            material_digest: l.material_digest.clone(),
+            private_binding: ArtifactRef {
+                id: Text::new(format!("aq.private-material/{}", l.lease_id)).unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: Digest::of(
+                    b"synthetic opaque installer record: no physical worker qualification",
+                ),
+            },
+            received_at_ms: plan.clock.server_time_ms,
+        })
+        .collect();
+    let request = aq_admission::transport::Prepare {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: accepted.identity.clone(),
+        binding: plan.binding.clone(),
+        reservation: plan.reservation.clone(),
+        guardian_id: plan.guardian_id,
+        launch_id: plan.launch_id,
+        journal_revision: accepted.journal_revision + 1,
+        journal_digest: Digest::of(b"synthetic durable Prepared intent"),
+        artifacts,
+        materials,
+    };
+    TransportDocument::Prepare(request.clone())
+        .validate()
+        .unwrap();
+    (accepted, plan, request, clock)
 }
 pub fn acceptance(
     c: &Case,

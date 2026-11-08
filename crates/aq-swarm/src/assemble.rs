@@ -277,7 +277,13 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             .unwrap_or_else(|| format!("node:{id}"));
         let mut codes: Vec<HoldCode> = Vec::new();
         if n.health == WorkerHealth::Online {
-            codes.extend(n.eligibility.reasons.iter().copied().filter_map(mapped));
+            // Live acceptance D7: a service slot reports its capabilities once
+            // per attempt, so the report lapses while its agent runs. A busy
+            // node is not held for that; it reports again before its next poll.
+            let busy = n.slots.occupied > 0;
+            let lapsed = |r: &IneligibleReason| busy && *r == IneligibleReason::CapabilityExpired;
+            let reasons = n.eligibility.reasons.iter().filter(|r| !lapsed(r));
+            codes.extend(reasons.copied().filter_map(mapped));
             codes.extend(extra.and_then(|e| e.measurement));
             match service.map(|s| s.state) {
                 Some(ServiceState::Stopped) => codes.push(HoldCode::WorkerStopped),
