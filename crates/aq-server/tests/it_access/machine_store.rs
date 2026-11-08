@@ -621,6 +621,44 @@ async fn owner_availability_defaults_unset_and_is_compare_and_swap() {
     ));
 }
 
+/// Fix round 2: on to on (and off to off) at the current generation changes
+/// nothing, so it cannot invalidate offers selected under the switch.
+#[tokio::test]
+async fn owner_availability_unchanged_state_keeps_the_generation() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let who = owner(&pool).await;
+    let mut c = pool.acquire().await.unwrap();
+    let mut set = async |on: bool, expected: u64| {
+        let r = mc::set_owner_availability(&mut c, on, expected, who, Uuid::new_v4(), now());
+        r.await.unwrap().generation
+    };
+    assert_eq!(set(true, 1).await, 2);
+    assert_eq!(set(true, 2).await, 2, "on to on");
+    assert_eq!(set(false, 2).await, 3);
+    assert_eq!(set(false, 3).await, 3, "off to off");
+}
+
+/// Fix round 2: a switch turned on by a user who is no longer an owner counts
+/// as unset.
+#[tokio::test]
+async fn owner_switch_of_a_demoted_user_is_unset() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let who = owner(&pool).await;
+    let mut c = pool.acquire().await.unwrap();
+    mc::set_owner_availability(&mut c, true, 1, who, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    assert_eq!(mc::owner_switch(&mut c).await.unwrap(), Some((who, 2)));
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(who)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(mc::owner_switch(&mut c).await.unwrap(), None);
+}
+
 #[tokio::test]
 async fn node_services_report_desired_and_since() {
     let db = TestDb::create().await;

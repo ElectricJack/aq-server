@@ -772,3 +772,16 @@ async fn owner_switch_flipped_between_selection_and_grant_refuses() {
     assert!(grant(&c).await.is_err());
     ungranted(&c).await;
 }
+
+/// Fix round 2: the fence treats the switch of a demoted owner as unset, so
+/// an offer selected under it is refused at the grant.
+#[tokio::test]
+async fn owner_switch_of_a_demoted_owner_refuses_the_grant() {
+    let c = switched_on().await;
+    sqlx::query("UPDATE users SET role='viewer' WHERE email='owner@localhost'")
+        .execute(&c.case.env.env.pool)
+        .await
+        .unwrap();
+    assert!(grant(&c).await.is_err());
+    ungranted(&c).await;
+}

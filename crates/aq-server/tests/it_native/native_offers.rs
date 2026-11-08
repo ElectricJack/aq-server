@@ -659,3 +659,22 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
         .unwrap();
     assert_eq!(attempts, 0);
 }
+
+/// Fix round 2: a switch turned on by a user who is no longer an owner counts
+/// as unset at selection, so without an attestation row no offer is made.
+#[tokio::test]
+async fn switch_of_a_demoted_owner_makes_no_offer() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    set_availability(&c, true, "1").await;
+    sqlx::query("UPDATE users SET role='viewer' WHERE email='owner@localhost'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = poll(&c).await;
+    assert!(poll_offers_or_none(status, &body), "{status} {body}");
+}

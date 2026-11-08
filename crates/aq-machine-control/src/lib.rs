@@ -839,22 +839,26 @@ pub fn is_serialization_failure(e: &sqlx::Error) -> bool {
 }
 
 /// Spec 0007 Q2: `(principal, generation)` of the owner's switch while it is
-/// on; None when unset or off, and below 101. Selection synthesizes the
-/// owner's attestation from it, so the admission fences change only when the
-/// owner flips the switch (never from a refreshed observation row).
+/// on; None when unset or off, below 101, or (fix round 2) when the user who
+/// switched it on is no longer an owner: that switch counts as unset.
+/// Selection synthesizes the owner's attestation from it, so the admission
+/// fences change only when the owner flips the switch.
 pub async fn owner_switch(conn: &mut PgConnection) -> Result<Option<(Uuid, u64)>, Error> {
     if !has_format(conn).await? {
         return Ok(None);
     }
     let on: Option<(Uuid, i64)> = sqlx::query_as(
-        "SELECT updated_by, generation FROM owner_availability WHERE available FOR SHARE",
+        "SELECT o.updated_by, o.generation FROM owner_availability o \
+         JOIN users u ON u.id = o.updated_by AND u.role = 'owner' WHERE o.available FOR SHARE OF o",
     )
     .fetch_optional(&mut *conn)
     .await?;
     Ok(on.map(|(by, g)| (by, ms(g))))
 }
 
-/// Compare-and-swap on the singleton, as `set_desired`.
+/// Compare-and-swap on the singleton, as `set_desired`. Setting the state it
+/// already has (on to on, off to off) at the current generation changes
+/// nothing and returns the current generation (fix round 2).
 pub async fn set_owner_availability(
     tx: &mut PgConnection,
     available: bool,
@@ -863,6 +867,14 @@ pub async fn set_owner_availability(
     operation_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<OwnerAvailability, Error> {
+    let current = owner_availability(tx).await?;
+    let same = matches!(
+        (current.state, available),
+        (Availability::On, true) | (Availability::Off, false)
+    );
+    if same && current.generation == expected_generation {
+        return Ok(current);
+    }
     let done = if expected_generation == 1 {
         sqlx::query(
             "INSERT INTO owner_availability(available,generation,operation_id,updated_at,updated_by) \
