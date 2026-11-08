@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
+pub mod lost;
 
 /// First `state_format_version` with these tables.
 pub const FORMAT: u32 = 101;

@@ -12,7 +12,7 @@ use sqlx::{Postgres, Transaction};
 fn conflict() -> AppError {
     AppError::Conflict("granted launch closure history unavailable or inconsistent".into())
 }
-fn database(_: sqlx::Error) -> AppError {
+pub(crate) fn database(_: sqlx::Error) -> AppError {
     AppError::Internal
 }
 fn canonical(value: &impl Serialize) -> Result<Vec<u8>, AppError> {

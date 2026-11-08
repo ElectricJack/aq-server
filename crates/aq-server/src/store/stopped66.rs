@@ -21,6 +21,17 @@ pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'sta
         guards.retain(|(existing, _)| *existing != name);
         guards.push((name, function_body(name)?));
     }
+    // Format 102 also admits a stop backed by its lost-attempt release (D2 ruling C).
+    if supported >= 102 {
+        let name = "profiled_stopped_projection_guard";
+        let body = include_str!("../../migrations/0102_lost_attempt_releases.sql")
+            .split_once(&format!("FUNCTION {name}("))
+            .and_then(|(_, tail)| tail.split_once("AS $$"))
+            .and_then(|(_, tail)| tail.split_once("$$;"))
+            .ok_or_else(corrupt)?;
+        guards.retain(|(existing, _)| *existing != name);
+        guards.push((name, body.0));
+    }
     Ok(guards)
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {

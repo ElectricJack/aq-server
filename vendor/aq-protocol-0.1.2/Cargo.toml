@@ -1,0 +1,27 @@
+[package]
+edition = "2024"
+name = "aq-protocol"
+version = "0.1.2"
+publish = false
+
+[lib]
+name = "aq_protocol"
+path = "src/lib.rs"
+
+[dependencies.chrono]
+version = "0.4"
+features = ["serde"]
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1"
+
+[dependencies.uuid]
+version = "1"
+features = [
+    "v4",
+    "serde",
+]

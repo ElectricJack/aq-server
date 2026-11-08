@@ -13,6 +13,7 @@ pub mod expiry;
 pub mod handoff;
 pub mod journal;
 pub mod login_refresh;
+pub mod lost;
 pub mod material;
 pub mod material_api;
 pub mod no_grant;
