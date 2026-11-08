@@ -87,8 +87,16 @@ pub async fn publish(
             &replacement.retained_source_receipt,
         )
         .await?;
-        if retained.token().request_digest() != export.request_digest()
-            || retained.fact().canonical_bytes()? != fact.canonical_bytes()?
+        let shared = retained.token().request_digest() == export.request_digest()
+            && retained.fact().canonical_bytes()? == fact.canonical_bytes()?;
+        // Spec 0007: a handoff successor's own export of the saved commit.
+        if !shared
+            && !super::super::handoff::export_is_handoff(
+                &mut tx,
+                replacement.predecessor_attempt_id,
+                export.request(),
+            )
+            .await?
         {
             return Err(refused());
         }

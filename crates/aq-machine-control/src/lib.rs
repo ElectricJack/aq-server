@@ -111,12 +111,36 @@ fn desired_of(s: &str) -> Result<DesiredState, Error> {
         _ => Err(Error::Invalid("desired")),
     }
 }
-fn reason_str(r: HandoffReason) -> &'static str {
+pub fn reason_str(r: HandoffReason) -> &'static str {
     match r {
         HandoffReason::OwnerStop => "owner_stop",
         HandoffReason::ServiceStop => "service_stop",
         HandoffReason::Restart => "restart",
     }
+}
+/// Spec 0007 S7: the deterministic ids and texts of a handoff successor base.
+pub fn handoff_candidate_operation(predecessor: Uuid) -> Uuid {
+    Uuid::new_v5(&predecessor, b"aq.swarm.handoff.candidate")
+}
+pub fn handoff_note_operation(predecessor: Uuid) -> Uuid {
+    Uuid::new_v5(&predecessor, b"aq.swarm.handoff.note")
+}
+pub fn handoff_commit_message(task: Uuid, predecessor: Uuid, note: &str) -> String {
+    format!("AQ: handoff of task {task} from attempt {predecessor}\n\n{note}")
+}
+pub fn handoff_note(predecessor: Uuid, reason: HandoffReason, conclusion: &str) -> String {
+    format!(
+        "Handoff from attempt {predecessor} ({}). {conclusion}",
+        reason_str(reason)
+    )
+}
+/// The publication fence: `base`/`handle` are the fresh export of this
+/// predecessor's recorded handoff candidate.
+pub fn is_handoff_export(row: &HandoffRow, base: &str, handle: Uuid) -> bool {
+    let op = handoff_candidate_operation(row.attempt_id);
+    row.candidate_operation_id == Some(op)
+        && op == handle
+        && row.candidate_oid.as_deref() == Some(base)
 }
 fn reason_of(s: &str) -> Result<HandoffReason, Error> {
     match s {

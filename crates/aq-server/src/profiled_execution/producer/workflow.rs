@@ -504,15 +504,36 @@ async fn offers(
     let policy_record = config
         .project_policy_record(policy.project_id)
         .map_err(|_| refused())?;
-    let (token, fact) = if let Some(replacement) = &replacement {
+    // Spec 0007: a handed-off predecessor's successor starts from its saved work.
+    let handoff = match &replacement {
+        Some(r) => {
+            on_heap(|| super::super::handoff::successor_base(state, task.task_id, r)).await?
+        }
+        None => None,
+    };
+    let (token, fact) = if let Some(replacement) =
+        replacement.as_ref().filter(|_| handoff.is_none())
+    {
         // Reuse the original verified export, including its bundle bytes and
         // operation identity. Never resolve a moving ref or re-export on retry.
         on_heap(|| replacement::retained_source(state, task.task_id, replacement))
             .await?
             .into_parts()
     } else {
-        // A first attempt freezes the configured source at offer time.
-        let observed = on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?;
+        // A first attempt freezes the configured source at offer time; a
+        // handoff successor freezes the saved commit as a fresh export (a new
+        // operation, never the predecessor's export).
+        let observed = match &handoff {
+            Some(base) => {
+                on_heap(|| source::observe_handoff(state, &compiled.frozen, &policy_record, base))
+                    .await?
+            }
+            None => on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?,
+        };
+        let frozen = match &handoff {
+            Some(base) => Some(base.oid.as_str()),
+            None => frozen_commit(&policy.source, &observed),
+        };
         let operation = source_operation(
             policy.project_id,
             &task,
@@ -521,7 +542,7 @@ async fn offers(
             config
                 .project_policy_ref(policy.project_id)
                 .map_err(|_| refused())?,
-            frozen_commit(&policy.source, &observed),
+            frozen,
         )?;
         match on_heap(|| reservation(state, &compiled, operation, observed)).await? {
             source_exports::Reservation::Pending(token) => {

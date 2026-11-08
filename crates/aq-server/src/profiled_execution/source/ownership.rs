@@ -25,6 +25,9 @@ struct Evidence {
     /// D1: the server-owned source head AQ published to the named ref.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     publication_head: Option<Value>,
+    /// Spec 0007: the handoff whose saved commit this immutable source is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff: Option<Value>,
     commit_inspection: Value,
     retention_inspection: Value,
 }
@@ -50,6 +53,10 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
     if inspected["oid"] != serde_json::json!({"algorithm":"sha1","hex":a.resolved_object.hex})
         || inspected["tree"]["algorithm"] != "sha1"
         || !hex40(inspected["tree"]["hex"].as_str().unwrap_or(""))
+    {
+        return Err(refused());
+    }
+    if body.evidence.handoff.is_some() && !matches!(a.selection, SourceSelection::Immutable { .. })
     {
         return Err(refused());
     }

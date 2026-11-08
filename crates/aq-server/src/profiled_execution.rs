@@ -10,6 +10,7 @@ pub mod context_budget;
 pub mod context_projection;
 pub mod context_renewal;
 pub mod expiry;
+pub mod handoff;
 pub mod journal;
 pub mod login_refresh;
 pub mod material;
