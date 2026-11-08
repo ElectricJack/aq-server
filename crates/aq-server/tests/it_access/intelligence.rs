@@ -45,6 +45,7 @@ fn registry(path: Option<std::path::PathBuf>) -> IntelligenceConfig {
             allowed_backends: aq_selection::default_allowed_backends(),
             credential: credential(),
             allowed_node_ids: vec![Uuid::from_u128(10)],
+            allow_enrolled_nodes: false,
             secret_file: path,
             delivery_mode: None,
         }],
@@ -664,4 +665,99 @@ async fn credential_policy_changes_require_a_new_registry_revision() {
             );
         }
     }
+}
+
+/// Registers the registry first, then enrolls a node that no list names: the
+/// node must not need any configuration edit or restart (spec 0007 Q3).
+async fn enrolled_inventory(
+    allow_enrolled_nodes: bool,
+    revoke: bool,
+) -> (StatusCode, Value, StatusCode) {
+    let mut reg = registry(None);
+    reg.credentials[0].allow_enrolled_nodes = allow_enrolled_nodes;
+    let (db, state, admin) = setup(reg).await;
+    let (register, _) = call(
+        &admin,
+        "/api/intelligence/register",
+        Some(json!({})),
+        true,
+        true,
+    )
+    .await;
+    assert_eq!(register, StatusCode::OK);
+    let time = (state.clock)();
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&db.pool().await)
+        .await
+        .unwrap();
+    let token = aq_server::tokens::new_node_credential();
+    state
+        .store
+        .create_enrollment("q3-code", owner, time, time + chrono::Duration::minutes(5))
+        .await
+        .unwrap();
+    let node = state
+        .store
+        .redeem_enrollment(
+            "q3-code",
+            aq_server::store::NewNode {
+                name: "q3".into(),
+                credential_hash: aq_server::tokens::verifier(&token),
+                worker_version: "0.1.0".into(),
+                protocol_version: 1,
+            },
+            time,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let boot_id = Uuid::new_v4();
+    state
+        .store
+        .execution_register(&aq_worker_protocol::RegisterRequest {
+            identity: aq_worker_protocol::NodeIdentity {
+                node_id: node.id,
+                boot_id,
+            },
+            operation_id: Uuid::new_v4(),
+            protocol_version: 2,
+            worker_version: "0.1.0".into(),
+            capabilities: vec![aq_worker_protocol::FAKE_HARNESS_CAPABILITY.into()],
+        })
+        .await
+        .unwrap();
+    let mut revoked = StatusCode::OK;
+    if revoke {
+        revoked = call(
+            &admin,
+            &format!("/api/workers/{}/revoke", node.id),
+            Some(json!({})),
+            true,
+            true,
+        )
+        .await
+        .0;
+    }
+    let c = credential();
+    let body = json!({"operation_id":Uuid::new_v4(),"boot_id":boot_id,"sequence":1,"ttl_ms":1000,"qualifications":[],"credentials":[{"profile":c.profile,"credential_revision":1,"available":true}]});
+    let worker = aq_server::build_worker_router(state);
+    let (status, answer) =
+        machine(&worker, "/v1/worker/intelligence/inventory", &token, body).await;
+    (status, answer, revoked)
+}
+
+#[tokio::test]
+async fn enrolled_node_inventory_accepted_with_flag() {
+    let (status, answer, _) = enrolled_inventory(true, false).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["credential_bindings"][0]["available"], true);
+    let (status, _, _) = enrolled_inventory(false, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn revoked_node_is_refused_even_with_flag() {
+    let (status, _, revoked) = enrolled_inventory(true, true).await;
+    assert_eq!(revoked, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

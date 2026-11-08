@@ -208,8 +208,7 @@ pub(super) async fn fence_locked(
             .credentials
             .get(index)
             .ok_or_else(|| refused())?
-            .allowed_node_ids
-            .contains(&node)
+            .allows(node)
     {
         return Err(refused());
     }

@@ -160,6 +160,7 @@ pub fn project(
         allowed_intelligence_profiles: vec![INTELLIGENCE.into()],
         allowed_execution_profiles: vec![EXECUTION.into()],
         allowed_node_ids: vec![],
+        allow_enrolled_nodes: false,
         allowed_worker_groups: vec![GROUP.into()],
         allowed_environments: vec![ENVIRONMENT.into()],
         policy: Reference {
@@ -744,6 +745,7 @@ impl Prepared {
                     allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![node],
+                allow_enrolled_nodes: false,
                 secret_file: Some(secret_file),
                 delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
             }],

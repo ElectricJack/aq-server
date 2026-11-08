@@ -86,6 +86,7 @@ async fn setup() -> Case {
                     allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![f.node.node_id],
+                allow_enrolled_nodes: false,
                 secret_file: Some(path.clone()),
                 delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
             }],

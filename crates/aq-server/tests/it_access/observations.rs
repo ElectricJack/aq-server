@@ -1175,6 +1175,7 @@ mod accounting {
                     allowed_backends: aq_selection::default_allowed_backends(),
                     credential,
                     allowed_node_ids: vec![],
+                    allow_enrolled_nodes: false,
                     secret_file: None,
                     delivery_mode: None,
                 }],

@@ -430,6 +430,7 @@ pub async fn selection_fixture() -> SelectionFixture {
                 allowed_backends: aq_selection::default_allowed_backends(),
                 credential: c,
                 allowed_node_ids: vec![env.node],
+                allow_enrolled_nodes: false,
                 secret_file: Some(key.clone()),
                 delivery_mode: None,
             }
@@ -448,6 +449,7 @@ pub async fn selection_fixture() -> SelectionFixture {
         allowed_backends: aq_selection::default_allowed_backends(),
         credential: unrelated.clone(),
         allowed_node_ids: vec![],
+        allow_enrolled_nodes: false,
         secret_file: Some(key.clone()),
         delivery_mode: None,
     });

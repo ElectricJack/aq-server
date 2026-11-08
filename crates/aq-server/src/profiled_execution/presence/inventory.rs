@@ -98,7 +98,7 @@ pub async fn record(
                 && c.credential.revision == profile.revision
                 && c.credential.enabled
                 && c.delivery_mode.is_some()
-                && c.allowed_node_ids.contains(&auth.id())
+                && c.allows(auth.id())
         }) {
             return Err(changed());
         }

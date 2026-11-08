@@ -164,7 +164,7 @@ async fn observe(
             .iter()
             .find(|c| c.credential.profile == credential.profile)
             .ok_or(AppError::Internal)?;
-        if !entry.allowed_node_ids.contains(&node) {
+        if !entry.allows(node) {
             return Err(bad("observation node outside credential authority"));
         }
     }

@@ -56,6 +56,7 @@ async fn quota_unknown_is_not_zero() {
             allowed_backends: aq_selection::default_allowed_backends(),
             credential,
             allowed_node_ids: vec![],
+            allow_enrolled_nodes: false,
             secret_file: None,
             delivery_mode: None,
         })
@@ -470,6 +471,7 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
                     allowed_backends: aq_selection::default_allowed_backends(),
                     credential,
                     allowed_node_ids: vec![],
+                    allow_enrolled_nodes: false,
                     secret_file: None,
                     delivery_mode: None,
                 })

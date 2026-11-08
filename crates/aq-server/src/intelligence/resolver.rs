@@ -144,7 +144,7 @@ async fn resolve_with_principal(
         .credentials
         .iter()
         .zip(&loaded.credentials)
-        .filter(|(cfg, _)| cfg.allowed_node_ids.contains(&node_id))
+        .filter(|(cfg, _)| cfg.allows(node_id))
         .map(|(_, c)| c.clone())
         .collect();
     let observations: Vec<Value> = sqlx::query_scalar(
@@ -550,7 +550,7 @@ async fn fence_snapshot(
         .credentials
         .iter()
         .zip(&loaded(state)?.credentials)
-        .filter(|(cfg, _)| cfg.allowed_node_ids.contains(&node_id))
+        .filter(|(cfg, _)| cfg.allows(node_id))
         .map(|(_, c)| c.clone())
         .collect();
     if digest(&credentials).map_err(|_| AppError::Internal)?

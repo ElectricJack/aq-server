@@ -33,6 +33,7 @@ fn input() -> ActualSetup {
             allowed_intelligence_profiles: vec!["engineering@1".into()],
             allowed_execution_profiles: vec!["confined-development@1".into()],
             allowed_node_ids: vec![],
+            allow_enrolled_nodes: false,
             allowed_worker_groups: vec!["actual-fixture".into()],
             allowed_environments: vec!["confined-worktree".into()],
             policy: Reference {

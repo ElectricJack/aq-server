@@ -24,9 +24,22 @@ pub struct CredentialConfig {
     /// Material state and the nested backend policy are derived by `load`.
     pub credential: AuthorizedCredential,
     pub allowed_node_ids: Vec<uuid::Uuid>,
+    /// Spec 0007 Q3: on by default; `false` restricts the credential to `allowed_node_ids`.
+    #[serde(default = "enrolled_by_default")]
+    pub allow_enrolled_nodes: bool,
     pub secret_file: Option<PathBuf>,
     #[serde(default)]
     pub delivery_mode: Option<MaterialDeliveryMode>,
+}
+fn enrolled_by_default() -> bool {
+    true
+}
+impl CredentialConfig {
+    /// Spec 0007 Q3: every enrolled node, or only the listed ones when the flag is off.
+    /// Revoked nodes are refused by authentication and the offer fence, not here.
+    pub fn allows(&self, node: uuid::Uuid) -> bool {
+        self.allow_enrolled_nodes || self.allowed_node_ids.contains(&node)
+    }
 }
 impl std::fmt::Debug for CredentialConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,6 +48,7 @@ impl std::fmt::Debug for CredentialConfig {
             .field("kind", &self.kind)
             .field("allowed_backends", &self.allowed_backends)
             .field("allowed_node_ids", &self.allowed_node_ids)
+            .field("allow_enrolled_nodes", &self.allow_enrolled_nodes)
             .field("delivery_mode", &self.delivery_mode)
             .field(
                 "secret_file",
@@ -285,4 +299,34 @@ pub fn deserialize_registry<'de, D: serde::Deserializer<'de>>(
                 .map_err(serde::de::Error::custom)
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn credential(extra: serde_json::Value) -> CredentialConfig {
+        let mut v = serde_json::json!({
+            "credential": {
+                "profile": {"id":"test", "version":"1", "digest":"a".repeat(64)},
+                "provider":"test", "account_reference":"acct", "endpoint_reference":"endpoint",
+                "revision":3, "enabled":true, "provisionable":false
+            },
+            "allowed_node_ids": [uuid::Uuid::from_u128(1)],
+            "secret_file": null
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn allows_listed_or_enrolled_nodes() {
+        let (listed, other) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let default = credential(serde_json::json!({}));
+        assert!(default.allow_enrolled_nodes && default.allows(other));
+        let restricted = credential(serde_json::json!({"allow_enrolled_nodes": false}));
+        assert!(restricted.allows(listed) && !restricted.allows(other));
+    }
 }

@@ -209,7 +209,7 @@ pub(super) async fn report(
                     && c.credential.revision == presence.credential_revision
             })
             .ok_or_else(|| bad("unknown exact credential revision"))?;
-        if !configured.allowed_node_ids.contains(&node.id) {
+        if !configured.allows(node.id) {
             return Err(AppError::Forbidden(
                 "credential not authorized for node".into(),
             ));

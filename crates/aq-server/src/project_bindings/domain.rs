@@ -44,6 +44,12 @@ pub struct ProjectCeilings {
     pub currency: Option<String>,
     pub require_hard_cost_enforcement: bool,
 }
+fn enrolled_by_default() -> bool {
+    true
+}
+fn is_true(v: &bool) -> bool {
+    *v
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBinding {
@@ -62,6 +68,9 @@ pub struct ProjectBinding {
     pub allowed_intelligence_profiles: Vec<String>,
     pub allowed_execution_profiles: Vec<String>,
     pub allowed_node_ids: Vec<Uuid>,
+    /// Spec 0007 Q3: on by default; `false` restricts the binding to its listed nodes and groups.
+    #[serde(default = "enrolled_by_default", skip_serializing_if = "is_true")]
+    pub allow_enrolled_nodes: bool,
     pub allowed_worker_groups: Vec<String>,
     pub allowed_environments: Vec<String>,
     pub policy: Reference,
@@ -223,7 +232,9 @@ impl ProjectBinding {
         ids(&self.allowed_node_ids, 256)?;
         labels(&self.allowed_worker_groups, 32)?;
         require(
-            !self.allowed_node_ids.is_empty() || !self.allowed_worker_groups.is_empty(),
+            self.allow_enrolled_nodes
+                || !self.allowed_node_ids.is_empty()
+                || !self.allowed_worker_groups.is_empty(),
             "no eligible worker identities",
         )?;
         for group in &self.allowed_worker_groups {
@@ -281,7 +292,8 @@ impl ProjectBinding {
         Ok(())
     }
     pub fn eligible_node(&self, config: &ProjectConfig, node: Uuid) -> bool {
-        self.allowed_node_ids.contains(&node)
+        self.allow_enrolled_nodes
+            || self.allowed_node_ids.contains(&node)
             || self.allowed_worker_groups.iter().any(|g| {
                 config
                     .worker_groups
@@ -426,6 +438,7 @@ pub(crate) mod tests {
             allowed_intelligence_profiles: vec!["engineering@1".into()],
             allowed_execution_profiles: vec!["confined-development@1".into()],
             allowed_node_ids: vec![Uuid::from_u128(4)],
+            allow_enrolled_nodes: false,
             allowed_worker_groups: vec![],
             allowed_environments: vec!["confined-worktree".into()],
             policy: Reference {
@@ -656,6 +669,26 @@ pub(crate) mod tests {
             )
             .eligible
         );
+    }
+    #[test]
+    fn enrolled_flag_makes_every_node_eligible_and_validates_without_lists() {
+        let (config, stranger) = (ProjectConfig::default(), Uuid::from_u128(99));
+        let mut b = binding();
+        assert!(!b.eligible_node(&config, stranger));
+        b.allow_enrolled_nodes = true;
+        b.allowed_node_ids.clear();
+        assert!(b.eligible_node(&config, stranger));
+        assert!(b.validate(&config).is_ok());
+        b.allow_enrolled_nodes = false;
+        assert!(b.validate(&config).is_err());
+    }
+    #[test]
+    fn binding_without_flag_serializes_unchanged() {
+        let mut v = serde_json::to_value(binding()).unwrap();
+        v.as_object_mut().unwrap().remove("allow_enrolled_nodes");
+        let b: ProjectBinding = serde_json::from_value(v.clone()).unwrap();
+        assert!(b.allow_enrolled_nodes);
+        assert_eq!(serde_json::to_value(&b).unwrap(), v);
     }
     #[test]
     fn request_fields_cannot_install_urls_credentials_or_worker_claimed_groups() {

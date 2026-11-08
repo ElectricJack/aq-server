@@ -84,8 +84,7 @@ pub async fn fence_locked(
             .credentials
             .get(index)
             .ok_or_else(invalid)?
-            .allowed_node_ids
-            .contains(&request.identity.node_id)
+            .allows(request.identity.node_id)
     {
         return Err(invalid());
     }

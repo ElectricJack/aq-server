@@ -205,7 +205,7 @@ pub async fn write_back(
         .ok_or_else(|| refused())?;
     if configured.kind != aq_selection::CredentialKind::SubscriptionLogin
         || !credential.enabled
-        || !configured.allowed_node_ids.contains(&auth.id())
+        || !configured.allows(auth.id())
     {
         return Err(refused());
     }
