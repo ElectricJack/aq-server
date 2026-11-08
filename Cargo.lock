@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "aq-selection"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aq-profiles",
  "aq-session-api",

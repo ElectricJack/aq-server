@@ -7,7 +7,7 @@ description = "Startup-owned intelligence configuration (moved out of the aq-ser
 
 [dependencies]
 aq-accounting = { path = "../aq-accounting", version = "=0.1.0" }
-aq-selection = { path = "../aq-selection", version = "=0.1.4" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

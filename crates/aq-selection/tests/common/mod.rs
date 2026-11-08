@@ -318,6 +318,7 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
             lineage,
             revision: 1,
             attempts_started: 0,
+            exempt_attempts: 0,
             last_attempt_id: None,
             elapsed_ms: Some(0),
             spent_microunits: None,

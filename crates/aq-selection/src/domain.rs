@@ -178,12 +178,20 @@ pub enum AccountingCompleteness {
     Incomplete,
     Unavailable,
 }
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BudgetSnapshot {
     pub lineage: TaskLineage,
     pub revision: u64,
     pub attempts_started: u32,
+    /// Started attempts that ended in an owner or service handoff (spec 0007
+    /// Q1): not charged to the policy's attempt limit. Zero is omitted, so
+    /// every earlier decision keeps its bytes and digest.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exempt_attempts: u32,
     pub last_attempt_id: Option<Uuid>,
     pub elapsed_ms: Option<u64>,
     pub spent_microunits: Option<u64>,

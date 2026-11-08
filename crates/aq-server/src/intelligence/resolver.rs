@@ -28,8 +28,14 @@ pub struct ResolveRequest {
 #[serde(deny_unknown_fields)]
 pub struct ReplacementBudget {
     pub attempts_started: u32,
+    /// Owner and service handoffs (spec 0007 Q1); not charged to the policy.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exempt_attempts: u32,
     pub elapsed_ms: u64,
     pub evidence: ReplacementEvidence,
+}
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 fn artifact(id: &str) -> ArtifactRef {
     ArtifactRef {
@@ -151,6 +157,7 @@ async fn resolve_with_principal(
         Some(r)
             if r.attempts_started == count.started
                 && r.attempts_started > 0
+                && r.exempt_attempts <= r.attempts_started
                 && r.evidence.lineage == request.lineage =>
         {
             Some(r)
@@ -250,6 +257,7 @@ async fn resolve_with_principal(
             lineage: request.lineage,
             revision: count.budget_revision(),
             attempts_started: count.started,
+            exempt_attempts: replacement.as_ref().map_or(0, |r| r.exempt_attempts),
             last_attempt_id: replacement
                 .as_ref()
                 .map(|r| r.evidence.predecessor_attempt_id),

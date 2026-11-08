@@ -199,6 +199,7 @@ async fn selection(
         .map(|r| {
             Ok::<_, AppError>(ReplacementBudget {
                 attempts_started: r.attempts_started,
+                exempt_attempts: r.exempt_attempts,
                 elapsed_ms: r.elapsed_ms,
                 evidence: r.evidence(lineage.clone(), now(state)?)?,
             })
