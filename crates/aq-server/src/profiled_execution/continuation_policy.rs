@@ -28,6 +28,11 @@ fn decode(
     body: &[u8],
     budget: BudgetSnapshot,
 ) -> Result<PinnedPolicy, AppError> {
+    let policy = policy_of(&reference, body)?;
+    let remaining_lineage_ms = remaining(&policy, &budget)?;
+    Ok((policy, remaining_lineage_ms))
+}
+fn policy_of(reference: &ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, AppError> {
     if body.is_empty()
         || body.len() > 2_097_152
         || aq_admission::Digest::of(body) != reference.digest
@@ -44,9 +49,69 @@ fn decode(
     {
         return Err(refused());
     }
-    let policy = definition.selection_policy.ok_or_else(|| refused())?;
-    let remaining_lineage_ms = remaining(&policy, &budget)?;
-    Ok((policy, remaining_lineage_ms))
+    definition.selection_policy.ok_or_else(|| refused())
+}
+/// The attempt's one retained definition body for `reference`, verified.
+async fn pinned_body(
+    conn: &mut sqlx::PgConnection,
+    attempt: uuid::Uuid,
+    reference: &ArtifactRef,
+    lock: &str,
+) -> Result<Vec<u8>, AppError> {
+    let rows=sqlx::query(&format!("SELECT a.descriptor,a.body FROM profiled_launch_artifacts x JOIN admission_artifacts a USING(artifact_id) WHERE x.attempt_id=$1 AND a.descriptor->>'kind'='definition' AND a.descriptor#>>'{{artifact,id}}'=$2 AND a.descriptor#>>'{{artifact,version}}'=$3 ORDER BY a.artifact_id LIMIT 2{lock}")).bind(attempt).bind(reference.id.as_str()).bind(reference.version.as_str()).fetch_all(&mut *conn).await.map_err(|_|AppError::Internal)?;
+    if rows.len() != 1 {
+        return Err(refused());
+    }
+    let descriptor: RetainedArtifact =
+        serde_json::from_value(rows[0].get("descriptor")).map_err(|_| refused())?;
+    let body: Vec<u8> = rows[0]
+        .get::<Option<Vec<u8>>, _>("body")
+        .ok_or_else(|| refused())?;
+    if descriptor.artifact != *reference {
+        return Err(refused());
+    }
+    descriptor
+        .verify(&body, descriptor.retained_at_ms)
+        .map_err(|_| refused())?;
+    Ok(body)
+}
+/// The predecessor's pinned policy limits `(max_attempts,
+/// max_lineage_elapsed_ms)`; `None` when they cannot be read (spec 0007 Q1).
+pub(crate) async fn pinned_limits(
+    pool: &sqlx::PgPool,
+    attempt: uuid::Uuid,
+) -> Result<Option<(u32, u64)>, AppError> {
+    let mut conn = pool.acquire().await.map_err(|_| AppError::Internal)?;
+    let reference: Option<Value> = sqlx::query_scalar(
+        "SELECT launch_manifest->'intelligence_profile' FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|_| AppError::Internal)?;
+    let Some(Ok(reference)) = reference.map(serde_json::from_value::<ArtifactRef>) else {
+        return Ok(None);
+    };
+    let Ok(body) = pinned_body(&mut conn, attempt, &reference, "").await else {
+        return Ok(None);
+    };
+    Ok(policy_of(&reference, &body)
+        .ok()
+        .map(|p| (p.max_attempts, p.max_lineage_elapsed_ms)))
+}
+/// Mirrors aq-selection `global_budget` for a successor's charged attempts.
+pub(crate) fn pinned_block(
+    limits: (u32, u64),
+    charged: u32,
+    elapsed_ms: u64,
+) -> Option<&'static str> {
+    if charged >= limits.0 {
+        Some("replacement_policy_retry_budget_exhausted")
+    } else if elapsed_ms >= limits.1 {
+        Some("replacement_policy_time_budget_exhausted")
+    } else {
+        None
+    }
 }
 pub(crate) async fn load_locked(
     tx: &mut Transaction<'_, Postgres>,
@@ -68,21 +133,13 @@ pub(crate) async fn load_locked(
     {
         return Err(refused());
     }
-    let rows=sqlx::query("SELECT a.descriptor,a.body FROM profiled_launch_artifacts x JOIN admission_artifacts a USING(artifact_id) WHERE x.attempt_id=$1 AND a.descriptor->>'kind'='definition' AND a.descriptor#>>'{artifact,id}'=$2 AND a.descriptor#>>'{artifact,version}'=$3 ORDER BY a.artifact_id LIMIT 2 FOR SHARE OF a,x").bind(binding.attempt_id).bind(reference.id.as_str()).bind(reference.version.as_str()).fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
-    if rows.len() != 1 {
-        return Err(refused());
-    }
-    let descriptor: RetainedArtifact =
-        serde_json::from_value(rows[0].get("descriptor")).map_err(|_| refused())?;
-    let body: Vec<u8> = rows[0]
-        .get::<Option<Vec<u8>>, _>("body")
-        .ok_or_else(|| refused())?;
-    if descriptor.artifact != reference {
-        return Err(refused());
-    }
-    descriptor
-        .verify(&body, descriptor.retained_at_ms)
-        .map_err(|_| refused())?;
+    let body = pinned_body(
+        &mut *tx,
+        binding.attempt_id,
+        &reference,
+        " FOR SHARE OF a,x",
+    )
+    .await?;
     decode(reference, &body, budget)
 }
 #[cfg(test)]
@@ -128,6 +185,19 @@ mod tests {
         assert!(decode(reference.clone(), &body, budget.clone()).is_err());
         budget.elapsed_ms = Some(u64::MAX);
         assert!(decode(reference, &body, budget).is_err());
+    }
+    #[test]
+    fn pinned_block_mirrors_the_policy_retry_and_time_limits() {
+        let limits = (2, 3_600_000);
+        assert_eq!(pinned_block(limits, 1, 3_599_999), None);
+        assert_eq!(
+            pinned_block(limits, 2, 0),
+            Some("replacement_policy_retry_budget_exhausted")
+        );
+        assert_eq!(
+            pinned_block(limits, 1, 3_600_000),
+            Some("replacement_policy_time_budget_exhausted")
+        );
     }
     #[test]
     fn mismatched_definition_and_unsupported_legacy_policy_never_get_defaults() {

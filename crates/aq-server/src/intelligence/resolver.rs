@@ -23,6 +23,14 @@ pub struct ResolveRequest {
     /// attempt; legacy history without it stays conservatively unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement: Option<ReplacementBudget>,
+    /// False only for a scheduling poll: a refused selection is then not
+    /// recorded, so refused polls cannot fill the decision table (spec 0007).
+    /// Not part of the request payload or its digest.
+    #[serde(skip, default = "yes")]
+    pub record_refused: bool,
+}
+fn yes() -> bool {
+    true
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -315,6 +323,10 @@ async fn resolve_with_principal(
         .lookup(&mut tx, request.operation_id, &payload)
         .await?
     {
+        return Ok(decision);
+    }
+    if !request.record_refused && decision.outcome.resolved.is_none() {
+        tx.rollback().await.map_err(db)?;
         return Ok(decision);
     }
     let row=sqlx::query("SELECT count(*) AS entries,COALESCE(sum(pg_column_size(decision)),0)::BIGINT AS bytes FROM intelligence_decisions").fetch_one(&mut *tx).await.map_err(db)?;

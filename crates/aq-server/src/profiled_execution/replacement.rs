@@ -390,11 +390,23 @@ pub async fn assess_task_for_revision(
         return Ok(assessment);
     };
     let pinned = predecessor_project_revision(&state.store.pool, replacement.predecessor).await?;
-    Ok(if pinned == Some(project_revision) {
-        assessment
-    } else {
-        Assessment::Blocked("replacement_project_revision_changed")
-    })
+    if pinned != Some(project_revision) {
+        return Ok(Assessment::Blocked("replacement_project_revision_changed"));
+    }
+    // Spec 0007 Q1: a successor the predecessor's pinned selection policy
+    // would refuse is skipped here, so it never fails the poll.
+    let limits =
+        super::continuation_policy::pinned_limits(&state.store.pool, replacement.predecessor)
+            .await?;
+    let charged = replacement.attempts_started - replacement.exempt_attempts;
+    Ok(
+        match limits.and_then(|l| {
+            super::continuation_policy::pinned_block(l, charged, replacement.elapsed_ms)
+        }) {
+            Some(reason) => Assessment::Blocked(reason),
+            None => assessment,
+        },
+    )
 }
 
 /// The project revision pinned by an attempt's linked source export request.

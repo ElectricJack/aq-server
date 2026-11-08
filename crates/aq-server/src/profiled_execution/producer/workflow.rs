@@ -213,9 +213,24 @@ async fn selection(
             project: compiled.frozen.clone(),
             compositions: compiled.candidates.clone(),
             replacement,
+            record_refused: false,
         },
     )
     .await
+}
+/// Spec 0007 Q1 backstop: selection refused a successor. That is no offer this
+/// poll, never a refused poll; a first attempt keeps the refusal.
+fn refused_successor(
+    decision: &resolver::Decision,
+    task: &aq_admission::TaskRevision,
+    replacement: Option<&replacement::Replacement>,
+) -> bool {
+    let (None, Some(r)) = (&decision.outcome.resolved, replacement) else {
+        return false;
+    };
+    let reasons = &decision.outcome.reason_codes;
+    tracing::warn!(task_id = %task.task_id, predecessor = %r.predecessor, ?reasons, "replacement refused by selection; no offer this poll");
+    true
 }
 /// The commit frozen into the export operation key. An immutable policy keeps
 /// its historical key; a named ref adds the commit it resolved to at offer
@@ -483,6 +498,9 @@ async fn offers(
             .node,
     )?;
     let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
+    if refused_successor(&decision, &task, replacement.as_ref()) {
+        return Ok(page);
+    }
     let selected = decision
         .outcome
         .resolved
@@ -594,6 +612,9 @@ async fn offers(
     let compiled =
         on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
     let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
+    if refused_successor(&decision, &task, replacement.as_ref()) {
+        return Ok(page);
+    }
     let source = if replacement.is_some() {
         on_heap(|| {
             source::observe_retained(state, &compiled.frozen, &policy_record, token.request())

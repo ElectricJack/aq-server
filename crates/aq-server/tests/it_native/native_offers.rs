@@ -343,3 +343,70 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(offers(body), 1);
 }
+
+fn poll_offers(body: &Value) -> Vec<aq_admission::startup::NativeOffer> {
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(body).unwrap()).unwrap() else {
+        panic!("{body}")
+    };
+    page.offers
+}
+
+/// Spec 0007 Q1 (Review Focus 7): a successor the predecessor's pinned policy
+/// refuses is skipped; the poll answers 200 and offers the next ready task.
+#[tokio::test]
+async fn refused_successor_is_skipped_and_other_work_is_offered() {
+    let mut c = setup().await;
+    common::native_offer::pin_policy(&mut c, |p| p.max_attempts = 1).await;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let first = poll_offers(&body).remove(0);
+    let t1 = c.env.lineage.task_id;
+    assert_eq!(first.offered.offer.manifest.bindings.task_id, t1);
+    common::native_offer::fail_and_release(&c, first.offered.offer.binding.attempt_id).await;
+    c.mode.store(7, Ordering::SeqCst);
+    let (status, body) = poll(&c).await;
+    assert_eq!(
+        status, 200,
+        "a refused successor never fails the poll: {body}"
+    );
+    let offers = poll_offers(&body);
+    assert_eq!(offers.len(), 1, "{body}");
+    assert_eq!(
+        offers[0].offered.offer.manifest.bindings.task_id,
+        c.second_task
+    );
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        poll_offers(&body)
+            .iter()
+            .all(|o| o.offered.offer.manifest.bindings.task_id != t1)
+    );
+}
+
+/// A refused poll selection (no fresh availability observation) writes no
+/// decision row: the table is capped and polls must not fill it.
+#[tokio::test]
+async fn refused_poll_selection_records_no_decision() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let decisions = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM intelligence_decisions")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    let before = decisions().await;
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert!(poll_offers_or_none(status, &body), "{status} {body}");
+    }
+    assert_eq!(decisions().await, before);
+}
+fn poll_offers_or_none(status: axum::http::StatusCode, body: &Value) -> bool {
+    status == 409 || (status == 200 && poll_offers(body).is_empty())
+}
