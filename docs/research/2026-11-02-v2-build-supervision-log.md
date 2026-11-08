@@ -1691,3 +1691,10 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - aq-dashboard #85 (9664a5e6, re-pinned to f68684fb).
 - Dispatched A1 live acceptance on aq-ms1 (rebuild server, dashboard and worker; browser at 1440 and 390; one real agent attempt for the terminal check). The Windows host-load probe is NOT installed pending owner approval.
 - aq-dashboard `RouteError.test` "a failed chunk reloads once automatically" flaked twice in CI on #85. Per W78, dispatched a root-cause fix (`fix/routeerror-flake`).
+- **00:43:** swarm phase 2 A1 live acceptance on aq-ms1. The stack was rebuilt from main (server e44c8024, dashboard 9664a5e, worker 05390a5); migration 0100 applied and machine reports are flowing.
+  - The record stays open; evidence is in aq-dashboard #86.
+  - **Blocking:**
+    - D1: the swarm counts stopped attempts that still hold their task as running agents (5 shown, overview says 0);
+    - D2: tree keyboard focus is invisible and doesn't pan into view.
+  - **Bigger gap:** the Claude docker-local setup disables terminal input, so no live agent can be controlled, though spec 0007 §5.4 requires it. It is added to the phase 1 plan.
+  - Dispatched the D1 server fix and the D2 dashboard fix (plus D3, D4, D6 and pan-to-selection) as Sonnet tasks.
