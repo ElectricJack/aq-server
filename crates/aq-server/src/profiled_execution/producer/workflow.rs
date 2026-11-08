@@ -219,6 +219,10 @@ async fn selection(
     )
     .await
 }
+/// Review I5: a poll skips at most MAX_SKIPPED refused successors.
+fn skips_spent(skipped: &std::collections::BTreeSet<Uuid>) -> bool {
+    skipped.len() >= MAX_SKIPPED
+}
 /// Spec 0007 Q1 backstop: selection refused a successor. That is no offer this
 /// poll, never a refused poll; a first attempt keeps the refusal.
 /// A refused replacement joins `skipped`: the poll goes on without it.
@@ -425,7 +429,7 @@ async fn offers(
     // goes on with the next eligible task, at most MAX_SKIPPED times a poll.
     let mut skipped = std::collections::BTreeSet::new();
     loop {
-        if skipped.len() > MAX_SKIPPED {
+        if skips_spent(&skipped) {
             return Ok(page);
         }
         let mut chosen = None;
@@ -837,6 +841,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_poll_skips_at_most_max_skipped_refused_successors() {
+        let mut skipped = std::collections::BTreeSet::new();
+        while !skips_spent(&skipped) {
+            skipped.insert(Uuid::new_v4());
+        }
+        assert_eq!(skipped.len(), MAX_SKIPPED);
+    }
     #[test]
     fn named_ref_resolves_to_exact_commit_at_offer() {
         let project = Uuid::from_u128(7);
