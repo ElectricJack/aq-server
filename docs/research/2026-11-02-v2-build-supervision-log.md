@@ -1698,3 +1698,16 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - D2: tree keyboard focus is invisible and doesn't pan into view.
   - **Bigger gap:** the Claude docker-local setup disables terminal input, so no live agent can be controlled, though spec 0007 §5.4 requires it. It is added to the phase 1 plan.
   - Dispatched the D1 server fix and the D2 dashboard fix (plus D3, D4, D6 and pan-to-selection) as Sonnet tasks.
+- **01:49:** A1 defect fixes merged.
+  - **aq-server #113 (91be1177):** `AuthorityView::running_at` is now shared by the overview and the swarm, so stopped attempts no longer count as running.
+  - **aq-dashboard #88 (30b13ce1):** visible focus, pan-on-keyboard-focus and pan to `?select=`, pill harness label and tooltip, "unknown" usage, phone label alignment.
+  - **aq-dashboard #87 (7e06dc72):** RouteError flake root-caused. The test asserted before the passive effect ran; it was 2/50 failing under `taskset -c 0` and is now 0/50.
+  - Dispatched an A1 recheck on a rebuilt aq-ms1.
+- **Phase 1 progress:**
+  - aq-worker #48 (W1, protocol 0.1.1) merged.
+  - The worker lane `swarm/p1-worker` has W0 and W2–W4 done. W4's salvage needed a new journal event, `salvage_result`, because result ownership can't be rebuilt after a restart.
+  - Rulings:
+    - W9 posts the marker's reason, so deliberate stops stay exempt;
+    - salvage refuses `sk-ant-` token shapes;
+    - the worker lib has 29 lines of headroom, so make room by moving code into crates.
+  - W5–W9 are running. The server lane `swarm/p1-server` S0–S6 is running, and S5 carries the #113 follow-up: the swarm read no longer takes a per-attempt locking read on every poll.
