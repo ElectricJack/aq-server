@@ -546,17 +546,19 @@ async fn offers(
             }
             None => None,
         };
-        let (token, fact) =
-            if let Some(replacement) = replacement.as_ref().filter(|_| handoff.is_none()) {
-                // Reuse the original verified export, including its bundle bytes and
-                // operation identity. Never resolve a moving ref or re-export on retry.
-                on_heap(|| replacement::retained_source(state, task.task_id, replacement))
-                    .await?
-                    .into_parts()
-            } else {
-                // A first attempt freezes the configured source at offer time; a
-                // handoff successor freezes the saved commit as a fresh export (a new
-                // operation, never the predecessor's export).
+        let (token, fact) = if let Some(replacement) =
+            replacement.as_ref().filter(|_| handoff.is_none())
+        {
+            // Reuse the original verified export, including its bundle bytes and
+            // operation identity. Never resolve a moving ref or re-export on retry.
+            on_heap(|| replacement::retained_source(state, task.task_id, replacement))
+                .await?
+                .into_parts()
+        } else {
+            // A first attempt freezes the configured source at offer time; a
+            // handoff successor freezes the saved commit as a fresh export (a new
+            // operation, never the predecessor's export).
+            let fresh = async {
                 let observed = match &handoff {
                     Some(base) => {
                         on_heap(|| {
@@ -582,7 +584,8 @@ async fn offers(
                         .map_err(|_| refused())?,
                     frozen,
                 )?;
-                match on_heap(|| reservation(state, &compiled, operation, observed)).await? {
+                let reserved = on_heap(|| reservation(state, &compiled, operation, observed));
+                Ok(match reserved.await? {
                     source_exports::Reservation::Pending(token) => {
                         let fact = on_heap(|| profiled_base::verify_export(state, &token)).await?;
                         on_heap(|| source_exports::finalize(state, &token, &fact)).await?;
@@ -598,8 +601,20 @@ async fn offers(
                         )?;
                         (reservation, fact)
                     }
+                })
+            }
+            .await;
+            match fresh {
+                // Q1 (live acceptance D5): a refused handoff export skips the task.
+                Err(error @ AppError::Conflict(_)) if handoff.is_some() => {
+                    let predecessor = handoff.as_ref().map(|b| b.predecessor);
+                    tracing::warn!(task_id = %task.task_id, ?predecessor, ?error, "handoff successor export refused; skipped this poll");
+                    skipped.insert(task.task_id);
+                    continue;
                 }
-            };
+                fresh => fresh?,
+            }
+        };
         let source_operation = token.request().operation_id;
         // External export can consume the original graph/selection freshness. Read
         // actual owners again; a task CAS/content change refuses this original task.
