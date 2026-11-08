@@ -13,7 +13,10 @@ CREATE TABLE lost_attempt_releases (
     OR (proof_kind = 'cgroup_teardown' AND reason = 'lost_after_crash')),
   charged BOOLEAN NOT NULL CHECK (charged = (proof_kind = 'cgroup_teardown')),
   receipt_digest TEXT NOT NULL CHECK (receipt_digest ~ '^[0-9a-f]{64}$'),
-  recorded_at TIMESTAMPTZ NOT NULL
+  recorded_at TIMESTAMPTZ NOT NULL,
+  -- Why B4 still holds the task after the release (for example an exhausted
+  -- budget); NULL once it is released for the retry. The node stays busy.
+  held_reason TEXT CHECK (held_reason IS NULL OR length(held_reason) BETWEEN 1 AND 256)
 );
 CREATE INDEX lost_attempt_releases_node ON lost_attempt_releases(node_id);
 -- A started attempt's hot stop becomes 'stopped' only with its original stopped

@@ -13,7 +13,7 @@ use aq_server::{
 use aq_session_protocol::ProfiledGrant;
 use common::{
     native_started::context,
-    profiled::{Fixture, NOW},
+    profiled::{Fixture, NOW, insert_typed},
     source_exports::{setup, synthetic_fact},
 };
 use serde_json::{Value, json};
@@ -27,12 +27,19 @@ struct Held {
     f: Fixture,
     pool: PgPool,
     attempt: Uuid,
+    /// The verified input export and its retention fact, linked again by a successor.
+    export: (
+        source_exports::ReservedExport,
+        aq_server::source_retention::profiled_base::VerifiedExport,
+        Value,
+    ),
     _dir: tempfile::TempDir,
 }
 /// A granted attempt whose host was lost: its task held, stop unknown to the server
-/// (`replacement_prior_execution_uncertain`), its input export linked and its launch clock
-/// known. With `started`, a Started record names the guardian's boot.
-async fn held(started: bool) -> Held {
+/// (`replacement_prior_execution_uncertain`), its input export linked (unless `link` is
+/// false) and its launch clock known. With `started`, a Started record names the guardian's
+/// boot.
+async fn held_with(started: bool, link: bool) -> Held {
     let (f, request, dir) = setup().await;
     let pool = f.db.pool().await;
     let source_exports::Reservation::Pending(token) =
@@ -47,28 +54,58 @@ async fn held(started: bool) -> Held {
         .await
         .unwrap();
     let original = fact.canonical_bytes().unwrap();
-    let retention = serde_json::from_value(json!({"request_digest":token.request_digest(),
+    let retention = json!({"request_digest":token.request_digest(),
         "export_operation_id":request.operation_id,
         "inspection":serde_json::from_slice::<Value>(&original).unwrap()["retention_inspection"],
-        "observed_at_ms":NOW,"expires_at_ms":NOW+30000}))
+        "observed_at_ms":NOW,"expires_at_ms":NOW+30000});
+    let attempt = f.profiled.offer.binding.attempt_id;
+    let mut h = Held {
+        f,
+        pool,
+        attempt,
+        export: (token, fact, retention),
+        _dir: dir,
+    };
+    if link {
+        link_export(&h).await;
+    }
+    running(&h, NOW - 9_000, started).await;
+    h.attempt = attempt;
+    h
+}
+async fn held(started: bool) -> Held {
+    held_with(started, true).await
+}
+async fn link_export(h: &Held) {
+    let mut tx = h.pool.begin().await.unwrap();
+    let session = h.f.profiled.offer.binding.session.clone();
+    let retention = serde_json::from_value(h.export.2.clone()).unwrap();
+    source_exports::link_locked(
+        &h.f.state,
+        &mut tx,
+        &session,
+        &h.export.0,
+        &h.export.1,
+        &retention,
+    )
+    .await
     .unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    let session = f.profiled.offer.binding.session.clone();
-    source_exports::link_locked(&f.state, &mut tx, &session, &token, &fact, &retention)
-        .await
-        .unwrap();
     tx.commit().await.unwrap();
+}
+/// Makes the fixture's current attempt granted and running (offered at `offered_at_ms`).
+async fn running(h: &Held, offered_at_ms: u64, started: bool) {
+    let (f, pool) = (&h.f, &h.pool);
     let attempt = f.profiled.offer.binding.attempt_id;
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
     sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
-        .bind(attempt).bind(json!(hot)).execute(&pool).await.unwrap();
+        .bind(attempt).bind(json!(hot)).execute(pool).await.unwrap();
     hot.status = Status::Preparing;
     hot.owner = Some(LaunchOwner {
         guardian_id: Uuid::new_v4(),
         launch_id: Uuid::new_v4(),
         reservation_id: Uuid::new_v4(),
     });
-    set_hot(&pool, attempt, &hot).await;
+    set_hot(pool, attempt, &hot).await;
     hot.status = Status::Granted;
     hot.stop = Stop::Running;
     hot.execution_deadline_ms = Some(NOW + 60_000);
@@ -77,7 +114,7 @@ async fn held(started: bool) -> Held {
         grant_id: Uuid::new_v4(),
         expires_at_ms: NOW + 1_000,
     });
-    set_hot(&pool, attempt, &hot).await;
+    set_hot(pool, attempt, &hot).await;
     // Synthetic history rows, written with the storage guards bypassed.
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET LOCAL session_replication_role=replica")
@@ -86,7 +123,7 @@ async fn held(started: bool) -> Held {
         .unwrap();
     sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',$2) WHERE attempt_id=$1")
         .bind(attempt)
-        .bind(json!({"offered":{"clock":{"server_time_ms":NOW - 5_000}}}))
+        .bind(json!({"offered":{"clock":{"server_time_ms":offered_at_ms}}}))
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -100,12 +137,46 @@ async fn held(started: bool) -> Held {
             .execute(&mut *tx).await.unwrap();
     }
     tx.commit().await.unwrap();
-    Held {
-        f,
-        pool,
-        attempt,
-        _dir: dir,
-    }
+}
+/// The task's next attempt (after the current one was released), sharing its input export,
+/// granted and running.
+async fn successor(h: &mut Held, generation: u64, offered_at_ms: u64) {
+    let mut spec: aq_admission::execution_spec::ProfiledExecutionSpec = serde_json::from_value(
+        sqlx::query_scalar::<_, Value>(
+            "SELECT execution_spec FROM profiled_launches WHERE attempt_id=$1",
+        )
+        .bind(h.attempt)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let f = &mut h.f;
+    let attempt = Uuid::new_v4();
+    let session = aq_session_protocol::SessionIdentity::Remote {
+        node_id: f.node.node_id,
+        boot_id: f.node.boot_id,
+        attempt_id: attempt,
+        assignment_generation: generation,
+        session_id: Uuid::new_v4(),
+    };
+    let offer = &mut f.profiled.offer;
+    offer.binding.session = session.clone();
+    offer.binding.attempt_id = attempt;
+    offer.binding.assignment_generation = generation;
+    offer.binding.offer_id = Uuid::new_v4();
+    offer.manifest.bindings.session = session;
+    offer.manifest.bindings.attempt_id = attempt;
+    offer.manifest.bindings.assignment_generation = generation;
+    offer.binding.launch_manifest_digest =
+        aq_session_protocol::canonical_digest(&offer.manifest).unwrap();
+    spec.lifecycle = aq_admission::transport::lifecycle_binding(offer).unwrap();
+    offer.binding.execution_spec_digest = spec.artifact().unwrap().digest;
+    f.decision = Uuid::new_v4();
+    insert_typed(f, &spec).await;
+    link_export(h).await;
+    running(h, offered_at_ms, false).await;
+    h.attempt = attempt;
 }
 /// A synthetic hot projection, written with the storage guards bypassed (a real running
 /// native attempt has the Started history these rows stand in for).
@@ -118,6 +189,20 @@ async fn set_hot(pool: &PgPool, attempt: Uuid, hot: &HotState) {
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(attempt)
         .bind(json!(hot))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+/// Runs `sql` (one bound attempt id) with the storage guards bypassed.
+async fn raw(pool: &PgPool, sql: &str, attempt: Uuid) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(sql)
+        .bind(attempt)
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -146,6 +231,12 @@ async fn release(h: &Held, proof: StopProof) -> Result<aq_protocol::LostAttemptR
     let auth = context(&h.f).await;
     (lost::release(&h.f.state, &auth, &request(h.attempt, proof)).await)
         .map_err(|e| format!("{e:?}"))
+}
+async fn releases(h: &Held) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM lost_attempt_releases")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap()
 }
 /// Whether the replacement history charges the attempt (an exempt prior is not charged).
 async fn charged(h: &Held) -> bool {
@@ -287,4 +378,118 @@ async fn a_lost_release_is_refused_unless_proven_owned_and_held() {
     let h = held(false).await;
     let e = release(&h, rebooted()).await.unwrap_err();
     assert!(e.contains("lost_attempt_boot_unknown"), "{e}");
+}
+
+/// #117 review I1: three crash releases of one lineage. The first two are retried; the third
+/// exhausts the retry budget, so B4 holds the task: the release answers `held` with the
+/// reason, records it for the owner, and the node is cleanly busy (a poll offers nothing)
+/// instead of failing every poll.
+#[tokio::test]
+async fn a_budget_held_lost_attempt_keeps_the_node_cleanly_busy() {
+    let mut h = held(false).await;
+    let auth = context(&h.f).await;
+    for (generation, offered) in [(2, NOW - 6_000), (3, NOW - 3_000)] {
+        let released = release(&h, torn_down()).await.unwrap();
+        assert!(released.released, "{released:?}");
+        successor(&mut h, generation, offered).await;
+    }
+    let held = release(&h, torn_down()).await.unwrap();
+    assert_eq!(
+        (held.charged, held.released, held.held.as_deref()),
+        (true, false, Some("lineage_retry_budget_exhausted"))
+    );
+    let reason: Option<String> =
+        sqlx::query_scalar("SELECT held_reason FROM lost_attempt_releases WHERE attempt_id=$1")
+            .bind(h.attempt)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(reason.as_deref(), Some("lineage_retry_budget_exhausted"));
+    let busy = aq_server::test_support::node_busy(&h.f.state, &auth).await;
+    assert_eq!(
+        busy.map_err(|e| format!("{e:?}")),
+        Ok(true),
+        "busy, not a 409"
+    );
+    // A replay answers the same held state.
+    assert_eq!(release(&h, torn_down()).await.unwrap(), held);
+}
+
+/// #117 review I2: refused, with nothing recorded, when the agent made an effect, when a
+/// result or stop is on record, and when no verified input export is linked.
+#[tokio::test]
+async fn a_lost_release_is_refused_with_effects_a_record_or_no_source() {
+    let h = held(true).await;
+    raw(&h.pool, "INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) SELECT gen_random_uuid(),$1,node_id,'{}','x','{}','{}','{}','queued',1,2 FROM execution_attempts WHERE attempt_id=$1", h.attempt).await;
+    let e = release(&h, torn_down()).await.unwrap_err();
+    assert!(e.contains("lost_attempt_effects_present"), "{e}");
+    let h = held(true).await;
+    raw(&h.pool, "INSERT INTO profiled_stopped_receipts(attempt_id,node_id,operation_id,request_bytes,request_digest,proof_bytes,proof_digest,receipt_bytes,before_record_revision,before_grant_revision) SELECT $1,node_id,gen_random_uuid(),'\x7b7d',encode(sha256('\x7b7d'),'hex'),'\x7b7d',encode(sha256('\x7b7d'),'hex'),'\x7b7d',1,1 FROM execution_attempts WHERE attempt_id=$1", h.attempt).await;
+    let e = release(&h, torn_down()).await.unwrap_err();
+    assert!(e.contains("lost_attempt_reported"), "{e}");
+    let h = held_with(true, false).await;
+    let e = release(&h, torn_down()).await.unwrap_err();
+    assert!(e.contains("lost_attempt_source_unknown"), "{e}");
+    assert_eq!(releases(&h).await, 0);
+}
+
+/// #117 review I2: the widened stopped-projection guard still refuses a stop that names a
+/// lost-attempt release when no release is recorded, or with another digest.
+#[tokio::test]
+async fn the_stopped_guard_refuses_an_unrecorded_or_mismatched_lost_release() {
+    let h = held(true).await;
+    let stop = |digest: &str| {
+        json!({"kind":"stopped","receipt":{"id":format!("aq.lost-attempt-release/{}", h.attempt),
+            "version":"1","digest":digest}})
+    };
+    let update = |digest: String| {
+        let pool = h.pool.clone();
+        let attempt = h.attempt;
+        let stop = stop(&digest);
+        async move {
+            sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(jsonb_set(state,'{stop}',$2),'{status}','\"finished\"') WHERE attempt_id=$1")
+                .bind(attempt).bind(stop).execute(&pool).await.map(drop).map_err(|e| e.to_string())
+        }
+    };
+    let digest = "a".repeat(64);
+    let e = update(digest.clone()).await.unwrap_err();
+    assert!(e.contains("native stopped projection requires"), "{e}");
+    sqlx::query("INSERT INTO lost_attempt_releases(attempt_id,node_id,proof_kind,proof,reason,charged,receipt_digest,recorded_at) SELECT $1,node_id,'cgroup_teardown','{}','lost_after_crash',TRUE,$2,now() FROM execution_attempts WHERE attempt_id=$1")
+        .bind(h.attempt).bind(&digest).execute(&h.pool).await.unwrap();
+    let e = update("b".repeat(64)).await.unwrap_err();
+    assert!(e.contains("native stopped projection requires"), "{e}");
+    update(digest).await.unwrap();
+}
+
+/// #117 review M2: an attempt never granted is refused (it is closed through the launch
+/// closure), and the ownership check comes before any replay (M1).
+#[tokio::test]
+async fn a_lost_release_refuses_an_ungranted_attempt_and_checks_ownership_first() {
+    let h = held(true).await;
+    let mut hot: HotState = serde_json::from_value(
+        sqlx::query_scalar::<_, Value>(
+            "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1",
+        )
+        .bind(h.attempt)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    hot.status = Status::Preparing;
+    hot.grant = None;
+    set_hot(&h.pool, h.attempt, &hot).await;
+    let e = release(&h, torn_down()).await.unwrap_err();
+    assert!(e.contains("lost_attempt_not_granted"), "{e}");
+    // A released attempt moved to another node: the replay is refused as not owned.
+    let h = held(true).await;
+    release(&h, torn_down()).await.unwrap();
+    raw(
+        &h.pool,
+        "UPDATE execution_attempts SET node_id=gen_random_uuid() WHERE attempt_id=$1",
+        h.attempt,
+    )
+    .await;
+    let e = release(&h, torn_down()).await.unwrap_err();
+    assert!(e.contains("attempt_not_owned"), "{e}");
 }

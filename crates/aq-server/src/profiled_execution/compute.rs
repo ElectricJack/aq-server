@@ -53,6 +53,11 @@ pub(crate) async fn busy_locked(
         else {
             return Ok(true);
         };
+        // A lost attempt whose task B4 still holds (D2 ruling C): busy, its reason recorded
+        // with the release; it has no phase terminal history to pin.
+        if receipt.id.as_str().starts_with("aq.lost-attempt-release/") {
+            return Ok(true);
+        }
         let pin = super::results::compute_stop_locked(tx, node, &binding, grant.grant_id, receipt)
             .await?;
         let valid: bool = sqlx::query_scalar("SELECT profiled_compute_stopped_valid($1,$2)")

@@ -34,6 +34,10 @@ pub async fn release(
     let mut tx = state.store.pool.begin().await.map_err(database)?;
     crate::worker_api::lock_current_node(&mut tx, node).await?;
     let mc = super::super::machine_api::mapped;
+    // Ownership first: a node learns nothing of another node's attempt, a replay included.
+    lost::owned_locked(&mut tx, node.id(), request)
+        .await
+        .map_err(mc)?;
     if let Some((proof, reason, charged)) = lost::release_of(&mut tx, attempt).await.map_err(mc)? {
         // A replay retries the release; another proof for the same attempt is refused.
         if proof != request.proof {
@@ -45,19 +49,6 @@ pub async fn release(
     let found = lost::check_locked(&mut tx, node.id(), request)
         .await
         .map_err(mc)?;
-    let reported: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1)",
-    )
-    .bind(attempt)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(database)?;
-    if reported {
-        return Err(refused(
-            "lost_attempt_reported: its result or stop is on record",
-        ));
-    }
     if closure::agent_effects_present(&mut tx, attempt).await? {
         return Err(refused(
             "lost_attempt_effects_present: an operator settles its effects",
@@ -154,6 +145,16 @@ async fn retry(
             _ => Some("lost_attempt_release_not_admitted".to_owned()),
         },
     };
+    // The node stays busy while B4 holds the task (`compute::busy_locked`); the reason is
+    // recorded for the owner.
+    let mut conn = state.store.pool.acquire().await.map_err(database)?;
+    let mc = super::super::machine_api::mapped;
+    lost::record_held(&mut conn, attempt, held.as_deref())
+        .await
+        .map_err(mc)?;
+    if let Some(why) = &held {
+        tracing::warn!(%attempt, held = why, "lost attempt failed; its task stays held");
+    }
     Ok(LostAttemptReleased {
         schema_version: 1,
         attempt_id: attempt,

@@ -42,24 +42,45 @@ pub async fn release_of(
     Ok(Some((proof, reason, row.get("charged"))))
 }
 
-/// Checks a release request under the caller's transaction (`FOR UPDATE` on the attempt):
-/// - a non-guardian proof whose facts are well formed;
-/// - the attempt is this node's;
-/// - it still holds its task with no known stop (`replacement_prior_execution_uncertain`);
-/// - a reboot proof names the boot the guardian recorded in the attempt's Started report.
-pub async fn check_locked(
+/// The checks that come first, before anything about the attempt is revealed (a replay
+/// included), under the caller's transaction (`FOR UPDATE` on the attempt): the request's
+/// shape, a non-guardian proof, and that the attempt is this node's.
+pub async fn owned_locked(
     conn: &mut PgConnection,
     node: Uuid,
     request: &LostAttemptRelease,
-) -> Result<Lost, Error> {
+) -> Result<LostReason, Error> {
     if request.schema_version != 1 {
         return Err(Error::Invalid("schema_version"));
     }
     let reason = LostReason::of(&request.proof).ok_or(Error::Invalid(
         "lost_attempt_guardian_proof: a guardian's own stop is reported as stopped",
     ))?;
+    let owner: Option<Uuid> =
+        sqlx::query_scalar("SELECT node_id FROM execution_attempts WHERE attempt_id=$1 FOR UPDATE")
+            .bind(request.attempt_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    match owner == Some(node) {
+        true => Ok(reason),
+        false => Err(Error::Invalid("attempt_not_owned")),
+    }
+}
+/// Checks a new release of an owned attempt (`owned_locked` first):
+/// - it still holds its task, was granted (status granted or cancelling, with a grant) and has
+///   no known stop (`replacement_prior_execution_uncertain`); an attempt never granted is closed
+///   through the launch closure instead;
+/// - no result report or stopped receipt is on record;
+/// - a reboot proof names the boot the guardian recorded in the attempt's Started report.
+pub async fn check_locked(
+    conn: &mut PgConnection,
+    node: Uuid,
+    request: &LostAttemptRelease,
+) -> Result<Lost, Error> {
+    let reason = owned_locked(conn, node, request).await?;
     let row = sqlx::query(
         "SELECT a.node_id, a.task_id, a.holds_task, h.state->'stop'->>'kind' AS stop, h.state->>'status' AS status, \
+         COALESCE(jsonb_typeof(h.state->'grant')='object', FALSE) AS granted, \
          s.request_bytes FROM execution_attempts a \
          LEFT JOIN profiled_authority_hot h ON h.attempt_id = a.attempt_id \
          LEFT JOIN profiled_started_receipts s ON s.attempt_id = a.attempt_id \
@@ -71,18 +92,34 @@ pub async fn check_locked(
     let Some(row) = row.filter(|r| r.get::<Uuid, _>("node_id") == node) else {
         return Err(Error::Invalid("attempt_not_owned"));
     };
+    let status = row.get::<Option<String>, _>("status");
+    if matches!(status.as_deref(), Some("offered" | "preparing")) {
+        return Err(Error::Refused(
+            "lost_attempt_not_granted: an attempt never granted is closed through the launch closure",
+        ));
+    }
     let held = row.get::<bool, _>("holds_task")
+        && row.get::<bool, _>("granted")
         && matches!(
             row.get::<Option<String>, _>("stop").as_deref(),
             Some("running" | "unknown")
         )
-        && matches!(
-            row.get::<Option<String>, _>("status").as_deref(),
-            Some("granted" | "cancelling" | "unknown" | "preparing" | "offered")
-        );
+        && matches!(status.as_deref(), Some("granted" | "cancelling"));
     if !held {
         return Err(Error::Refused(
             "lost_attempt_not_held: the attempt is not held as prior execution uncertain",
+        ));
+    }
+    let reported: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
+         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1)",
+    )
+    .bind(request.attempt_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    if reported {
+        return Err(Error::Refused(
+            "lost_attempt_reported: its result or stop is on record",
         ));
     }
     let guardian_boot = row
@@ -110,6 +147,20 @@ pub async fn check_locked(
     })
 }
 
+/// Records why B4 still holds the released attempt's task (none once it is released), so
+/// the owner can see it.
+pub async fn record_held(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+    held: Option<&str>,
+) -> Result<(), Error> {
+    sqlx::query("UPDATE lost_attempt_releases SET held_reason=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(held)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
 /// Records the release once; a replay with the same proof is accepted, another refused.
 pub async fn record(
     conn: &mut PgConnection,
