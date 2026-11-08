@@ -1840,3 +1840,16 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - aq-worker#51 then squash-merged as 915afc77.
   - The round-6 re-reviews found only Minor items, which are parked in the SDD ledger. On the server: the hold-comment wording for non-budget reasons, and pool connections used inside the release transaction. On the worker: an engine-group kill on a failed git start, plus test preconditions.
   - The phase 1 live acceptance rerun is dispatched on aq-ms1. Terminal control (Step 2) is pending the owner's W13 decision.
+
+- **2026-11-08 — Phase 1 live acceptance rerun: NOT ACCEPTED.**
+  - D1–D5 are fixed live.
+    - Passed: install at the default state root, graceful restart handoff, SIGKILL lost release under ruling C (`cgroup_teardown`, charged, fresh attempt, sandbox kept), Stop and Start, the availability switch, revoke and re-enroll, and the handoff successor export and grant.
+    - Step 2 (terminal) is pending W13.
+  - Blocking defects:
+    - R3, critical: the per-project admission-artifact quota (512) ran out after 33 attempts, so every poll returned 409 while the node showed `online` with no reason.
+    - R1, important: a transient 503 during preparation fails the attempt, then slot recovery loops forever ("missing or mixed exact phase execution").
+  - Minor defects still open: D6 (handoff commit message) and D12 (terminal 500 / dashboard 503 under load).
+  - Actions:
+    - R3 falls under the owner's retention decision of 2026-11-07. Dispatched spec 0008 (Opus): an inventory generated from the code, then phase A, where caps count only live rows, a rate limit is added and refusals become visible. Phase B (deletion after 7 days plus a 1 KB summary) needs owner approval of the spec.
+    - R1 fix dispatched (Opus, aq-worker).
+  - State: `aq-node@ms1` is stopped and disabled. PR heads: aq-server#115 7dddd714, aq-worker#50 8cd2d580.
