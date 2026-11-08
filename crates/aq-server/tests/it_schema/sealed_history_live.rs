@@ -365,3 +365,69 @@ async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
         )]
     );
 }
+
+#[tokio::test]
+async fn offer_rate_fence_refuses_the_thirty_first_offer_in_an_hour() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let p = Uuid::new_v4();
+    // 30 offers: the 31st insert is refused by the fence (54000). 29 offers: the
+    // fence passes and the insert goes on to fail on the decision FK (23503).
+    for (seeded, code) in [(30, "54000"), (29, "23503")] {
+        let n = Uuid::new_v4();
+        sealed::offers(&pool, n, p, NOW - 1_000, seeded).await;
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL session_replication_role='replica'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let (attempt, decision, observation) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,'{}'::jsonb,$3,$3+30000)")
+            .bind(observation).bind(p).bind(NOW).execute(&mut *tx).await.unwrap();
+        sqlx::query("SET LOCAL session_replication_role='origin'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let err = sqlx::query("INSERT INTO profiled_launches(attempt_id,decision_id,source_observation_id,launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest,graph_task_observation,source_binding,offer_expires_at_ms) VALUES($1,$2,$3,jsonb_build_object('session',jsonb_build_object('node_id',$4::text)),'{}'::jsonb,repeat('0',64),'{}'::jsonb,repeat('0',64),'{}'::jsonb,'{}'::jsonb,$5+60000)")
+            .bind(attempt).bind(decision).bind(observation).bind(n).bind(NOW)
+            .execute(&mut *tx).await.unwrap_err();
+        let db_err = err.as_database_error().unwrap();
+        assert_eq!(db_err.code().as_deref(), Some(code), "{db_err}");
+        if code == "54000" {
+            assert!(
+                db_err.message().contains("sealed history offer rate"),
+                "{db_err}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn phase_a_guards_call_the_live_usage() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    for (function, kind) in [
+        ("admission_artifact_insert_guard", "admission_artifacts"),
+        ("profiled_source_export_guard", "source_exports"),
+        ("profiled_launch_registration_guard", "launch_registrations"),
+        ("profiled_phase_terminal_capacity_guard", "phase_terminal"),
+        ("profiled_presence_operation_guard", "presence_rate"),
+    ] {
+        let src: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname=$1")
+            .bind(function)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            src.contains(&format!("sealed_history_usage('{kind}'")),
+            "{function}"
+        );
+    }
+    let triggers: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('admission_artifact_insert','profiled_source_export_guard','profiled_launch_registration_guard','profiled_phase_terminal_capacity_guard','profiled_presence_operation_guard')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(triggers, 5);
+}
