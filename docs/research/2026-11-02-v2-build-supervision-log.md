@@ -1750,3 +1750,11 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - decisions 1024.
 - S14 proceeds without S16.
 - The worker PR #49 is in fix round 3: the node-side destroy must skip preserved sandboxes.
+- **04:48:** **owner decision on sealed history retention:**
+  - full sealed records are kept while a run is live or its task is open;
+  - they are deleted 7 days after the run settles and its task closes (the window is configurable in Settings);
+  - a ~1 KB summary row is kept for Results and task history;
+  - caps count only in-progress runs, plus a per-machine rate limit.
+  - It replaces AQ-08's "never deleted". Measured on aq-ms1, a sealed history is about 170 KB per run (11 runs, 1.9 MB), so the caps were never about storage.
+  - A spec is to be written right after phase 1 merges; S16 is superseded.
+- aq-server #114 (phase 1 server) CI failures: four from the stale `vendor/aq-protocol-0.1.0` worker-candidate path after S1 vendored 0.1.1, plus fmt/clippy. They are with the lane agent.
