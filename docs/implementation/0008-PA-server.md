@@ -107,9 +107,11 @@ operations are unchanged. They belong to phase B.
   the publication with no offer, an empty 200 page.
 - **Presence counters.** The 0029 lifetime counters now saturate at their CHECK
   bounds, so they no longer stop an always-on worker after 4096 reports.
-- The settlement39 catalog ignores indexes named `sealed_*`.
 - The fair-share store functions moved into `aq-profiled-state::fairness`
   (lib line budget).
+
+- The settlement39 catalog now expects the four `sealed_*` indexes on tables it attests from format 103 (`aq_history_caps::ATTESTED_INDEXES`); the `sealed_*` exemption is gone. `source_transfers` gets a partial index on unreleased staging.
+- The source export reservation INSERT writes `created_at_ms` (`aq_history_caps::insert_export`).
 
 ## Verification
 

@@ -216,6 +216,7 @@ CREATE INDEX sealed_artifact_created ON admission_artifacts(created_at_ms);
 CREATE INDEX sealed_decision_time ON intelligence_decisions(((decision#>>'{inputs,now_ms}')::BIGINT));
 CREATE INDEX sealed_export_pending ON profiled_source_exports(operation_id) WHERE state='pending';
 CREATE INDEX sealed_export_created ON profiled_source_exports(created_at_ms) WHERE created_at_ms IS NOT NULL;
+CREATE INDEX sealed_transfer_unreleased ON source_transfers(transfer_id) WHERE NOT staging_released;
 CREATE INDEX sealed_attempt_held ON execution_attempts(attempt_id) WHERE holds_task;
 CREATE INDEX sealed_hot_unsettled ON profiled_authority_hot(attempt_id)
  WHERE (state->>'status') NOT IN ('finished','declined','never_granted');

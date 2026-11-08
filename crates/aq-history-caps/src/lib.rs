@@ -138,21 +138,95 @@ pub async fn staging_used(conn: &mut PgConnection, now_ms: i64) -> Result<i64, s
     }
 }
 
-/// Records when a source export was reserved (its pending window). A no-op
-/// before migration 0103, which adds the column.
-pub async fn stamp_export(
+/// The INSERT of a pending source export. From migration 0103 it writes
+/// `created_at_ms` (`$6`), so the quota trigger sees the real time at insert and
+/// the pending window is on; before, it ignores `$6`.
+async fn export_insert_sql(conn: &mut PgConnection) -> Result<&'static str, sqlx::Error> {
+    const BEFORE: &str = "INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) SELECT $1,$2,$3,$4,$5,$5,'pending' WHERE $6::bigint>0";
+    const LIVE: &str = "INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state,created_at_ms) SELECT $1,$2,$3,$4,$5,$5,'pending',$6::bigint";
+    Ok(if live_schema(conn).await? {
+        LIVE
+    } else {
+        BEFORE
+    })
+}
+
+/// Reserves a pending source export, written with its creation time.
+/// `ids` is (operation, project), `request` (bytes, digest), `reservation`
+/// (reserved bytes, creation time in ms).
+pub async fn insert_export(
     conn: &mut PgConnection,
-    operation: Uuid,
-    now_ms: u64,
+    ids: (Uuid, Uuid),
+    request: (&[u8], &str),
+    reservation: (i64, i64),
 ) -> Result<(), sqlx::Error> {
-    if live_schema(&mut *conn).await? {
-        sqlx::query("UPDATE profiled_source_exports SET created_at_ms=$2 WHERE operation_id=$1")
-            .bind(operation)
-            .bind(ms(now_ms))
-            .execute(&mut *conn)
-            .await?;
-    }
+    let sql = export_insert_sql(&mut *conn).await?;
+    sqlx::query(sql)
+        .bind(ids.0)
+        .bind(ids.1)
+        .bind(request.0)
+        .bind(request.1)
+        .bind(reservation.0)
+        .bind(reservation.1)
+        .execute(conn)
+        .await?;
     Ok(())
+}
+
+/// The indexes migration 0103 adds on tables the settlement39 catalog attests
+/// (`execution_attempts`, `profiled_authority_hot`, `source_transfers`), as the
+/// catalog rows it expects from format 103 on. Any other index there still fails.
+pub const ATTESTED_INDEXES: [(&str, &str); 4] = [
+    (
+        "sealed_attempt_held",
+        "CREATE INDEX sealed_attempt_held ON public.execution_attempts USING btree (attempt_id) WHERE holds_task",
+    ),
+    (
+        "sealed_attempt_unsettled",
+        "CREATE INDEX sealed_attempt_unsettled ON public.execution_attempts USING btree (attempt_id) WHERE ((NOT holds_task) AND (kind = 'legacy_fixture'::text) AND (COALESCE((state ->> 'status'::text), 'unknown'::text) <> ALL (ARRAY['finished'::text, 'declined'::text, 'never_granted'::text])))",
+    ),
+    (
+        "sealed_hot_unsettled",
+        "CREATE INDEX sealed_hot_unsettled ON public.profiled_authority_hot USING btree (attempt_id) WHERE ((state ->> 'status'::text) <> ALL (ARRAY['finished'::text, 'declined'::text, 'never_granted'::text]))",
+    ),
+    (
+        "sealed_transfer_unreleased",
+        "CREATE INDEX sealed_transfer_unreleased ON public.source_transfers USING btree (transfer_id) WHERE (NOT staging_released)",
+    ),
+];
+
+/// `ATTESTED_INDEXES` as catalog rows (`kind`, `name`, `body`).
+pub fn attested_index_rows() -> Vec<serde_json::Value> {
+    (ATTESTED_INDEXES.iter())
+        .map(|(name, definition)| {
+            serde_json::json!({"kind": "index", "name": name, "body": {
+            "definition": definition, "valid": true, "ready": true, "live": true,
+            "primary": false, "unique": false, "immediate": true, "nulls_not_distinct": false}})
+        })
+        .collect()
+}
+
+/// Whether the attested catalog equals the expected one. From format 103 the
+/// expected rows include `ATTESTED_INDEXES`; both sides are compared in
+/// (kind, name) order, so the database collation does not matter.
+pub fn catalog_matches(
+    expected: &mut serde_json::Value,
+    actual: &mut serde_json::Value,
+    supported: u32,
+) -> bool {
+    use serde_json::Value;
+    let key = |r: &Value| (r["kind"].to_string(), r["name"].to_string());
+    match (expected.as_array_mut(), actual.as_array_mut()) {
+        (Some(expected), Some(actual)) => {
+            if supported >= 103 {
+                expected.extend(attested_index_rows());
+            }
+            expected.sort_by_key(key);
+            actual.sort_by_key(key);
+            expected == actual
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

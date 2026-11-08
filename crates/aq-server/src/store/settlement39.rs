@@ -59,10 +59,11 @@ async fn validate_composed(
             .ok_or_else(corrupt)?;
         row["body"]["body"] = serde_json::Value::String(body.into());
     }
-    let actual: serde_json::Value = sqlx::query_scalar(include_str!("settlement39_catalog.sql"))
-        .fetch_one(&mut **tx)
-        .await?;
-    if actual != expected {
+    let mut actual: serde_json::Value =
+        sqlx::query_scalar(include_str!("settlement39_catalog.sql"))
+            .fetch_one(&mut **tx)
+            .await?;
+    if !aq_history_caps::catalog_matches(&mut expected, &mut actual, supported) {
         return Err(corrupt());
     }
     result38::validate_data(tx).await?;

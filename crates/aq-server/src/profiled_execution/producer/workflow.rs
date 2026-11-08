@@ -400,10 +400,8 @@ async fn offers(
     if busy {
         return Ok(page);
     }
-    // Spec 0008: one grouped read. A node or server hold (history cap, offer
-    // rate) ends the poll visibly, before any write; a project hold drops that
-    // project from the candidates, like a project with no ready task, before
-    // the per-poll project limit is applied.
+    // Spec 0008: one grouped read. A node or server hold ends the poll before any write;
+    // a project hold drops that project from the candidates (it is never charged a turn).
     let config = state
         .config
         .profiled_execution

@@ -360,8 +360,10 @@ pub async fn reserve(
                 "source export metadata quota exhausted".into(),
             ));
         }
-        sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) VALUES($1,$2,$3,$4,$5,$5,'pending')").bind(request.operation_id).bind(request.project_id).bind(&request_bytes).bind(request_digest.as_str()).bind(reserved_bytes as i64).execute(&mut *tx).await.map_err(database)?;
-        aq_history_caps::stamp_export(&mut tx, request.operation_id, now)
+        let ids = (request.operation_id, request.project_id);
+        let request = (&request_bytes[..], request_digest.as_str());
+        let reservation = (reserved_bytes as i64, now as i64);
+        aq_history_caps::insert_export(&mut tx, ids, request, reservation)
             .await
             .map_err(database)?;
         reserved_bytes

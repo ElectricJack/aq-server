@@ -6,6 +6,7 @@ publish = false
 description = "Spec 0008 phase A: live sealed-history usage, the poll gate and swarm holds"
 
 [dependencies]
+serde_json.workspace = true
 sqlx.workspace = true
 sqlx-postgres.workspace = true
 uuid.workspace = true

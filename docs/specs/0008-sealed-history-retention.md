@@ -121,7 +121,15 @@ e.holds_task OR COALESCE(h.state->>'status', e.state->>'status', 'unknown')
 
 This is the predicate DEP6 row retention already uses (`crates/aq-row-retention/src/lib.rs:38-40, 49-52`), so the server has one definition **(author's call)**. A finished run that still holds its task (awaiting settlement) is live. On ms1, 11 of 33 runs are live: 5 granted, 6 finished but still holding.
 
-The SQL function `sealed_attempt_live(attempt_id)` (migration 0103) is that predicate.
+Phase A narrows it in one case, so that counting follows the live set and not the history. The status comes from the hot row for a `profiled_v1` attempt (the native path) and from the snapshot for a `legacy_fixture` attempt, which never has a hot row:
+
+```sql
+e.holds_task OR CASE WHEN e.kind = 'profiled_v1' THEN COALESCE(h.state->>'status', 'never_granted')
+                     ELSE COALESCE(e.state->>'status', 'unknown') END
+                NOT IN ('finished','declined','never_granted')
+```
+
+A released `profiled_v1` attempt (`holds_task = false`) with no hot row is therefore settled, whatever its snapshot says. The snapshot of an attempt the hot row owns is frozen at `offered`, so reading it would list every settled run and force a scan of the hot table. A released attempt with a hot row is live exactly while the hot status is not terminal. Only `legacy_fixture` attempts fall back to the snapshot. It is still one definition: the SQL function `sealed_attempt_live(attempt_id)` and the view `sealed_live_attempt_ids` (migration 0103) state the same rule, and the view's three partial indexes (held tasks, unsettled hot status, unsettled legacy snapshot) make it cheap.
 
 ### 6.2 A pending row
 
@@ -133,7 +141,7 @@ The poll writes some rows before the attempt exists: selection decisions, admiss
 |---|---|---|
 | `admission_artifacts` | `profiled_launch_artifacts.artifact_id` → `attempt_id`. A row can be shared: on ms1, 77 rows are linked by more than one run (up to 23). Owner key = project | any linking run is live, or no run links it and `created_at_ms` is within 10 minutes |
 | `intelligence_decisions` | `profiled_launches.decision_id` → `attempt_id` (1:1 today) | the linking run is live, or no run links it and `decision.inputs.now_ms` is within 10 minutes |
-| `profiled_source_exports` | `profiled_launch_source_exports.operation_id` → `attempt_id`; `source_bases.profiled_export_operation_id` → `attempt_id` | `state = 'pending'`, or any run linked through either table is live |
+| `profiled_source_exports` | `profiled_launch_source_exports.operation_id` → `attempt_id`; `source_bases.profiled_export_operation_id` → `attempt_id` | `state = 'pending'`, or any run linked through either table is live, or no run links it and `created_at_ms` (written by the reservation INSERT, so the quota trigger sees it) is within 10 minutes. Rows written before 0103 have no time and get no window |
 | Staging bytes of an export | as above | the export is live |
 | `admission_material_leases` | `admitted_attempt_id` | the run is live |
 | `admission_material_receipts` | `lease_id` → lease | its lease is live |
@@ -244,7 +252,7 @@ The current maximum on main is 0102. Phase A adds three, contiguous:
 
 | Migration | Contents |
 |---|---|
-| `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid[],uuid[],bigint)`, `sealed_history_scoped(text,bigint,uuid,uuid[])`, the view `sealed_live_attempt_ids`; indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(admitted_attempt_id)`, `profiled_presence_operations(node_id, recorded_at_ms)`, `source_bases(profiled_export_operation_id)`. No table changes. |
+| `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid[],uuid[],bigint)`, `sealed_history_scoped(text,bigint,uuid,uuid[])`, the view `sealed_live_attempt_ids`; the column `profiled_source_exports.created_at_ms` (nullable; written by the reservation INSERT); indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(prospective_attempt_id)` and `(lease_id) WHERE state='pending'`, `profiled_presence_operations` on `(node_id, recorded_at_ms)`, `(recorded_at_ms)`, `(expires_at_ms)` and `(attempt_id)`, `source_bases(profiled_export_operation_id)`, `admission_artifacts(created_at_ms)`, `intelligence_decisions(((decision#>>'{inputs,now_ms}')::bigint))`, `profiled_source_exports(operation_id) WHERE state='pending'` and `(created_at_ms)`, `source_transfers(transfer_id) WHERE NOT staging_released`, and the partial attempt indexes `execution_attempts(attempt_id) WHERE holds_task`, `execution_attempts(attempt_id)` for released, unsettled `legacy_fixture` attempts, and `profiled_authority_hot(attempt_id)` for an unsettled status. The four indexes on tables the settlement39 catalog attests are listed in that catalog from format 103 on (`aq_history_caps::ATTESTED_INDEXES`); any other index there still fails the attestation. |
 | `0104_sealed_history_live_caps.sql` | `CREATE OR REPLACE` of `admission_artifact_insert_guard`, `profiled_source_export_guard`, `profiled_launch_registration_guard`, `profiled_phase_terminal_capacity_guard` and `profiled_presence_operation_guard`. Names, triggers and every non-quota check are unchanged (the store checks the phase-terminal function by name, `store.rs:314-345`). |
 | `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. |
 

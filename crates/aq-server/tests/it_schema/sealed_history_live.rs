@@ -469,21 +469,36 @@ async fn inventory_report_rate_is_720_per_node_and_11520_in_all() {
             720
         )]
     );
-    // Server-wide: 11,520 an hour over many nodes (718 + 2 above, already in).
-    let m = sealed::node(&pool).await;
-    for _ in 0..22 {
-        sealed::inventories(&pool, Uuid::new_v4(), 500, NOW - 1_000).await;
+    // Server-wide: 11,520 an hour over many nodes. Node n holds 720; 14 nodes of 720 and
+    // one of 719 make 11,519.
+    for _ in 0..14 {
+        sealed::inventories(&pool, Uuid::new_v4(), 720, NOW - 1_000).await;
     }
-    // 720 + 11,000 = 11,720 > 11,520: the server cap refuses a node with room.
-    assert_eq!(
-        sealed::report(&pool, m, 1, NOW).await,
-        Err("54000".to_string())
-    );
+    sealed::inventories(&pool, Uuid::new_v4(), 719, NOW - 1_000).await;
+    let (m, o) = (sealed::node(&pool).await, sealed::node(&pool).await);
+    // Under the limit: the 11,520th report is accepted.
     assert!(
-        holds(&pool, &[m], &[])
+        !holds(&pool, &[m], &[])
             .await
             .iter()
-            .any(|h| h.1 == "presence_rate" && h.2 == "global")
+            .any(|h| h.1 == "presence_rate")
+    );
+    assert_eq!(sealed::report(&pool, m, 1, NOW).await, Ok(()));
+    // At the limit: the 11,521st is refused, and the gate holds on the server cap.
+    assert_eq!(
+        sealed::report(&pool, o, 1, NOW).await,
+        Err("54000".to_string())
+    );
+    assert_eq!(
+        holds(&pool, &[o], &[]).await,
+        vec![row(
+            "history_rate_limited",
+            "presence_rate",
+            "global",
+            "rows",
+            11_520,
+            11_520
+        )]
     );
 }
 
@@ -806,4 +821,80 @@ async fn phase_a_guards_call_the_live_usage() {
         .await
         .unwrap();
     assert_eq!(triggers, 5);
+}
+
+#[tokio::test]
+async fn an_unexpected_sealed_index_on_an_attested_table_fails_the_catalog_attestation() {
+    let db = aq_server::test_support::TestDb::create().await;
+    drop(db.store().await);
+    let pool = db.pool().await;
+    sqlx::query("CREATE INDEX sealed_foo ON execution_attempts(node_id)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        aq_server::store::Store::connect_with(db.options())
+            .await
+            .is_err()
+    );
+    sqlx::query("DROP INDEX sealed_foo")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(
+        aq_server::store::Store::connect_with(db.options())
+            .await
+            .unwrap(),
+    );
+    // A missing expected index fails too.
+    sqlx::query("DROP INDEX sealed_attempt_held")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        aq_server::store::Store::connect_with(db.options())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn released_profiled_attempt_is_live_only_while_its_hot_status_is_unsettled_and_never_without_hot()
+ {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    // (hot status, live): a released profiled_v1 attempt (holds_task = false) takes its
+    // liveness from the hot row; with no hot row it is settled whatever its snapshot says.
+    let cases = [
+        (Some("granted"), true),
+        (Some("cancelling"), true),
+        (Some("finished"), false),
+        (Some("never_granted"), false),
+        (None, false),
+    ];
+    for (hot, live) in cases {
+        let attempt = Uuid::new_v4();
+        let mut tx = sealed::replica(&pool).await;
+        sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,kind,state) VALUES($1,gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),FALSE,'profiled_v1',jsonb_build_object('schema_version','1','status','offered'))")
+            .bind(attempt).execute(&mut *tx).await.unwrap();
+        if let Some(status) = hot {
+            sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,jsonb_build_object('schema_version','1','status',$2::text),1,1,0)")
+                .bind(attempt).bind(status).execute(&mut *tx).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        let by_function: bool = sqlx::query_scalar("SELECT sealed_attempt_live($1)")
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let by_view: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sealed_live_attempt_ids WHERE attempt_id=$1)",
+        )
+        .bind(attempt)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((hot, by_function, by_view), (hot, live, live));
+    }
 }
