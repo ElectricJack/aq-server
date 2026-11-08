@@ -452,6 +452,12 @@ impl Store {
     pub fn terminal_control_pool_for_testing(&self) -> PgPool {
         self.terminal_pool.clone()
     }
+    /// This store over `pool` (a test bounds the connections an owner may use).
+    #[cfg(feature = "test-support")]
+    pub fn with_pool_for_testing(mut self, pool: PgPool) -> Self {
+        self.pool = pool;
+        self
+    }
     #[cfg(feature = "test-support")]
     pub fn terminal_data_pool_for_testing(&self) -> PgPool {
         self.terminal_data_pool.clone()

@@ -6,27 +6,9 @@ use crate::{AppState, error::AppError};
 use aq_admission::ArtifactRef;
 pub use aq_profiled_state::replacement::*;
 use aq_profiled_state::replacement_sql as sql;
-use aq_selection::{ReplacementEvidence, TaskLineage};
 use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
-
-/// The B4 successor's evidence of `r`, fresh for `EVIDENCE_TTL_MS`.
-pub fn evidence(
-    r: &Replacement,
-    lineage: TaskLineage,
-    now: u64,
-) -> Result<ReplacementEvidence, AppError> {
-    Ok(ReplacementEvidence {
-        lineage,
-        predecessor_attempt_id: r.predecessor,
-        stop_receipt: r.stop_receipt.clone(),
-        retained_source_receipt: r.retained_source_receipt.clone(),
-        effect_reconciliation_receipt: r.effect_reconciliation_receipt.clone(),
-        observed_at_ms: now,
-        expires_at_ms: now.checked_add(EVIDENCE_TTL_MS).ok_or(AppError::Internal)?,
-    })
-}
 
 fn decode(row: sqlx::postgres::PgRow) -> Result<Prior, AppError> {
     let hot: crate::execution::authority::hot::HotState =
@@ -116,29 +98,20 @@ pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Asses
         .acquire()
         .await
         .map_err(|_| AppError::Internal)?;
-    assess_task_in(state, &mut conn, task, now).await
+    assess_task_in(&mut conn, task, now).await
 }
-/// [`assess_task`] reading the history on `history` (a caller's transaction, its own facts).
+/// [`assess_task`] reading every fact on `conn` (a caller's transaction sees its own facts and
+/// holds no second pool connection, #117 review).
 pub async fn assess_task_in(
-    state: &AppState,
-    history: &mut sqlx::PgConnection,
+    conn: &mut sqlx::PgConnection,
     task: Uuid,
     now: u64,
 ) -> Result<Assessment, AppError> {
-    let mut conn = state
-        .store
-        .pool
-        .acquire()
-        .await
-        .map_err(|_| AppError::Internal)?;
-    let disposed = super::disposition::task_disposed(&mut conn, task).await?;
-    if disposed {
+    if super::disposition::task_disposed(conn, task).await? {
         return Ok(Assessment::Blocked("task_terminally_disposed"));
     }
     // H3 rung 5: a quarantined lineage is never replaced until an owner acts.
-    let quarantined = lineage_quarantined(&mut conn, task).await?;
-    drop(conn);
-    if quarantined {
+    if lineage_quarantined(conn, task).await? {
         return Ok(Assessment::Blocked("stall_quarantined"));
     }
     // D1: a successor reuses the predecessor's immutable export, so a result
@@ -149,7 +122,7 @@ pub async fn assess_task_in(
     // table and so records no unpublished delivery (as for quarantines).
     let format: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_one(&state.store.pool)
+            .fetch_one(&mut *conn)
             .await
             .map_err(|_| AppError::Internal)?;
     let unpublished: bool = if format.parse::<u32>().map_err(|_| AppError::Internal)?
@@ -157,7 +130,7 @@ pub async fn assess_task_in(
     {
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished')")
             .bind(task)
-            .fetch_one(&state.store.pool)
+            .fetch_one(&mut *conn)
             .await
             .map_err(|_| AppError::Internal)?
     } else {
@@ -168,11 +141,11 @@ pub async fn assess_task_in(
             "replacement_after_unpublished_delivery_needs_new_source",
         ));
     }
-    let counts = super::no_grant::attempt_counts(&state.store.pool, task).await?;
+    let counts = super::no_grant::attempt_counts_locked(conn, task).await?;
     if let Some(decided) = precheck(&counts) {
         return Ok(decided);
     }
-    Ok(match load(history, task, counts.started).await? {
+    Ok(match load(conn, task, counts.started).await? {
         Some(priors) => assess(&priors, &Limits::default(), now),
         None => Assessment::Blocked("replacement_lineage_history_unknown"),
     })
@@ -351,36 +324,6 @@ pub async fn retained_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn evidence_carries_the_predecessor_receipts_for_its_ttl() {
-        let receipt = |id: &str| ArtifactRef {
-            id: aq_admission::Text::new(id).unwrap(),
-            version: aq_admission::Text::new("1").unwrap(),
-            digest: aq_admission::Digest::of(id.as_bytes()),
-        };
-        let r = Replacement {
-            predecessor: Uuid::from_u128(1),
-            attempts_started: 1,
-            exempt_attempts: 0,
-            elapsed_ms: 1,
-            sandbox_ms: 0,
-            stop_receipt: receipt("stop"),
-            retained_source_receipt: receipt("retained"),
-            effect_reconciliation_receipt: receipt("effects"),
-            needs_release: true,
-        };
-        let lineage = TaskLineage {
-            project_id: Uuid::new_v4(),
-            workspace_id: Uuid::new_v4(),
-            task_id: Uuid::new_v4(),
-        };
-        let e = evidence(&r, lineage, 1_000).unwrap();
-        assert_eq!(e.predecessor_attempt_id, r.predecessor);
-        assert_eq!(e.stop_receipt, receipt("stop"));
-        assert_eq!(e.retained_source_receipt, receipt("retained"));
-        assert_eq!(e.effect_reconciliation_receipt, receipt("effects"));
-        assert_eq!(e.expires_at_ms, 1_000 + EVIDENCE_TTL_MS);
-    }
     #[tokio::test]
     async fn replacement_sql_matches_migrated_schema() {
         let db = crate::test_support::TestDb::create().await;
