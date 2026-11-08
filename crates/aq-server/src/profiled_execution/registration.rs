@@ -196,8 +196,9 @@ pub(crate) async fn register_locked(
         }
     }
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM native_registration_receipts WHERE node_id=$1")
+        sqlx::query_scalar("SELECT count(*) FROM native_registration_receipts WHERE node_id=$1 AND response->'identity'->>'boot_id'=$2")
             .bind(auth.id())
+            .bind(request.identity.boot_id.to_string())
             .fetch_one(&mut **tx)
             .await
             .map_err(|_| AppError::Internal)?;
