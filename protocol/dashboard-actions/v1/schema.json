@@ -1416,6 +1416,42 @@
         {
           "properties": {
             "kind": {
+              "const": "swarm.availability.set"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:swarm.availability.set:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "available": {
+                  "type": "boolean"
+                },
+                "expected_generation": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "available",
+                "expected_generation"
+              ],
+              "title": "AvailabilityChange",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "task.cancel"
             },
             "payload": {
@@ -2141,6 +2177,153 @@
                 "reason"
               ],
               "title": "Resolve",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "worker.drain"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:worker.drain:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "expected_generation": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "machine": {
+                  "description": "SwarmMachine.id of a service machine (a machine key).",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "machine",
+                "expected_generation"
+              ],
+              "title": "WorkerControl",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "worker.revoke"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:worker.revoke:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "machine": {
+                  "description": "SwarmMachine.id: a machine key, or \"node:<uuid>\" for a single legacy node.",
+                  "pattern": "^([a-z0-9][a-z0-9-]{0,62}|node:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "machine"
+              ],
+              "title": "WorkerRevoke",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "worker.start"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:worker.start:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "expected_generation": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "machine": {
+                  "description": "SwarmMachine.id of a service machine (a machine key).",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "machine",
+                "expected_generation"
+              ],
+              "title": "WorkerControl",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "worker.stop"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:worker.stop:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "expected_generation": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "machine": {
+                  "description": "SwarmMachine.id of a service machine (a machine key).",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "machine",
+                "expected_generation"
+              ],
+              "title": "WorkerControl",
               "type": "object"
             }
           },

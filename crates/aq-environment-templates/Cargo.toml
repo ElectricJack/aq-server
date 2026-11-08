@@ -1,0 +1,15 @@
+[package]
+name = "aq-environment-templates"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "C4 environment templates: the allowlist and the per-catalog image digest pins"
+
+[dependencies]
+aq-admission = { path = "../aq-admission", version = "=0.1.12" }
+aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true

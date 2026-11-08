@@ -13,6 +13,13 @@ enum Placement<'a> {
         &'a [uuid::Uuid],
         aq_selection::CredentialKind,
     ),
+    /// Enrolled nodes allowed by default (Q3); only a credential that turns it off adds this.
+    Restricted(
+        &'a aq_selection::AuthorizedCredential,
+        &'a [uuid::Uuid],
+        aq_selection::CredentialKind,
+        bool,
+    ),
 }
 fn configuration(registry: &config::LoadedRegistry) -> Result<aq_selection::Digest> {
     // The backend allowlist participates through `registry.credentials`, whose
@@ -23,6 +30,9 @@ fn configuration(registry: &config::LoadedRegistry) -> Result<aq_selection::Dige
         .credentials
         .iter()
         .map(|c| match c.kind {
+            kind if !c.allow_enrolled_nodes => {
+                Placement::Restricted(&c.credential, &c.allowed_node_ids, kind, false)
+            }
             aq_selection::CredentialKind::ApiKey => {
                 Placement::Legacy(&c.credential, &c.allowed_node_ids)
             }
@@ -257,6 +267,16 @@ mod tests {
             BackendKind::Boat,
         ];
         assert_eq!(digest(&explicit).as_str(), LEGACY_DIGEST);
+    }
+
+    #[test]
+    fn enrolled_flag_changes_digest_only_when_turned_off() {
+        let mut cfg = legacy_config();
+        assert!(cfg.credentials[0].allow_enrolled_nodes);
+        cfg.credentials[0].allow_enrolled_nodes = true;
+        assert_eq!(digest(&cfg).as_str(), LEGACY_DIGEST);
+        cfg.credentials[0].allow_enrolled_nodes = false;
+        assert_ne!(digest(&cfg).as_str(), LEGACY_DIGEST);
     }
 
     #[test]

@@ -2,11 +2,11 @@
 //! from facts the server has already read.
 use crate::class::intelligence_class;
 use crate::machine::{FRESH_MS, MachineFacts};
-use crate::service::ServiceFact;
+use crate::service::{ControlFact, ServiceFact};
 use crate::{TimeError, timestamp};
 use aq_dashboard_contract::*;
 use aq_selection::ArtifactRef;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// A measured-context fact for one runtime and qualification.
@@ -46,6 +46,8 @@ pub struct NodeExtra {
     pub worker_version: String,
     pub sandbox_templates: Vec<String>,
     pub measurement: Option<HoldCode>,
+    /// The server-held machine key (`nodes.machine_key`) of a service node.
+    pub machine_key: Option<String>,
 }
 
 /// Upper bound of running agents resolved per read.
@@ -61,7 +63,15 @@ impl NodeExtra {
     ) -> sqlx::Result<Vec<Self>> {
         use serde_json::Value;
         use sqlx::Row;
-        let rows = sqlx::query("SELECT n.id, n.worker_version, b.registration->'backend'->'templates' AS templates, e.state->'native'->'request'->'runtime' AS runtime, e.state->'native'->'qualification' AS qualification FROM nodes n LEFT JOIN delegated_node_boots b ON b.node_id=n.id LEFT JOIN execution_nodes e ON e.node_id=n.id WHERE n.id = ANY($1)")
+        let key = if aq_machine_control::has_format(&mut *conn)
+            .await
+            .map_err(|_| sqlx::Error::Protocol("machine control".into()))?
+        {
+            "n.machine_key"
+        } else {
+            "NULL::text"
+        };
+        let rows = sqlx::query(&format!("SELECT n.id, n.worker_version, {key} AS machine_key, b.registration->'backend'->'templates' AS templates, e.state->'native'->'request'->'runtime' AS runtime, e.state->'native'->'qualification' AS qualification FROM nodes n LEFT JOIN delegated_node_boots b ON b.node_id=n.id LEFT JOIN execution_nodes e ON e.node_id=n.id WHERE n.id = ANY($1)"))
             .bind(ids)
             .fetch_all(conn)
             .await?;
@@ -77,6 +87,7 @@ impl NodeExtra {
                 Self {
                     id: r.get("id"),
                     worker_version: r.get("worker_version"),
+                    machine_key: r.get("machine_key"),
                     sandbox_templates: templates
                         .iter()
                         .filter_map(Value::as_array)
@@ -94,25 +105,42 @@ impl NodeExtra {
     }
 }
 
-/// `(attempt, session, node)` of task-holding attempts. These are candidates
-/// only: a stopped attempt keeps its task until released, so the caller keeps
-/// the ones the overview read counts as running (`AuthorityView::running_at`).
+/// Task-holding attempts read per swarm poll: twice the agents shown, so a
+/// stopped attempt that keeps its task cannot crowd out a running one.
+pub const MAX_CANDIDATES: usize = MAX_AGENTS * 2;
+
+/// `(attempt, session, node)` of task-holding attempts, most recent first (the
+/// latest execution deadline; no deadline is the most recent), at most `limit`,
+/// and whether more exist. These are candidates only: a stopped attempt keeps
+/// its task until released, so the caller keeps the ones the overview read
+/// counts as running (`AuthorityView::running_at`).
 pub async fn holding(
     conn: &mut sqlx::PgConnection,
     ids: &[Uuid],
-) -> sqlx::Result<Vec<(Uuid, Uuid, Uuid)>> {
-    sqlx::query_as("SELECT attempt_id, session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY node_id, session_id")
+    limit: usize,
+) -> sqlx::Result<(Vec<(Uuid, Uuid, Uuid)>, bool)> {
+    let mut rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as("SELECT attempt_id, session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY execution_deadline_ms DESC NULLS FIRST, node_id, session_id LIMIT $2")
         .bind(ids)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX).saturating_add(1))
         .fetch_all(conn)
-        .await
+        .await?;
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    Ok((rows, more))
 }
 
-/// The read's coverage reason: the capacity gap plus a note when the agent list was cut.
-pub fn reason(capacity: Option<String>, running: usize) -> Option<String> {
+/// The read's coverage reason: the capacity gap, a note when the candidate
+/// list was cut (the running count is then a lower bound), and a note when the
+/// agent list was cut.
+pub fn reason(capacity: Option<String>, running: usize, candidates_cut: bool) -> Option<String> {
+    let counted = candidates_cut.then(|| {
+        format!("Running agents are counted from the {MAX_CANDIDATES} most recent attempts")
+    });
     let cut =
         (running > MAX_AGENTS).then(|| "More than 64 running agents; some are not shown".into());
     let all = capacity
         .into_iter()
+        .chain(counted)
         .chain(cut)
         .collect::<Vec<String>>()
         .join("; ");
@@ -126,6 +154,7 @@ pub struct SwarmInput {
     pub extras: Vec<NodeExtra>,
     pub machines: BTreeMap<Uuid, MachineFacts>,
     pub services: BTreeMap<Uuid, ServiceFact>,
+    pub controls: BTreeMap<String, ControlFact>,
     pub agents: Vec<(Uuid, SessionSummary)>,
 }
 
@@ -221,8 +250,13 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
         extras,
         machines,
         services,
+        controls,
         agents,
     } = input;
+    let held: BTreeSet<&str> = extras
+        .iter()
+        .filter_map(|e| e.machine_key.as_deref())
+        .collect();
     let mut built = Vec::new();
     for n in capacity
         .nodes
@@ -233,9 +267,13 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
         let facts = machines.get(&id);
         let service = services.get(&id);
         let extra = extras.iter().find(|e| e.id == id);
-        let key = facts
-            .and_then(|f| f.report.machine.key.clone())
-            .filter(|k| !k.is_empty())
+        let key = extra
+            .and_then(|e| e.machine_key.clone())
+            .or_else(|| {
+                facts
+                    .and_then(|f| f.report.machine.key.clone())
+                    .filter(|k| !k.is_empty() && !held.contains(k.as_str()))
+            })
             .unwrap_or_else(|| format!("node:{id}"));
         let mut codes: Vec<HoldCode> = Vec::new();
         if n.health == WorkerHealth::Online {
@@ -383,6 +421,17 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             hardware,
             agent_max: totals.map(|t| t.iter().fold(0u32, |a, v| a.saturating_add(*v))),
             cost: None,
+            control: controls
+                .get(&key)
+                .map(|c| {
+                    Ok(MachineControl {
+                        desired: c.desired,
+                        generation: c.generation.to_string(),
+                        since: Some(timestamp(c.since_ms)?),
+                        pending_handoffs: c.pending_handoffs,
+                    })
+                })
+                .transpose()?,
             nodes: group.iter().map(|b| b.node.clone()).collect(),
         });
     }

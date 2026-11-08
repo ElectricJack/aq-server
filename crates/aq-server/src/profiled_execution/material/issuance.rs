@@ -65,7 +65,7 @@ pub fn issue_for_selection_from(
         || !credential.provisionable
         || credential.material_owner.is_none()
         || configured.delivery_mode.is_none()
-        || !configured.allowed_node_ids.contains(&node_id)
+        || !configured.allows(node_id)
         || aq_selection::credential_backend_policy(&configured.allowed_backends, backend_kind)
             .is_err()
         || credential.provider != selection.choice.provider

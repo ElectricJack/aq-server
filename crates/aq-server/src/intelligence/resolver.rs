@@ -23,13 +23,27 @@ pub struct ResolveRequest {
     /// attempt; legacy history without it stays conservatively unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement: Option<ReplacementBudget>,
+    /// False only for a scheduling poll: a refused selection is then not
+    /// recorded, so refused polls cannot fill the decision table (spec 0007).
+    /// Not part of the request payload or its digest.
+    #[serde(skip, default = "yes")]
+    pub record_refused: bool,
+}
+fn yes() -> bool {
+    true
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplacementBudget {
     pub attempts_started: u32,
+    /// Owner and service handoffs (spec 0007 Q1); not charged to the policy.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exempt_attempts: u32,
     pub elapsed_ms: u64,
     pub evidence: ReplacementEvidence,
+}
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 fn artifact(id: &str) -> ArtifactRef {
     ArtifactRef {
@@ -47,7 +61,7 @@ async fn attempts(
         .check_retry_bound()
 }
 
-pub(super) fn relevant(
+pub(crate) fn relevant(
     observations: Vec<AvailabilityObservation>,
     credentials: &[AuthorizedCredential],
     node: Uuid,
@@ -130,7 +144,7 @@ async fn resolve_with_principal(
         .credentials
         .iter()
         .zip(&loaded.credentials)
-        .filter(|(cfg, _)| cfg.allowed_node_ids.contains(&node_id))
+        .filter(|(cfg, _)| cfg.allows(node_id))
         .map(|(_, c)| c.clone())
         .collect();
     let observations: Vec<Value> = sqlx::query_scalar(
@@ -144,13 +158,29 @@ async fn resolve_with_principal(
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
-    let observations = relevant(observations, &credentials, node_id);
+    let mut observations = relevant(observations, &credentials, node_id);
     let time = now(state)?;
+    let registry_revision = sqlx::query_scalar::<_, i64>(
+        "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
+    )
+    .fetch_optional(&state.store.pool)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| conflict("intelligence registry has not been installed"))?
+        as u64;
+    // Spec 0007 Q2: the switch's attestation (aq_machine_control::owner_attested).
+    let mut conn = state.store.pool.acquire().await.map_err(db)?;
+    let at = (registry_revision, time);
+    let owner =
+        aq_machine_control::owner_attested(&mut conn, &credentials, &observations, at.0, at.1);
+    observations.extend(owner.await?);
+    drop(conn);
     let count = attempts(state, &request.lineage).await?;
     let replacement = match request.replacement.take() {
         Some(r)
             if r.attempts_started == count.started
                 && r.attempts_started > 0
+                && r.exempt_attempts <= r.attempts_started
                 && r.evidence.lineage == request.lineage =>
         {
             Some(r)
@@ -236,20 +266,14 @@ async fn resolve_with_principal(
         node,
         credentials,
         observations,
-        registry_revision: sqlx::query_scalar::<_, i64>(
-            "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
-        )
-        .fetch_optional(&state.store.pool)
-        .await
-        .map_err(db)?
-        .ok_or_else(|| conflict("intelligence registry has not been installed"))?
-            as u64,
+        registry_revision,
         // Legacy attempts are counted conservatively. No latest stop/retention/
         // reconciliation or provider ledger authority is invented for them.
         budget: BudgetSnapshot {
             lineage: request.lineage,
             revision: count.budget_revision(),
             attempts_started: count.started,
+            exempt_attempts: replacement.as_ref().map_or(0, |r| r.exempt_attempts),
             last_attempt_id: replacement
                 .as_ref()
                 .map(|r| r.evidence.predecessor_attempt_id),
@@ -307,6 +331,10 @@ async fn resolve_with_principal(
         .lookup(&mut tx, request.operation_id, &payload)
         .await?
     {
+        return Ok(decision);
+    }
+    if !request.record_refused && decision.outcome.resolved.is_none() {
+        tx.rollback().await.map_err(db)?;
         return Ok(decision);
     }
     let row=sqlx::query("SELECT count(*) AS entries,COALESCE(sum(pg_column_size(decision)),0)::BIGINT AS bytes FROM intelligence_decisions").fetch_one(&mut *tx).await.map_err(db)?;
@@ -530,7 +558,7 @@ async fn fence_snapshot(
         .credentials
         .iter()
         .zip(&loaded(state)?.credentials)
-        .filter(|(cfg, _)| cfg.allowed_node_ids.contains(&node_id))
+        .filter(|(cfg, _)| cfg.allows(node_id))
         .map(|(_, c)| c.clone())
         .collect();
     if digest(&credentials).map_err(|_| AppError::Internal)?
@@ -544,7 +572,11 @@ async fn fence_snapshot(
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
-    if digest(&relevant(observations, &credentials, node_id)).map_err(|_| AppError::Internal)?
+    let mut expected = relevant(observations, &credentials, node_id);
+    let (revision, at) = (decision.inputs.registry_revision, decision.inputs.now_ms);
+    let owner = aq_machine_control::owner_attested(tx, &credentials, &expected, revision, at);
+    expected.extend(owner.await?);
+    if digest(&expected).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.observations).map_err(|_| AppError::Internal)?
     {
         return Err(conflict("relevant availability changed"));

@@ -45,7 +45,13 @@ aq-admission-sandbox = { package = "aq-admission", path = "../../vendor/aq-admis
 aq-phase-terminal-protocol = { path = "../aq-phase-terminal-protocol", version = "=0.1.2" }
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
-aq-selection = { path = "../aq-selection", version = "=0.1.4" }
+aq-row-retention = { path = "../aq-row-retention" }
+aq-machine-control = { path = "../aq-machine-control" }
+aq-context-renewal = { path = "../aq-context-renewal" }
+aq-playbook-domain = { path = "../aq-playbook-domain" }
+aq-provider-quota = { path = "../aq-provider-quota" }
+aq-environment-templates = { path = "../aq-environment-templates" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 aq-swarm = { path = "../aq-swarm", version = "=0.1.0" }
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
 aq-protocol.workspace = true

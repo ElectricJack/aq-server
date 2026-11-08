@@ -208,8 +208,7 @@ pub(super) async fn fence_locked(
             .credentials
             .get(index)
             .ok_or_else(|| refused())?
-            .allowed_node_ids
-            .contains(&node)
+            .allows(node)
     {
         return Err(refused());
     }
@@ -304,16 +303,21 @@ pub(super) async fn fence_locked(
         return Err(refused());
     }
     let raw: Vec<serde_json::Value> = sqlx::query_scalar("SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1025 FOR SHARE").fetch_all(&mut **tx).await.map_err(db)?;
-    if raw.len() > 1024 {
-        return Err(refused());
-    }
-    let availability: Vec<AvailabilityObservation> = raw
+    let mut availability: Vec<AvailabilityObservation> = raw
         .into_iter()
         .map(serde_json::from_value)
         .collect::<Result<_, _>>()
         .map_err(|_| refused())?;
-    super::validate_observation_revisions(&availability, &registry)?;
     let time = now(state)?;
+    // The switch's attestation, as in selection; rows and attestation within 1,024.
+    let credentials = std::slice::from_ref(credential);
+    let mine = crate::intelligence::resolver::relevant(availability.clone(), credentials, node);
+    let owner = aq_machine_control::owner_attested(tx, credentials, &mine, registry_revision, time);
+    availability.extend(owner.await?);
+    if availability.len() > 1024 {
+        return Err(refused());
+    }
+    super::validate_observation_revisions(&availability, &registry)?;
     if inventory.observed_at_ms == 0
         || inventory.observed_at_ms > time
         || inventory

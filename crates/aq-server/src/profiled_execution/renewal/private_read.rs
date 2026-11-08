@@ -212,6 +212,7 @@ mod tests {
                     allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![node],
+                allow_enrolled_nodes: false,
                 secret_file: Some(path),
                 delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
             }],

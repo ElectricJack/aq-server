@@ -339,7 +339,7 @@ async fn exact_schema_two_upgrades_preserving_node_and_result_receipt() {
             .await
             .unwrap();
     let snapshot = async || {
-        sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('node',(SELECT to_jsonb(n) FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1 AND operation_id=$2))")
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT jsonb_build_object('node',(SELECT to_jsonb(n) - 'machine_key' - 'slot' FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1 AND operation_id=$2))")
             .bind(node_id)
             .bind(operation_id)
             .fetch_one(&pool)

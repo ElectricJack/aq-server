@@ -10,7 +10,11 @@ fn global_budget(input: &SelectionInputs, policy: &SelectionPolicy) -> Option<&'
     if !fresh(budget.observed_at_ms, budget.expires_at_ms, input.now_ms) {
         return Some("lineage_budget_stale");
     }
-    if budget.attempts_started >= policy.max_attempts {
+    if budget
+        .attempts_started
+        .saturating_sub(budget.exempt_attempts)
+        >= policy.max_attempts
+    {
         return Some("lineage_retry_budget_exhausted");
     }
     if budget.elapsed_ms.is_none()

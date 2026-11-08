@@ -92,13 +92,15 @@ pub async fn record(
                 .ok_or_else(changed)?,
         );
     }
+    let enrolled = aq_machine_control::enrolled(&mut tx, auth.id()).await;
+    let enrolled = enrolled.map_err(|_| unavailable())?;
     for profile in &request.provisionable_only {
         if !registry.config.credentials.iter().any(|c| {
             c.credential.profile == profile.profile
                 && c.credential.revision == profile.revision
                 && c.credential.enabled
                 && c.delivery_mode.is_some()
-                && c.allowed_node_ids.contains(&auth.id())
+                && c.admits(auth.id(), enrolled)
         }) {
             return Err(changed());
         }

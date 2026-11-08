@@ -56,12 +56,17 @@ pub struct Prior {
     pub needs_reconciliation: bool,
     pub cancelled_settled: bool,
     pub completion: Option<String>,
+    /// An owner_stop or service_stop handoff (spec 0007 Q1): not charged to
+    /// any lineage budget.
+    pub exempt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Replacement {
     pub predecessor: Uuid,
     pub attempts_started: u32,
+    /// Started attempts exempt from the budgets (spec 0007 Q1).
+    pub exempt_attempts: u32,
     pub elapsed_ms: u64,
     pub sandbox_ms: u64,
     pub stop_receipt: ArtifactRef,
@@ -164,20 +169,29 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
         return Blocked("replacement_effects_unreconciled");
     };
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
-    if attempts_started >= limits.max_attempts {
+    let exempt = aq_machine_control::cap_exempt(ordered.iter().map(|p| p.exempt));
+    let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
+    if attempts_started - exempt_attempts >= limits.max_attempts {
         return Blocked("lineage_retry_budget_exhausted");
     }
-    let first = ordered[0].offered_at_ms.unwrap_or(now);
-    let elapsed_ms = now.saturating_sub(first);
+    // Lineage time is the sum of the charged attempts' windows, each from its
+    // publication to the next one (or now); without exemptions, now - first.
+    let elapsed_ms = (0..ordered.len())
+        .filter(|&i| !exempt[i])
+        .map(|i| {
+            let end = ordered.get(i + 1).and_then(|n| n.offered_at_ms);
+            end.unwrap_or(now)
+                .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
+        })
+        .fold(0u64, u64::saturating_add);
     if elapsed_ms >= limits.max_lineage_elapsed_ms {
         return Blocked("lineage_time_budget_exhausted");
     }
     // Conservative sandbox charge: each granted attempt is billed its full
     // admitted window from publication to execution deadline.
-    let sandbox_ms = ordered
-        .iter()
-        .filter(|p| p.granted)
-        .map(|p| {
+    let sandbox_ms = (ordered.iter().zip(&exempt))
+        .filter(|(p, e)| p.granted && !**e)
+        .map(|(p, _)| {
             p.execution_deadline_ms
                 .unwrap_or(u64::MAX)
                 .saturating_sub(p.offered_at_ms.unwrap_or(0))
@@ -189,6 +203,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     Assessment::Replace(Box::new(Replacement {
         predecessor: predecessor.attempt_id,
         attempts_started,
+        exempt_attempts,
         elapsed_ms,
         sandbox_ms,
         stop_receipt: stop.clone(),
@@ -198,7 +213,10 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     }))
 }
 
-const PRIORS: &str = "SELECT a.attempt_id,a.holds_task,h.state AS hot,\
+/// `$exempt` is the spec 0007 Q1 handoff exemption, `FALSE` before format 101.
+macro_rules! priors {
+    ($exempt:literal) => {
+        concat!("SELECT a.attempt_id,a.holds_task,h.state AS hot,", $exempt, " AS exempt,\
  (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT AS offered_at_ms,\
  EXISTS(SELECT 1 FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id) AS released,\
  EXISTS(SELECT 1 FROM profiled_settlement_evaluations e WHERE e.attempt_id=a.attempt_id AND e.disposition='accepted') AS accepted,\
@@ -208,7 +226,13 @@ const PRIORS: &str = "SELECT a.attempt_id,a.holds_task,h.state AS hot,\
  (SELECT c.state FROM profiled_task_completions c WHERE c.attempt_id=a.attempt_id) AS completion \
  FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) \
  WHERE a.task_id=$1 AND a.kind='profiled_v1' AND NOT (NOT a.holds_task AND profiled_never_granted_valid(a.attempt_id)) \
- ORDER BY a.attempt_id";
+ ORDER BY a.attempt_id")
+    };
+}
+const PRIORS: &str = priors!(
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))"
+);
+const PRIORS_PRE_101: &str = priors!("FALSE");
 
 fn decode(row: sqlx::postgres::PgRow) -> Result<Prior, AppError> {
     let hot: crate::execution::authority::hot::HotState =
@@ -231,22 +255,21 @@ fn decode(row: sqlx::postgres::PgRow) -> Result<Prior, AppError> {
         needs_reconciliation: row.get("needs_reconciliation"),
         cancelled_settled: row.get("cancelled"),
         completion: row.get("completion"),
+        exempt: row.get("exempt"),
     })
 }
 
 /// Loads started-attempt owner facts. A history that does not match the
 /// central started count (for example legacy attempts) is returned as `None`.
-pub async fn load<'e, E>(
-    executor: E,
+pub async fn load(
+    conn: &mut sqlx::PgConnection,
     task: Uuid,
     started: u32,
-) -> Result<Option<Vec<Prior>>, AppError>
-where
-    E: sqlx::PgExecutor<'e>,
-{
-    let rows = sqlx::query(PRIORS)
+) -> Result<Option<Vec<Prior>>, AppError> {
+    let handoffs = aq_machine_control::has_format(conn).await?;
+    let rows = sqlx::query(if handoffs { PRIORS } else { PRIORS_PRE_101 })
         .bind(task)
-        .fetch_all(executor)
+        .fetch_all(conn)
         .await
         .map_err(|_| AppError::Internal)?;
     let priors = rows
@@ -336,7 +359,13 @@ pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Asses
     if let Some(decided) = precheck(&counts) {
         return Ok(decided);
     }
-    Ok(match load(&state.store.pool, task, counts.started).await? {
+    let mut conn = state
+        .store
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    Ok(match load(&mut conn, task, counts.started).await? {
         Some(priors) => assess(&priors, &Limits::default(), now),
         None => Assessment::Blocked("replacement_lineage_history_unknown"),
     })
@@ -358,11 +387,23 @@ pub async fn assess_task_for_revision(
         return Ok(assessment);
     };
     let pinned = predecessor_project_revision(&state.store.pool, replacement.predecessor).await?;
-    Ok(if pinned == Some(project_revision) {
-        assessment
-    } else {
-        Assessment::Blocked("replacement_project_revision_changed")
-    })
+    if pinned != Some(project_revision) {
+        return Ok(Assessment::Blocked("replacement_project_revision_changed"));
+    }
+    // Spec 0007 Q1: a successor the predecessor's pinned selection policy
+    // would refuse is skipped here, so it never fails the poll.
+    let limits =
+        super::continuation_policy::pinned_limits(&state.store.pool, replacement.predecessor)
+            .await?;
+    let charged = replacement.attempts_started - replacement.exempt_attempts;
+    Ok(
+        match limits.and_then(|l| {
+            super::continuation_policy::pinned_block(l, charged, replacement.elapsed_ms)
+        }) {
+            Some(reason) => Assessment::Blocked(reason),
+            None => assessment,
+        },
+    )
 }
 
 /// The project revision pinned by an attempt's linked source export request.
@@ -415,7 +456,7 @@ pub async fn release(
         .await
         .map_err(db)?;
     let counts = super::no_grant::attempt_counts_locked(&mut tx, task).await?;
-    let priors = load(&mut *tx, task, counts.started)
+    let priors = load(&mut tx, task, counts.started)
         .await?
         .ok_or_else(|| AppError::Conflict("replacement history changed".into()))?;
     let now = u64::try_from((state.clock)().timestamp_millis())
@@ -535,6 +576,7 @@ pub(crate) mod tests {
             needs_reconciliation: false,
             cancelled_settled: false,
             completion: None,
+            exempt: false,
         }
     }
     fn released(mut prior: Prior) -> Prior {
@@ -704,12 +746,91 @@ pub(crate) mod tests {
         );
     }
 
+    fn exempt(mut prior: Prior) -> Prior {
+        prior.exempt = true;
+        prior
+    }
+    const MIN: u64 = 60_000;
+    const HOUR: u64 = 3_600_000;
+
+    /// Review Focus 6: owner/service handoffs never exhaust the retry budget;
+    /// a crash restart (not exempt) is still charged.
+    #[test]
+    fn owner_and_service_handoffs_are_exempt_restart_counts() {
+        let now = 30 * MIN;
+        let history = |exempt_first_two: bool| {
+            let mark = |p: Prior| if exempt_first_two { exempt(p) } else { p };
+            [
+                released(mark(failed_prior(0))),
+                released(mark(failed_prior(10 * MIN))),
+                failed_prior(20 * MIN),
+            ]
+        };
+        let Assessment::Replace(r) = assess(&history(true), &Limits::default(), now) else {
+            panic!("two exempt handoffs leave one charged attempt");
+        };
+        assert_eq!((r.attempts_started, r.exempt_attempts), (3, 2));
+        assert_eq!(
+            assess(&history(false), &Limits::default(), now),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
+        );
+    }
+    #[test]
+    fn exempt_windows_are_not_lineage_time() {
+        let now = 25 * HOUR;
+        let history = |first: Prior| [released(first), failed_prior(23 * HOUR)];
+        let Assessment::Replace(r) =
+            assess(&history(exempt(failed_prior(0))), &Limits::default(), now)
+        else {
+            panic!("the exempt window is not charged");
+        };
+        assert_eq!(r.elapsed_ms, 2 * HOUR);
+        assert_eq!(
+            assess(&history(failed_prior(0)), &Limits::default(), now),
+            Assessment::Blocked("lineage_time_budget_exhausted")
+        );
+    }
+    #[test]
+    fn exempt_attempts_cost_no_sandbox_minutes() {
+        let now = 10 * HOUR;
+        let long = |offered: u64| {
+            let mut p = failed_prior(offered);
+            p.execution_deadline_ms = Some(offered + 150 * MIN);
+            p
+        };
+        let history = |e: bool| {
+            let first = if e { exempt(long(0)) } else { long(0) };
+            [released(first), long(3 * HOUR)]
+        };
+        let Assessment::Replace(r) = assess(&history(true), &Limits::default(), now) else {
+            panic!("an exempt attempt costs no sandbox minutes");
+        };
+        assert_eq!(r.sandbox_ms, 150 * MIN);
+        assert_eq!(
+            assess(&history(false), &Limits::default(), now),
+            Assessment::Blocked("task_sandbox_minutes_budget_exhausted")
+        );
+    }
+    #[test]
+    fn no_exempt_priors_match_previous_values() {
+        let now = 1_000_000;
+        let (first, second) = (failed_prior(800_000), failed_prior(900_000));
+        let Assessment::Replace(r) = assess(&[released(first), second], &Limits::default(), now)
+        else {
+            panic!("within the default budget");
+        };
+        assert_eq!(r.exempt_attempts, 0);
+        assert_eq!(r.elapsed_ms, now - 800_000);
+        assert_eq!(r.sandbox_ms, 2 * 60_000);
+    }
+
     #[tokio::test]
     async fn replacement_sql_matches_migrated_schema() {
         let db = crate::test_support::TestDb::create().await;
         let store = db.store().await;
         // The task has no started attempts: the history query plans and runs.
-        let none = load(&store.pool, Uuid::new_v4(), 0).await.unwrap();
+        let mut conn = store.pool.acquire().await.unwrap();
+        let none = load(&mut conn, Uuid::new_v4(), 0).await.unwrap();
         assert_eq!(none.map(|priors| priors.len()), Some(0));
         // The guard body plans against the real schema and refuses a release
         // for an attempt that does not exist, before any foreign key check.

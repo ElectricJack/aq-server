@@ -1,0 +1,24 @@
+[package]
+name = "aq-provider-quota"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Router-owned provider quota collection and the configured-account inventory type"
+
+[dependencies]
+aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+nix.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+zeroize = "1"
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt"] }

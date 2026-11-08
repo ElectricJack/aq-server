@@ -2656,7 +2656,7 @@ Expected:
 - The attempt reports `Failed`, and D3 records rework.
 - An `attempt_handoffs` row exists with `candidate_oid` set (`up.sh handoffs`).
 - After the service comes back, a fresh attempt for the same task starts. Its workspace already contains `step1.txt` and `step2.txt`; check `git show <candidate_oid> --stat` in the aq-git volume.
-- The task thread has the system comment "Handoff from attempt …".
+- The task thread has the comment "Handoff from attempt …", authored by the predecessor agent (fix round 1: not a system comment), with the label "Worker-reported conclusion:".
 
 **Step 3b: Reboot-equivalent, crash.** Repeat with `systemctl --user kill -s KILL aq-node@ms1`. systemd restarts the unit.
 
@@ -2689,7 +2689,7 @@ Expected:
 **Step 7: Availability stays on (Q2).** Leave the machine idle with one ready task for at least 5 minutes, posting no observation.
 
 Expected:
-- The task is offered: the keeper kept availability fresh.
+- The task is offered: the switch's synthesized attestation (fix round 1, review C1; there is no keeper) keeps the owner available, and `intelligence_observations` gains no owner row.
 - Then press **Turn off availability**. Within one poll no new offer is made, and `up.sh decisions` stays unchanged across several polls.
 - Press **Keep available** again, and offers resume.
 
@@ -2699,6 +2699,24 @@ Expected:
 - Both nodes are revoked, and the machine leaves the Swarm page.
 - The service journal shows "all slots are paused", and it does not restart-loop.
 - Then run `aq-worker service uninstall --profile ms1 --purge`, create a new code, and rerun the Step 1 install command. The machine enrolls again under the key `desktop` with no configuration edit, and takes work.
+
+**Step 9: The handoff successor end to end (S7; fix round 1, review I8).** No test fixture drives `successor_base`, publication and the initial grant together (the lane report's "Fix round 1", I8, says why), so this step checks the wiring live. Use the handoffs of Steps 3a and 4/5.
+
+For each handoff:
+1. `up.sh handoffs` shows the predecessor's row with `candidate_operation_id`, `candidate_oid` and `note_comment_id` all set.
+2. The successor's export is a fresh export of the saved commit, not the predecessor's export:
+   - its `source_bases` base is `candidate_oid`;
+   - its `source_retention_handle` equals `candidate_operation_id`;
+   - its export operation differs from the predecessor's.
+   The server log has no `shared source requires released predecessor retention receipt`, so the 0053/0095 `profiled_replacement_source_guard` let it through.
+3. The successor is accepted and granted: it has an initial-grant receipt, its hot status is `granted`, and its workspace holds the saved step files.
+4. The note was posted before any later refusal and exactly once:
+   - one task comment has the id `note_comment_id`, author kind `agent` and the predecessor's attempt id, with the body label "Worker-reported conclusion:";
+   - its `created_at` is before the successor's offer time;
+   - a poll for the successor that was refused or retried after the candidate was created (log line "handoff candidate not ready", a refused publication, or a backstop skip) left no second comment.
+5. `git show <candidate_oid>` (in the aq-git volume) shows a commit message that starts with "AQ: handoff of task" and has a "worker-reported: " line.
+
+Record the SQL rows, the comment JSON and the commit message in the evidence.
 
 **Finally:**
 1. Capture `up.sh status`, `up.sh service-status`, `up.sh handoffs`, `up.sh renewals` and `up.sh decisions`, the dashboard screenshots (desktop and phone), and the server log lines filtered by `attempt_id`.

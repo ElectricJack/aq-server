@@ -237,3 +237,5 @@ Each phase has its own implementation plan in `docs/superpowers/plans/`. Phases 
 | 3. Controls and placement | Swarm settings (provider and VM maximums, per-machine limits and thresholds), sliders replacing per-project pool sizes, the placement rules of §7.1, waiting reasons, the burn gauge | 1, 2 |
 | 4. Cloud VMs | The server starts one boat VM per attempt, the boat agent launch, the in-VM channel proxy, the Codex restriction, the cloud Access token | 1, 3 |
 | 5. macOS | launchd service, multi-arch templates and `aqv2`, a proven Docker Desktop channel transport | 1 |
+
+Phase 1 server: see `docs/implementation/0007-P1-server.md`.

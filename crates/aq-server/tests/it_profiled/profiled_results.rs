@@ -1887,7 +1887,7 @@ mod review_inbox;
 mod media_http;
 
 #[path = "profiled_results/auto_settlement56.rs"]
-mod auto_settlement56;
+pub(crate) mod auto_settlement56;
 #[path = "profiled_results/operations.rs"]
 mod operations;
 #[path = "profiled_results/question_inbox.rs"]

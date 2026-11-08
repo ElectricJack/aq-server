@@ -705,3 +705,83 @@ mod renewal;
 
 #[path = "published/presence.rs"]
 mod presence;
+
+/// Spec 0007 Q2 (fix round 1, C1): an offer selected while the owner's switch
+/// is on, with no observation row at all. Time passes between selection,
+/// accept and grant (nothing rewrites a fenced fact any more).
+async fn switched_on() -> Prepared {
+    let case = native_offer::setup().await;
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(&case.env.env.pool)
+        .await
+        .unwrap();
+    switch(&case, true, 1).await;
+    let (status, body) = native_offer::poll(&case).await;
+    assert_eq!(status, 200, "{body}");
+    let reply = aq_admission::control::decode_reply(&serde_json::to_vec(&body).unwrap());
+    let Ok(aq_admission::control::ControlReply::Poll(mut page)) = reply else {
+        panic!("{body}")
+    };
+    assert_eq!(page.offers.len(), 1, "{body}");
+    case.env.env.time.fetch_add(2_000, Ordering::SeqCst);
+    let offer = page.offers.remove(0);
+    setup_from(case, offer).await
+}
+async fn switch(case: &Case, on: bool, expected: u64) {
+    let pool = &case.env.env.pool;
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let mut c = pool.acquire().await.unwrap();
+    let now = (case.env.env.state.clock)();
+    aq_machine_control::set_owner_availability(&mut c, on, expected, owner, Uuid::new_v4(), now)
+        .await
+        .unwrap();
+}
+async fn observation_rows(c: &Prepared) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM intelligence_observations")
+        .fetch_one(&c.case.env.env.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn owner_switch_on_offer_accepts_grants_and_replays_without_an_attestation_row() {
+    let c = switched_on().await;
+    c.clock.fetch_add(1_000, Ordering::SeqCst);
+    let first = grant(&c).await.unwrap();
+    c.clock.fetch_add(500, Ordering::SeqCst);
+    let replay = grant(&c).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&first.original).unwrap(),
+        serde_json::to_value(&replay.original).unwrap()
+    );
+    assert_eq!(observation_rows(&c).await, 0);
+}
+
+#[tokio::test]
+async fn owner_switch_flipped_between_selection_and_grant_refuses() {
+    let c = switched_on().await;
+    switch(&c.case, false, 2).await;
+    let off = grant(&c).await.unwrap_err();
+    assert!(format!("{off:?}").contains("availability"), "{off:?}");
+    ungranted(&c).await;
+    // Back on is a new generation: still not the switch the offer was selected under.
+    switch(&c.case, true, 3).await;
+    assert!(grant(&c).await.is_err());
+    ungranted(&c).await;
+}
+
+/// Fix round 2: the fence treats the switch of a demoted owner as unset, so
+/// an offer selected under it is refused at the grant.
+#[tokio::test]
+async fn owner_switch_of_a_demoted_owner_refuses_the_grant() {
+    let c = switched_on().await;
+    sqlx::query("UPDATE users SET role='viewer' WHERE email='owner@localhost'")
+        .execute(&c.case.env.env.pool)
+        .await
+        .unwrap();
+    assert!(grant(&c).await.is_err());
+    ungranted(&c).await;
+}

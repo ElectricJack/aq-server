@@ -1,0 +1,17 @@
+[package]
+name = "aq-machine-control"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Service machines (spec 0007 phase 1): machine keys, slot nodes, desired state, handoffs, revocation, owner availability"
+
+[dependencies]
+aq-intelligence-config = { path = "../aq-intelligence-config", version = "=0.1.0" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
+aq-protocol.workspace = true
+chrono.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v5"] }

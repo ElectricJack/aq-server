@@ -591,3 +591,255 @@ async fn machine_reports_one_second_apart_store_one_sample() {
 async fn machine_reports_six_seconds_apart_store_two_samples() {
     assert_eq!(samples_after_gaps([1_000, 6_000]).await.0, 2);
 }
+
+fn slots_body(key: &str, slots: u32) -> Value {
+    json!({"schema_version": 1, "machine_key": key, "slots": slots})
+}
+
+async fn post_slots(h: &Harness, bearer: Option<&str>, body: Value) -> (StatusCode, Value) {
+    send(&h.worker, "POST", "/v1/worker/slots", bearer, Some(body)).await
+}
+
+#[tokio::test]
+async fn slots_claim_key_and_mint_siblings_once_with_credentials() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, v) = post_slots(&h, Some(&r.credential), slots_body("desk", 3)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["machine_key"], "desk");
+    let slots = v["slots"].as_array().unwrap().clone();
+    assert_eq!(slots.len(), 2);
+    for slot in &slots {
+        let cred = slot["credential"].as_str().unwrap();
+        assert!(cred.starts_with("aqn_"));
+        let (s, _) = send(
+            &h.worker,
+            "POST",
+            "/v1/worker/heartbeat",
+            Some(cred),
+            Some(hb()),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let pool = h._db.pool().await;
+    let rows: Vec<(String, i32)> =
+        sqlx::query_as("SELECT machine_key, slot FROM nodes ORDER BY slot")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("desk".to_string(), 1),
+            ("desk".to_string(), 2),
+            ("desk".to_string(), 3)
+        ]
+    );
+    let (s, again) = post_slots(&h, Some(&r.credential), slots_body("desk", 3)).await;
+    assert_eq!(s, StatusCode::OK);
+    let again = again["slots"].as_array().unwrap().clone();
+    assert_eq!(
+        again.iter().map(|x| &x["node_id"]).collect::<Vec<_>>(),
+        slots.iter().map(|x| &x["node_id"]).collect::<Vec<_>>()
+    );
+    assert!(again.iter().all(|x| x.get("credential").is_none()));
+}
+
+#[tokio::test]
+async fn slots_refuses_sibling_caller_bounds_and_bad_key() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (_, v) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    let sibling = v["slots"][0]["credential"].as_str().unwrap().to_string();
+    let (s, _) = post_slots(&h, Some(&sibling), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    for body in [
+        slots_body("desk", 0),
+        slots_body("desk", 9),
+        slots_body("Desk", 2),
+    ] {
+        let (s, _) = post_slots(&h, Some(&r.credential), body).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+    let (s, _) = post_slots(&h, None, slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn slots_refuses_a_key_held_by_another_machine() {
+    let h = harness().await;
+    let a = enroll(&h).await;
+    let b = enroll(&h).await;
+    let (s, _) = post_slots(&h, Some(&a.credential), slots_body("desk", 1)).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = post_slots(&h, Some(&b.credential), slots_body("desk", 1)).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn slots_refused_after_machine_revoked() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, _) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::OK);
+    let pool = h._db.pool().await;
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::revoke_machine(&mut c, "desk", t0())
+        .await
+        .unwrap();
+    let (s, _) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+async fn post_control(h: &Router, bearer: &str) -> (StatusCode, Value) {
+    send(
+        h,
+        "POST",
+        "/v1/worker/control",
+        Some(bearer),
+        Some(json!({"schema_version": 1})),
+    )
+    .await
+}
+
+async fn any_user(pool: &sqlx::PgPool) -> uuid::Uuid {
+    sqlx::query_scalar("SELECT id FROM users LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn control_reports_desired_state_and_pending_handoffs() {
+    let f = crate::common::profiled::fixture().await;
+    let (attempt, pool, _) = crate::machine_store::granted(&f).await;
+    let worker = build_worker_router(f.state.clone());
+    let (s, v) = send(
+        &worker,
+        "POST",
+        "/v1/worker/slots",
+        Some(&f.credential),
+        Some(slots_body("desk", 1)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = post_control(&worker, &f.credential).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (
+            &v["desired"],
+            &v["generation"],
+            v["handoff"].as_array().unwrap().len()
+        ),
+        (&json!("running"), &json!(1), 0)
+    );
+    let mut c = pool.acquire().await.unwrap();
+    let who = any_user(&pool).await;
+    aq_machine_control::set_desired(
+        &mut c,
+        "desk",
+        aq_machine_control::DesiredState::Stopped,
+        1,
+        who,
+        uuid::Uuid::new_v4(),
+        t0(),
+    )
+    .await
+    .unwrap();
+    aq_machine_control::request_handoffs(&mut c, "desk", t0())
+        .await
+        .unwrap();
+    let (s, v) = post_control(&worker, &f.credential).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["desired"], "stopped");
+    assert_eq!(v["generation"], 2);
+    assert_eq!(v["handoff"], json!([attempt]));
+    let seen: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT last_seen_at FROM nodes WHERE id=$1")
+            .bind(f.node.node_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(seen.is_some());
+}
+
+#[tokio::test]
+async fn control_refuses_a_legacy_node() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, _) = post_control(&h.worker, &r.credential).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn machine_control_generation_conflicts_and_idempotent_handoffs() {
+    let f = crate::common::profiled::fixture().await;
+    let (attempt, pool, _) = crate::machine_store::granted(&f).await;
+    let worker = build_worker_router(f.state.clone());
+    let (_, v) = send(
+        &worker,
+        "POST",
+        "/v1/worker/slots",
+        Some(&f.credential),
+        Some(slots_body("desk", 2)),
+    )
+    .await;
+    let sibling = v["slots"][0]["credential"].as_str().unwrap().to_string();
+    let mut c = pool.acquire().await.unwrap();
+    for _ in 0..2 {
+        aq_machine_control::request_handoffs(&mut c, "desk", t0())
+            .await
+            .unwrap();
+    }
+    let rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM attempt_handoffs")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(rows().await, 1);
+    let who = any_user(&pool).await;
+    let set = |expected| {
+        let pool = pool.clone();
+        async move {
+            aq_machine_control::set_desired(
+                &mut pool.acquire().await.unwrap(),
+                "desk",
+                aq_machine_control::DesiredState::Stopped,
+                expected,
+                who,
+                uuid::Uuid::new_v4(),
+                t0(),
+            )
+            .await
+        }
+    };
+    set(1).await.unwrap();
+    assert!(matches!(
+        set(1).await,
+        Err(aq_machine_control::Error::Conflict { generation: 2 })
+    ));
+    let notice = json!({"schema_version": 1, "attempt_id": attempt, "reason": "service_stop"});
+    for _ in 0..2 {
+        let (s, v) = send(
+            &worker,
+            "POST",
+            "/v1/worker/handoffs",
+            Some(&f.credential),
+            Some(notice.clone()),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+    assert_eq!(rows().await, 1);
+    let (s, _) = send(
+        &worker,
+        "POST",
+        "/v1/worker/handoffs",
+        Some(&sibling),
+        Some(notice),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}

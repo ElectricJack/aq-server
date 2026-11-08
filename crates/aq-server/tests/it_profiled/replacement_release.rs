@@ -30,7 +30,10 @@ async fn set_hot(pool: &PgPool, attempt: Uuid, hot: &HotState) {
 
 /// A held, granted, still-running profiled attempt offered at `NOW`.
 async fn granted(f: &Fixture) -> (Uuid, PgPool, HotState) {
-    let attempt = insert_offered(f, NOW).await;
+    granted_at(f, NOW).await
+}
+pub(crate) async fn granted_at(f: &Fixture, offered_at_ms: u64) -> (Uuid, PgPool, HotState) {
+    let attempt = insert_offered(f, offered_at_ms).await;
     let pool = f.db.pool().await;
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
     sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)").bind(attempt).bind(json!(hot)).execute(&pool).await.unwrap();
@@ -54,7 +57,7 @@ async fn granted(f: &Fixture) -> (Uuid, PgPool, HotState) {
 }
 
 /// Drives the granted attempt to a failed, stopped, retained, quiescent end.
-async fn fail(pool: &PgPool, attempt: Uuid, hot: &mut HotState) {
+pub(crate) async fn fail(pool: &PgPool, attempt: Uuid, hot: &mut HotState) {
     hot.status = Status::Cancelling;
     hot.revoked = true;
     set_hot(pool, attempt, hot).await;
@@ -211,6 +214,7 @@ async fn uncertain_predecessor_is_never_released() {
     let forged = Replacement {
         predecessor: attempt,
         attempts_started: 1,
+        exempt_attempts: 0,
         elapsed_ms: 0,
         sandbox_ms: 60_000,
         stop_receipt: artifact("synthetic-stop-owner-receipt", b"synthetic-stop"),

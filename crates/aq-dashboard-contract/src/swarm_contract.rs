@@ -19,6 +19,30 @@ pub struct SwarmServer {
     pub version: String,
     pub source_revision: String,
     pub running_agents: u32,
+    pub owner_availability: OwnerAvailability,
+}
+/// The owner's sticky availability switch (spec 0007 Q2). `unset` keeps the
+/// manual observations of before; `off` stops new offers.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerAvailabilityState {
+    Unset,
+    On,
+    Off,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerAvailability {
+    pub state: OwnerAvailabilityState,
+    /// Decimal compare-and-swap generation for swarm.availability.set.
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub generation: String,
+    pub since: Option<Timestamp>,
+    /// Why the state differs from the last switch, e.g. `unset` because the
+    /// owner who set it is no longer an owner. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 200))]
+    pub note: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -53,7 +77,27 @@ pub struct SwarmMachine {
     pub agent_max: Option<u32>,
     /// Cost of a cloud machine; always None until cost reporting exists.
     pub cost: Option<MachineCost>,
+    /// Present only for a service machine (a server-held key); None for legacy and `node:` machines.
+    pub control: Option<MachineControl>,
     pub nodes: Vec<SwarmNode>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineDesired {
+    Running,
+    Draining,
+    Stopped,
+}
+/// The owner's control of a service machine (spec 0007 phase 1).
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MachineControl {
+    pub desired: MachineDesired,
+    /// Decimal compare-and-swap generation for worker.start/stop/drain.
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub generation: String,
+    pub since: Option<Timestamp>,
+    pub pending_handoffs: u32,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

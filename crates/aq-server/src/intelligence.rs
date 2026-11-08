@@ -3,6 +3,7 @@
 pub mod config {
     pub use aq_intelligence_config::*;
 }
+pub(crate) mod availability_action;
 mod feedback;
 mod inventory;
 pub mod login_import;
@@ -164,7 +165,7 @@ async fn observe(
             .iter()
             .find(|c| c.credential.profile == credential.profile)
             .ok_or(AppError::Internal)?;
-        if !entry.allowed_node_ids.contains(&node) {
+        if !entry.admits(node, aq_machine_control::enrolled(&mut tx, node).await?) {
             return Err(bad("observation node outside credential authority"));
         }
     }

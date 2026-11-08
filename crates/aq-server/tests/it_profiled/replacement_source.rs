@@ -93,6 +93,7 @@ async fn successor_reuses_predecessor_export_only_with_exact_release_receipt() {
     let replacement = Replacement {
         predecessor,
         attempts_started: 1,
+        exempt_attempts: 0,
         elapsed_ms: 1,
         sandbox_ms: 0,
         stop_receipt: profiled::artifact("stop", b"stop"),

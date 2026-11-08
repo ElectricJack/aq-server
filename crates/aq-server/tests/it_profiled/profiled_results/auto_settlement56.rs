@@ -19,11 +19,11 @@ fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions:
     .unwrap()
 }
 
-struct AutoEnv {
-    f: Fixture,
-    report: ResultReport,
-    source: Uuid,
-    checkpoint: String,
+pub(crate) struct AutoEnv {
+    pub(crate) f: Fixture,
+    pub(crate) report: ResultReport,
+    pub(crate) source: Uuid,
+    pub(crate) checkpoint: String,
     check_id: String,
     validator: String,
     expected_version: u64,
@@ -36,7 +36,7 @@ async fn auto_env(delivery: &str, graph_status: axum::http::StatusCode) -> AutoE
     auto_env_with(delivery, graph_status, true, None).await
 }
 
-async fn auto_env_with(
+pub(crate) async fn auto_env_with(
     delivery: &str,
     graph_status: axum::http::StatusCode,
     keep_checks: bool,
@@ -465,7 +465,7 @@ async fn failed_or_unknown_report_never_completes_a_task_without_required_checks
 
 /// Synthetic central aq-git peer: answers `candidate.create` and `publish`
 /// in order, after checking the intent was committed before the socket call.
-async fn git_peer(
+pub(crate) async fn git_peer(
     pool: sqlx::PgPool,
     socket: std::path::PathBuf,
     replies: Vec<Value>,
@@ -535,7 +535,7 @@ async fn git_peer_cancelling(
 }
 
 /// Counts every connection to the central socket; nothing may arrive.
-fn silent_git(socket: &std::path::Path) -> Arc<AtomicUsize> {
+pub(crate) fn silent_git(socket: &std::path::Path) -> Arc<AtomicUsize> {
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
     let count = Arc::new(AtomicUsize::new(0));
     let c = count.clone();
@@ -594,7 +594,7 @@ async fn publish_env_with(outcome: Option<aq_admission::transport::ProcessOutcom
         _git: git,
     }
 }
-async fn admitted(env: &AutoEnv) -> aq_admission::SourceAdmission {
+pub(crate) async fn admitted(env: &AutoEnv) -> aq_admission::SourceAdmission {
     let pool = env.f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     let r = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
@@ -603,7 +603,7 @@ async fn admitted(env: &AutoEnv) -> aq_admission::SourceAdmission {
     tx.rollback().await.unwrap();
     r.spec.source
 }
-fn ready_candidate(candidate: &str) -> Value {
+pub(crate) fn ready_candidate(candidate: &str) -> Value {
     json!({"ok":true,"result":{"candidate_id":"OP","state":"ready","candidate":{"algorithm":"sha1","hex":candidate},
         "clean_prefix":{"algorithm":"sha1","hex":candidate},"retention_handle":"OP","conflict_step":null,
         "conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false}})

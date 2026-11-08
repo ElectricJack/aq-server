@@ -95,12 +95,12 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:c3cbd5c140cbf5f0a29905a877070d267db55f63d96a2277e9a3ca6707c03cde"
+          "digest": "sha256:55028fe57017668a5a7b1ef88cb41223b9184928ad174d30d4616694a5deb7f8"
         },
         {
           "name": "dashboard-actions",
           "version": "dashboard-actions-1",
-          "digest": "sha256:6b8c255bb66190705fa13df23f2cb7761e409f8c3bbb705cac09f7f3635df9ec"
+          "digest": "sha256:67e991d5fe15be26fd2a26aefd09031609c82e4b1770a7731727fb20af2d5f15"
         }
       ],
       "default_scope": {
@@ -278,12 +278,12 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:c3cbd5c140cbf5f0a29905a877070d267db55f63d96a2277e9a3ca6707c03cde"
+          "digest": "sha256:55028fe57017668a5a7b1ef88cb41223b9184928ad174d30d4616694a5deb7f8"
         },
         {
           "name": "dashboard-actions",
           "version": "dashboard-actions-1",
-          "digest": "sha256:6b8c255bb66190705fa13df23f2cb7761e409f8c3bbb705cac09f7f3635df9ec"
+          "digest": "sha256:67e991d5fe15be26fd2a26aefd09031609c82e4b1770a7731727fb20af2d5f15"
         }
       ],
       "default_scope": {

@@ -446,3 +446,67 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn registration_receipt_cap_is_per_boot() {
+    let mut f = fixture().await;
+    let pool = f.db.pool().await;
+    let request = Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        runtime: artifact("synthetic-native-runtime", b"code"),
+        capabilities: vec![],
+        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
+    };
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        context_qualifications: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            runtime: request.runtime.clone(),
+            qualification: artifact("synthetic-qualification", b"qualification"),
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    f.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&f.state)
+        .await
+        .unwrap();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {}", f.credential).parse().unwrap(),
+    );
+    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
+        .await
+        .unwrap();
+    // Receipts are append-only, so the filled history is inserted directly.
+    sqlx::query("INSERT INTO native_registration_receipts(node_id,operation_id,request_digest,response) SELECT $1,gen_random_uuid(),repeat('a',64),jsonb_build_object('identity',jsonb_build_object('boot_id',$2::text)) FROM generate_series(1,1024)")
+        .bind(f.node.node_id)
+        .bind(f.node.boot_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut boot_b = request.clone();
+    boot_b.identity.boot_id = Uuid::new_v4();
+    registration::register(&f.state, &auth, &boot_b)
+        .await
+        .unwrap();
+    let mut boot_a = request.clone();
+    boot_a.operation_id = Uuid::new_v4();
+    let error = registration::register(&f.state, &auth, &boot_a)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:?}").contains("native registration receipt capacity exhausted"),
+        "{error:?}"
+    );
+}

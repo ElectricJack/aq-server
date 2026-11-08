@@ -72,7 +72,7 @@ pub fn read_for_lease_from(
     if !credential.enabled
         || !credential.provisionable
         || credential.material_owner.is_none()
-        || !configured.allowed_node_ids.contains(&node_id)
+        || !configured.allows(node_id)
         || credential.provider != lease.provider.as_str()
         || credential.account_reference != lease.account_reference.as_str()
         || credential.endpoint_reference != lease.endpoint_reference.as_str()
@@ -187,7 +187,7 @@ pub(crate) fn provisioning_bindings(
             if !c.enabled
                 || !c.provisionable
                 || cfg.delivery_mode.is_none()
-                || !cfg.allowed_node_ids.contains(&node)
+                || !cfg.allows(node)
                 || aq_selection::credential_backend_policy(&cfg.allowed_backends, backend_kind)
                     .is_err()
                 || read_configured(registry, index).is_err()
@@ -258,6 +258,7 @@ mod tests {
                     allowed_backends: aq_selection::default_allowed_backends(),
                 },
                 allowed_node_ids: vec![node],
+                allow_enrolled_nodes: false,
                 secret_file: Some(path),
                 delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
             }],

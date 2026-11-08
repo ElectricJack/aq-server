@@ -74,6 +74,12 @@ pub async fn observe(
 ) -> Result<Observation, AppError> {
     observe_source(state, project, policy, None).await
 }
+/// A fixed commit and its central retention handle; `handoff` is evidence.
+struct Fixed {
+    hex: String,
+    retention_handle: Uuid,
+    handoff: Option<Value>,
+}
 
 /// A replacement observes the predecessor's exact retained commit and handle.
 /// It does not resolve the configured moving ref again or mint another export.
@@ -92,14 +98,37 @@ pub async fn observe_retained(
     {
         return Err(refused());
     }
-    observe_source(state, project, policy, Some(retained)).await
+    let fixed = Fixed {
+        hex: retained.base.hex.clone(),
+        retention_handle: retained.operation_id,
+        handoff: None,
+    };
+    observe_source(state, project, policy, Some(fixed)).await
+}
+
+/// A handoff successor (spec 0007) observes the predecessor's saved commit,
+/// hydrated from its candidate's central retention handle.
+pub async fn observe_handoff(
+    state: &AppState,
+    project: &FrozenProjectBinding,
+    policy: &ProjectPolicyRecord,
+    base: &super::handoff::HandoffBase,
+) -> Result<Observation, AppError> {
+    let handoff =
+        json!({"predecessor": base.predecessor, "candidate_operation_id": base.retention_handle});
+    let fixed = Fixed {
+        hex: base.oid.clone(),
+        retention_handle: base.retention_handle,
+        handoff: Some(handoff),
+    };
+    observe_source(state, project, policy, Some(fixed)).await
 }
 
 async fn observe_source(
     state: &AppState,
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
-    retained: Option<&super::source_exports::Request>,
+    fixed: Option<Fixed>,
 ) -> Result<Observation, AppError> {
     static READS: OnceLock<Semaphore> = OnceLock::new();
     let _permit = READS
@@ -133,22 +162,27 @@ async fn observe_source(
         return Err(refused());
     }
     let mut evidence = BTreeMap::new();
-    let selection = retained.map_or_else(
+    let selection = fixed.as_ref().map_or_else(
         || policy.source.clone(),
-        |request| SourceSelection::Immutable {
+        |fixed| SourceSelection::Immutable {
             object: ObjectId {
                 format: ObjectFormat::Sha1,
-                hex: request.base.hex.clone(),
+                hex: fixed.hex.clone(),
             },
         },
     );
-    // The export transfer is the retained byte owner. The checkpoint handle
-    // originally used to create it may have since been released.
-    let mut retention_handle = retained.map_or(policy.retention_handle, |r| r.operation_id);
+    // The export transfer (or handoff candidate) is the retained byte owner.
+    // The checkpoint handle originally used may have since been released.
+    let mut retention_handle = fixed
+        .as_ref()
+        .map_or(policy.retention_handle, |f| f.retention_handle);
+    if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
+        evidence.insert("handoff", handoff);
+    }
     // D1: a named ref that AQ itself publishes follows the recorded source
     // head (the publication receipt is the evidence) and hydrates from the
     // candidate's central retention handle. Without one, a fresh observation.
-    let head = match (&selection, retained) {
+    let head = match (&selection, &fixed) {
         (SourceSelection::NamedRef { reference }, None) => {
             crate::profiled_execution::settlement::publication::current_head(
                 &state.store.pool,

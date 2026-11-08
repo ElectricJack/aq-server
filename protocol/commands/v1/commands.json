@@ -2705,6 +2705,34 @@
     },
     {
       "cli": [
+        "swarm",
+        "availability",
+        "set"
+      ],
+      "grant": "swarm.availability",
+      "kind": "mutation",
+      "name": "swarm.availability.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:54f88abce35a6d3b38ecf0dd9b9878af0854fee8182e5ab03cf6bbe05ab2b781",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=swarm.availability.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
         "task",
         "cancel"
       ],
@@ -4159,6 +4187,114 @@
       "summary": "The calling principal: attempt, task, project, profile, grants and credential expiry",
       "target": {
         "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "drain"
+      ],
+      "grant": "worker.control",
+      "kind": "mutation",
+      "name": "worker.drain",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:daa39f00ae925e0b6a7848da862b430082d73401e2793285ba33eb7f7067dc28",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=worker.drain"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "revoke"
+      ],
+      "grant": "worker.control",
+      "kind": "mutation",
+      "name": "worker.revoke",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:fb20c24c2c0659e2962bdaadc17845bc64b428669520377c37d4f59e62370cc0",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=worker.revoke"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "start"
+      ],
+      "grant": "worker.control",
+      "kind": "mutation",
+      "name": "worker.start",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:daa39f00ae925e0b6a7848da862b430082d73401e2793285ba33eb7f7067dc28",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=worker.start"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "stop"
+      ],
+      "grant": "worker.control",
+      "kind": "mutation",
+      "name": "worker.stop",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:daa39f00ae925e0b6a7848da862b430082d73401e2793285ba33eb7f7067dc28",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=worker.stop"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
       }
     }
   ],

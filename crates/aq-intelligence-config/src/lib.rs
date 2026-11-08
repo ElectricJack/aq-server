@@ -24,9 +24,92 @@ pub struct CredentialConfig {
     /// Material state and the nested backend policy are derived by `load`.
     pub credential: AuthorizedCredential,
     pub allowed_node_ids: Vec<uuid::Uuid>,
+    /// Spec 0007 Q3: on by default; `false` restricts the credential to `allowed_node_ids`.
+    #[serde(default = "enrolled_by_default")]
+    pub allow_enrolled_nodes: bool,
     pub secret_file: Option<PathBuf>,
     #[serde(default)]
     pub delivery_mode: Option<MaterialDeliveryMode>,
+}
+fn enrolled_by_default() -> bool {
+    true
+}
+/// The credential-wide observation scope (no model, no node) of `c`: the scope
+/// of the owner's availability switch (spec 0007 Q2).
+pub fn credential_scope(c: &AuthorizedCredential) -> aq_selection::ObservationScope {
+    aq_selection::ObservationScope {
+        credential_revision: c.revision,
+        provider: c.provider.clone(),
+        credential_profile: c.profile.clone(),
+        account_reference: c.account_reference.clone(),
+        endpoint_reference: c.endpoint_reference.clone(),
+        model: None,
+        node_id: None,
+    }
+}
+/// Lifetime of a synthesized owner attestation (the validator's maximum).
+pub const OWNER_ATTESTATION_TTL_MS: u64 = 3_600_000;
+/// Spec 0007 Q2: while the owner's switch is on (`switch` = its principal and
+/// generation), selection treats every authorized credential as attested
+/// available at `now_ms`, with no observation row. A credential with unexpired
+/// negative feedback in `observed` (the relevant rows) is not attested, so that
+/// feedback still holds it off. The result depends only on its inputs: the
+/// admission fences recompute it from the decision's own `now_ms`, so it
+/// changes only when the owner flips the switch. Its sequence ranks above any
+/// row of the same scope and principal, so a stale or expired row of the old
+/// keeper never hides it.
+pub fn owner_attestations(
+    credentials: &[AuthorizedCredential],
+    observed: &[aq_selection::AvailabilityObservation],
+    (principal, generation): (uuid::Uuid, u64),
+    revision: u64,
+    now_ms: u64,
+) -> Vec<aq_selection::AvailabilityObservation> {
+    use sha2::Digest;
+    let negative = |c: &AuthorizedCredential| {
+        observed.iter().any(|o| {
+            o.state != aq_selection::Availability::Available
+                && o.expires_at_ms > now_ms
+                && o.scope.credential_profile == c.profile
+                && o.scope.credential_revision == c.revision
+                && o.scope.provider == c.provider
+                && o.scope.account_reference == c.account_reference
+                && o.scope.endpoint_reference == c.endpoint_reference
+        })
+    };
+    (credentials.iter().enumerate())
+        .filter(|(_, c)| !negative(c))
+        .map(|(i, c)| {
+            let name = format!("aq.swarm.owner-availability:{generation}:{i}");
+            let hash: [u8; 32] = sha2::Sha256::digest(name.as_bytes()).into();
+            let id = uuid::Builder::from_custom_bytes(hash[..16].try_into().expect("16 bytes"));
+            aq_selection::AvailabilityObservation {
+                observation_id: id.into_uuid(),
+                scope: credential_scope(c),
+                source: aq_selection::ObservationSource::Operator {
+                    principal_id: principal,
+                },
+                sequence: (1 << 62) + generation,
+                revision,
+                state: aq_selection::Availability::Available,
+                received_at_ms: now_ms,
+                expires_at_ms: now_ms + OWNER_ATTESTATION_TTL_MS,
+                cooldown_until_ms: 0,
+            }
+        })
+        .collect()
+}
+impl CredentialConfig {
+    /// Spec 0007 Q3: every enrolled node, or only the listed ones when the flag is off.
+    /// Revoked nodes are refused by authentication and the offer fence, not here.
+    pub fn allows(&self, node: uuid::Uuid) -> bool {
+        self.allow_enrolled_nodes || self.allowed_node_ids.contains(&node)
+    }
+    /// Review I6: a listed node, or with the flag an `enrolled` one (a live
+    /// node enrolled with an owner's code, or a slot minted by its machine).
+    pub fn admits(&self, node: uuid::Uuid, enrolled: bool) -> bool {
+        self.allowed_node_ids.contains(&node) || (self.allow_enrolled_nodes && enrolled)
+    }
 }
 impl std::fmt::Debug for CredentialConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,6 +118,7 @@ impl std::fmt::Debug for CredentialConfig {
             .field("kind", &self.kind)
             .field("allowed_backends", &self.allowed_backends)
             .field("allowed_node_ids", &self.allowed_node_ids)
+            .field("allow_enrolled_nodes", &self.allow_enrolled_nodes)
             .field("delivery_mode", &self.delivery_mode)
             .field(
                 "secret_file",
@@ -173,10 +257,21 @@ impl IntelligenceConfig {
         }
         Ok(())
     }
+    /// Review I6: one line per credential whose explicit `allowed_node_ids`
+    /// the default-on `allow_enrolled_nodes` (spec 0007 Q3) overrides.
+    pub fn widened_lists(&self) -> Vec<String> {
+        (self.credentials.iter())
+            .filter(|c| c.allow_enrolled_nodes && !c.allowed_node_ids.is_empty())
+            .map(|c| format!("intelligence credential {} lists allowed_node_ids, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node may use it; set allow_enrolled_nodes = false on the credential to keep only the listed nodes", c.credential.profile.id.as_str()))
+            .collect()
+    }
     /// Call once at daemon startup, never while selecting. Missing files are a
     /// missing-credentials fact; unsafe objects and oversized input fail closed.
     pub fn load(&self) -> Result<LoadedRegistry, String> {
         self.validate()?;
+        for line in self.widened_lists() {
+            tracing::warn!("{line}");
+        }
         let mut credentials = Vec::new();
         let mut fingerprints = Vec::new();
         for item in &self.credentials {
@@ -285,4 +380,87 @@ pub fn deserialize_registry<'de, D: serde::Deserializer<'de>>(
                 .map_err(serde::de::Error::custom)
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn credential(extra: serde_json::Value) -> CredentialConfig {
+        let mut v = serde_json::json!({
+            "credential": {
+                "profile": {"id":"test", "version":"1", "digest":"a".repeat(64)},
+                "provider":"test", "account_reference":"acct", "endpoint_reference":"endpoint",
+                "revision":3, "enabled":true, "provisionable":false
+            },
+            "allowed_node_ids": [uuid::Uuid::from_u128(1)],
+            "secret_file": null
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn allows_listed_or_enrolled_nodes() {
+        let (listed, other) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let default = credential(serde_json::json!({}));
+        assert!(default.allow_enrolled_nodes && default.allows(other));
+        let restricted = credential(serde_json::json!({"allow_enrolled_nodes": false}));
+        assert!(restricted.allows(listed) && !restricted.allows(other));
+    }
+
+    #[test]
+    fn owner_attestations_follow_the_switch_generation_and_spare_negative_feedback() {
+        let c = credential(serde_json::json!({})).credential;
+        let who = uuid::Uuid::from_u128(9);
+        let on = |g, observed: &[aq_selection::AvailabilityObservation], now| {
+            owner_attestations(std::slice::from_ref(&c), observed, (who, g), 4, now)
+        };
+        let a = on(2, &[], 1_000);
+        assert_eq!(a.len(), 1);
+        a[0].validate().unwrap();
+        assert_eq!(a[0].state, aq_selection::Availability::Available);
+        assert_eq!((a[0].received_at_ms, a[0].revision), (1_000, 4));
+        // Recomputed later from the decision's own clock: identical bytes.
+        let again = on(2, &[], 1_000);
+        assert_eq!(
+            serde_json::to_value(&a).unwrap(),
+            serde_json::to_value(&again).unwrap()
+        );
+        // Flipping the switch (a new generation) changes the attestation.
+        assert_ne!(on(4, &[], 1_000)[0].observation_id, a[0].observation_id);
+        let mut negative = a[0].clone();
+        negative.state = aq_selection::Availability::QuotaUnavailable;
+        negative.scope.model = Some("m".into());
+        negative.expires_at_ms = 2_000;
+        assert!(on(2, std::slice::from_ref(&negative), 1_000).is_empty());
+        assert_eq!(on(2, std::slice::from_ref(&negative), 2_000).len(), 1);
+    }
+    #[test]
+    fn widened_lists_name_each_overridden_credential_and_admits_needs_enrollment() {
+        let (listed, other) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let default = credential(serde_json::json!({}));
+        let restricted = credential(serde_json::json!({"allow_enrolled_nodes": false}));
+        let unlisted = credential(serde_json::json!({"allowed_node_ids": []}));
+        let config = |c: CredentialConfig| IntelligenceConfig {
+            revision: 1,
+            credentials: vec![c],
+            qualified_harnesses: vec![],
+            accounting: Default::default(),
+            material_store: None,
+        };
+        let lines = config(default.clone()).widened_lists();
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].contains("credential test")
+                && lines[0].contains("allow_enrolled_nodes = false")
+        );
+        assert!(config(restricted.clone()).widened_lists().is_empty());
+        assert!(config(unlisted).widened_lists().is_empty());
+        assert!(default.admits(listed, false) && default.admits(other, true));
+        assert!(!default.admits(other, false), "revoked or not enrolled");
+        assert!(!restricted.admits(other, true));
+    }
 }

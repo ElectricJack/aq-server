@@ -11,7 +11,7 @@ use crate::{
     intelligence::resolver::{self, ReplacementBudget, ResolveRequest},
     profiled_execution::{
         artifacts::OwnerKind,
-        context_budget, registration,
+        registration,
         replacement::{self, Assessment},
         source, source_exports,
     },
@@ -30,6 +30,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
+const MAX_SKIPPED: usize = 8;
 fn db(_: sqlx::Error) -> AppError {
     AppError::Internal
 }
@@ -199,6 +200,7 @@ async fn selection(
         .map(|r| {
             Ok::<_, AppError>(ReplacementBudget {
                 attempts_started: r.attempts_started,
+                exempt_attempts: r.exempt_attempts,
                 elapsed_ms: r.elapsed_ms,
                 evidence: r.evidence(lineage.clone(), now(state)?)?,
             })
@@ -212,9 +214,30 @@ async fn selection(
             project: compiled.frozen.clone(),
             compositions: compiled.candidates.clone(),
             replacement,
+            record_refused: false,
         },
     )
     .await
+}
+/// Review I5: a poll skips at most MAX_SKIPPED refused successors.
+fn skips_spent(skipped: &std::collections::BTreeSet<Uuid>) -> bool {
+    skipped.len() >= MAX_SKIPPED
+}
+/// Spec 0007 Q1 backstop: selection refused a successor. That is no offer this
+/// poll, never a refused poll; a first attempt keeps the refusal.
+/// A refused replacement joins `skipped`: the poll goes on without it.
+fn refused_successor(
+    decision: &resolver::Decision,
+    task: &aq_admission::TaskRevision,
+    replacement: Option<&replacement::Replacement>,
+    skipped: &mut std::collections::BTreeSet<Uuid>,
+) -> bool {
+    let (None, Some(r)) = (&decision.outcome.resolved, replacement) else {
+        return false;
+    };
+    let reasons = &decision.outcome.reason_codes;
+    tracing::warn!(task_id = %task.task_id, predecessor = %r.predecessor, ?reasons, "replacement refused by selection; skipped this poll");
+    skipped.insert(task.task_id)
 }
 /// The commit frozen into the export operation key. An immutable policy keeps
 /// its historical key; a named ref adds the commit it resolved to at offer
@@ -251,6 +274,7 @@ fn source_operation<T: serde::Serialize>(
 }
 async fn first_eligible_task<F, Fut>(
     ready: &crate::agent_access::scheduling::ReadyPage,
+    skipped: &std::collections::BTreeSet<Uuid>,
     mut assess: F,
 ) -> Result<Option<(aq_admission::TaskRevision, Assessment)>, AppError>
 where
@@ -269,7 +293,10 @@ where
                 .unwrap_or(0),
         )
     });
-    for candidate in candidates {
+    for candidate in candidates
+        .into_iter()
+        .filter(|c| !skipped.contains(&c.revision.task_id))
+    {
         // Graph readiness is independent of AQ's retained task claims. A held
         // task, an exhausted retry/time/sandbox budget or an uncertain prior
         // must not starve later tasks on this same bounded page.
@@ -351,6 +378,13 @@ async fn offers(
     if request.available.slots == 0 {
         return Ok(page);
     }
+    let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
+    let hold = aq_machine_control::offer_hold(&mut gate, auth.id());
+    if let Some(reason) = hold.await.map_err(|_| refused())? {
+        tracing::info!(node_id = %auth.id(), "{reason}; no new offers");
+        return Ok(page);
+    }
+    drop(gate);
     // Redelivery precedes new scheduling. Preparing/granted rows are not offers;
     // those require their independently fenced control/reconciliation owners.
     if let Some(native) = on_heap(|| super::redelivery::existing(state, auth, request)).await? {
@@ -391,20 +425,184 @@ async fn offers(
     // Fair share (§8.2): priority plus aging. A project is charged a turn
     // before its Graph read, so one with no work or a failing owner read
     // cannot hold the head of the order and starve the others.
-    let mut chosen = None;
-    for candidate in fairness::order(&candidates, &served, polled_at)
-        .into_iter()
-        .take(MAX_PROJECTS_PER_POLL)
-    {
-        let policy = config
-            .projects
-            .iter()
-            .find(|p| p.project_id == candidate.project_id)
-            .ok_or_else(|| refused())?;
-        if recorded {
-            on_heap(|| fairness::record(&state.store.pool, policy.project_id, polled_at)).await?;
+    // Review I5: a successor refused at a backstop is skipped and selection
+    // goes on with the next eligible task, at most MAX_SKIPPED times a poll.
+    let mut skipped = std::collections::BTreeSet::new();
+    loop {
+        if skips_spent(&skipped) {
+            return Ok(page);
         }
-        let record = on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;
+        let mut chosen = None;
+        for candidate in fairness::order(&candidates, &served, polled_at)
+            .into_iter()
+            .take(MAX_PROJECTS_PER_POLL)
+        {
+            let policy = config
+                .projects
+                .iter()
+                .find(|p| p.project_id == candidate.project_id)
+                .ok_or_else(|| refused())?;
+            if recorded {
+                on_heap(|| fairness::record(&state.store.pool, policy.project_id, polled_at))
+                    .await?;
+            }
+            let record =
+                on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;
+            let ready = on_heap(|| {
+                graph.scheduling_ready_current(
+                    record.binding.graph_workspace_id,
+                    8,
+                    None,
+                    state.clock.as_ref(),
+                )
+            })
+            .await
+            .map_err(|_| refused())?;
+            if let Some((task, assessment)) = on_heap(|| {
+                first_eligible_task(&ready, &skipped, |task| {
+                    replacement::assess_task_for_revision(state, task, polled_at, record.revision)
+                })
+            })
+            .await?
+            {
+                chosen = Some((policy, record, ready, task, assessment));
+                break;
+            }
+        }
+        let Some((policy, record, ready, task, assessment)) = chosen else {
+            return Ok(page);
+        };
+        let replacement = assessment.replacement().cloned();
+        if let Some(replacement) = &replacement {
+            tracing::info!(
+                task_id = %task.task_id,
+                predecessor = %replacement.predecessor,
+                attempts_started = replacement.attempts_started,
+                lineage_elapsed_ms = replacement.elapsed_ms,
+                sandbox_ms_charged = replacement.sandbox_ms,
+                max_attempts = replacement::MAX_ATTEMPTS,
+                max_sandbox_ms = replacement::MAX_SANDBOX_MS,
+                "replacement attempt admitted within the lineage budget"
+            );
+            // The failed predecessor's claim is released under its locks before
+            // the successor's generation; a later refusal retries idempotently.
+            on_heap(|| replacement::release(state, task.task_id, replacement)).await?;
+        }
+        let generation =
+            on_heap(|| super::super::no_grant::next_generation(&state.store.pool, task.task_id))
+                .await?;
+        let context = on_heap(|| {
+            graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref())
+        })
+        .await
+        .map_err(|_| refused())?;
+        let compiled =
+            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        super::observation::ReadProvenance::capture(
+            &task,
+            &ready,
+            &context,
+            compiled.projection.artifact.digest.clone(),
+            now(state)?,
+        )?;
+        let original_ready_node = canonical(
+            &ready
+                .items
+                .iter()
+                .find(|r| r.revision == task)
+                .ok_or_else(|| refused())?
+                .node,
+        )?;
+        let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
+        if refused_successor(&decision, &task, replacement.as_ref(), &mut skipped) {
+            continue;
+        }
+        let selected = decision
+            .outcome
+            .resolved
+            .as_ref()
+            .ok_or_else(|| refused())?;
+        let composition = compiled
+            .candidates
+            .iter()
+            .find(|c| c.digest == selected.choice.composition_digest)
+            .ok_or_else(|| refused())?;
+        // Qualification and exact startup counting precede expensive source export.
+        super::super::context_renewal::evaluate(
+            state,
+            &runtime,
+            selected,
+            &composition.composition,
+            now(state)?,
+        )
+        .await?;
+        let policy_record = config
+            .project_policy_record(policy.project_id)
+            .map_err(|_| refused())?;
+        // Spec 0007: a handed-off predecessor's successor starts from its saved work.
+        let handoff = match &replacement {
+            Some(r) => {
+                on_heap(|| super::super::handoff::successor_base(state, task.task_id, r)).await?
+            }
+            None => None,
+        };
+        let (token, fact) =
+            if let Some(replacement) = replacement.as_ref().filter(|_| handoff.is_none()) {
+                // Reuse the original verified export, including its bundle bytes and
+                // operation identity. Never resolve a moving ref or re-export on retry.
+                on_heap(|| replacement::retained_source(state, task.task_id, replacement))
+                    .await?
+                    .into_parts()
+            } else {
+                // A first attempt freezes the configured source at offer time; a
+                // handoff successor freezes the saved commit as a fresh export (a new
+                // operation, never the predecessor's export).
+                let observed = match &handoff {
+                    Some(base) => {
+                        on_heap(|| {
+                            source::observe_handoff(state, &compiled.frozen, &policy_record, base)
+                        })
+                        .await?
+                    }
+                    None => {
+                        on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
+                    }
+                };
+                let frozen = match &handoff {
+                    Some(base) => Some(base.oid.as_str()),
+                    None => frozen_commit(&policy.source, &observed),
+                };
+                let operation = source_operation(
+                    policy.project_id,
+                    &task,
+                    record.revision,
+                    generation,
+                    config
+                        .project_policy_ref(policy.project_id)
+                        .map_err(|_| refused())?,
+                    frozen,
+                )?;
+                match on_heap(|| reservation(state, &compiled, operation, observed)).await? {
+                    source_exports::Reservation::Pending(token) => {
+                        let fact = on_heap(|| profiled_base::verify_export(state, &token)).await?;
+                        on_heap(|| source_exports::finalize(state, &token, &fact)).await?;
+                        (token, fact)
+                    }
+                    source_exports::Reservation::Verified {
+                        reservation,
+                        canonical_verified,
+                    } => {
+                        let fact = profiled_base::VerifiedExport::decode_stored(
+                            &reservation,
+                            &canonical_verified,
+                        )?;
+                        (reservation, fact)
+                    }
+                }
+            };
+        let source_operation = token.request().operation_id;
+        // External export can consume the original graph/selection freshness. Read
+        // actual owners again; a task CAS/content change refuses this original task.
         let ready = on_heap(|| {
             graph.scheduling_ready_current(
                 record.binding.graph_workspace_id,
@@ -415,208 +613,88 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        if let Some((task, assessment)) = on_heap(|| {
-            first_eligible_task(&ready, |task| {
-                replacement::assess_task_for_revision(state, task, polled_at, record.revision)
+        if canonical(
+            &ready
+                .items
+                .iter()
+                .find(|r| r.revision == task)
+                .ok_or_else(|| refused())?
+                .node,
+        )? != original_ready_node
+        {
+            return Err(refused());
+        }
+        let context = on_heap(|| {
+            graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref())
+        })
+        .await
+        .map_err(|_| refused())?;
+        let compiled =
+            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
+        if refused_successor(&decision, &task, replacement.as_ref(), &mut skipped) {
+            continue;
+        }
+        let source = if replacement.is_some() {
+            on_heap(|| {
+                source::observe_retained(state, &compiled.frozen, &policy_record, token.request())
+            })
+            .await?
+        } else {
+            on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
+        };
+        if source.admission.resolved_object.hex != token.request().base.hex
+            || source.admission.repository_binding_generation != token.request().binding_generation
+        {
+            return Err(refused());
+        }
+        let built = on_heap(|| {
+            build::assemble(build::Assembly {
+                state,
+                runtime: &runtime,
+                compiled,
+                decision,
+                task: &task,
+                context: &context,
+                ready: &ready,
+                source,
+                source_operation,
+                logical_identity: &token.request().logical_identity,
+                generation,
             })
         })
-        .await?
+        .await?;
+        // The node's authenticated registration must qualify the exact
+        // confinement mode this manifest requires (MS1 review should-fix 1).
+        if !built
+            .native
+            .offered
+            .offer
+            .manifest
+            .harness
+            .required_capabilities
+            .iter()
+            .any(|c| c.version == 1 && modes.contains(&c.id.as_str()))
         {
-            chosen = Some((policy, record, ready, task, assessment));
-            break;
+            return Err(refused());
         }
-    }
-    let Some((policy, record, ready, task, assessment)) = chosen else {
+        let limits = &built.native.offered.offer.manifest.resources;
+        if limits.memory_bytes > request.available.memory_bytes
+            || limits.cpu_millis > request.available.cpu_millis
+            || fact.bundle_bytes() > request.available.disk_bytes
+        {
+            return Err(refused());
+        }
+        let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
+        let offer =
+            on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
+                .await?;
+        let Some(offer) = offer else { return Ok(page) };
+        page.server_time_ms = offer.offered.clock.server_time_ms;
+        page.offers.push(offer);
+        page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
-    };
-    let replacement = assessment.replacement().cloned();
-    if let Some(replacement) = &replacement {
-        tracing::info!(
-            task_id = %task.task_id,
-            predecessor = %replacement.predecessor,
-            attempts_started = replacement.attempts_started,
-            lineage_elapsed_ms = replacement.elapsed_ms,
-            sandbox_ms_charged = replacement.sandbox_ms,
-            max_attempts = replacement::MAX_ATTEMPTS,
-            max_sandbox_ms = replacement::MAX_SANDBOX_MS,
-            "replacement attempt admitted within the lineage budget"
-        );
-        // The failed predecessor's claim is released under its locks before
-        // the successor's generation; a later refusal retries idempotently.
-        on_heap(|| replacement::release(state, task.task_id, replacement)).await?;
     }
-    let generation =
-        on_heap(|| super::super::no_grant::next_generation(&state.store.pool, task.task_id))
-            .await?;
-    let context =
-        on_heap(|| graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref()))
-            .await
-            .map_err(|_| refused())?;
-    let compiled =
-        on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
-    super::observation::ReadProvenance::capture(
-        &task,
-        &ready,
-        &context,
-        compiled.projection.artifact.digest.clone(),
-        now(state)?,
-    )?;
-    let original_ready_node = canonical(
-        &ready
-            .items
-            .iter()
-            .find(|r| r.revision == task)
-            .ok_or_else(|| refused())?
-            .node,
-    )?;
-    let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
-    let selected = decision
-        .outcome
-        .resolved
-        .as_ref()
-        .ok_or_else(|| refused())?;
-    let composition = compiled
-        .candidates
-        .iter()
-        .find(|c| c.digest == selected.choice.composition_digest)
-        .ok_or_else(|| refused())?;
-    // Qualification and exact startup counting precede expensive source export.
-    context_budget::evaluate(
-        &config.context_qualifications,
-        &runtime,
-        selected,
-        &composition.composition,
-        now(state)?,
-    )
-    .map_err(|_| refused())?;
-    let policy_record = config
-        .project_policy_record(policy.project_id)
-        .map_err(|_| refused())?;
-    let (token, fact) = if let Some(replacement) = &replacement {
-        // Reuse the original verified export, including its bundle bytes and
-        // operation identity. Never resolve a moving ref or re-export on retry.
-        on_heap(|| replacement::retained_source(state, task.task_id, replacement))
-            .await?
-            .into_parts()
-    } else {
-        // A first attempt freezes the configured source at offer time.
-        let observed = on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?;
-        let operation = source_operation(
-            policy.project_id,
-            &task,
-            record.revision,
-            generation,
-            config
-                .project_policy_ref(policy.project_id)
-                .map_err(|_| refused())?,
-            frozen_commit(&policy.source, &observed),
-        )?;
-        match on_heap(|| reservation(state, &compiled, operation, observed)).await? {
-            source_exports::Reservation::Pending(token) => {
-                let fact = on_heap(|| profiled_base::verify_export(state, &token)).await?;
-                on_heap(|| source_exports::finalize(state, &token, &fact)).await?;
-                (token, fact)
-            }
-            source_exports::Reservation::Verified {
-                reservation,
-                canonical_verified,
-            } => {
-                let fact = profiled_base::VerifiedExport::decode_stored(
-                    &reservation,
-                    &canonical_verified,
-                )?;
-                (reservation, fact)
-            }
-        }
-    };
-    let source_operation = token.request().operation_id;
-    // External export can consume the original graph/selection freshness. Read
-    // actual owners again; a task CAS/content change refuses this original task.
-    let ready = on_heap(|| {
-        graph.scheduling_ready_current(
-            record.binding.graph_workspace_id,
-            8,
-            None,
-            state.clock.as_ref(),
-        )
-    })
-    .await
-    .map_err(|_| refused())?;
-    if canonical(
-        &ready
-            .items
-            .iter()
-            .find(|r| r.revision == task)
-            .ok_or_else(|| refused())?
-            .node,
-    )? != original_ready_node
-    {
-        return Err(refused());
-    }
-    let context =
-        on_heap(|| graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref()))
-            .await
-            .map_err(|_| refused())?;
-    let compiled =
-        on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
-    let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
-    let source = if replacement.is_some() {
-        on_heap(|| {
-            source::observe_retained(state, &compiled.frozen, &policy_record, token.request())
-        })
-        .await?
-    } else {
-        on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
-    };
-    if source.admission.resolved_object.hex != token.request().base.hex
-        || source.admission.repository_binding_generation != token.request().binding_generation
-    {
-        return Err(refused());
-    }
-    let built = on_heap(|| {
-        build::assemble(build::Assembly {
-            state,
-            runtime: &runtime,
-            compiled,
-            decision,
-            task: &task,
-            context: &context,
-            ready: &ready,
-            source,
-            source_operation,
-            logical_identity: &token.request().logical_identity,
-            generation,
-        })
-    })
-    .await?;
-    // The node's authenticated registration must qualify the exact
-    // confinement mode this manifest requires (MS1 review should-fix 1).
-    if !built
-        .native
-        .offered
-        .offer
-        .manifest
-        .harness
-        .required_capabilities
-        .iter()
-        .any(|c| c.version == 1 && modes.contains(&c.id.as_str()))
-    {
-        return Err(refused());
-    }
-    let limits = &built.native.offered.offer.manifest.resources;
-    if limits.memory_bytes > request.available.memory_bytes
-        || limits.cpu_millis > request.available.cpu_millis
-        || fact.bundle_bytes() > request.available.disk_bytes
-    {
-        return Err(refused());
-    }
-    let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
-    let offer =
-        on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection)).await?;
-    page.server_time_ms = offer.offered.clock.server_time_ms;
-    page.offers.push(offer);
-    page.validate_for(request).map_err(|_| refused())?;
-    Ok(page)
 }
 
 #[cfg(test)]
@@ -666,10 +744,11 @@ mod tests {
                 candidate.node = serde_json::json!({"metadata":{"aq:priority":priority}});
             }
             let original = serde_json::to_value(&ready).unwrap();
-            let selected =
-                first_eligible_task(&ready, |_| std::future::ready(Ok(Assessment::Fresh)))
-                    .await
-                    .unwrap();
+            let selected = first_eligible_task(&ready, &Default::default(), |_| {
+                std::future::ready(Ok(Assessment::Fresh))
+            })
+            .await
+            .unwrap();
             assert_eq!(
                 selected,
                 Some((ready.items[expected].revision.clone(), Assessment::Fresh))
@@ -696,10 +775,11 @@ mod tests {
             ready.items[0].node = json!({"metadata":{"aq:priority":-1}});
             ready.items[1].node = json!({"metadata":metadata});
             ready.items[2].node = json!({"metadata":{"aq:priority":0}});
-            let selected =
-                first_eligible_task(&ready, |_| std::future::ready(Ok(Assessment::Fresh)))
-                    .await
-                    .unwrap();
+            let selected = first_eligible_task(&ready, &Default::default(), |_| {
+                std::future::ready(Ok(Assessment::Fresh))
+            })
+            .await
+            .unwrap();
             assert_eq!(
                 selected,
                 Some((ready.items[1].revision.clone(), Assessment::Fresh))
@@ -733,7 +813,7 @@ mod tests {
             },
         ];
         let mut observed = Vec::new();
-        let selected = first_eligible_task(&ready, |task| {
+        let selected = first_eligible_task(&ready, &Default::default(), |task| {
             let index = ready
                 .items
                 .iter()
@@ -760,6 +840,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_poll_skips_at_most_max_skipped_refused_successors() {
+        let mut skipped = std::collections::BTreeSet::new();
+        while !skips_spent(&skipped) {
+            skipped.insert(Uuid::new_v4());
+        }
+        assert_eq!(skipped.len(), MAX_SKIPPED);
+    }
     #[test]
     fn named_ref_resolves_to_exact_commit_at_offer() {
         let project = Uuid::from_u128(7);
@@ -799,7 +887,7 @@ mod tests {
         };
         assert!(replacement::precheck(&held).is_none());
         assert!(
-            first_eligible_task(&ready, |_| {
+            first_eligible_task(&ready, &Default::default(), |_| {
                 std::future::ready(Ok(Assessment::Blocked(
                     "replacement_prior_execution_uncertain",
                 )))
@@ -809,7 +897,7 @@ mod tests {
             .is_none()
         );
         let mut reads = 0;
-        let result = first_eligible_task(&ready, |_| {
+        let result = first_eligible_task(&ready, &Default::default(), |_| {
             reads += 1;
             std::future::ready(Err(AppError::Internal))
         })

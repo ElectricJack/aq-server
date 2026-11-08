@@ -30,6 +30,8 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
+    /// A second ready task of lower priority, listed only in mode 7.
+    pub second_task: Uuid,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -74,6 +76,11 @@ pub async fn setup() -> Case {
     let workspace = env.lineage.workspace_id;
     let repository = env.frozen.project.binding.repository_id;
     let node = json!({"id":task,"workspace_id":workspace,"kind":"task","version":1,"content_revision":1,"title":"Synthetic native admission task","body":"Read the scoped source and report evidence.","acceptance_criteria":"Report exact inspected revisions.","labels":[],"metadata":{},"task_state":"active","verification":"unverified","provenance":[],"retired":false,"deleted":false,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","created_by":"fixture","last_verified_by":null,"last_verified_at":null,"retirement_reason":null,"content_type":null,"summary":null,"summary_of_revision":null,"valid_from":null,"valid_until":null,"review_at":null,"successor_id":null});
+    let second_task = Uuid::new_v5(&task, b"aq.test.second-ready-task");
+    let mut second = node.clone();
+    second["id"] = json!(second_task);
+    second["title"] = json!("Second synthetic native task");
+    second["metadata"] = json!({"aq:priority": -1});
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let peer_mode = mode.clone();
@@ -83,6 +90,7 @@ pub async fn setup() -> Case {
     let peer_resume = observation_resume.clone();
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
+        let second = second.clone();
         let mode = peer_mode.load(Ordering::SeqCst);
         let entered = peer_entered.clone();
         let resume = peer_resume.clone();
@@ -104,7 +112,16 @@ pub async fn setup() -> Case {
                 node["metadata"] = json!({"private_daemon_note":"not part of startup"});
             }
             let value = if uri.path().ends_with("/ready") {
-                json!({"items":if mode == 3 { vec![] } else { vec![node] },"next_cursor":null})
+                let items = match mode {
+                    3 => vec![],
+                    7 => vec![node, second],
+                    _ => vec![node],
+                };
+                json!({"items":items,"next_cursor":null})
+            } else if uri.path().ends_with("/context")
+                && uri.path().contains(&second_task.to_string())
+            {
+                json!({"node":second,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false})
             } else if uri.path().ends_with("/context") {
                 if mode == 1 {
                     node["version"] = json!(2);
@@ -361,8 +378,97 @@ pub async fn setup() -> Case {
         controlled_clock: None,
         observation_entered,
         observation_resume,
+        second_task,
         tasks,
     }
+}
+/// Activates a catalog whose selection policies `edit` changes (version 3)
+/// and binds the project to it, as the pinned lineage policy test does.
+pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::SelectionPolicy)) {
+    let env = &mut c.env.env;
+    let original: Vec<u8> =
+        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
+            .bind(env.body["catalog_digest"].as_str().unwrap())
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
+    let mut artifact = catalog.artifact().clone();
+    for profile in &mut artifact.catalog.intelligence {
+        if let Some(policy) = profile.selection_policy.as_mut() {
+            edit(policy);
+            profile.version = 3;
+        }
+    }
+    for profile in &mut artifact.catalog.agents {
+        profile.version = 3;
+        profile.intelligence = "engineering@3".into();
+    }
+    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
+    let app = aq_server::build_admin_router(env.state.clone());
+    let (status,body)=selection::call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
+    assert_eq!(status, 200, "{body}");
+    env.body["catalog_digest"] = json!(updated.digest());
+    env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
+    env.body["allowed_intelligence_profiles"] = json!(["engineering@3"]);
+    let (status, body) = selection::call(
+        &app,
+        &selection::path(),
+        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":env.body})),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+}
+/// The published attempt fails: synthetic stopped, retained and quiescent
+/// owner facts (written with guards bypassed in this disposable database),
+/// then B4's own release of its task claim.
+pub async fn fail_and_release(c: &Case, attempt: Uuid) {
+    use aq_server::{
+        execution::{
+            authority::hot::HotState,
+            profiled::{Effects, Retention, Status, Stop},
+        },
+        profiled_execution::replacement::{self, Assessment},
+    };
+    let pool = &c.env.env.pool;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let hot: Value =
+        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    let mut hot: HotState = serde_json::from_value(hot).unwrap();
+    hot.status = Status::Finished;
+    hot.stop = Stop::Stopped {
+        receipt: art("synthetic-stop", "stop"),
+    };
+    hot.retention = Retention::Retained {
+        receipt: art("synthetic-retained", "retained"),
+    };
+    hot.effects = Effects::Quiescent {
+        receipt: art("synthetic-effects", "effects"),
+    };
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(json!(hot))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let state = &c.env.env.state;
+    let task = c.env.lineage.task_id;
+    let now = (state.clock)().timestamp_millis() as u64;
+    let assessed = replacement::assess_task(state, task, now).await.unwrap();
+    let Assessment::Replace(r) = assessed else {
+        panic!("the failed attempt is replaceable: {assessed:?}");
+    };
+    replacement::release(state, task, &r).await.unwrap();
 }
 pub async fn post(
     state: &AppState,
