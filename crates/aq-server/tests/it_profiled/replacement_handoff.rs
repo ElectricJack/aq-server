@@ -411,3 +411,39 @@ async fn owner_stop_handoffs_do_not_exhaust_the_retry_budget() {
         Assessment::Blocked("lineage_retry_budget_exhausted")
     );
 }
+
+/// Review I1(c): only the first five exempt handoffs of a lineage are free;
+/// later owner stops are charged as normal attempts.
+#[tokio::test]
+async fn exempt_handoffs_are_capped_at_five_per_lineage() {
+    use crate::replacement_release::{fail, granted_at};
+    use aq_server::profiled_execution::replacement::{self, Assessment};
+    let mut f = common::profiled::fixture().await;
+    let task = f.selection.lineage.task_id;
+    let pool = f.db.pool().await;
+    for generation in 1..=8 {
+        if generation > 1 {
+            next_attempt(&mut f, generation);
+        }
+        let (attempt, _, mut hot) = granted_at(&f, NOW - 10_000 + generation * 1_000).await;
+        fail(&pool, attempt, &mut hot).await;
+        sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
+            .bind(attempt).bind(f.node.node_id).execute(&pool).await.unwrap();
+        let assessed = replacement::assess_task(&f.state, task, NOW).await.unwrap();
+        let Assessment::Replace(r) = assessed else {
+            assert_eq!(generation, 8, "{assessed:?}");
+            assert_eq!(
+                assessed,
+                Assessment::Blocked("lineage_retry_budget_exhausted")
+            );
+            return;
+        };
+        let exempt = generation.min(5) as u32;
+        assert_eq!(
+            (r.attempts_started, r.exempt_attempts),
+            (generation as u32, exempt)
+        );
+        replacement::release(&f.state, task, &r).await.unwrap();
+    }
+    panic!("the eighth owner stop leaves three charged attempts");
+}

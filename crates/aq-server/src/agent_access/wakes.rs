@@ -410,7 +410,8 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
         return held_or_escalated(tx, intent, holds, "retention_missing", now).await;
     }
     // Budgets carry forward from the lineage; they are never reset.
-    // Owner and service handoffs are not charged (spec 0007 Q1), as in B4.
+    // Owner and service handoffs are not charged (spec 0007 Q1), as in B4,
+    // up to MAX_EXEMPT_HANDOFFS per lineage (review I1).
     let format: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
             .fetch_one(&mut *tx)
@@ -419,11 +420,14 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
         .parse()
         .is_ok_and(|v: u32| v >= aq_machine_control::FORMAT)
     {
-        " AND NOT EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))"
+        format!(
+            "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))))",
+            aq_machine_control::MAX_EXEMPT_HANDOFFS
+        )
     } else {
-        ""
+        String::new()
     };
-    let started: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1{exempt}"))
+    let started: i64 = sqlx::query_scalar(&format!("SELECT count(*){exempt} FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1"))
         .bind(task_id)
         .fetch_one(&mut *tx)
         .await?;

@@ -11,4 +11,4 @@ chrono.workspace = true
 sqlx.workspace = true
 sqlx-postgres.workspace = true
 thiserror.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v5"] }

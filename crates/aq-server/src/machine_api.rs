@@ -36,6 +36,7 @@ fn mapped(e: McError) -> AppError {
     match e {
         McError::KeyInUse => AppError::Conflict("machine key is in use by another machine; revoke it from the Swarm page or choose another key".into()),
         McError::Invalid(m) => AppError::BadRequest(m.into()),
+        McError::Refused(m) => AppError::Conflict(m.into()),
         McError::Conflict { .. } => AppError::Conflict("generation".into()),
         McError::NotFound | McError::Db(_) => AppError::Internal,
     }
@@ -146,7 +147,7 @@ async fn control(
 async fn handoffs(
     State(state): State<AppState>,
     headers: HeaderMap,
-    ApiJson(req): ApiJson<HandoffNotice>,
+    ApiJson(mut req): ApiJson<HandoffNotice>,
 ) -> Result<Json<HandoffNotice>, AppError> {
     let auth = authenticate_context(&state, &headers).await?;
     if req.schema_version != 1 {
@@ -158,15 +159,11 @@ async fn handoffs(
         .acquire()
         .await
         .map_err(|_| AppError::Internal)?;
-    mc::record_handoff(
-        &mut conn,
-        auth.id(),
-        req.attempt_id,
-        req.reason,
-        (state.clock)(),
-    )
-    .await
-    .map_err(mapped)?;
+    // The answer carries the reason on record (an unrequested owner_stop is a restart).
+    let now = (state.clock)();
+    req.reason = mc::record_handoff(&mut conn, auth.id(), req.attempt_id, req.reason, now)
+        .await
+        .map_err(mapped)?;
     Ok(Json(req))
 }
 

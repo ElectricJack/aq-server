@@ -169,15 +169,15 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
         return Blocked("replacement_effects_unreconciled");
     };
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
-    let exempt_attempts =
-        u32::try_from(ordered.iter().filter(|p| p.exempt).count()).unwrap_or(u32::MAX);
+    let exempt = aq_machine_control::cap_exempt(ordered.iter().map(|p| p.exempt));
+    let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
     if attempts_started - exempt_attempts >= limits.max_attempts {
         return Blocked("lineage_retry_budget_exhausted");
     }
     // Lineage time is the sum of the charged attempts' windows, each from its
     // publication to the next one (or now); without exemptions, now - first.
     let elapsed_ms = (0..ordered.len())
-        .filter(|&i| !ordered[i].exempt)
+        .filter(|&i| !exempt[i])
         .map(|i| {
             let end = ordered.get(i + 1).and_then(|n| n.offered_at_ms);
             end.unwrap_or(now)
@@ -189,10 +189,9 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     }
     // Conservative sandbox charge: each granted attempt is billed its full
     // admitted window from publication to execution deadline.
-    let sandbox_ms = ordered
-        .iter()
-        .filter(|p| p.granted && !p.exempt)
-        .map(|p| {
+    let sandbox_ms = (ordered.iter().zip(&exempt))
+        .filter(|(p, e)| p.granted && !**e)
+        .map(|(p, _)| {
             p.execution_deadline_ms
                 .unwrap_or(u64::MAX)
                 .saturating_sub(p.offered_at_ms.unwrap_or(0))

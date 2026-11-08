@@ -22,6 +22,9 @@ pub enum Error {
     KeyInUse,
     #[error("invalid: {0}")]
     Invalid(&'static str),
+    /// A typed refusal (409); the text starts with its code.
+    #[error("refused: {0}")]
+    Refused(&'static str),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -141,6 +144,20 @@ pub fn is_handoff_export(row: &HandoffRow, base: &str, handle: Uuid) -> bool {
     row.candidate_operation_id == Some(op)
         && op == handle
         && row.candidate_oid.as_deref() == Some(base)
+}
+/// Review I1(c): at most this many owner/service handoffs per lineage are exempt.
+pub const MAX_EXEMPT_HANDOFFS: usize = 5;
+/// Keeps the first `MAX_EXEMPT_HANDOFFS` exempt flags (in attempt order); every
+/// later handoff is charged as a normal attempt.
+pub fn cap_exempt(flags: impl IntoIterator<Item = bool>) -> Vec<bool> {
+    let mut left = MAX_EXEMPT_HANDOFFS;
+    (flags.into_iter())
+        .map(|e| {
+            let keep = e && left > 0;
+            left -= usize::from(keep);
+            keep
+        })
+        .collect()
 }
 fn reason_of(s: &str) -> Result<HandoffReason, Error> {
     match s {
@@ -417,22 +434,42 @@ pub async fn pending_counts(
     Ok(rows.into_iter().map(|(k, n)| (k, n as u32)).collect())
 }
 
-/// Node-announced handoff; the attempt must belong to `node`.
+/// Node-announced handoff (review I1). The attempt must belong to `node`. An
+/// exempt reason (`owner_stop`, `service_stop`) is refused unless the attempt
+/// still holds its task and runs. A node-posted `owner_stop` counts only while
+/// the machine is desired stopped by a stop requested before the handoff (one
+/// minute of slack); otherwise it is stored as `restart`. Returns the reason
+/// on record (an earlier row, such as the owner's own Stop, wins).
 pub async fn record_handoff(
     conn: &mut PgConnection,
     node: Uuid,
     attempt: Uuid,
     reason: HandoffReason,
     now: DateTime<Utc>,
-) -> Result<(), Error> {
-    let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT node_id FROM execution_attempts WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_optional(&mut *conn)
-            .await?;
-    if owner != Some(node) {
+) -> Result<HandoffReason, Error> {
+    let row = sqlx::query(
+        "SELECT a.node_id, COALESCE(a.holds_task AND h.state->'stop'->>'kind' IN ('unknown','running'), FALSE) AS running, \
+         COALESCE(c.desired = 'stopped' AND c.updated_at <= $2 + interval '1 minute', FALSE) AS stopped \
+         FROM execution_attempts a JOIN nodes n ON n.id = a.node_id \
+         LEFT JOIN profiled_authority_hot h ON h.attempt_id = a.attempt_id \
+         LEFT JOIN machine_controls c ON c.machine_key = n.machine_key WHERE a.attempt_id=$1",
+    )
+    .bind(attempt)
+    .bind(now)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(row) = row.filter(|r| r.get::<Uuid, _>("node_id") == node) else {
         return Err(Error::Invalid("attempt_not_owned"));
+    };
+    if reason != HandoffReason::Restart && !row.try_get::<bool, _>("running")? {
+        return Err(Error::Refused(
+            "handoff_not_running: the attempt is no longer running",
+        ));
     }
+    let reason = match reason {
+        HandoffReason::OwnerStop if !row.try_get::<bool, _>("stopped")? => HandoffReason::Restart,
+        r => r,
+    };
     sqlx::query(
         "INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) \
          VALUES($1,$2,$3,$4) ON CONFLICT (attempt_id) DO NOTHING",
@@ -443,7 +480,12 @@ pub async fn record_handoff(
     .bind(now)
     .execute(&mut *conn)
     .await?;
-    Ok(())
+    let stored: String =
+        sqlx::query_scalar("SELECT reason FROM attempt_handoffs WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&mut *conn)
+            .await?;
+    reason_of(&stored)
 }
 
 pub async fn handoff_of(
@@ -676,4 +718,15 @@ pub async fn set_owner_availability(
         }
     }
     owner_availability(tx).await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_the_first_five_exempt_handoffs_stay_exempt() {
+        let flags = [true, false, true, true, true, true, true, true];
+        let capped = super::cap_exempt(flags);
+        assert_eq!(capped, [true, false, true, true, true, true, false, false]);
+        assert_eq!(super::cap_exempt([false; 3]), [false; 3]);
+    }
 }

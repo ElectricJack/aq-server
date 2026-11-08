@@ -300,6 +300,70 @@ async fn record_handoff_requires_the_owning_node() {
     assert_eq!(row.reason, HandoffReason::ServiceStop);
 }
 
+/// Review I1(a): a node-posted owner_stop counts only while the machine is
+/// desired stopped by a stop requested before the handoff; else it is a restart.
+#[tokio::test]
+async fn node_owner_stop_needs_a_requested_stop() {
+    let f = fixture().await;
+    let (attempt, pool, _) = granted(&f).await;
+    let (me, who) = (f.node.node_id, owner(&pool).await);
+    let mut c = pool.acquire().await.unwrap();
+    mc::claim_key(&mut c, me, "desk").await.unwrap();
+    let later = now() + chrono::Duration::minutes(5);
+    async fn post(
+        c: &mut sqlx::PgConnection,
+        me: Uuid,
+        attempt: Uuid,
+        at: DateTime<Utc>,
+    ) -> HandoffReason {
+        sqlx::query("DELETE FROM attempt_handoffs")
+            .execute(&mut *c)
+            .await
+            .unwrap();
+        let r = mc::record_handoff(c, me, attempt, HandoffReason::OwnerStop, at).await;
+        let stored = mc::handoff_of(c, attempt).await.unwrap().unwrap().reason;
+        assert_eq!(r.unwrap(), stored);
+        stored
+    }
+    assert_eq!(
+        post(&mut c, me, attempt, now()).await,
+        HandoffReason::Restart,
+        "running"
+    );
+    let stop = DesiredState::Stopped;
+    mc::set_desired(&mut c, "desk", stop, 1, who, Uuid::new_v4(), later)
+        .await
+        .unwrap();
+    let r = post(&mut c, me, attempt, now()).await;
+    assert_eq!(r, HandoffReason::Restart, "stop after the handoff");
+    assert_eq!(
+        post(&mut c, me, attempt, later).await,
+        HandoffReason::OwnerStop
+    );
+}
+
+/// Review I1(b): owner_stop/service_stop are refused (typed) once the attempt
+/// no longer runs; a restart is still recorded.
+#[tokio::test]
+async fn exempt_handoff_is_refused_after_the_attempt_stopped() {
+    let f = fixture().await;
+    let (attempt, pool, mut hot) = granted(&f).await;
+    hot.status = Status::Finished;
+    hot.stop = Stop::Stopped {
+        receipt: artifact("synthetic-stop-owner-receipt", b"synthetic-stop"),
+    };
+    set_hot(&pool, attempt, &hot).await;
+    let me = f.node.node_id;
+    let mut c = pool.acquire().await.unwrap();
+    for reason in [HandoffReason::OwnerStop, HandoffReason::ServiceStop] {
+        let r = mc::record_handoff(&mut c, me, attempt, reason, now()).await;
+        assert!(matches!(r, Err(Error::Refused(m)) if m.starts_with("handoff_not_running")));
+    }
+    assert!(mc::handoff_of(&mut c, attempt).await.unwrap().is_none());
+    let r = mc::record_handoff(&mut c, me, attempt, HandoffReason::Restart, now()).await;
+    assert_eq!(r.unwrap(), HandoffReason::Restart);
+}
+
 #[tokio::test]
 async fn accepts_new_work_follows_desired() {
     let db = TestDb::create().await;
