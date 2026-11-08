@@ -1790,3 +1790,18 @@ Each entry records what was observed, the action taken, and anything waiting on 
 - **10:33:** merged aq-dashboard #90 (8392a544), swarm phase 1 dashboard (worker controls, Add machine, availability switch, re-pinned to 7529e623). The Opus review found the I1 allow_enrolled_nodes misread and the I2 operation-key leak across machines; both fixed.
   - Phase 1's server, worker and dashboard work is all merged.
   - Dispatched L0 plus live acceptance L on aq-ms1 and this desktop: the systemd user service is installed per the plan, `aq-worker@local` is untouched, and the terminal steps wait on W13.
+- **11:45:** **swarm phase 1 live acceptance (L) on aq-ms1 and this desktop FAILED.**
+  - **Passed:**
+    - install and enroll, with a workaround;
+    - W10 measurement, validated, with offers using the renewed qualification;
+    - dashboard Stop (handoff markers about 1 s after the press);
+    - sticky availability (offered 13+ min after the switch, with no observations);
+    - revoke, pause and re-enroll;
+    - one handoff note per handoff.
+  - **Blocking defects:**
+    - D1: the default state path is too long for the session-host Unix sockets;
+    - D2: slot recovery re-registers the repo with aq-git and gets a stale git.sock, so slots are lost and tasks held;
+    - D3: slots poll before the qualification pin;
+    - D4: slot 2's handoff uses slot 1's credential;
+    - D5: the server refuses the handoff successor's export on every poll, so the machine stalls after Stop/Start.
+  - Fixes dispatched to two Opus agents. The service is left installed but stopped and disabled.
