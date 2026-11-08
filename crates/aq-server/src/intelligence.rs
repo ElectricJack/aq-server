@@ -165,7 +165,8 @@ async fn observe(
             .iter()
             .find(|c| c.credential.profile == credential.profile)
             .ok_or(AppError::Internal)?;
-        if !entry.allows(node) {
+        let enrolled = aq_machine_control::enrolled(&mut tx, node).await;
+        if !entry.admits(node, enrolled.map_err(|_| AppError::Internal)?) {
             return Err(bad("observation node outside credential authority"));
         }
     }

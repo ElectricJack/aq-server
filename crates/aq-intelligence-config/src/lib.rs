@@ -105,6 +105,11 @@ impl CredentialConfig {
     pub fn allows(&self, node: uuid::Uuid) -> bool {
         self.allow_enrolled_nodes || self.allowed_node_ids.contains(&node)
     }
+    /// Review I6: a listed node, or with the flag an `enrolled` one (a live
+    /// node enrolled with an owner's code, or a slot minted by its machine).
+    pub fn admits(&self, node: uuid::Uuid, enrolled: bool) -> bool {
+        self.allowed_node_ids.contains(&node) || (self.allow_enrolled_nodes && enrolled)
+    }
 }
 impl std::fmt::Debug for CredentialConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -252,10 +257,21 @@ impl IntelligenceConfig {
         }
         Ok(())
     }
+    /// Review I6: one line per credential whose explicit `allowed_node_ids`
+    /// the default-on `allow_enrolled_nodes` (spec 0007 Q3) overrides.
+    pub fn widened_lists(&self) -> Vec<String> {
+        (self.credentials.iter())
+            .filter(|c| c.allow_enrolled_nodes && !c.allowed_node_ids.is_empty())
+            .map(|c| format!("intelligence credential {} lists allowed_node_ids, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node may use it; set allow_enrolled_nodes = false on the credential to keep only the listed nodes", c.credential.profile.id.as_str()))
+            .collect()
+    }
     /// Call once at daemon startup, never while selecting. Missing files are a
     /// missing-credentials fact; unsafe objects and oversized input fail closed.
     pub fn load(&self) -> Result<LoadedRegistry, String> {
         self.validate()?;
+        for line in self.widened_lists() {
+            tracing::warn!("{line}");
+        }
         let mut credentials = Vec::new();
         let mut fingerprints = Vec::new();
         for item in &self.credentials {
@@ -421,5 +437,30 @@ mod tests {
         negative.expires_at_ms = 2_000;
         assert!(on(2, std::slice::from_ref(&negative), 1_000).is_empty());
         assert_eq!(on(2, std::slice::from_ref(&negative), 2_000).len(), 1);
+    }
+    #[test]
+    fn widened_lists_name_each_overridden_credential_and_admits_needs_enrollment() {
+        let (listed, other) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let default = credential(serde_json::json!({}));
+        let restricted = credential(serde_json::json!({"allow_enrolled_nodes": false}));
+        let unlisted = credential(serde_json::json!({"allowed_node_ids": []}));
+        let config = |c: CredentialConfig| IntelligenceConfig {
+            revision: 1,
+            credentials: vec![c],
+            qualified_harnesses: vec![],
+            accounting: Default::default(),
+            material_store: None,
+        };
+        let lines = config(default.clone()).widened_lists();
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].contains("credential test")
+                && lines[0].contains("allow_enrolled_nodes = false")
+        );
+        assert!(config(restricted.clone()).widened_lists().is_empty());
+        assert!(config(unlisted).widened_lists().is_empty());
+        assert!(default.admits(listed, false) && default.admits(other, true));
+        assert!(!default.admits(other, false), "revoked or not enrolled");
+        assert!(!restricted.admits(other, true));
     }
 }

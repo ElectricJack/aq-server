@@ -321,6 +321,7 @@ dependencies = [
  "sqlx",
  "sqlx-postgres",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 

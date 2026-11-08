@@ -622,6 +622,46 @@ pub async fn node_services(
         .collect()
 }
 
+/// Review I6: what "enrolled" means for `allow_enrolled_nodes`: a live node
+/// that redeemed an enrollment code (only owners issue codes), or a live slot
+/// minted by a machine whose live slot 1 did. Other rows of `nodes` are not.
+pub async fn enrolled(conn: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
+    let sibling = if has_format(conn).await? {
+        " OR (n.slot > 1 AND p.machine_key = n.machine_key AND p.slot = 1 AND p.revoked_at IS NULL)"
+    } else {
+        ""
+    };
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM nodes n JOIN nodes p ON p.id = n.id{sibling} \
+         JOIN enrollment_codes e ON e.node_id = p.id WHERE n.id = $1 AND n.revoked_at IS NULL)"
+    ))
+    .bind(node)
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+/// Review I6: logs (and returns) one warning per project binding whose explicit
+/// node or group list the default-on `allow_enrolled_nodes` overrides. Called
+/// once at server startup.
+pub async fn warn_widened_bindings(pool: sqlx::PgPool) -> Vec<String> {
+    let rows: Result<Vec<Uuid>, _> = sqlx::query_scalar(
+        "SELECT project_id FROM project_execution_bindings \
+         WHERE COALESCE((binding->>'allow_enrolled_nodes')::boolean, TRUE) \
+         AND (jsonb_array_length(COALESCE(binding->'allowed_node_ids','[]')) > 0 \
+           OR jsonb_array_length(COALESCE(binding->'allowed_worker_groups','[]')) > 0) \
+         ORDER BY project_id LIMIT 64",
+    )
+    .fetch_all(&pool)
+    .await;
+    let lines: Vec<String> = (rows.unwrap_or_default().into_iter())
+        .map(|p| format!("project binding {p} lists allowed_node_ids or allowed_worker_groups, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node is eligible; set allow_enrolled_nodes = false in the binding to keep only the listed nodes"))
+        .collect();
+    for line in &lines {
+        tracing::warn!("{line}");
+    }
+    lines
+}
+
 /// The machine key of a live node, if it holds one.
 pub async fn live_machine_key(
     conn: &mut PgConnection,

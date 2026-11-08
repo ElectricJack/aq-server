@@ -193,6 +193,9 @@ pub(super) async fn report(
         harnesses.push(harness.clone());
     }
     let mut credential_bindings = Vec::new();
+    let enrolled = aq_machine_control::enrolled(&mut tx, node.id)
+        .await
+        .map_err(|_| AppError::Internal)?;
     for presence in request.credentials {
         if credential_bindings
             .iter()
@@ -209,7 +212,7 @@ pub(super) async fn report(
                     && c.credential.revision == presence.credential_revision
             })
             .ok_or_else(|| bad("unknown exact credential revision"))?;
-        if !configured.allows(node.id) {
+        if !configured.admits(node.id, enrolled) {
             return Err(AppError::Forbidden(
                 "credential not authorized for node".into(),
             ));

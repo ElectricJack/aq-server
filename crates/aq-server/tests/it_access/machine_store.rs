@@ -472,6 +472,37 @@ async fn racing_slot_one_claims_lose_with_key_in_use() {
     assert!(matches!(second.await.unwrap(), Err(Error::KeyInUse)));
 }
 
+/// Review I6: "enrolled" is a live node that redeemed an owner's code, or a
+/// live minted slot of its machine; not a revoked node or any other node row.
+#[tokio::test]
+async fn enrolled_means_code_enrolled_or_a_minted_sibling() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let ids = machine(&pool, 3).await;
+    let stray = node(&pool, "stray").await;
+    let mut c = pool.acquire().await.unwrap();
+    async fn all(c: &mut sqlx::PgConnection, ids: &[Uuid]) -> Vec<bool> {
+        let mut out = vec![];
+        for id in ids {
+            out.push(mc::enrolled(c, *id).await.unwrap());
+        }
+        out
+    }
+    let ids = [ids.clone(), vec![stray]].concat();
+    assert_eq!(all(&mut c, &ids).await, [false; 4], "no code: not enrolled");
+    sqlx::query("INSERT INTO enrollment_codes(id,code_hash,created_by,created_at,expires_at,used_at,node_id) VALUES($1,'h',$2,$3,$3,$3,$4)")
+        .bind(Uuid::new_v4()).bind(owner(&pool).await).bind(now()).bind(ids[0])
+        .execute(&pool).await.unwrap();
+    assert_eq!(all(&mut c, &ids).await, [true, true, true, false]);
+    sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1")
+        .bind(ids[2])
+        .bind(now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(all(&mut c, &ids).await, [true, true, false, false]);
+}
+
 #[tokio::test]
 async fn revoke_machine_revokes_every_slot_and_clears_control() {
     let db = TestDb::create().await;

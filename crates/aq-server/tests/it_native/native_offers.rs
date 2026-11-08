@@ -570,3 +570,35 @@ async fn backstop_refused_successor_is_skipped_within_the_poll() {
         c.second_task
     );
 }
+
+/// Review I6: at startup, every binding whose explicit list the default-on
+/// allow_enrolled_nodes overrides is named in a warning; turning the flag
+/// off keeps the list and silences it.
+#[tokio::test]
+async fn startup_warns_for_bindings_whose_lists_enrolled_nodes_override() {
+    let mut c = setup().await;
+    let pool = c.env.env.pool.clone();
+    let lines = aq_machine_control::warn_widened_bindings(pool.clone()).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains(&Uuid::from_u128(1).to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines[0].contains("allow_enrolled_nodes = false"),
+        "{lines:?}"
+    );
+    let env = &mut c.env.env;
+    env.body["allow_enrolled_nodes"] = serde_json::json!(false);
+    let app = aq_server::build_admin_router(env.state.clone());
+    let body =
+        serde_json::json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":env.body});
+    let path = common::selection::path();
+    let (status, v) = common::selection::call(&app, &path, Some(body), "owner@localhost").await;
+    assert_eq!(status, 200, "{v}");
+    assert!(
+        aq_machine_control::warn_widened_bindings(pool)
+            .await
+            .is_empty()
+    );
+}

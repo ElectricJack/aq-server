@@ -673,6 +673,15 @@ async fn enrolled_inventory(
     allow_enrolled_nodes: bool,
     revoke: bool,
 ) -> (StatusCode, Value, StatusCode) {
+    inventory_of(allow_enrolled_nodes, revoke, true).await
+}
+/// `coded: false` drops the node's enrollment code: a node row that was not
+/// enrolled with an owner's code (review I6).
+async fn inventory_of(
+    allow_enrolled_nodes: bool,
+    revoke: bool,
+    coded: bool,
+) -> (StatusCode, Value, StatusCode) {
     let mut reg = registry(None);
     reg.credentials[0].allow_enrolled_nodes = allow_enrolled_nodes;
     let (db, state, admin) = setup(reg).await;
@@ -711,6 +720,12 @@ async fn enrolled_inventory(
         .await
         .unwrap()
         .unwrap();
+    if !coded {
+        sqlx::query("DELETE FROM enrollment_codes")
+            .execute(&db.pool().await)
+            .await
+            .unwrap();
+    }
     let boot_id = Uuid::new_v4();
     state
         .store
@@ -753,6 +768,13 @@ async fn enrolled_node_inventory_accepted_with_flag() {
     assert_eq!(answer["credential_bindings"][0]["available"], true);
     let (status, _, _) = enrolled_inventory(false, false).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Review I6: allow_enrolled_nodes admits only nodes enrolled with a code.
+#[tokio::test]
+async fn unenrolled_node_is_refused_even_with_flag() {
+    let (status, v, _) = inventory_of(true, false, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{v}");
 }
 
 #[tokio::test]
