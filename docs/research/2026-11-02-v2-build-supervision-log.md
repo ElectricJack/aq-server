@@ -1805,3 +1805,16 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - D4: slot 2's handoff uses slot 1's credential;
     - D5: the server refuses the handoff successor's export on every poll, so the machine stalls after Stop/Start.
   - Fixes dispatched to two Opus agents. The service is left installed but stopped and disabled.
+- **13:18:** fixing the live acceptance defects.
+  - **aq-server #116 (830804bf) merged:**
+    - D5 root cause: `source_exports::reserve` accepted only the policy handle, so a handoff successor's fresh export of the candidate got a silent 409 on every poll;
+    - the export is now accepted only when it matches the server-recorded `attempt_handoffs` commit, handle and scope;
+    - a real poll-to-grant end-to-end test was added;
+    - refusals are logged.
+    - Follow-ups: an exempt handoff successor can be skipped forever with no owner-visible hold; log flooding.
+  - **aq-worker #51 (D1–D4):**
+    - D1: sockets moved under `$XDG_RUNTIME_DIR/aq/<profile>`;
+    - D2: aq-git re-registration and the stale fence are cleared only when `owner.lock` is free; crash and reboot salvage per Ruling B (boot-id change or systemd cgroup teardown proof);
+    - D3: pin before polling;
+    - D4: per-slot credentials.
+  - **Ruling:** the stopped proof gets an explicit `proof_kind` (aq-protocol 0.1.2), instead of synthesizing guardian evidence. A server PR goes first, then #51.
