@@ -400,6 +400,16 @@ async fn offers(
     if busy {
         return Ok(page);
     }
+    // Spec 0008: a history cap or the offer rate holds the node, visibly, before any write.
+    let staging = (state.source_retention.as_ref())
+        .map(|r| (r.config.max_staging_bytes, r.config.max_bundle_bytes));
+    let mut conn = state.store.pool.acquire().await.map_err(|_| refused())?;
+    let holds = aq_history_caps::node_holds(&mut conn, auth.id(), now(state)?, staging).await;
+    if let Some(h) = holds.map_err(|_| refused())?.first() {
+        tracing::info!(node_id = %auth.id(), "{}; no new offers", h.log_line());
+        return Ok(page);
+    }
+    drop(conn);
     let config = state
         .config
         .profiled_execution
@@ -442,6 +452,12 @@ async fn offers(
                 .iter()
                 .find(|p| p.project_id == candidate.project_id)
                 .ok_or_else(|| refused())?;
+            let mut conn = state.store.pool.acquire().await.map_err(|_| refused())?;
+            let held = aq_history_caps::project_holds(&mut conn, policy.project_id, polled_at);
+            if !held.await.map_err(|_| refused())?.is_empty() {
+                continue;
+            }
+            drop(conn);
             if recorded {
                 on_heap(|| fairness::record(&state.store.pool, policy.project_id, polled_at))
                     .await?;
