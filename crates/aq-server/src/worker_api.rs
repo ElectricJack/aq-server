@@ -30,6 +30,7 @@ pub fn worker_routes(state: AppState) -> Router<AppState> {
                 .route("/v1/worker/machine", post(machine))
                 .with_state(state.control_view()),
         )
+        .merge(crate::machine_api::machine_routes(state.clone()))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 

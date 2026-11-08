@@ -591,3 +591,103 @@ async fn machine_reports_one_second_apart_store_one_sample() {
 async fn machine_reports_six_seconds_apart_store_two_samples() {
     assert_eq!(samples_after_gaps([1_000, 6_000]).await.0, 2);
 }
+
+fn slots_body(key: &str, slots: u32) -> Value {
+    json!({"schema_version": 1, "machine_key": key, "slots": slots})
+}
+
+async fn post_slots(h: &Harness, bearer: Option<&str>, body: Value) -> (StatusCode, Value) {
+    send(&h.worker, "POST", "/v1/worker/slots", bearer, Some(body)).await
+}
+
+#[tokio::test]
+async fn slots_claim_key_and_mint_siblings_once_with_credentials() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, v) = post_slots(&h, Some(&r.credential), slots_body("desk", 3)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["machine_key"], "desk");
+    let slots = v["slots"].as_array().unwrap().clone();
+    assert_eq!(slots.len(), 2);
+    for slot in &slots {
+        let cred = slot["credential"].as_str().unwrap();
+        assert!(cred.starts_with("aqn_"));
+        let (s, _) = send(
+            &h.worker,
+            "POST",
+            "/v1/worker/heartbeat",
+            Some(cred),
+            Some(hb()),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let pool = h._db.pool().await;
+    let rows: Vec<(String, i32)> =
+        sqlx::query_as("SELECT machine_key, slot FROM nodes ORDER BY slot")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("desk".to_string(), 1),
+            ("desk".to_string(), 2),
+            ("desk".to_string(), 3)
+        ]
+    );
+    let (s, again) = post_slots(&h, Some(&r.credential), slots_body("desk", 3)).await;
+    assert_eq!(s, StatusCode::OK);
+    let again = again["slots"].as_array().unwrap().clone();
+    assert_eq!(
+        again.iter().map(|x| &x["node_id"]).collect::<Vec<_>>(),
+        slots.iter().map(|x| &x["node_id"]).collect::<Vec<_>>()
+    );
+    assert!(again.iter().all(|x| x.get("credential").is_none()));
+}
+
+#[tokio::test]
+async fn slots_refuses_sibling_caller_bounds_and_bad_key() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (_, v) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    let sibling = v["slots"][0]["credential"].as_str().unwrap().to_string();
+    let (s, _) = post_slots(&h, Some(&sibling), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    for body in [
+        slots_body("desk", 0),
+        slots_body("desk", 9),
+        slots_body("Desk", 2),
+    ] {
+        let (s, _) = post_slots(&h, Some(&r.credential), body).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+    let (s, _) = post_slots(&h, None, slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn slots_refuses_a_key_held_by_another_machine() {
+    let h = harness().await;
+    let a = enroll(&h).await;
+    let b = enroll(&h).await;
+    let (s, _) = post_slots(&h, Some(&a.credential), slots_body("desk", 1)).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = post_slots(&h, Some(&b.credential), slots_body("desk", 1)).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn slots_refused_after_machine_revoked() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (s, _) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::OK);
+    let pool = h._db.pool().await;
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::revoke_machine(&mut c, "desk", t0())
+        .await
+        .unwrap();
+    let (s, _) = post_slots(&h, Some(&r.credential), slots_body("desk", 2)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
