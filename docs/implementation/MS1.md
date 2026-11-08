@@ -208,7 +208,7 @@ RSS. A realistic Rust build has not been measured (E5).
 | The persistent `aq-worker run` controller is still fenced; attempts run through one-shot `run-native` | no open plan task (see [Missing integration](#missing-integration), item 1) |
 | No live session or terminal state reaches Agents ("State unknown", "Controller unknown") | not assigned |
 | A cancelled task stays held: B4 needs retained source, which a cancelled attempt never produced | B4 (`noble-summit-37.4`) |
-| Selection's 1-hour lineage budget refusal fails the poll instead of skipping the lineage | B4 |
+| ~~Selection's 1-hour lineage budget refusal fails the poll instead of skipping the lineage~~ Fixed by spec 0007 phase 1 S9: a refused successor is skipped and other work is offered | B4 |
 | Reviewer follow-up: `release_fence` is not scoped to its owner | B4 |
 | Reviewer follow-up: the sandbox-uncertain path skips recording retention, so such an attempt is never replaceable | B4, B5b (`noble-summit-37.6`) |
 | Reviewer follow-up: the S4 block (`replacement_after_unpublished_delivery_needs_new_source`) gives the owner no clear action | D1b (`crisp-meadow-36.2`) |
@@ -1403,7 +1403,9 @@ after `measure/observed_at_ms` (`QUALIFICATION_TTL_MS` in
 `scripts/ms1-profiled.py`). After that, `context_budget::evaluate` refuses
 every candidate, every profiled poll that would carry an offer gets HTTP 409,
 and the stack makes no offers. Until spec 0007 phase 1 automates it, someone
-re-measures before expiry:
+re-measures before expiry. With the phase 1 service, nodes renew the fact
+themselves (`aq-worker service measure`); `remeasure.sh` stays for stacks
+without the service.
 
 ```sh
 ~/.local/share/aq-ms1/remeasure.sh check   # what the running server loaded, and its expiry
