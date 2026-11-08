@@ -2705,6 +2705,34 @@
     },
     {
       "cli": [
+        "swarm",
+        "availability",
+        "set"
+      ],
+      "grant": "swarm.availability",
+      "kind": "mutation",
+      "name": "swarm.availability.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:54f88abce35a6d3b38ecf0dd9b9878af0854fee8182e5ab03cf6bbe05ab2b781",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=swarm.availability.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
         "task",
         "cancel"
       ],

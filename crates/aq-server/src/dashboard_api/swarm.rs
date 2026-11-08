@@ -42,6 +42,7 @@ pub(super) async fn swarm(
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
     let controls = aq_swarm::service::controls(&mut tx, &ids).await?;
+    let owner_availability = aq_swarm::service::owner_availability(&mut tx).await?;
     let mut held = Vec::new();
     // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.
     let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
@@ -67,6 +68,7 @@ pub(super) async fn swarm(
         version: info.server_version,
         source_revision: info.source_revision,
         running_agents: u32::try_from(held.len()).unwrap_or(u32::MAX),
+        owner_availability,
     };
     let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.len(), cut);
     let data = assemble(SwarmInput {

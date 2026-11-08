@@ -489,6 +489,7 @@ async fn run_with_listeners_and_dashboard(
     ));
     let terminal_task = tokio::spawn(terminal::runtime::run(state.clone(), rx.clone()));
     let retention_task = tokio::spawn(row_retention::run(state.clone(), rx.clone()));
+    tokio::spawn(intelligence::keeper::run(state.clone(), rx.clone()));
     let waits_task = tokio::spawn(agent_access::waits::run(state.clone(), rx.clone()));
     let wakes_task = tokio::spawn(agent_access::wakes::run(state.clone(), rx.clone()));
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));

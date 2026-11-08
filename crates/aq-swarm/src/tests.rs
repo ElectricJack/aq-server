@@ -242,6 +242,11 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
             version: "0.1.0".into(),
             source_revision: "r".into(),
             running_agents: 0,
+            owner_availability: OwnerAvailability {
+                state: OwnerAvailabilityState::Unset,
+                generation: "1".into(),
+                since: None,
+            },
         },
         capacity: Capacity {
             slots,

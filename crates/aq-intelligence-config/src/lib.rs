@@ -34,6 +34,19 @@ pub struct CredentialConfig {
 fn enrolled_by_default() -> bool {
     true
 }
+/// The credential-wide observation scope (no model, no node) of `c`: the scope
+/// of the owner's availability switch (spec 0007 Q2).
+pub fn credential_scope(c: &AuthorizedCredential) -> aq_selection::ObservationScope {
+    aq_selection::ObservationScope {
+        credential_revision: c.revision,
+        provider: c.provider.clone(),
+        credential_profile: c.profile.clone(),
+        account_reference: c.account_reference.clone(),
+        endpoint_reference: c.endpoint_reference.clone(),
+        model: None,
+        node_id: None,
+    }
+}
 impl CredentialConfig {
     /// Spec 0007 Q3: every enrolled node, or only the listed ones when the flag is off.
     /// Revoked nodes are refused by authentication and the offer fence, not here.

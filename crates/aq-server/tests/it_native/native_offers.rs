@@ -410,3 +410,92 @@ async fn refused_poll_selection_records_no_decision() {
 fn poll_offers_or_none(status: axum::http::StatusCode, body: &Value) -> bool {
     status == 409 || (status == 200 && poll_offers(body).is_empty())
 }
+
+/// `swarm.availability.set` through the mounted action route.
+async fn set_availability(c: &common::native_offer::Case, available: bool, generation: &str) {
+    let id = Uuid::new_v4();
+    let body = serde_json::json!({"operation_id":id,"kind":"swarm.availability.set",
+        "subject":{"type":"swarm","id":"owner-availability"},"expected_versions":{},
+        "payload":{"operation_id":id,"available":available,"expected_generation":generation}});
+    let (status, v) = common::selection::call(
+        &c.env.env.app,
+        "/api/v1/actions",
+        Some(body),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+}
+
+/// Spec 0007 Q2 (Review Focus 9): with the owner's switch off the poll makes no
+/// offer and runs no selection; switching it on restores offers without a
+/// manual observation.
+#[tokio::test]
+async fn owner_availability_off_makes_no_offer_and_no_decision() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let decisions = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM intelligence_decisions")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    set_availability(&c, false, "1").await;
+    let before = decisions().await;
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(poll_offers(&body).is_empty(), "{body}");
+    }
+    assert_eq!(decisions().await, before);
+    set_availability(&c, true, "2").await;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(poll_offers(&body).len(), 1, "{body}");
+}
+
+/// Spec 0007 Q2 (owner request): the switch alone keeps the owner available
+/// after the last attestation is older than the 30 s observation window.
+#[tokio::test]
+async fn owner_availability_on_outlives_the_attestation_window() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    set_availability(&c, true, "1").await;
+    let now = (c.env.env.state.clock)().timestamp_millis();
+    // The switch's attestation is 45 s old and nothing new was posted.
+    sqlx::query("UPDATE intelligence_observations SET observation = observation || jsonb_build_object('received_at_ms', $1::bigint, 'cooldown_until_ms', $1::bigint, 'expires_at_ms', $1::bigint + 3600000)")
+        .bind(now - 45_000)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = poll(&c).await;
+    assert!(
+        status == 409 || (status == 200 && poll_offers(&body).is_empty()),
+        "a 45 s old attestation alone no longer selects: {status} {body}"
+    );
+    let state = &c.env.env.state;
+    let refreshed = aq_server::intelligence::keeper::refresh_once(state, now as u64)
+        .await
+        .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM intelligence_observations")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        i64::from(refreshed),
+        rows,
+        "every owner row of the switch is refreshed"
+    );
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(poll_offers(&body).len(), 1, "{body}");
+}

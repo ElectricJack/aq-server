@@ -196,6 +196,11 @@
       }
     ],
     "server": {
+      "owner_availability": {
+        "generation": "1",
+        "since": null,
+        "state": "unset"
+      },
       "running_agents": 1,
       "source_revision": "dev",
       "version": "0.1.0"

@@ -19,6 +19,25 @@ pub struct SwarmServer {
     pub version: String,
     pub source_revision: String,
     pub running_agents: u32,
+    pub owner_availability: OwnerAvailability,
+}
+/// The owner's sticky availability switch (spec 0007 Q2). `unset` keeps the
+/// manual observations of before; `off` stops new offers.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerAvailabilityState {
+    Unset,
+    On,
+    Off,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerAvailability {
+    pub state: OwnerAvailabilityState,
+    /// Decimal compare-and-swap generation for swarm.availability.set.
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub generation: String,
+    pub since: Option<Timestamp>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

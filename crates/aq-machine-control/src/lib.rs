@@ -507,6 +507,23 @@ pub async fn accepts_new_work(conn: &mut PgConnection, node: Uuid) -> Result<boo
     Ok(desired.is_none_or(|d| d == "running"))
 }
 
+/// The offer gate of a polling node: why it gets no new offer, or None. Holds
+/// when its machine is not running (S4) or the owner's availability switch is
+/// off (spec 0007 Q2: no selection runs, so no decision row). None below 101.
+pub async fn offer_hold(
+    conn: &mut PgConnection,
+    node: Uuid,
+) -> Result<Option<&'static str>, Error> {
+    if !has_format(conn).await? {
+        return Ok(None);
+    }
+    if !accepts_new_work(conn, node).await? {
+        return Ok(Some("machine is not running (draining or stopped)"));
+    }
+    let off = owner_availability(conn).await?.state == Availability::Off;
+    Ok(off.then_some("owner availability is off"))
+}
+
 /// The service facts of the given nodes that hold a key (legacy nodes are absent).
 pub async fn node_services(
     conn: &mut PgConnection,
@@ -643,4 +660,49 @@ pub async fn set_owner_availability(
         }
     }
     owner_availability(tx).await
+}
+
+/// Spec 0007 Q2 keeper step, under advisory lock 712009 held by the caller.
+/// Rewrites every operator `available` observation received before
+/// `now_ms - refresh_after_ms` as freshly received at `now_ms`: sequence + 1, a
+/// new observation id, the same TTL, cooldown `now_ms` and `revision`. A row is
+/// left alone while any unexpired non-operator negative observation shares its
+/// credential scope (ignoring the node, and the model unless the owner row
+/// names one), so the keeper never masks negative feedback. Bumps the registry
+/// to `revision` when a row changed; returns the number of rows refreshed.
+pub async fn refresh_owner_available(
+    tx: &mut PgConnection,
+    now_ms: u64,
+    refresh_after_ms: u64,
+    revision: u64,
+) -> Result<u32, Error> {
+    let now = i64::try_from(now_ms).map_err(|_| Error::Invalid("now"))?;
+    let revision = i64::try_from(revision).map_err(|_| Error::Invalid("revision"))?;
+    let n: i64 = sqlx::query_scalar(
+        "WITH refreshed AS (UPDATE intelligence_observations o SET sequence = o.sequence + 1, \
+           observation = o.observation || jsonb_build_object('observation_id', gen_random_uuid(), \
+             'sequence', o.sequence + 1, 'revision', $3::bigint, 'received_at_ms', $1::bigint, \
+             'expires_at_ms', $1::bigint + ((o.observation->>'expires_at_ms')::bigint - (o.observation->>'received_at_ms')::bigint), \
+             'cooldown_until_ms', $1::bigint) \
+         WHERE o.observation->'source'->>'kind' = 'operator' AND o.observation->>'state' = 'available' \
+           AND (o.observation->>'received_at_ms')::bigint < $1::bigint - $2::bigint \
+           AND NOT EXISTS (SELECT 1 FROM intelligence_observations b \
+             WHERE b.observation->'source'->>'kind' <> 'operator' AND b.observation->>'state' <> 'available' \
+               AND (b.observation->>'expires_at_ms')::bigint > $1::bigint \
+               AND (b.observation->'scope') - 'node_id' - 'model' = (o.observation->'scope') - 'node_id' - 'model' \
+               AND COALESCE(o.observation->'scope'->'model', 'null'::jsonb) IN ('null'::jsonb, b.observation->'scope'->'model')) \
+         RETURNING 1) SELECT count(*) FROM refreshed",
+    )
+    .bind(now)
+    .bind(i64::try_from(refresh_after_ms).map_err(|_| Error::Invalid("refresh"))?)
+    .bind(revision)
+    .fetch_one(&mut *tx)
+    .await?;
+    if n > 0 {
+        sqlx::query("UPDATE intelligence_registry SET revision=$1 WHERE singleton=TRUE")
+            .bind(revision)
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(n as u32)
 }

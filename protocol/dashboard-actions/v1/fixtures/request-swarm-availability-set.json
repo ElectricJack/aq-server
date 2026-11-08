@@ -1,0 +1,14 @@
+{
+  "operation_id": "5b0c2a9e-1f1e-4c55-9d7e-000000000005",
+  "kind": "swarm.availability.set",
+  "subject": {
+    "type": "swarm",
+    "id": "owner-availability"
+  },
+  "expected_versions": {},
+  "payload": {
+    "operation_id": "5b0c2a9e-1f1e-4c55-9d7e-000000000005",
+    "available": true,
+    "expected_generation": "1"
+  }
+}

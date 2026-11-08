@@ -368,14 +368,9 @@ async fn offers(
         return Ok(page);
     }
     let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
-    if aq_machine_control::has_format(&mut gate)
-        .await
-        .map_err(|_| refused())?
-        && !aq_machine_control::accepts_new_work(&mut gate, auth.id())
-            .await
-            .map_err(|_| refused())?
-    {
-        tracing::info!(node_id = %auth.id(), "machine is not running (draining or stopped); no new offers");
+    let hold = aq_machine_control::offer_hold(&mut gate, auth.id());
+    if let Some(reason) = hold.await.map_err(|_| refused())? {
+        tracing::info!(node_id = %auth.id(), "{reason}; no new offers");
         return Ok(page);
     }
     drop(gate);

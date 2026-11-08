@@ -277,3 +277,179 @@ async fn bootstrap_lists_worker_capabilities() {
         assert_eq!((&c["version"], &c["enabled"]), (&json!("1"), &json!(true)));
     }
 }
+
+/// Spec 0007 Q2: a `swarm.availability.set` body with a fresh operation id.
+fn availability(available: bool, generation: &str) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(FIXTURES)
+        .join("request-swarm-availability-set.json");
+    let mut v: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let id = Uuid::new_v4().to_string();
+    v["operation_id"] = json!(id);
+    v["payload"]["operation_id"] = json!(id);
+    v["payload"]["available"] = json!(available);
+    v["payload"]["expected_generation"] = json!(generation);
+    v
+}
+
+/// A fixture with an intelligence registry of two enabled credentials and one disabled.
+async fn with_registry() -> (Fixture, PgPool, Router) {
+    use aq_server::intelligence::config::{CredentialConfig, IntelligenceConfig};
+    let mut f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let credential = |name: &str, enabled: bool| CredentialConfig {
+        kind: Default::default(),
+        allowed_backends: aq_selection::default_allowed_backends(),
+        credential: aq_selection::AuthorizedCredential {
+            profile: common::profiled::artifact(name, name.as_bytes()),
+            provider: "synthetic-provider".into(),
+            account_reference: format!("{name}-account"),
+            endpoint_reference: "endpoint-a".into(),
+            revision: 1,
+            enabled,
+            provisionable: false,
+            material_owner: None,
+            allowed_backends: aq_selection::default_allowed_backends(),
+        },
+        allowed_node_ids: vec![],
+        allow_enrolled_nodes: true,
+        secret_file: None,
+        delivery_mode: None,
+    };
+    let registry = IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
+        revision: 1,
+        credentials: vec![
+            credential("account-a", true),
+            credential("account-b", true),
+            credential("account-off", false),
+        ],
+        qualified_harnesses: vec![],
+    };
+    let mut config = (*f.state.config).clone();
+    config.intelligence = Some(std::sync::Arc::new(registry.load().unwrap()));
+    f.state.config = std::sync::Arc::new(config);
+    let app = aq_server::build_admin_router(f.state.clone());
+    (f, pool, app)
+}
+
+async fn owner_rows(pool: &PgPool) -> Vec<Value> {
+    sqlx::query_scalar("SELECT observation FROM intelligence_observations WHERE observation->'source'->>'kind'='operator' ORDER BY observation->'scope'->>'account_reference'")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn availability_on_records_an_operator_observation_per_enabled_credential() {
+    let (_f, pool, app) = with_registry().await;
+    let (s, v) = act(&app, "owner@localhost", &availability(true, "1")).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+    let rows = owner_rows(&pool).await;
+    let accounts: Vec<&Value> = rows
+        .iter()
+        .map(|o| &o["scope"]["account_reference"])
+        .collect();
+    assert_eq!(
+        accounts,
+        [&json!("account-a-account"), &json!("account-b-account")]
+    );
+    for o in &rows {
+        assert_eq!(o["state"], "available");
+        assert!(
+            o["scope"]["model"].is_null() && o["scope"]["node_id"].is_null(),
+            "{o}"
+        );
+        assert_eq!(
+            o["expires_at_ms"].as_u64().unwrap() - o["received_at_ms"].as_u64().unwrap(),
+            3_600_000
+        );
+    }
+    let (_, v) = act(&app, "owner@localhost", &availability(false, "2")).await;
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+    assert_eq!(owner_rows(&pool).await, rows, "off records nothing");
+}
+
+#[tokio::test]
+async fn availability_stale_generation_is_a_conflict() {
+    let (_f, _pool, app) = with_registry().await;
+    let (_, v) = act(&app, "owner@localhost", &availability(true, "1")).await;
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+    let (_, v) = act(&app, "owner@localhost", &availability(false, "1")).await;
+    assert_eq!(v["data"]["disposition"], "conflict", "{v}");
+    assert_eq!(
+        v["data"]["current_versions"]["owner_availability"], "2",
+        "{v}"
+    );
+}
+
+#[tokio::test]
+async fn swarm_read_reports_owner_availability() {
+    let (_f, _pool, app) = with_registry().await;
+    let read = || async {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v1/swarm")
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["data"]["server"]["owner_availability"]
+            .clone()
+    };
+    assert_eq!(
+        read().await,
+        json!({"state":"unset","generation":"1","since":null})
+    );
+    act(&app, "owner@localhost", &availability(true, "1")).await;
+    let on = read().await;
+    assert_eq!(
+        (&on["state"], &on["generation"]),
+        (&json!("on"), &json!("2")),
+        "{on}"
+    );
+    assert!(on["since"].is_string(), "{on}");
+    act(&app, "owner@localhost", &availability(false, "2")).await;
+    let off = read().await;
+    assert_eq!(
+        (&off["state"], &off["generation"]),
+        (&json!("off"), &json!("3")),
+        "{off}"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_lists_availability_capability() {
+    let capability = |app: Router| async move {
+        let response = app
+            .oneshot(
+                Request::get("/api/v1/bootstrap")
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+        v["data"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "swarm.availability.control")
+            .cloned()
+            .unwrap_or_else(|| panic!("missing: {v}"))
+    };
+    let (_f, _pool, app) = with_registry().await;
+    let c = capability(app).await;
+    assert_eq!((&c["version"], &c["enabled"]), (&json!("1"), &json!(true)));
+    // Without an intelligence registry the switch is listed but disabled.
+    let (_f, _pool, app) = machine(1).await;
+    assert_eq!(capability(app).await["enabled"], json!(false));
+}

@@ -1,5 +1,7 @@
 //! Worker service state per node and machine control per key (spec 0007 phase 1).
-use aq_dashboard_contract::{MachineDesired, ServiceState};
+use aq_dashboard_contract::{
+    MachineDesired, OwnerAvailability, OwnerAvailabilityState, ServiceState,
+};
 use aq_machine_control::{self as mc, DesiredState};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -80,4 +82,28 @@ pub async fn controls(
             (n.machine_key, fact)
         })
         .collect())
+}
+
+/// The owner's availability switch; `unset` at generation 1 before the machine tables.
+pub async fn owner_availability(conn: &mut sqlx::PgConnection) -> sqlx::Result<OwnerAvailability> {
+    let o = match mc::has_format(conn).await.map_err(db)? {
+        true => Some(mc::owner_availability(conn).await.map_err(db)?),
+        false => None,
+    };
+    let state = match o.as_ref().map(|o| o.state) {
+        Some(mc::Availability::On) => OwnerAvailabilityState::On,
+        Some(mc::Availability::Off) => OwnerAvailabilityState::Off,
+        _ => OwnerAvailabilityState::Unset,
+    };
+    let since = o
+        .as_ref()
+        .and_then(|o| o.updated_at_ms)
+        .map(crate::timestamp);
+    Ok(OwnerAvailability {
+        state,
+        generation: o.map_or(1, |o| o.generation).to_string(),
+        since: since
+            .transpose()
+            .map_err(|_| sqlx::Error::Protocol("time".into()))?,
+    })
 }

@@ -390,6 +390,11 @@ pub(super) async fn bootstrap(
             "Adding a machine requires an owner account",
         ),
         capability(
+            "swarm.availability.control",
+            a.owner && state.config.intelligence.is_some(),
+            "Owner availability requires an owner account and a configured intelligence registry",
+        ),
+        capability(
             "supervisor.history.read",
             mounted.supervisor_conversation && a.owner,
             "Global supervisor history requires an owner account and mounted conversation owner",

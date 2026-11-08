@@ -83,7 +83,7 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("worker control schema");
 }
 
-fn generation(value: &str) -> Option<u64> {
+pub(crate) fn generation(value: &str) -> Option<u64> {
     value
         .parse::<u64>()
         .ok()
@@ -101,21 +101,23 @@ fn bound(request: &ActionRequest, operation_id: Uuid, machine: &str) -> Result<(
     }
     Ok(())
 }
-fn unavailable<E>(_: E) -> ApiError {
+pub(crate) fn unavailable<E>(_: E) -> ApiError {
     ApiError::unavailable()
 }
 fn not_found() -> ApiError {
     ApiError::for_status(StatusCode::NOT_FOUND)
 }
-async fn lookup(
+/// Owner, all-authorized scope, and exactly one `subject` entity per operation.
+pub(crate) async fn lookup(
     state: &AppState,
     user: &User,
     scope: &Scope,
     op: Option<&Operation>,
+    subject: &str,
 ) -> Result<(), ApiError> {
     existing::owner(state, user).await?;
     let one_machine =
-        op.is_none_or(|o| o.subject_refs.len() == 1 && o.subject_refs[0].entity_type == "machine");
+        op.is_none_or(|o| o.subject_refs.len() == 1 && o.subject_refs[0].entity_type == subject);
     if !matches!(scope, Scope::AllAuthorized) || !one_machine {
         return Err(ApiError::invalid());
     }
@@ -154,7 +156,7 @@ impl<D: Desired> ActionKind for SetDesired<D> {
         scope: &Scope,
         op: Option<&Operation>,
     ) -> Result<(), ApiError> {
-        lookup(state, user, scope, op).await
+        lookup(state, user, scope, op, "machine").await
     }
     async fn reconcile(
         &self,
@@ -266,7 +268,7 @@ impl ActionKind for RevokeMachine {
         scope: &Scope,
         op: Option<&Operation>,
     ) -> Result<(), ApiError> {
-        lookup(state, user, scope, op).await
+        lookup(state, user, scope, op, "machine").await
     }
     async fn execute(
         &self,

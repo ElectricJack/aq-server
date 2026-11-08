@@ -81,6 +81,10 @@ def validate_request(value):
         assert subject == {'type':'machine', 'id':payload['machine']} and value['expected_versions'] == {}
         assert ('expected_generation' in payload) == (kind != 'worker.revoke')
         return
+    if kind == 'swarm.availability.set':
+        assert subject == {'type':'swarm', 'id':'owner-availability'} and value['expected_versions'] == {}
+        assert isinstance(payload['available'], bool) and 0 < int(payload['expected_generation']) <= 2**63 - 1
+        return
     key = {'task.graph.create':'project', 'task.create':'project', 'decision.resolve':'decision', 'supervisor.message.send':'conversation', 'session.message.send':'session'}.get(kind)
     key = key or ('project' if kind == 'knowledge.author' else kind.split('.')[0])
     field = {'task.create':'expected_project_revision', 'decision.resolve':'expected_decision_revision', 'supervisor.message.send':'expected_conversation_revision', 'knowledge.author':'expected_project_revision', 'session.message.send':'expected_generation'}.get(kind, 'expected_version')
@@ -129,7 +133,7 @@ def validate_request(value):
         assert payload['expected_subject']['version'] == '1'
     assert len(canonical(value)) <= 65536
 
-for name in ('task-create', 'decision-resolve', 'supervisor-message-send', 'session-message-send') + tuple(k.replace('.', '-') for k in TYPED + PLAYBOOK + COMMENT + WORKER):
+for name in ('task-create', 'decision-resolve', 'supervisor-message-send', 'session-message-send') + tuple(k.replace('.', '-') for k in TYPED + PLAYBOOK + COMMENT + WORKER + ('swarm.availability.set',)):
     validate_request(load('request-' + name))
 conflict = load('operation-conflict-current-versions')
 validator.validate(conflict)
@@ -188,4 +192,4 @@ for contract in compat['read']['data']['contracts']:
 assert len(compat['read']['data']['contracts']) == 2
 assert compat['read']['api_version'] == 'dashboard-read-1'
 validate_request(load('request-task-create-metadata'))
-print('24 requests, 5 dispositions, current-versions conflicts, 10 errors, cursor, replay, invalid and compatibility fixtures passed')
+print('25 requests, 5 dispositions, current-versions conflicts, 10 errors, cursor, replay, invalid and compatibility fixtures passed')
