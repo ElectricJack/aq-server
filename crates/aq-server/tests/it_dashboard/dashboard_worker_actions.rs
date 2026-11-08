@@ -228,6 +228,47 @@ async fn revoke_revokes_every_slot_node() {
     drop(f);
 }
 
+/// Review I4: a slot of a service machine is not revoked alone, through the
+/// action or the legacy route; the answer says to revoke the machine.
+#[tokio::test]
+async fn revoking_one_slot_of_a_machine_is_refused() {
+    let (f, pool, app) = machine(2).await;
+    let slot = f.node.node_id;
+    let (s, v) = act(
+        &app,
+        "owner@localhost",
+        &body("revoke", &format!("node:{slot}"), ""),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["code"], "machine_node", "{v}");
+    let legacy = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/workers/{slot}/revoke"))
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), StatusCode::CONFLICT);
+    let bytes = legacy.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("revoke the whole machine") && text.contains("desktop"),
+        "{text}"
+    );
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nodes WHERE machine_key='desktop' AND revoked_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 2);
+}
+
 #[tokio::test]
 async fn non_owner_is_refused() {
     let (_f, pool, app) = machine(1).await;

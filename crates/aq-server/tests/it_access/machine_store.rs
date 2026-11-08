@@ -420,6 +420,58 @@ async fn concurrent_mint_and_revoke_leave_no_live_sibling() {
     assert_eq!(live, 0);
 }
 
+/// Review I4: the key stays in use while any live slot holds it, and a slot
+/// alone is not revoked (`node:` of a machine node is refused).
+#[tokio::test]
+async fn key_is_not_adopted_while_a_sibling_lives() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let ids = machine(&pool, 3).await;
+    let mut c = pool.acquire().await.unwrap();
+    for id in &ids {
+        let r = mc::revoke_machine(&mut c, &format!("node:{id}"), now()).await;
+        assert!(matches!(r, Err(Error::Refused(m)) if m == mc::MACHINE_NODE));
+    }
+    // Slot 1 revoked by older code: its live siblings still hold the key.
+    sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1")
+        .bind(ids[0])
+        .bind(now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let other = node(&pool, "other").await;
+    assert!(matches!(
+        mc::claim_key(&mut c, other, "desk").await,
+        Err(Error::KeyInUse)
+    ));
+    assert_eq!(mc::revoke_machine(&mut c, "desk", now()).await.unwrap(), 2);
+    assert_eq!(
+        mc::claim_key(&mut c, other, "desk").await.unwrap().slot,
+        Some(1)
+    );
+}
+
+/// Review minor: of two racing slot-1 claims of one key, the loser gets
+/// KeyInUse (a 409), never a database error.
+#[tokio::test]
+async fn racing_slot_one_claims_lose_with_key_in_use() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let (a, b) = (node(&pool, "a").await, node(&pool, "b").await);
+    let mut first = pool.begin().await.unwrap();
+    mc::claim_key(&mut first, a, "desk").await.unwrap();
+    let second = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            mc::claim_key(&mut tx, b, "desk").await.map(drop)
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    first.commit().await.unwrap();
+    assert!(matches!(second.await.unwrap(), Err(Error::KeyInUse)));
+}
+
 #[tokio::test]
 async fn revoke_machine_revokes_every_slot_and_clears_control() {
     let db = TestDb::create().await;

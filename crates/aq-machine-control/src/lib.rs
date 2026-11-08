@@ -222,8 +222,9 @@ pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<M
             Err(Error::Invalid("not_slot_one"))
         };
     }
+    // Review I4: any live node of the key (not only slot 1) keeps it in use.
     let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM nodes WHERE machine_key=$1 AND slot=1 AND revoked_at IS NULL AND id<>$2)",
+        "SELECT EXISTS(SELECT 1 FROM nodes WHERE machine_key=$1 AND revoked_at IS NULL AND id<>$2)",
     )
     .bind(key)
     .bind(node)
@@ -236,7 +237,11 @@ pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<M
         .bind(node)
         .bind(key)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
+            Some(code) if code == "23505" => Error::KeyInUse,
+            _ => Error::Db(e),
+        })?;
     Ok(MachineNode {
         node_id: node,
         machine_key: Some(key.into()),
@@ -617,8 +622,26 @@ pub async fn node_services(
         .collect()
 }
 
+/// The machine key of a live node, if it holds one.
+pub async fn live_machine_key(
+    conn: &mut PgConnection,
+    node: Uuid,
+) -> Result<Option<String>, Error> {
+    Ok(sqlx::query_scalar(
+        "SELECT machine_key FROM nodes WHERE id=$1 AND revoked_at IS NULL AND machine_key IS NOT NULL",
+    )
+    .bind(node)
+    .fetch_optional(&mut *conn)
+    .await?)
+}
+
+/// Review I4: revoking one node of a machine is refused; revoke the machine.
+pub const MACHINE_NODE: &str =
+    "machine_node: this node belongs to a service machine; revoke the whole machine by its key";
+
 /// `machine` is a key or `node:<uuid>`. Sets revoked_at on every live node of
 /// it and deletes its machine_controls row. Returns the number of nodes revoked.
+/// A `node:` that holds a machine key is refused (`MACHINE_NODE`).
 pub async fn revoke_machine(
     tx: &mut PgConnection,
     machine: &str,
@@ -626,6 +649,9 @@ pub async fn revoke_machine(
 ) -> Result<u32, Error> {
     if let Some(id) = machine.strip_prefix("node:") {
         let id: Uuid = id.parse().map_err(|_| Error::Invalid("machine"))?;
+        if live_machine_key(tx, id).await?.is_some() {
+            return Err(Error::Refused(MACHINE_NODE));
+        }
         let n = sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL")
             .bind(id)
             .bind(now)

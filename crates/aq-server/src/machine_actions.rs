@@ -243,9 +243,19 @@ impl ActionKind for RevokeMachine {
         // Known to the server, live or already revoked: revoking twice stays idempotent.
         let known: bool = match p.machine.strip_prefix("node:") {
             Some(id) => {
+                let id = id.parse::<Uuid>().map_err(|_| ApiError::invalid())?;
+                let mut conn = state.store.pool.acquire().await.map_err(unavailable)?;
+                if mc::live_machine_key(&mut conn, id)
+                    .await
+                    .map_err(unavailable)?
+                    .is_some()
+                {
+                    let message = "This node belongs to a service machine; revoke the machine";
+                    return Err(ApiError::new(StatusCode::CONFLICT, "machine_node", message));
+                }
                 sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1)")
-                    .bind(id.parse::<Uuid>().map_err(|_| ApiError::invalid())?)
-                    .fetch_one(&state.store.pool)
+                    .bind(id)
+                    .fetch_one(&mut *conn)
                     .await
             }
             None => {
