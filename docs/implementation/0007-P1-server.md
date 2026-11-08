@@ -119,8 +119,12 @@ Swarm read fields:
   generation, so they refuse only when the owner flipped the switch. The
   phase-execution health check (Prepare, delegated renewals, the
   phase-refresh profile) adds the same attestation at its own check time.
+  It is held off only by the polling node's own relevant feedback, as in
+  selection, and carries the registry revision.
   Setting the state the switch already has keeps its generation, and a switch
-  turned on by a user who is no longer an owner counts as unset. While
+  set by a user who is no longer an owner counts as unset everywhere (the
+  swarm read says so in `owner_availability.note`); an owner switching it
+  again writes a new row. While
   the switch is off, polls make no offer and run no selection. When it was
   never set, the old attestation rules apply.
 - **Q3 (enrolled nodes are allowed).** `allow_enrolled_nodes` defaults to on.
