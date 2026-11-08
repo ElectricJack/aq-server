@@ -1711,3 +1711,31 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - salvage refuses `sk-ant-` token shapes;
     - the worker lib has 29 lines of headroom, so make room by moving code into crates.
   - W5–W9 are running. The server lane `swarm/p1-server` S0–S6 is running, and S5 carries the #113 follow-up: the swarm read no longer takes a per-attempt locking read on every poll.
+- **03:03:** swarm phase 1 progress.
+  - aq-dashboard #86 (A1 record, open; ced5034a) merged.
+  - **Worker lane done (aq-worker #49, CI green):**
+    - W0, W2–W12;
+    - the lib ratchet lowered to 70993;
+    - the measurement output validated offline by `measured()`.
+
+    The Opus review found 9 important defects:
+    - lost recovery for an attempt that errors after admission;
+    - a restart loop when all slots are held;
+    - a transient error disables a slot;
+    - a stale renderer pin;
+    - enroll burns the code;
+    - plaintext enroll;
+    - a leaked measurement sandbox;
+    - a partial copy-back as the successor base;
+    - re-enroll restart.
+
+    It confirmed the salvage gate is sound. Fix round 1 is with Opus.
+  - **Dashboard lane D1–D5 done** (`swarm/p1-dashboard` 45e6e08, pinned to server 62b57adf; re-pin at merge).
+  - **Server lane:**
+    - S0–S9 done (9a63d84d);
+    - the S7 successor starts from the handoff commit;
+    - S8 exempts owner and service handoffs from the budgets, while restarts are charged;
+    - S9 skips a refused successor and refused polls write no decision row.
+    - The lib is 108970/109566.
+    - S10–S11 are running, with S11 allow_enrolled_nodes on by default.
+  - Freed about 50 G by deleting the build dirs of 6 finished worktrees.
