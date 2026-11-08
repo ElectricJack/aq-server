@@ -306,13 +306,17 @@ pub(super) async fn fence_locked(
     if raw.len() > 1024 {
         return Err(refused());
     }
-    let availability: Vec<AvailabilityObservation> = raw
+    let mut availability: Vec<AvailabilityObservation> = raw
         .into_iter()
         .map(serde_json::from_value)
         .collect::<Result<_, _>>()
         .map_err(|_| refused())?;
     super::validate_observation_revisions(&availability, &registry)?;
     let time = now(state)?;
+    // Fix round 2: a switched-on owner is observed available here as in selection.
+    let credentials = std::slice::from_ref(credential);
+    let owner = aq_machine_control::owner_attested(tx, credentials, &availability, revision, time);
+    availability.extend(owner.await?);
     if inventory.observed_at_ms == 0
         || inventory.observed_at_ms > time
         || inventory

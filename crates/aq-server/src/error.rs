@@ -162,6 +162,11 @@ impl From<IdentityError> for AppError {
     }
 }
 
+impl From<aq_machine_control::Error> for AppError {
+    fn from(_: aq_machine_control::Error) -> Self {
+        AppError::Internal
+    }
+}
 impl From<StoreError> for AppError {
     fn from(e: StoreError) -> Self {
         if matches!(e, StoreError::EmailTaken) {

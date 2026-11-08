@@ -266,9 +266,7 @@ pub async fn load(
     task: Uuid,
     started: u32,
 ) -> Result<Option<Vec<Prior>>, AppError> {
-    let handoffs = aq_machine_control::has_format(conn)
-        .await
-        .map_err(|_| AppError::Internal)?;
+    let handoffs = aq_machine_control::has_format(conn).await?;
     let rows = sqlx::query(if handoffs { PRIORS } else { PRIORS_PRE_101 })
         .bind(task)
         .fetch_all(conn)

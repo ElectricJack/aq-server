@@ -193,9 +193,7 @@ pub(super) async fn report(
         harnesses.push(harness.clone());
     }
     let mut credential_bindings = Vec::new();
-    let enrolled = aq_machine_control::enrolled(&mut tx, node.id)
-        .await
-        .map_err(|_| AppError::Internal)?;
+    let enrolled = aq_machine_control::enrolled(&mut tx, node.id).await?;
     for presence in request.credentials {
         if credential_bindings
             .iter()

@@ -80,22 +80,6 @@ pub(super) fn relevant(
         })
         .collect()
 }
-/// Spec 0007 Q2: the owner's switch, while on, attests the credentials at
-/// `now_ms` (`aq_intelligence_config::owner_attestations`); its generation is
-/// the only fact a fence compares, so a later flip refuses the admission.
-async fn attested(
-    conn: &mut sqlx::PgConnection,
-    credentials: &[AuthorizedCredential],
-    observed: &[AvailabilityObservation],
-    revision: u64,
-    now_ms: u64,
-) -> Result<Vec<AvailabilityObservation>> {
-    let switch = aq_machine_control::owner_switch(conn).await;
-    Ok(match switch.map_err(|_| AppError::Internal)? {
-        Some(on) => config::owner_attestations(credentials, observed, on, revision, now_ms),
-        None => vec![],
-    })
-}
 /// Internal authenticated-caller service, never a grant. Task/context arguments
 /// must be obtained from their real owners. Replays retain their original result;
 /// new observations need a new operation ID. No provider calls occur here.
@@ -184,16 +168,12 @@ async fn resolve_with_principal(
     .map_err(db)?
     .ok_or_else(|| conflict("intelligence registry has not been installed"))?
         as u64;
+    // Spec 0007 Q2: the switch's attestation (aq_machine_control::owner_attested).
     let mut conn = state.store.pool.acquire().await.map_err(db)?;
-    let owner = attested(
-        &mut conn,
-        &credentials,
-        &observations,
-        registry_revision,
-        time,
-    )
-    .await?;
-    observations.extend(owner);
+    let at = (registry_revision, time);
+    let owner =
+        aq_machine_control::owner_attested(&mut conn, &credentials, &observations, at.0, at.1);
+    observations.extend(owner.await?);
     drop(conn);
     let count = attempts(state, &request.lineage).await?;
     let replacement = match request.replacement.take() {
@@ -594,8 +574,8 @@ async fn fence_snapshot(
         .map_err(|_| AppError::Internal)?;
     let mut expected = relevant(observations, &credentials, node_id);
     let (revision, at) = (decision.inputs.registry_revision, decision.inputs.now_ms);
-    let owner = attested(tx, &credentials, &expected, revision, at).await?;
-    expected.extend(owner);
+    let owner = aq_machine_control::owner_attested(tx, &credentials, &expected, revision, at);
+    expected.extend(owner.await?);
     if digest(&expected).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.observations).map_err(|_| AppError::Internal)?
     {

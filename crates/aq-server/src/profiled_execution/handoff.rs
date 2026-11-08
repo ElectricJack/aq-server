@@ -34,16 +34,10 @@ pub async fn successor_base(
     let predecessor = replacement.predecessor;
     let pool = &state.store.pool;
     let mut conn = pool.acquire().await.map_err(internal)?;
-    if !aq_machine_control::has_format(&mut conn)
-        .await
-        .map_err(internal)?
-    {
+    if !aq_machine_control::has_format(&mut conn).await? {
         return Ok(None);
     }
-    let Some(row) = aq_machine_control::handoff_of(&mut conn, predecessor)
-        .await
-        .map_err(internal)?
-    else {
+    let Some(row) = aq_machine_control::handoff_of(&mut conn, predecessor).await? else {
         return Ok(None);
     };
     drop(conn);
@@ -155,8 +149,7 @@ pub async fn successor_base(
     }
     let mut conn = pool.acquire().await.map_err(internal)?;
     aq_machine_control::set_handoff_candidate(&mut conn, predecessor, operation, &oid, note)
-        .await
-        .map_err(internal)?;
+        .await?;
     Ok(Some(HandoffBase {
         oid,
         retention_handle: operation,
@@ -170,15 +163,10 @@ pub async fn export_is_handoff(
     predecessor: Uuid,
     export: &super::source_exports::Request,
 ) -> Result<bool, AppError> {
-    if !aq_machine_control::has_format(conn)
-        .await
-        .map_err(internal)?
-    {
+    if !aq_machine_control::has_format(conn).await? {
         return Ok(false);
     }
-    let row = aq_machine_control::handoff_of(conn, predecessor)
-        .await
-        .map_err(internal)?;
+    let row = aq_machine_control::handoff_of(conn, predecessor).await?;
     Ok(row.is_some_and(|row| {
         aq_machine_control::is_handoff_export(
             &row,

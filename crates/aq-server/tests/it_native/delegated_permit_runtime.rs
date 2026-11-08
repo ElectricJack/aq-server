@@ -208,6 +208,10 @@ async fn readoption_refuses_backend_template_capability_changes_and_expired_gran
     }
 }
 #[tokio::test]
+async fn owner_switch_on_renews_past_the_observation_age_without_a_row() {
+    Box::pin(exercise_phase(10)).await;
+}
+#[tokio::test]
 async fn expired_permit_is_refused_by_every_runner_route() {
     Box::pin(exercise_phase(8)).await;
 }
@@ -429,6 +433,8 @@ async fn exercise_phase(mode: u8) {
     assert_eq!(status, 200, "started: {}", String::from_utf8_lossy(&bytes));
     if mode == 8 {
         routes::exercise(&f, &upgraded, &started, installed_revision).await;
+    } else if mode == 10 {
+        owner_switch_renewal(&f, &upgraded, &started, installed_revision).await;
     } else if mode != 0 {
         exercise_reboot(
             &f,
@@ -443,6 +449,59 @@ async fn exercise_phase(mode: u8) {
     } else {
         exercise_same_boot_renewal(&f, &upgraded, &started, installed_revision).await;
     }
+}
+
+/// Fix round 2: with no observation row and the renewal past the policy's
+/// observation age (5 s here), a renewal is refused while the switch is unset
+/// and succeeds once the owner's switch is on (its synthesized attestation
+/// reaches the phase health check).
+async fn owner_switch_renewal(
+    f: &phase_refresh_fixture::Prepared,
+    upgraded: &PermitUpgradeResponse,
+    started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
+    installed_revision: u64,
+) {
+    use std::sync::atomic::Ordering;
+    let (state, pool) = (&f.c.env.env.state, &f.c.env.env.pool);
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    f.c.controlled_clock
+        .as_ref()
+        .unwrap()
+        .fetch_add(6_000, Ordering::SeqCst);
+    let q = RunnerRenewalRequest {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        authority: upgraded.authority.clone(),
+        permit: upgraded.permit.clone(),
+        revision: installed_revision,
+    };
+    let body = serde_json::to_value(SandboxDocument::RunnerRenewalRequest(q.clone())).unwrap();
+    let unset = request(
+        state,
+        "/v1/worker/profiled/renew",
+        &headers(&q.permit),
+        body,
+    )
+    .await;
+    assert_ne!(
+        unset.status(),
+        200,
+        "no attestation, no switch: stale health"
+    );
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let now = (state.clock)();
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::set_owner_availability(&mut c, true, 1, owner, Uuid::new_v4(), now)
+        .await
+        .unwrap();
+    drop(c);
+    exercise_same_boot_renewal(f, upgraded, started, installed_revision).await;
 }
 
 async fn exercise_same_boot_renewal(

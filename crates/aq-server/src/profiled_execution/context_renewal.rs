@@ -22,10 +22,7 @@ async fn load(state: &AppState, now_ms: u64) -> Result<(Vec<Qualification>, Rene
     };
     let configured = config.context_qualifications.clone();
     let mut conn = state.store.pool.acquire().await.map_err(db)?;
-    if !aq_machine_control::has_format(&mut conn)
-        .await
-        .map_err(db)?
-    {
+    if !aq_machine_control::has_format(&mut conn).await? {
         return Ok((configured, vec![]));
     }
     let bases = configured
@@ -152,9 +149,10 @@ pub async fn record(
         .await
         .map_err(db)?;
     let bases: Vec<&str> = renewed.iter().map(|(b, _, _)| b.digest.as_str()).collect();
-    let hold =
-        aq_machine_control::renewal_hold(&mut tx, node.id(), &bases, now_ms, EFFECTIVE_DELAY_MS);
-    if let Some(why) = hold.await.map_err(db)? {
+    let delay = EFFECTIVE_DELAY_MS;
+    if let Some(why) =
+        aq_machine_control::renewal_hold(&mut tx, node.id(), &bases, now_ms, delay).await?
+    {
         return Err(AppError::Conflict(why.into()));
     }
     for (base, renderer, fact) in &renewed {

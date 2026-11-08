@@ -786,6 +786,24 @@ pub async fn owner_availability(conn: &mut PgConnection) -> Result<OwnerAvailabi
     })
 }
 
+/// Spec 0007 Q2: the owner's attestation of `credentials` at `now_ms` while the
+/// switch is on (`aq_intelligence_config::owner_attestations`), else none.
+/// Its generation is the only fact a fence compares, so a flip refuses.
+pub async fn owner_attested(
+    conn: &mut PgConnection,
+    credentials: &[aq_selection::AuthorizedCredential],
+    observed: &[aq_selection::AvailabilityObservation],
+    revision: u64,
+    now_ms: u64,
+) -> Result<Vec<aq_selection::AvailabilityObservation>, Error> {
+    Ok(match owner_switch(conn).await? {
+        Some(on) => {
+            aq_intelligence_config::owner_attestations(credentials, observed, on, revision, now_ms)
+        }
+        None => vec![],
+    })
+}
+
 /// Spec 0007 Q2: `(principal, generation)` of the owner's switch while it is
 /// on; None when unset or off, and below 101. Selection synthesizes the
 /// owner's attestation from it, so the admission fences change only when the

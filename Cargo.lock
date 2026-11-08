@@ -316,7 +316,9 @@ dependencies = [
 name = "aq-machine-control"
 version = "0.1.0"
 dependencies = [
+ "aq-intelligence-config",
  "aq-protocol",
+ "aq-selection",
  "chrono",
  "sqlx",
  "sqlx-postgres",

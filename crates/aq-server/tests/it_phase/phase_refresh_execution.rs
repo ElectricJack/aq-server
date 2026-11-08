@@ -324,3 +324,57 @@ async fn original_live_grant_replays_after_preparation_retrieval_expiry_without_
     assert_eq!(replay.delivery.clock.server_time_ms, at);
     assert_eq!(stored(&f).await, original);
 }
+
+/// Fix round 2: the owner's switch reaches the phase health check. With no
+/// observation row, Prepare issues while the switch is on and its replay stays
+/// healthy past observation_max_age_ms (5 s here); with the switch off (or
+/// unset) Prepare is refused.
+async fn switched(f: &Prepared, on: Option<bool>) {
+    let pool = &f.c.env.env.pool;
+    sqlx::query("DELETE FROM intelligence_observations")
+        .execute(pool)
+        .await
+        .unwrap();
+    let Some(on) = on else { return };
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let now = (f.c.env.env.state.clock)();
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::set_owner_availability(&mut c, on, 1, owner, Uuid::new_v4(), now)
+        .await
+        .unwrap();
+}
+async fn refused(f: &Prepared) -> bool {
+    let auth = auth(&f.c).await;
+    owner::prepare(&f.c.env.env.state, &auth, &f.prepared, Uuid::new_v4())
+        .await
+        .is_err()
+}
+
+#[tokio::test]
+async fn owner_switch_on_prepares_and_stays_healthy_without_an_observation() {
+    let f = prepared(true).await;
+    switched(&f, Some(true)).await;
+    let first = issue(&f).await;
+    f.c.controlled_clock.as_ref().unwrap().store(
+        first.receipt.issued_at_ms as i64 + 5_001,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    let replay = issue(&f).await;
+    assert_eq!(json!(first.receipt), json!(replay.receipt));
+}
+
+#[tokio::test]
+async fn owner_switch_off_or_unset_refuses_prepare_without_an_observation() {
+    for on in [Some(false), None] {
+        let f = prepared(true).await;
+        switched(&f, on).await;
+        assert!(
+            refused(&f).await,
+            "switch {on:?}: no attestation, no Prepare"
+        );
+        fixture::assert_unissued(&f.c).await;
+    }
+}
