@@ -127,6 +127,11 @@ impl From<crate::error::AppError> for ApiError {
         Self::for_status(value.status())
     }
 }
+impl From<aq_swarm::TimeError> for super::Error {
+    fn from(_: aq_swarm::TimeError) -> Self {
+        Self::Unavailable
+    }
+}
 impl From<sqlx::Error> for ApiError {
     fn from(_: sqlx::Error) -> Self {
         Self::unavailable()

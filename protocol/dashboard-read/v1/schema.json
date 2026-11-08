@@ -529,6 +529,51 @@
       ],
       "type": "object"
     },
+    "Envelope10": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "#/$defs/ApiVersion"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "data": {
+          "$ref": "#/$defs/Page2"
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "pending_operations": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "server_time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "api_version",
+        "request_id",
+        "server_time",
+        "scope",
+        "data",
+        "observation",
+        "pending_operations",
+        "coverage"
+      ],
+      "type": "object"
+    },
     "Envelope2": {
       "additionalProperties": false,
       "properties": {
@@ -722,7 +767,7 @@
           "$ref": "#/$defs/Coverage"
         },
         "data": {
-          "$ref": "#/$defs/Page"
+          "$ref": "#/$defs/Swarm"
         },
         "observation": {
           "$ref": "#/$defs/Observation"
@@ -767,7 +812,7 @@
           "$ref": "#/$defs/Coverage"
         },
         "data": {
-          "$ref": "#/$defs/SessionDetail"
+          "$ref": "#/$defs/Page"
         },
         "observation": {
           "$ref": "#/$defs/Observation"
@@ -812,7 +857,7 @@
           "$ref": "#/$defs/Coverage"
         },
         "data": {
-          "$ref": "#/$defs/SessionOperations"
+          "$ref": "#/$defs/SessionDetail"
         },
         "observation": {
           "$ref": "#/$defs/Observation"
@@ -857,7 +902,7 @@
           "$ref": "#/$defs/Coverage"
         },
         "data": {
-          "$ref": "#/$defs/Page2"
+          "$ref": "#/$defs/SessionOperations"
         },
         "observation": {
           "$ref": "#/$defs/Observation"
@@ -891,6 +936,59 @@
         "coverage"
       ],
       "type": "object"
+    },
+    "HoldCode": {
+      "enum": [
+        "worker_offline",
+        "worker_revoked",
+        "worker_stopped",
+        "worker_draining",
+        "capability_unreported",
+        "capability_expired",
+        "measurement_expired",
+        "measurement_unavailable",
+        "node_spend_ceiling_reached",
+        "node_spend_unaccounted",
+        "node_disk_pressure",
+        "cpu_above_threshold",
+        "memory_above_threshold",
+        "agent_maximum_reached",
+        "no_machine_online",
+        "no_eligible_machine",
+        "no_free_slot"
+      ],
+      "type": "string"
+    },
+    "HoldReason": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/HoldCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remedy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "HostProbe": {
+      "enum": [
+        "not_applicable",
+        "fresh",
+        "stale",
+        "missing"
+      ],
+      "type": "string"
     },
     "InMotion": {
       "additionalProperties": false,
@@ -972,6 +1070,14 @@
         "context"
       ],
       "type": "object"
+    },
+    "IntelligenceClass": {
+      "enum": [
+        "fast",
+        "standard",
+        "deep"
+      ],
+      "type": "string"
     },
     "Limits": {
       "additionalProperties": false,
@@ -1056,6 +1162,152 @@
         "complete"
       ],
       "type": "object"
+    },
+    "LoadSource": {
+      "enum": [
+        "linux",
+        "windows_host"
+      ],
+      "type": "string"
+    },
+    "MachineCost": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "micros_per_hour": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "currency",
+        "micros_per_hour",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "MachineHardware": {
+      "additionalProperties": false,
+      "properties": {
+        "disk_free_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "disk_total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "logical_cpus": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "logical_cpus",
+        "memory_total_bytes"
+      ],
+      "type": "object"
+    },
+    "MachineKind": {
+      "enum": [
+        "local",
+        "cloud"
+      ],
+      "type": "string"
+    },
+    "MachineLoad": {
+      "additionalProperties": false,
+      "description": "Live machine load in basis points (0-10000).",
+      "properties": {
+        "cpu_avg_15m_bps": {
+          "description": "Mean of the samples in the last 15 minutes; null when there are none.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cpu_busy_bps": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fresh": {
+          "type": "boolean"
+        },
+        "host_probe": {
+          "$ref": "#/$defs/HostProbe"
+        },
+        "memory_avg_15m_bps": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory_used_bps": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "samples_15m": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/LoadSource"
+        }
+      },
+      "required": [
+        "source",
+        "host_probe",
+        "cpu_busy_bps",
+        "memory_used_bps",
+        "samples_15m",
+        "observed_at",
+        "fresh"
+      ],
+      "type": "object"
+    },
+    "MachineState": {
+      "enum": [
+        "online",
+        "holding",
+        "offline",
+        "stopped",
+        "booting"
+      ],
+      "type": "string"
     },
     "NodeCapacity": {
       "additionalProperties": false,
@@ -2029,6 +2281,14 @@
       ],
       "description": "Reference pins retain the owner's numeric revision or exact content digest."
     },
+    "ReportedState": {
+      "enum": [
+        "ready",
+        "unavailable",
+        "unreported"
+      ],
+      "type": "string"
+    },
     "Revision": {
       "pattern": "^[1-9][0-9]{0,39}$",
       "type": "string"
@@ -2176,6 +2436,15 @@
         "result",
         "playbook",
         "knowledge"
+      ],
+      "type": "string"
+    },
+    "ServiceState": {
+      "enum": [
+        "running",
+        "stopped",
+        "draining",
+        "unreported"
       ],
       "type": "string"
     },
@@ -2919,6 +3188,327 @@
       ],
       "type": "object"
     },
+    "Swarm": {
+      "additionalProperties": false,
+      "description": "The whole swarm: the server, its machines and swarm-wide waiting reasons.",
+      "properties": {
+        "machines": {
+          "items": {
+            "$ref": "#/$defs/SwarmMachine"
+          },
+          "type": "array"
+        },
+        "server": {
+          "$ref": "#/$defs/SwarmServer"
+        },
+        "waiting": {
+          "$ref": "#/$defs/SwarmWaiting"
+        }
+      },
+      "required": [
+        "server",
+        "machines",
+        "waiting"
+      ],
+      "type": "object"
+    },
+    "SwarmAgent": {
+      "additionalProperties": false,
+      "description": "A running agent on a node.",
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intelligence_class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntelligenceClass"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project": {
+          "$ref": "#/$defs/ProjectRef"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TitledRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "attempt_id",
+        "project"
+      ],
+      "type": "object"
+    },
+    "SwarmMachine": {
+      "additionalProperties": false,
+      "description": "A group of worker nodes that report the same machine key.",
+      "properties": {
+        "agent_max": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineCost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cost of a cloud machine; always None until cost reporting exists."
+        },
+        "hardware": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineHardware"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "holding": {
+          "items": {
+            "$ref": "#/$defs/HoldReason"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Machine key, or `node:<uuid>` for a node without one.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MachineKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "last_seen_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Newest node heartbeat."
+        },
+        "load": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineLoad"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "None when the machine is offline or has not reported."
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/SwarmNode"
+          },
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/MachineState"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "state",
+        "holding",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "SwarmNode": {
+      "additionalProperties": false,
+      "description": "One worker node of a machine.",
+      "properties": {
+        "agent_channel": {
+          "$ref": "#/$defs/ReportedState",
+          "description": "Always `unreported`: no node reports it yet."
+        },
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/SwarmAgent"
+          },
+          "type": "array"
+        },
+        "backend_kind": {
+          "description": "`docker-local`, `boat` and so on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health": {
+          "$ref": "#/$defs/WorkerHealth"
+        },
+        "holding": {
+          "items": {
+            "$ref": "#/$defs/HoldReason"
+          },
+          "type": "array"
+        },
+        "last_seen_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "node": {
+          "$ref": "#/$defs/EntityRef",
+          "description": "Entity type `worker`."
+        },
+        "sandbox_templates": {
+          "description": "`sha256:<64 hex>` digests.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "service": {
+          "$ref": "#/$defs/WorkerService"
+        },
+        "slots": {
+          "$ref": "#/$defs/NodeSlots"
+        },
+        "worker_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "name",
+        "health",
+        "service",
+        "worker_version",
+        "sandbox_templates",
+        "agent_channel",
+        "slots",
+        "holding",
+        "agents"
+      ],
+      "type": "object"
+    },
+    "SwarmServer": {
+      "additionalProperties": false,
+      "description": "The server root of the tree.",
+      "properties": {
+        "running_agents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "source_revision",
+        "running_agents"
+      ],
+      "type": "object"
+    },
+    "SwarmWaiting": {
+      "additionalProperties": false,
+      "description": "Swarm-wide reasons why new work cannot start now.",
+      "properties": {
+        "agents": {
+          "description": "Empty until placement produces per-agent waits.",
+          "items": {
+            "$ref": "#/$defs/WaitingAgent"
+          },
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/HoldReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reasons",
+        "agents"
+      ],
+      "type": "object"
+    },
     "TerminalReplayRef": {
       "additionalProperties": false,
       "description": "H7 terminal replay key: `GET /api/v1/terminals/{terminal_id}/output` serves the\nsnapshot and replay for exactly this terminal identity and epoch.",
@@ -3081,6 +3671,55 @@
       ],
       "type": "object"
     },
+    "WaitingAgent": {
+      "additionalProperties": false,
+      "properties": {
+        "intelligence_class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntelligenceClass"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project": {
+          "$ref": "#/$defs/ProjectRef"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/HoldReason"
+          },
+          "type": "array"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TitledRef"
+        }
+      },
+      "required": [
+        "task",
+        "project",
+        "reasons"
+      ],
+      "type": "object"
+    },
     "WorkerHealth": {
       "enum": [
         "online",
@@ -3088,6 +3727,29 @@
         "revoked"
       ],
       "type": "string"
+    },
+    "WorkerService": {
+      "additionalProperties": false,
+      "description": "The worker service state of a node.",
+      "properties": {
+        "since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3118,6 +3780,9 @@
     },
     {
       "$ref": "#/$defs/Envelope9"
+    },
+    {
+      "$ref": "#/$defs/Envelope10"
     },
     {
       "$ref": "#/$defs/QuestionInboxPage"

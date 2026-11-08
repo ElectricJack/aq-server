@@ -1,8 +1,10 @@
 //! dashboard-read-1 projections. These read claims never grant execution/control.
 pub mod action_contract;
 pub mod feedback_contract;
+pub mod swarm_contract;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+pub use swarm_contract::*;
 use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(transparent)]
@@ -794,6 +796,7 @@ pub enum Response {
     Search(Envelope<Search>),
     ProviderUsage(Envelope<Vec<ProviderUsage>>),
     Capacity(Envelope<Capacity>),
+    Swarm(Box<Envelope<Swarm>>),
     Sessions(Envelope<Page<SessionSummary>>),
     Session(Box<Envelope<SessionDetail>>),
     SessionOperations(Box<Envelope<SessionOperations>>),

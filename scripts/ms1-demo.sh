@@ -266,6 +266,11 @@ cmd_node() {
   }
 }
 EOF
+  host_load=null
+  if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then host_load='"/mnt/c/ProgramData/agent-q/host-load.json"'; fi
+  cat > "$W/machine.json" <<EOF
+{"key": "desktop", "label": "desktop", "kind": "local", "host_load_file": $host_load}
+EOF
   chmod 600 "$W/node.json"
   cmd_node_stop
   say "start node controller (detached; log $W/controller.log)"

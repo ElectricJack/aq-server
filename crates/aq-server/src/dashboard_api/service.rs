@@ -378,6 +378,7 @@ pub(super) async fn bootstrap(
             a.owner,
             "Capacity and provider availability require an owner account",
         ),
+        capability("swarm.read", a.owner, "The swarm requires an owner account"),
         capability(
             "supervisor.history.read",
             mounted.supervisor_conversation && a.owner,

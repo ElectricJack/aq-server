@@ -439,6 +439,43 @@
     },
     {
       "cli": [
+        "dashboard",
+        "swarm"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "dashboard.swarm",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/v1/swarm"
+          }
+        }
+      },
+      "summary": "Swarm: machines, worker nodes and running agents",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "decision",
         "resolve"
       ],

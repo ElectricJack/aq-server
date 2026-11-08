@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "machine": {
+    "key": "laptop",
+    "label": "laptop",
+    "kind": "local"
+  },
+  "observed_at_ms": 1794100000000,
+  "source": "linux",
+  "host_probe": "not_applicable",
+  "logical_cpus": 8,
+  "memory_total_bytes": 17179869184,
+  "memory_used_bytes": 6871947674,
+  "cpu_busy_bps": 2350,
+  "disk_total_bytes": 512110190592,
+  "disk_free_bytes": 215680000000
+}

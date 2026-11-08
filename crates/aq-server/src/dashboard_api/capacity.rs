@@ -13,47 +13,12 @@ use crate::{
     profiled_execution::placement::{self, Ledger},
     store::User,
 };
-use aq_selection::{ArtifactRef, NodeCeiling};
-use serde::Deserialize;
+use aq_swarm::capacity::{self as swarm, AccountInput, NodeInput, Snapshot};
 use sqlx::Row;
 use std::collections::BTreeMap;
 
 /// Nodes read per request; more marks the response partial.
 const MAX_NODES: usize = 256;
-
-/// The capability-snapshot facts capacity needs. Unknown snapshot fields are
-/// ignored: the owner validated the full snapshot when the node reported it.
-#[derive(Deserialize)]
-struct Snapshot {
-    #[serde(default)]
-    observed_at_ms: Option<u64>,
-    expires_at_ms: u64,
-    #[serde(default)]
-    credential_bindings: Vec<Binding>,
-}
-#[derive(Deserialize)]
-struct Binding {
-    credential_profile: ArtifactRef,
-    available: bool,
-    observed_at_ms: u64,
-    expires_at_ms: u64,
-}
-
-fn reason(ceiling: NodeCeiling) -> IneligibleReason {
-    match ceiling {
-        NodeCeiling::Concurrency => IneligibleReason::NodeConcurrencyCeilingReached,
-        NodeCeiling::Spend => IneligibleReason::NodeSpendCeilingReached,
-        NodeCeiling::SpendUnaccounted => IneligibleReason::NodeSpendUnaccounted,
-        NodeCeiling::DiskPressure => IneligibleReason::NodeDiskPressure,
-    }
-}
-
-fn exact(value: u32) -> Total {
-    Total {
-        value: Some(value),
-        accuracy: Accuracy::Exact,
-    }
-}
 
 pub(super) async fn capacity(
     state: &AppState,
@@ -112,38 +77,9 @@ pub(super) async fn capacity(
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
-
     let mut out = Vec::with_capacity(nodes.len());
-    let (mut total, mut idle, mut unadvertised) = (0u32, 0u32, false);
     for (node, load) in nodes.iter().zip(&loads) {
-        let health = match crate::admin_api::worker_status(node, now_at, offline_after) {
-            "online" => WorkerHealth::Online,
-            "revoked" => WorkerHealth::Revoked,
-            _ => WorkerHealth::Offline,
-        };
-        let snapshot = snapshots.get(&node.id);
-        let mut reasons = Vec::new();
-        match health {
-            WorkerHealth::Revoked => reasons.push(IneligibleReason::WorkerRevoked),
-            WorkerHealth::Offline => reasons.push(IneligibleReason::WorkerOffline),
-            WorkerHealth::Online => {}
-        }
-        match snapshot {
-            None => reasons.push(IneligibleReason::CapabilityUnreported),
-            Some(s) if s.expires_at_ms <= now => reasons.push(IneligibleReason::CapabilityExpired),
-            Some(_) => {}
-        }
-        reasons.extend(load.ceiling.map(reason));
-        let node_idle = load.total.map(|t| t.saturating_sub(load.occupied));
-        if health == WorkerHealth::Online {
-            match load.total {
-                Some(t) => {
-                    total = total.saturating_add(t);
-                    idle = idle.saturating_add(node_idle.unwrap_or(0));
-                }
-                None => unadvertised = true,
-            }
-        }
+        let health = swarm::health(crate::admin_api::worker_status(node, now_at, offline_after));
         let storage = storage
             .iter()
             .find(|(n, ..)| *n == node.id)
@@ -160,76 +96,33 @@ pub(super) async fn capacity(
                 })
             })
             .transpose()?;
-        out.push(NodeCapacity {
-            node: EntityRef {
-                kind: "worker".into(),
+        out.push(swarm::node_capacity(
+            NodeInput {
                 id: node.id,
-                revision: None,
-            },
-            name: node.name.clone(),
-            health,
-            last_seen_at: node
-                .last_seen_at
-                .map(|at| timestamp(at.timestamp_millis().max(0) as u64))
-                .transpose()?,
-            backend_kind: load
-                .backend
-                .and_then(|k| serde_json::to_value(k).ok())
-                .and_then(|v| v.as_str().map(str::to_owned)),
-            slots: NodeSlots {
+                name: &node.name,
+                health,
+                last_seen_ms: node.last_seen_at.map(swarm::millis),
+                backend_kind: load
+                    .backend
+                    .and_then(|k| serde_json::to_value(k).ok())
+                    .and_then(|v| v.as_str().map(str::to_owned)),
                 total: load.total,
                 occupied: load.occupied,
-                idle: node_idle,
+                ceiling: load.ceiling,
+                snapshot: snapshots.get(&node.id),
+                storage,
             },
-            eligibility: Eligibility {
-                state: if reasons.is_empty() {
-                    EligibilityState::Eligible
-                } else {
-                    EligibilityState::Ineligible
-                },
-                reasons,
-            },
-            capability_observed_at: snapshot
-                .and_then(|s| s.observed_at_ms)
-                .map(timestamp)
-                .transpose()?,
-            capability_fresh_until: snapshot.map(|s| timestamp(s.expires_at_ms)).transpose()?,
-            storage,
-        });
+            now,
+        )?);
     }
 
     let providers = providers(state, &nodes, &snapshots, now)?;
-    let mut gaps = Vec::new();
-    if unadvertised {
-        gaps.push("Some online workers advertise no slot total");
-    }
-    if truncated {
-        gaps.push("Worker inventory exceeds the bounded read");
-    }
-    let unknown_total = unadvertised || truncated;
-    let reason = (!gaps.is_empty()).then(|| gaps.join("; "));
-    let slots = SlotSummary {
-        total: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(total)
-        },
-        occupied: exact(u32::try_from(occupied_all).unwrap_or(u32::MAX)),
-        idle: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(idle)
-        },
-        observed_at: timestamp(now)?,
-        coverage: Coverage {
-            state: if reason.is_some() {
-                Completeness::Partial
-            } else {
-                Completeness::Complete
-            },
-            reason: reason.clone(),
-        },
-    };
+    let (slots, reason) = swarm::slot_summary(
+        &out,
+        u32::try_from(occupied_all).unwrap_or(u32::MAX),
+        truncated,
+        now,
+    )?;
     fence(state, runtime, user, &a).await?;
     envelope(
         state,
@@ -243,8 +136,7 @@ pub(super) async fn capacity(
     )
 }
 
-/// Per configured account: available while an unrevoked node holds an
-/// unexpired, available binding for one of the account's credential profiles.
+/// Per configured account: available while an unrevoked node holds a live binding.
 fn providers(
     state: &AppState,
     nodes: &[crate::store::Node],
@@ -252,17 +144,16 @@ fn providers(
     now: u64,
 ) -> Result<Vec<ProviderAvailability>> {
     let registry = state.config.intelligence.as_deref();
-    let accounts = crate::provider_accounts::project(registry, now).accounts;
-    let live: Vec<&Snapshot> = nodes
-        .iter()
-        .filter(|n| n.revoked_at.is_none())
-        .filter_map(|n| snapshots.get(&n.id))
-        .filter(|s| s.expires_at_ms > now)
-        .collect();
-    accounts
+    let live = swarm::live(
+        nodes.iter().filter(|n| n.revoked_at.is_none()),
+        |n| snapshots.get(&n.id),
+        now,
+    );
+    let accounts = crate::provider_accounts::project(registry, now)
+        .accounts
         .into_iter()
-        .map(|account| {
-            let profiles: Vec<&ArtifactRef> = registry
+        .map(|account| AccountInput {
+            profiles: registry
                 .map(|r| r.credentials.as_slice())
                 .unwrap_or_default()
                 .iter()
@@ -270,57 +161,12 @@ fn providers(
                     c.provider == account.provider
                         && c.account_reference == account.account_reference
                 })
-                .map(|c| &c.profile)
-                .collect();
-            let (mut reported, mut available_nodes) = (Vec::new(), 0u32);
-            for snapshot in &live {
-                let bindings: Vec<&Binding> = snapshot
-                    .credential_bindings
-                    .iter()
-                    .filter(|b| b.expires_at_ms > now && profiles.contains(&&b.credential_profile))
-                    .collect();
-                if bindings.iter().any(|b| b.available) {
-                    available_nodes += 1;
-                }
-                reported.extend(bindings);
-            }
-            let (state, reason) = if !account.enabled {
-                (
-                    AvailabilityState::Unavailable,
-                    Some(AvailabilityReason::AccountDisabled),
-                )
-            } else if reported.is_empty() {
-                (
-                    AvailabilityState::Unknown,
-                    Some(AvailabilityReason::NoFreshNodeReport),
-                )
-            } else if available_nodes > 0 {
-                (AvailabilityState::Available, None)
-            } else {
-                (
-                    AvailabilityState::Unavailable,
-                    Some(AvailabilityReason::CredentialUnavailableOnNodes),
-                )
-            };
-            Ok(ProviderAvailability {
-                provider_id: account.provider,
-                account_ref: account.account_reference,
-                state,
-                reason,
-                available_nodes,
-                observed_at: reported
-                    .iter()
-                    .map(|b| b.observed_at_ms)
-                    .max()
-                    .map(timestamp)
-                    .transpose()?,
-                fresh_until: reported
-                    .iter()
-                    .map(|b| b.expires_at_ms)
-                    .max()
-                    .map(timestamp)
-                    .transpose()?,
-            })
+                .map(|c| c.profile.clone())
+                .collect(),
+            provider: account.provider,
+            account_reference: account.account_reference,
+            enabled: account.enabled,
         })
-        .collect()
+        .collect();
+    Ok(swarm::provider_availability(accounts, &live, now)?)
 }

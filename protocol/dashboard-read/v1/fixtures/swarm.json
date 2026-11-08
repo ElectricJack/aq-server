@@ -1,0 +1,220 @@
+{
+  "api_version": "dashboard-read-1",
+  "coverage": {
+    "reason": "Some online workers advertise no slot total",
+    "state": "partial"
+  },
+  "data": {
+    "machines": [
+      {
+        "agent_max": null,
+        "cost": null,
+        "hardware": {
+          "disk_free_bytes": 315680000000,
+          "disk_total_bytes": 2000398934016,
+          "logical_cpus": 24,
+          "memory_total_bytes": 68719476736
+        },
+        "holding": [
+          {
+            "code": "capability_unreported",
+            "message": "local-2: Worker has not reported its capabilities",
+            "remedy": "Check that the worker runs the current version"
+          }
+        ],
+        "id": "desktop",
+        "kind": "local",
+        "label": "desktop",
+        "last_seen_at": "1970-01-01T00:16:40.000Z",
+        "load": {
+          "cpu_avg_15m_bps": 6100,
+          "cpu_busy_bps": 6100,
+          "fresh": true,
+          "host_probe": "fresh",
+          "memory_avg_15m_bps": 5800,
+          "memory_used_bps": 5800,
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "samples_15m": 1,
+          "source": "windows_host"
+        },
+        "nodes": [
+          {
+            "agent_channel": "unreported",
+            "agents": [],
+            "backend_kind": "docker-local",
+            "health": "online",
+            "holding": [
+              {
+                "code": "capability_unreported",
+                "message": "Worker has not reported its capabilities",
+                "remedy": "Check that the worker runs the current version"
+              }
+            ],
+            "last_seen_at": "1970-01-01T00:16:40.000Z",
+            "name": "local-2",
+            "node": {
+              "id": "d1b17bb9-2ca1-4e51-ba7e-c4dc38ddaa06",
+              "type": "worker"
+            },
+            "sandbox_templates": [],
+            "service": {
+              "since": null,
+              "state": "unreported"
+            },
+            "slots": {
+              "idle": 2,
+              "occupied": 0,
+              "total": 2
+            },
+            "worker_version": "t"
+          },
+          {
+            "agent_channel": "unreported",
+            "agents": [
+              {
+                "attempt_id": "18b0b16f-5a27-47d4-ac8b-7ddbd6f6eef9",
+                "harness": "codex",
+                "intelligence_class": "standard",
+                "model": "model-a",
+                "project": {
+                  "id": "00000000-0000-0000-0000-000000000001",
+                  "label": "Synthetic authority fixture"
+                },
+                "provider": "fixture-a",
+                "session_id": "8443464c-ffb8-4666-b947-c0b39e7db38d",
+                "started_at": null,
+                "task": {
+                  "id": "00000000-0000-0000-0000-000000000003",
+                  "revision": "1",
+                  "title": "00000000-0000-0000-0000-000000000003",
+                  "type": "task"
+                },
+                "terminal": null
+              }
+            ],
+            "backend_kind": null,
+            "health": "online",
+            "holding": [
+              {
+                "code": "capability_unreported",
+                "message": "Worker has not reported its capabilities",
+                "remedy": "Check that the worker runs the current version"
+              }
+            ],
+            "last_seen_at": "1970-01-01T00:16:40.000Z",
+            "name": "profiled-fixture",
+            "node": {
+              "id": "77a91b8a-9467-4453-9841-e3f5a627a9db",
+              "type": "worker"
+            },
+            "sandbox_templates": [],
+            "service": {
+              "since": null,
+              "state": "unreported"
+            },
+            "slots": {
+              "idle": null,
+              "occupied": 1,
+              "total": null
+            },
+            "worker_version": "0.1.0"
+          }
+        ],
+        "state": "holding"
+      },
+      {
+        "agent_max": null,
+        "cost": null,
+        "hardware": {
+          "disk_free_bytes": 315680000000,
+          "disk_total_bytes": 2000398934016,
+          "logical_cpus": 24,
+          "memory_total_bytes": 68719476736
+        },
+        "holding": [
+          {
+            "code": "capability_unreported",
+            "message": "Worker has not reported its capabilities",
+            "remedy": "Check that the worker runs the current version"
+          }
+        ],
+        "id": "quiet-box",
+        "kind": "local",
+        "label": "quiet-box",
+        "last_seen_at": "1970-01-01T00:16:40.000Z",
+        "load": {
+          "cpu_avg_15m_bps": null,
+          "cpu_busy_bps": 6100,
+          "fresh": true,
+          "host_probe": "fresh",
+          "memory_avg_15m_bps": null,
+          "memory_used_bps": 5800,
+          "observed_at": "1970-01-01T00:16:40.000Z",
+          "samples_15m": 0,
+          "source": "windows_host"
+        },
+        "nodes": [
+          {
+            "agent_channel": "unreported",
+            "agents": [],
+            "backend_kind": null,
+            "health": "online",
+            "holding": [
+              {
+                "code": "capability_unreported",
+                "message": "Worker has not reported its capabilities",
+                "remedy": "Check that the worker runs the current version"
+              }
+            ],
+            "last_seen_at": "1970-01-01T00:16:40.000Z",
+            "name": "quiet",
+            "node": {
+              "id": "51a42f94-8303-485d-9abd-c233d3bcccf2",
+              "type": "worker"
+            },
+            "sandbox_templates": [],
+            "service": {
+              "since": null,
+              "state": "unreported"
+            },
+            "slots": {
+              "idle": null,
+              "occupied": 0,
+              "total": null
+            },
+            "worker_version": "t"
+          }
+        ],
+        "state": "holding"
+      }
+    ],
+    "server": {
+      "running_agents": 1,
+      "source_revision": "dev",
+      "version": "0.1.0"
+    },
+    "waiting": {
+      "agents": [],
+      "reasons": [
+        {
+          "code": "no_eligible_machine",
+          "message": "No machine can take work: desktop: local-2: Worker has not reported its capabilities; quiet-box: Worker has not reported its capabilities",
+          "remedy": "Check that the worker runs the current version"
+        }
+      ]
+    }
+  },
+  "observation": {
+    "coverage": "partial",
+    "fresh_until": "1970-01-01T00:16:45.000Z",
+    "observed_at": "1970-01-01T00:16:40.000Z",
+    "quality": "reported",
+    "source": "aq_dashboard_read"
+  },
+  "pending_operations": [],
+  "request_id": "336635c7-3a0a-40c7-bd39-b9e273c720b3",
+  "scope": {
+    "kind": "all_authorized"
+  },
+  "server_time": "1970-01-01T00:16:40.000Z"
+}

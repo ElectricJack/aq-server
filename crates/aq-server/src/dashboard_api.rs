@@ -11,6 +11,7 @@ pub mod quota;
 mod runtime;
 mod search;
 mod service;
+mod swarm;
 use crate::{AppState, authz::CurrentUser, error::AppError};
 use axum::{
     Extension, Json, Router,
@@ -178,6 +179,7 @@ pub(crate) fn routes_with_reviews(
         .route("/api/v1/search", get(search::read))
         .route("/api/v1/provider-usage", get(provider_usage))
         .route("/api/v1/capacity", get(capacity))
+        .route("/api/v1/swarm", get(swarm))
         .route("/api/v1/sessions", get(sessions))
         .route("/api/v1/sessions/{id}", get(detail))
         .route("/api/v1/sessions/{id}/operations", get(operations))
@@ -274,6 +276,26 @@ async fn capacity(
         tokio::time::timeout(
             Duration::from_secs(4),
             capacity::capacity(&state, &runtime, &user, scope),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??,
+    )
+}
+async fn swarm(
+    State(state): State<AppState>,
+    DashboardUser(user): DashboardUser,
+    Extension(runtime): Extension<Arc<Runtime>>,
+    DashboardQuery(query): DashboardQuery,
+) -> Result<Json<Envelope<Swarm>>> {
+    let _permit = runtime.gate.try_acquire().map_err(|_| Error::Unavailable)?;
+    let scope = query.scope()?;
+    if query.limit.is_some() || query.cursor.is_some() {
+        return Err(Error::Invalid);
+    }
+    bounded(
+        tokio::time::timeout(
+            Duration::from_secs(4),
+            swarm::swarm(&state, &runtime, &user, scope),
         )
         .await
         .map_err(|_| Error::Unavailable)??,
