@@ -38,6 +38,11 @@ pub struct OwnerAvailability {
     #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
     pub generation: String,
     pub since: Option<Timestamp>,
+    /// Why the state differs from the last switch, e.g. `unset` because the
+    /// owner who set it is no longer an owner. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 200))]
+    pub note: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

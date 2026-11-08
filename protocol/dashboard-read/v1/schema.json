@@ -1654,6 +1654,14 @@
           "pattern": "^[1-9][0-9]{0,18}$",
           "type": "string"
         },
+        "note": {
+          "description": "Why the state differs from the last switch, e.g. `unset` because the\nowner who set it is no longer an owner. Absent otherwise.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "since": {
           "anyOf": [
             {

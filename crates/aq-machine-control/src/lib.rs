@@ -83,10 +83,14 @@ pub enum Availability {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerAvailability {
+    /// The effective state: `Unset` when the user who set it is no longer an
+    /// owner (fix round 3), whatever the row says.
     pub state: Availability,
     pub generation: u64,
     pub updated_at_ms: Option<u64>,
     pub operation_id: Option<Uuid>,
+    /// The row was set by a user who is no longer an owner.
+    pub set_by_former_owner: bool,
 }
 
 const RUNNING_ATTEMPTS: &str = "SELECT a.attempt_id, a.node_id FROM execution_attempts a \
@@ -774,8 +778,9 @@ pub async fn revoke_machine(
 
 pub async fn owner_availability(conn: &mut PgConnection) -> Result<OwnerAvailability, Error> {
     let row = sqlx::query(
-        "SELECT available, generation, operation_id, \
-         (extract(epoch FROM updated_at) * 1000)::bigint AS at_ms FROM owner_availability",
+        "SELECT o.available, o.generation, o.operation_id, COALESCE(u.role = 'owner', FALSE) AS by_owner, \
+         (extract(epoch FROM o.updated_at) * 1000)::bigint AS at_ms \
+         FROM owner_availability o LEFT JOIN users u ON u.id = o.updated_by",
     )
     .fetch_optional(&mut *conn)
     .await?;
@@ -785,17 +790,20 @@ pub async fn owner_availability(conn: &mut PgConnection) -> Result<OwnerAvailabi
             generation: 1,
             updated_at_ms: None,
             operation_id: None,
+            set_by_former_owner: false,
         });
     };
+    let by_owner: bool = r.try_get("by_owner")?;
     Ok(OwnerAvailability {
-        state: if r.try_get("available")? {
-            Availability::On
-        } else {
-            Availability::Off
+        state: match (by_owner, r.try_get("available")?) {
+            (false, _) => Availability::Unset,
+            (true, true) => Availability::On,
+            (true, false) => Availability::Off,
         },
         generation: ms(r.try_get("generation")?),
         updated_at_ms: Some(ms(r.try_get("at_ms")?)),
         operation_id: Some(r.try_get("operation_id")?),
+        set_by_former_owner: !by_owner,
     })
 }
 
@@ -867,6 +875,8 @@ pub async fn set_owner_availability(
     operation_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<OwnerAvailability, Error> {
+    // The effective state: a former owner's switch is unset, so setting it
+    // again writes a new row under the current owner.
     let current = owner_availability(tx).await?;
     let same = matches!(
         (current.state, available),

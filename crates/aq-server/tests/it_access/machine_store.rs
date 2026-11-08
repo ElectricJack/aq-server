@@ -487,6 +487,33 @@ async fn publishing_node_lock_after_a_committed_stop_is_a_hold() {
     );
 }
 
+/// Fix round 3: a switch set by a former owner reads as unset (with the flag),
+/// and a current owner setting the same state writes a new row under them.
+#[tokio::test]
+async fn former_owners_switch_reads_unset_and_can_be_set_again() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let (old, new) = (owner(&pool).await, owner(&pool).await);
+    let mut c = pool.acquire().await.unwrap();
+    mc::set_owner_availability(&mut c, true, 1, old, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(old)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let read = mc::owner_availability(&mut c).await.unwrap();
+    assert_eq!((read.state, read.generation), (Availability::Unset, 2));
+    assert!(read.set_by_former_owner);
+    let again = mc::set_owner_availability(&mut c, true, 2, new, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    assert_eq!((again.state, again.generation), (Availability::On, 3));
+    assert!(!again.set_by_former_owner);
+    assert_eq!(mc::owner_switch(&mut c).await.unwrap(), Some((new, 3)));
+}
+
 /// Fix round 2 (I4): a `node:` revoke racing the node's own key claim waits
 /// for it and then refuses (the node is now a machine slot); it never revokes
 /// slot 1 alone.

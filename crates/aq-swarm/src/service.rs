@@ -99,8 +99,10 @@ pub async fn owner_availability(conn: &mut sqlx::PgConnection) -> sqlx::Result<O
         .as_ref()
         .and_then(|o| o.updated_at_ms)
         .map(crate::timestamp);
+    let former = o.as_ref().is_some_and(|o| o.set_by_former_owner);
     Ok(OwnerAvailability {
         state,
+        note: former.then(|| "unset: set by a former owner; switch it again".into()),
         generation: o.map_or(1, |o| o.generation).to_string(),
         since: since
             .transpose()

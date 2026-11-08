@@ -95,7 +95,7 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:a3a22dfa5487c83b70c8a2c8d626c2cb5c22a078c77ad65ba0ee0f8a257df143"
+          "digest": "sha256:55028fe57017668a5a7b1ef88cb41223b9184928ad174d30d4616694a5deb7f8"
         },
         {
           "name": "dashboard-actions",
@@ -278,7 +278,7 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:a3a22dfa5487c83b70c8a2c8d626c2cb5c22a078c77ad65ba0ee0f8a257df143"
+          "digest": "sha256:55028fe57017668a5a7b1ef88cb41223b9184928ad174d30d4616694a5deb7f8"
         },
         {
           "name": "dashboard-actions",

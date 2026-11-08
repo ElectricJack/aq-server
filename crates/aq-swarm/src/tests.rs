@@ -246,6 +246,7 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
                 state: OwnerAvailabilityState::Unset,
                 generation: "1".into(),
                 since: None,
+                note: None,
             },
         },
         capacity: Capacity {

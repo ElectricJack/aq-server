@@ -448,6 +448,49 @@ async fn swarm_read_reports_owner_availability() {
     );
 }
 
+/// Fix round 3: the swarm read reports a former owner's switch as unset, with
+/// a note, at its real generation (so the owner can switch it again).
+#[tokio::test]
+async fn swarm_read_reports_a_former_owners_switch_as_unset() {
+    let (_f, pool, app) = with_registry().await;
+    let (_, v) = act(&app, "owner@localhost", &availability(true, "1")).await;
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+    let former = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users(id,email,role,created_at) VALUES($1,'former@localhost','viewer',now())",
+    )
+    .bind(former)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE owner_availability SET updated_by=$1")
+        .bind(former)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/swarm")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let read: Value = serde_json::from_slice(&bytes).unwrap();
+    let o = &read["data"]["server"]["owner_availability"];
+    assert_eq!(
+        (&o["state"], &o["generation"]),
+        (&json!("unset"), &json!("2")),
+        "{o}"
+    );
+    assert!(o["note"].as_str().unwrap().contains("former owner"), "{o}");
+    let (_, v) = act(&app, "owner@localhost", &availability(true, "2")).await;
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+}
+
 #[tokio::test]
 async fn bootstrap_lists_availability_capability() {
     let capability = |app: Router| async move {
