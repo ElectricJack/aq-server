@@ -212,6 +212,10 @@ async fn owner_switch_on_renews_past_the_observation_age_without_a_row() {
     Box::pin(exercise_phase(10)).await;
 }
 #[tokio::test]
+async fn owner_switch_off_before_a_renewal_refuses_it() {
+    Box::pin(exercise_phase(11)).await;
+}
+#[tokio::test]
 async fn expired_permit_is_refused_by_every_runner_route() {
     Box::pin(exercise_phase(8)).await;
 }
@@ -358,6 +362,14 @@ async fn exercise_phase(mode: u8) {
         "aq-permit-upgrade",
         serde_json::to_string(&upgrade).unwrap().parse().unwrap(),
     );
+    if mode == 11 {
+        // Fix round 3: Prepare passes on the switch alone (no observation row).
+        sqlx::query("DELETE FROM intelligence_observations")
+            .execute(&f.c.env.env.pool)
+            .await
+            .unwrap();
+        switch_owner_availability(&f, true, 1).await;
+    }
     let body = serde_json::to_value(Document::Prepare(Box::new(f.prepared.clone()))).unwrap();
     let response = request(state, "/v1/worker/profiled-v2/prepare", &h, body.clone()).await;
     let status = response.status();
@@ -433,8 +445,8 @@ async fn exercise_phase(mode: u8) {
     assert_eq!(status, 200, "started: {}", String::from_utf8_lossy(&bytes));
     if mode == 8 {
         routes::exercise(&f, &upgraded, &started, installed_revision).await;
-    } else if mode == 10 {
-        owner_switch_renewal(&f, &upgraded, &started, installed_revision).await;
+    } else if mode == 10 || mode == 11 {
+        owner_switch_renewal(&f, &upgraded, &started, installed_revision, mode == 11).await;
     } else if mode != 0 {
         exercise_reboot(
             &f,
@@ -451,15 +463,30 @@ async fn exercise_phase(mode: u8) {
     }
 }
 
+async fn switch_owner_availability(f: &phase_refresh_fixture::Prepared, on: bool, expected: u64) {
+    let pool = &f.c.env.env.pool;
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let now = (f.c.env.env.state.clock)();
+    let mut c = pool.acquire().await.unwrap();
+    aq_machine_control::set_owner_availability(&mut c, on, expected, owner, Uuid::new_v4(), now)
+        .await
+        .unwrap();
+}
 /// Fix round 2: with no observation row and the renewal past the policy's
 /// observation age (5 s here), a renewal is refused while the switch is unset
 /// and succeeds once the owner's switch is on (its synthesized attestation
-/// reaches the phase health check).
+/// reaches the phase health check). With `then_off` (fix round 3; mode 11,
+/// where Prepare passed on the switch alone) the switch is turned off before
+/// the renewal, which is then refused.
 async fn owner_switch_renewal(
     f: &phase_refresh_fixture::Prepared,
     upgraded: &PermitUpgradeResponse,
     started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
     installed_revision: u64,
+    then_off: bool,
 ) {
     use std::sync::atomic::Ordering;
     let (state, pool) = (&f.c.env.env.state, &f.c.env.env.pool);
@@ -479,6 +506,22 @@ async fn owner_switch_renewal(
         revision: installed_revision,
     };
     let body = serde_json::to_value(SandboxDocument::RunnerRenewalRequest(q.clone())).unwrap();
+    if then_off {
+        switch_owner_availability(f, false, 2).await;
+        let off = request(
+            state,
+            "/v1/worker/profiled/renew",
+            &headers(&q.permit),
+            body,
+        )
+        .await;
+        assert_ne!(
+            off.status(),
+            200,
+            "switched off before the renewal: refused"
+        );
+        return;
+    }
     let unset = request(
         state,
         "/v1/worker/profiled/renew",
@@ -491,16 +534,7 @@ async fn owner_switch_renewal(
         200,
         "no attestation, no switch: stale health"
     );
-    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    let now = (state.clock)();
-    let mut c = pool.acquire().await.unwrap();
-    aq_machine_control::set_owner_availability(&mut c, true, 1, owner, Uuid::new_v4(), now)
-        .await
-        .unwrap();
-    drop(c);
+    switch_owner_availability(f, true, 1).await;
     exercise_same_boot_renewal(f, upgraded, started, installed_revision).await;
 }
 
