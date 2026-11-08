@@ -482,7 +482,7 @@ pub(super) async fn retained_quota_locked(
     node: Uuid,
 ) -> Result<(i64, i64, i64, i64), AppError> {
     let kind = aq_history_caps::Kind::NativePreparation;
-    if let Some(u) = aq_history_caps::live_usage(&mut **tx, kind, Some(node), 0)
+    if let Some(u) = aq_history_caps::live_usage(tx, kind, Some(node), 0)
         .await
         .map_err(db)?
     {

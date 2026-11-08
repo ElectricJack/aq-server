@@ -149,7 +149,7 @@ pub(crate) async fn for_attempt_locked(
     let history = capture_locked(tx, &current).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-native-attempt-registration-link-v1',0))").execute(&mut **tx).await.map_err(database)?;
     let kind = aq_history_caps::Kind::LaunchRegistrations;
-    let u = aq_history_caps::usage(&mut **tx, kind, Some(node_id), 0)
+    let u = aq_history_caps::usage(tx, kind, Some(node_id), 0)
         .await
         .map_err(database)?;
     let quota = (u.total_rows, u.total_bytes, u.scope_rows, u.scope_bytes);

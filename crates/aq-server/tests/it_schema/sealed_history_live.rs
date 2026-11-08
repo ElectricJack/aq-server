@@ -195,13 +195,14 @@ async fn limits_are_the_spec_values() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;
     let pool = db.pool().await;
-    let got: Vec<(String, String, i64, Option<i64>, i64, i64)> = sqlx::query_as(
+    type Limit = (String, String, i64, Option<i64>, i64, i64);
+    let got: Vec<Limit> = sqlx::query_as(
         "SELECT kind,scope,max_rows,max_bytes,headroom_rows,headroom_bytes FROM sealed_history_limits() ORDER BY kind,scope",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
-    let want: Vec<(&str, &str, i64, Option<i64>, i64, i64)> = vec![
+    let want = vec![
         (
             "admission_artifacts",
             "global",

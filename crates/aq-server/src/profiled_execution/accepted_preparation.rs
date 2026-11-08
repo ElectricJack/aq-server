@@ -63,7 +63,7 @@ pub(super) async fn quota(
     .map_err(db)?;
     let q = super::preparation::retained_quota_locked(tx, node).await?;
     let kind = aq_history_caps::Kind::V2Proposals;
-    let p = aq_history_caps::usage(&mut **tx, kind, Some(node), 0)
+    let p = aq_history_caps::usage(tx, kind, Some(node), 0)
         .await
         .map_err(db)?;
     let counts = (p.total_rows, p.scope_rows);

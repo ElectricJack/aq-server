@@ -379,6 +379,8 @@ What each reader reads after deletion. The readers come from the read inventory 
 | A. Live caps (plan `docs/superpowers/plans/2026-11-08-sealed-history-p-a-live-caps.md`) | §7: migrations 0103–0105, `aq-history-caps`, the poll gate, swarm holds, contract re-pin | — |
 | B. Deletion and summaries | §8: summaries, tickets, guard relaxation, sweeper, Settings, readers on summaries, §5.2 caps | A |
 
+Phase A server: see `docs/implementation/0008-PA-server.md`.
+
 Phase A is what 0007 phase 1 needs. Phase B can follow when the owner has answered §13.
 
 ## 13. Questions for the owner
