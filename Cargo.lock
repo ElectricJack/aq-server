@@ -511,6 +511,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-row-retention"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "sqlx",
+ "sqlx-postgres",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "aq-selection"
 version = "0.1.4"
 dependencies = [
@@ -553,6 +565,7 @@ dependencies = [
  "aq-release",
  "aq-result-media",
  "aq-review-protocol",
+ "aq-row-retention",
  "aq-selection",
  "aq-server",
  "aq-session-api",

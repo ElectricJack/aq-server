@@ -1,0 +1,16 @@
+[package]
+name = "aq-row-retention"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "DEP6 row retention: bounded deletes of settled execution rows"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
