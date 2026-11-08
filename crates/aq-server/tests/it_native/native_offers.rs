@@ -526,3 +526,47 @@ async fn stop_committed_after_the_gate_publishes_no_offer() {
         .unwrap();
     assert_eq!(attempts, 0);
 }
+
+/// Review I5: a successor refused at the selection backstop is skipped within
+/// the same poll: the next eligible task is offered instead of an empty page.
+/// The pre-check fails open when it cannot read the predecessor's pinned
+/// policy (made unreadable here), so only selection's own budget check (one
+/// attempt allowed) refuses the successor.
+#[tokio::test]
+async fn backstop_refused_successor_is_skipped_within_the_poll() {
+    let mut c = setup().await;
+    common::native_offer::pin_policy(&mut c, |p| p.max_attempts = 1).await;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let first = poll_offers(&body).remove(0);
+    let (t1, attempt) = (
+        c.env.lineage.task_id,
+        first.offered.offer.binding.attempt_id,
+    );
+    assert_eq!(first.offered.offer.manifest.bindings.task_id, t1);
+    common::native_offer::fail_and_release(&c, attempt).await;
+    let mut tx = c.env.env.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET launch_manifest = launch_manifest || '{\"intelligence_profile\":null}' WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    c.mode.store(7, Ordering::SeqCst);
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let offers = poll_offers(&body);
+    assert_eq!(
+        offers.len(),
+        1,
+        "the next task is offered in the same poll: {body}"
+    );
+    assert_eq!(
+        offers[0].offered.offer.manifest.bindings.task_id,
+        c.second_task
+    );
+}
