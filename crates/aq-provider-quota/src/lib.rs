@@ -3,9 +3,9 @@ use aq_dashboard_contract::{
     Completeness, Observation, ProviderScope, ProviderUsage, Quality, QuotaState, QuotaWindow,
     Timestamp,
 };
-use serde::Serialize;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
