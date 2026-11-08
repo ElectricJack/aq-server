@@ -489,3 +489,40 @@ async fn owner_availability_on_outlives_the_attestation_window() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(poll_offers(&body).len(), 1, "{body}");
 }
+
+/// Review I2: a Stop committed after the poll passed the offer gate (while it
+/// reads Graph) still publishes no offer.
+#[tokio::test]
+async fn stop_committed_after_the_gate_publishes_no_offer() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let mut conn = pool.acquire().await.unwrap();
+    let node = c.request.identity.node_id;
+    aq_machine_control::claim_key(&mut conn, node, "desk")
+        .await
+        .unwrap();
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    c.mode.store(6, Ordering::SeqCst);
+    let stop = async {
+        c.observation_entered.acquire().await.unwrap().forget();
+        c.mode.store(0, Ordering::SeqCst);
+        let (stopped, now) = (
+            aq_machine_control::DesiredState::Stopped,
+            (c.env.env.state.clock)(),
+        );
+        aq_machine_control::set_desired(&mut conn, "desk", stopped, 1, owner, Uuid::new_v4(), now)
+            .await
+            .unwrap();
+        c.observation_resume.add_permits(1);
+    };
+    let ((status, body), ()) = tokio::join!(poll(&c), stop);
+    assert!(poll_offers_or_none(status, &body), "{status} {body}");
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
+}

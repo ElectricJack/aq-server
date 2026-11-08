@@ -343,6 +343,16 @@ pub async fn set_desired(
     now: DateTime<Utc>,
 ) -> Result<Control, Error> {
     let next = expected_generation as i64 + 1;
+    // Review I2: touch the machine's live node rows first. A publication holds
+    // its node row lock while it re-checks the gate, so it either commits
+    // before this change (and its attempt is then handed off) or fails to
+    // serialize after it.
+    sqlx::query(
+        "UPDATE nodes SET machine_key=machine_key WHERE machine_key=$1 AND revoked_at IS NULL",
+    )
+    .bind(key)
+    .execute(&mut *tx)
+    .await?;
     let done = if expected_generation == 1 {
         sqlx::query(
             "INSERT INTO machine_controls(machine_key,desired,generation,operation_id,updated_at,updated_by) \

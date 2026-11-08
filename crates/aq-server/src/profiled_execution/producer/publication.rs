@@ -51,6 +51,11 @@ pub async fn publish(
         .await
         .map_err(db)?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    // Review I2: a Stop, Drain or availability off after the poll's gate.
+    let hold = aq_machine_control::offer_hold(&mut tx, auth.id()).await;
+    if hold.map_err(|_| refused())?.is_some() {
+        return Err(refused());
+    }
     let (node, boot) = match built.decision.inputs.node.target {
         ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
         _ => return Err(refused()),
