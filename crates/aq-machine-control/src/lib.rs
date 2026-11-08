@@ -826,8 +826,9 @@ pub async fn owner_attested(
 }
 
 /// Fix round 2 (review I2): the publication's first lock, on its node row. A
-/// serialization failure here means a machine change (Stop, Drain) committed
-/// after the transaction began: `Ok(false)`, which publishes no offer.
+/// serialization failure here means a machine change (Stop, Drain) or an
+/// availability change committed after the transaction began, and a lock
+/// timeout means one is still open: `Ok(false)`, which publishes no offer.
 pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
     let locked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
         .bind(node)
@@ -835,9 +836,15 @@ pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<b
         .await;
     match locked {
         Ok(_) => Ok(true),
-        Err(e) if is_serialization_failure(&e) => Ok(false),
+        Err(e) if is_serialization_failure(&e) || is_lock_timeout(&e) => Ok(false),
         Err(e) => Err(e.into()),
     }
+}
+/// SQLSTATE 55P03: the publication's `lock_timeout` passed waiting for the row.
+pub fn is_lock_timeout(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|c| c == "55P03")
 }
 /// SQLSTATE 40001 (serialization failure) or 40P01 (deadlock).
 pub fn is_serialization_failure(e: &sqlx::Error) -> bool {
@@ -875,6 +882,11 @@ pub async fn set_owner_availability(
     operation_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<OwnerAvailability, Error> {
+    // Fix round 3 (I2 race): touch the live node rows first, as set_desired
+    // does, so a publication racing this change waits or fails to serialize.
+    sqlx::query("UPDATE nodes SET machine_key=machine_key WHERE revoked_at IS NULL")
+        .execute(&mut *tx)
+        .await?;
     // The effective state: a former owner's switch is unset, so setting it
     // again writes a new row under the current owner.
     let current = owner_availability(tx).await?;

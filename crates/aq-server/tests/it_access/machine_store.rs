@@ -514,6 +514,57 @@ async fn former_owners_switch_reads_unset_and_can_be_set_again() {
     assert_eq!(mc::owner_switch(&mut c).await.unwrap(), Some((new, 3)));
 }
 
+/// Fix round 3: a publication racing an availability change, or still waiting
+/// past its lock timeout, holds instead of failing.
+#[tokio::test]
+async fn publishing_node_lock_holds_after_a_switch_change_or_a_lock_timeout() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let ids = machine(&pool, 1).await;
+    let who = owner(&pool).await;
+    let begin = |timeout: bool| {
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            if timeout {
+                sqlx::query("SET LOCAL lock_timeout='100ms'")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+            sqlx::query("SELECT 1").execute(&mut *tx).await.unwrap();
+            tx
+        }
+    };
+    let mut publish = begin(false).await;
+    let mut switch = pool.acquire().await.unwrap();
+    mc::set_owner_availability(&mut switch, false, 1, who, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    assert!(
+        !mc::lock_publishing_node(&mut publish, ids[0])
+            .await
+            .unwrap()
+    );
+    drop((publish, switch));
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(ids[0])
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let mut waiting = begin(true).await;
+    assert!(
+        !mc::lock_publishing_node(&mut waiting, ids[0])
+            .await
+            .unwrap()
+    );
+}
+
 /// Fix round 2 (I4): a `node:` revoke racing the node's own key claim waits
 /// for it and then refuses (the node is now a machine slot); it never revokes
 /// slot 1 alone.
