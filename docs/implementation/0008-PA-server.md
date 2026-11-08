@@ -85,6 +85,32 @@ Registration history, presence heads, settlement evaluations, the review budget,
 intelligence receipts, legacy closures, legacy renew receipts and delegated
 operations are unchanged. They belong to phase B.
 
+## Fix round 1
+
+- **Live-set driven queries.** `sealed_live_attempt_ids` (a view over three partial
+  indexes: held tasks, hot status not settled, legacy-fixture snapshot not
+  settled) is read once per call into an array, and every kind joins from it
+  through the history table's attempt key (`= ANY(live)`). A pending or recent
+  window uses a btree on the table's time column. Nothing scans a history table.
+  A released profiled attempt with no hot row is settled (it holds nothing and no
+  owner advances it), which narrows `sealed_attempt_live` for that case.
+- **One call per kind.** `sealed_history_scoped` returns a kind grouped by node
+  or project; `sealed_history_holds(uuid[], uuid[], bigint)` computes each kind
+  once for all listed nodes and projects. `swarm_holds` and the poll gate
+  (`poll_gate`) make one call each. `swarm_holds` takes the enabled projects.
+- **Fair share.** Held projects leave the candidate list before the per-poll
+  project limit, so they are never charged a turn.
+- **Pending window for exports.** `profiled_source_exports.created_at_ms` (set
+  at reservation) keeps an unlinked export live for ten minutes, in the source
+  export cap and in staging.
+- **Fence race.** The offer-rate fence refusing an insert (SQLSTATE 54000) ends
+  the publication with no offer, an empty 200 page.
+- **Presence counters.** The 0029 lifetime counters now saturate at their CHECK
+  bounds, so they no longer stop an always-on worker after 4096 reports.
+- The settlement39 catalog ignores indexes named `sealed_*`.
+- The fair-share store functions moved into `aq-profiled-state::fairness`
+  (lib line budget).
+
 ## Verification
 
 The full `cargo nextest run --workspace --locked --no-fail-fast` run had three

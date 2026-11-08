@@ -87,6 +87,11 @@ fn artifact(value: &ArtifactRef) -> Result<(), String> {
     Ok(())
 }
 impl ProfiledConfig {
+    pub fn enabled_projects(&self) -> Vec<uuid::Uuid> {
+        (self.projects.iter().filter(|p| p.enabled))
+            .map(|p| p.project_id)
+            .collect()
+    }
     pub fn validate(&self) -> Result<(), String> {
         super::definitions::validate_catalog(&self.definition_bodies)?;
         super::accepted_preparation::policy::validate_catalog(self)?;

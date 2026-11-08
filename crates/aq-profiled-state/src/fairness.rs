@@ -46,6 +46,41 @@ pub fn order(projects: &[Candidate], served: &BTreeMap<Uuid, u64>, now: u64) -> 
     ordered
 }
 
+/// First store format carrying `profiled_project_schedule` (migration 52).
+pub const SCHEDULE_FORMAT: u32 = 52;
+
+/// Whether this store records fair-share service. A store held at an earlier
+/// migration prefix has no schedule table, so it schedules every project as
+/// never served and records nothing, instead of failing the whole poll.
+pub async fn recorded(pool: &sqlx::PgPool) -> Result<bool, sqlx::Error> {
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(pool)
+            .await?;
+    let version = version.parse::<u32>();
+    Ok(version.map_err(|e| sqlx::Error::Decode(Box::new(e)))? >= SCHEDULE_FORMAT)
+}
+
+pub async fn served(pool: &sqlx::PgPool) -> Result<BTreeMap<Uuid, u64>, sqlx::Error> {
+    let rows: Vec<(Uuid, i64)> =
+        sqlx::query_as("SELECT project_id,last_served_at_ms FROM profiled_project_schedule")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, at)| u64::try_from(at).ok().map(|at| (id, at)))
+        .collect())
+}
+
+pub async fn record(pool: &sqlx::PgPool, project: Uuid, now: u64) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO profiled_project_schedule(project_id,last_served_at_ms,served_count) VALUES($1,$2,1) ON CONFLICT(project_id) DO UPDATE SET last_served_at_ms=GREATEST(profiled_project_schedule.last_served_at_ms,EXCLUDED.last_served_at_ms),served_count=profiled_project_schedule.served_count+1")
+        .bind(project)
+        .bind(i64::try_from(now).unwrap_or(i64::MAX))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

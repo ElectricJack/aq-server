@@ -23,8 +23,8 @@ fn offered(body: &serde_json::Value) -> usize {
     };
     page.offers.len()
 }
-async fn rows(pool: &sqlx::PgPool) -> (i64, i64) {
-    sqlx::query_as("SELECT (SELECT count(*) FROM intelligence_decisions),(SELECT count(*) FROM admission_artifacts)")
+async fn rows(pool: &sqlx::PgPool) -> (i64, i64, i64, i64) {
+    sqlx::query_as("SELECT (SELECT count(*) FROM intelligence_decisions),(SELECT count(*) FROM admission_artifacts),(SELECT count(*) FROM profiled_source_exports),(SELECT count(*) FROM profiled_project_schedule)")
         .fetch_one(pool)
         .await
         .unwrap()
@@ -41,7 +41,11 @@ async fn offer_rate_limit_holds_the_node_without_a_409() {
     let (status, body) = native_offer::poll(&c).await;
     assert_eq!(status, 200, "never a 409: {body}");
     assert_eq!(offered(&body), 0, "{body}");
-    assert_eq!(rows(pool).await, before, "a held poll writes no history");
+    assert_eq!(
+        rows(pool).await,
+        before,
+        "a held poll writes no decision, artifact, export or schedule row"
+    );
     let mut conn = pool.acquire().await.unwrap();
     let holds = aq_history_caps::node_holds(&mut conn, id, now as u64, None)
         .await
@@ -62,4 +66,69 @@ async fn offers_older_than_an_hour_do_not_count() {
     let (status, body) = native_offer::poll(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered(&body), 1, "{body}");
+}
+
+/// A project at its artifact cap is dropped before the per-poll project limit (4)
+/// applies, so it is never charged a turn and cannot crowd out a project with work.
+#[tokio::test]
+async fn four_held_projects_do_not_starve_the_fifth() {
+    let mut c = native_offer::setup().await;
+    let pool = c.env.env.pool.clone();
+    let now = (c.env.env.state.clock)().timestamp_millis();
+    let mut config = (*c.env.env.state.config).clone();
+    let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
+    profiled.revision += 1;
+    let template = profiled.projects[0].clone();
+    let mut tx = sealed::replica(&pool).await;
+    for _ in 0..4 {
+        let mut held = template.clone();
+        held.project_id = Uuid::new_v4();
+        held.priority = 100;
+        for _ in 0..449 {
+            sealed::artifact(&mut tx, held.project_id, now - 1_000).await;
+        }
+        profiled.projects.push(held);
+    }
+    tx.commit().await.unwrap();
+    config.profiled_execution = Some(std::sync::Arc::new(profiled));
+    c.env.env.state.config = std::sync::Arc::new(config);
+    c.env.env.app = aq_server::build_admin_router(c.env.env.state.clone());
+    aq_server::profiled_execution::policies::install(&c.env.env.state)
+        .await
+        .unwrap();
+    let (status, body) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        offered(&body),
+        1,
+        "the fifth project's task is offered: {body}"
+    );
+    let served: i64 = sqlx::query_scalar("SELECT count(*) FROM profiled_project_schedule")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        served, 1,
+        "only the project that was tried is charged a turn"
+    );
+}
+
+/// The offer-rate fence lost a race with another poll that passed the gate: the
+/// poll offers nothing (200), never a 500, and leaves no attempt behind.
+#[tokio::test]
+async fn the_offer_rate_fence_racing_past_the_gate_is_an_empty_page() {
+    let c = native_offer::setup().await;
+    let pool = &c.env.env.pool;
+    sqlx::raw_sql("CREATE FUNCTION fence_race() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'sealed history offer rate' USING ERRCODE='54000'; END $$; CREATE TRIGGER fence_race BEFORE INSERT ON profiled_launches FOR EACH ROW EXECUTE FUNCTION fence_race();")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered(&body), 0, "{body}");
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
 }

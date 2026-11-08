@@ -328,7 +328,7 @@ pub async fn reserve(
         if now == 0 || now < observation.observed_at_ms || now >= observation.expires_at_ms {
             return Err(unavailable());
         }
-        let used = aq_history_caps::staging_used(&mut tx)
+        let used = aq_history_caps::staging_used(&mut tx, now as i64)
             .await
             .map_err(database)?;
         if used < 0
@@ -341,7 +341,7 @@ pub async fn reserve(
             ));
         }
         let kind = aq_history_caps::Kind::SourceExports;
-        let capacity = aq_history_caps::usage(&mut tx, kind, Some(request.project_id), 0)
+        let capacity = aq_history_caps::usage(&mut tx, kind, Some(request.project_id), now)
             .await
             .map_err(database)?;
         let incoming = request_bytes.len() as i64 + 4_194_304;
@@ -361,6 +361,9 @@ pub async fn reserve(
             ));
         }
         sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) VALUES($1,$2,$3,$4,$5,$5,'pending')").bind(request.operation_id).bind(request.project_id).bind(&request_bytes).bind(request_digest.as_str()).bind(reserved_bytes as i64).execute(&mut *tx).await.map_err(database)?;
+        aq_history_caps::stamp_export(&mut tx, request.operation_id, now)
+            .await
+            .map_err(database)?;
         reserved_bytes
     };
     tx.commit().await.map_err(database)?;

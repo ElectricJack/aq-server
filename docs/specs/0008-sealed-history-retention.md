@@ -216,13 +216,13 @@ Orphan rows (§6.2) are also rate-bounded: pending rows count toward their table
 A new crate, `crates/aq-history-caps`, owns the gate. `offers()` in `profiled_execution/producer/workflow.rs` calls it after the existing `offer_hold` and the `busy` check, and before any selection, export or artifact write:
 
 1. **Node and server holds** (`aq_history_caps::node_holds(conn, node, now_ms, staging)`): the offer rate for the node and the server; live usage plus headroom against each node-scoped and global cap (A1, A2 global, A3, A5, A6, A7, A8, A9 global, A10); inventory reports for the node. Any hold → the poll returns its page with no offers (200), logs `"{code} {subject}: {used} of {limit}; no new offers"` at info, and writes nothing.
-2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): inside the fair-share loop, a project with a hold (its offer rate, A2, A9) is skipped like a project with no ready task, so other projects still get offers.
+2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): a project with a hold (its offer rate, A2, A9) is dropped from the fair-share candidates before the per-poll project limit, so it is never charged a turn, like a project with no ready task. The poll reads node, server and project holds in one call, `aq_history_caps::poll_gate`, so other projects still get offers.
 
 Headroom is the most a single offer can add: 64 admission artifacts and 4 MiB, 2 decisions and 16 MiB, 1 export and 4 MiB, 1 lease and 256 KiB of preparation bytes, 1 registration, 1 phase reservation and 1 MiB, and `max_bundle_bytes` of staging **(author's call)**. With headroom, a refusal happens at the gate and not halfway through a poll.
 
 ### 7.4 Visible holds
 
-`GET /api/v1/swarm` computes the same holds: `aq_history_caps::swarm_holds(conn, node_ids, now_ms, staging)`, which returns node holds for each listed node and project and server holds for every enabled project. The holds go into `SwarmInput.history`. Then:
+`GET /api/v1/swarm` computes the same holds: `aq_history_caps::swarm_holds(conn, node_ids, project_ids, now_ms, staging)`, which returns node holds for each listed node and project and server holds for every enabled project. The holds go into `SwarmInput.history`. Then:
 
 - a node hold is appended to that node's `holding`, so its machine shows `holding` (the existing rule);
 - a project or server hold is appended to `waiting.reasons`.
@@ -244,7 +244,7 @@ The current maximum on main is 0102. Phase A adds three, contiguous:
 
 | Migration | Contents |
 |---|---|
-| `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid,uuid,bigint)`; indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(admitted_attempt_id)`, `profiled_presence_operations(node_id, recorded_at_ms)`, `source_bases(profiled_export_operation_id)`. No table changes. |
+| `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid[],uuid[],bigint)`, `sealed_history_scoped(text,bigint,uuid,uuid[])`, the view `sealed_live_attempt_ids`; indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(admitted_attempt_id)`, `profiled_presence_operations(node_id, recorded_at_ms)`, `source_bases(profiled_export_operation_id)`. No table changes. |
 | `0104_sealed_history_live_caps.sql` | `CREATE OR REPLACE` of `admission_artifact_insert_guard`, `profiled_source_export_guard`, `profiled_launch_registration_guard`, `profiled_phase_terminal_capacity_guard` and `profiled_presence_operation_guard`. Names, triggers and every non-quota check are unchanged (the store checks the phase-terminal function by name, `store.rs:314-345`). |
 | `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. |
 

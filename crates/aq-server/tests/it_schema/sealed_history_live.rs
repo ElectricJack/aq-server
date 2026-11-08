@@ -296,16 +296,17 @@ async fn limits_are_the_spec_values() {
 
 type HoldRow = (String, String, String, String, i64, i64);
 
-async fn holds(pool: &sqlx::PgPool, node: Option<Uuid>, project: Option<Uuid>) -> Vec<HoldRow> {
-    sqlx::query_as(
+async fn holds(pool: &sqlx::PgPool, nodes: &[Uuid], projects: &[Uuid]) -> Vec<HoldRow> {
+    let rows: Vec<(String, String, String, String, i64, i64)> = sqlx::query_as(
         "SELECT hold_code,hold_kind,hold_scope,hold_unit,hold_used,hold_limit FROM sealed_history_holds($1,$2,$3)",
     )
-    .bind(node)
-    .bind(project)
+    .bind(nodes)
+    .bind(projects)
     .bind(NOW)
     .fetch_all(pool)
     .await
-    .unwrap()
+    .unwrap();
+    rows
 }
 
 fn row(code: &str, kind: &str, scope: &str, unit: &str, used: i64, limit: i64) -> HoldRow {
@@ -332,7 +333,7 @@ async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
     }
     tx.commit().await.unwrap();
     assert_eq!(
-        holds(&pool, Some(n), None).await,
+        holds(&pool, &[n], &[]).await,
         vec![row(
             "history_rate_limited",
             "offers",
@@ -343,7 +344,7 @@ async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
         )]
     );
     assert_eq!(
-        holds(&pool, None, Some(p)).await,
+        holds(&pool, &[], &[p]).await,
         vec![row(
             "history_cap_reached",
             "admission_artifacts",
@@ -355,7 +356,7 @@ async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
     );
     sealed::offers(&pool, n, p, NOW - 1_000, 1).await;
     assert_eq!(
-        holds(&pool, Some(n), None).await,
+        holds(&pool, &[n], &[]).await,
         vec![row(
             "history_rate_limited",
             "offers",
@@ -378,32 +379,406 @@ async fn offer_rate_fence_refuses_the_thirty_first_offer_in_an_hour() {
     for (seeded, code) in [(30, "54000"), (29, "23503")] {
         let n = Uuid::new_v4();
         sealed::offers(&pool, n, p, NOW - 1_000, seeded).await;
-        let mut tx = pool.begin().await.unwrap();
-        sqlx::query("SET LOCAL session_replication_role='replica'")
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let (attempt, decision, observation) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,'{}'::jsonb,$3,$3+30000)")
-            .bind(observation).bind(p).bind(NOW).execute(&mut *tx).await.unwrap();
-        sqlx::query("SET LOCAL session_replication_role='origin'")
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let err = sqlx::query("INSERT INTO profiled_launches(attempt_id,decision_id,source_observation_id,launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest,graph_task_observation,source_binding,offer_expires_at_ms) VALUES($1,$2,$3,jsonb_build_object('session',jsonb_build_object('node_id',$4::text)),'{}'::jsonb,repeat('0',64),'{}'::jsonb,repeat('0',64),'{}'::jsonb,'{}'::jsonb,$5+60000)")
-            .bind(attempt).bind(decision).bind(observation).bind(n).bind(NOW)
-            .execute(&mut *tx).await.unwrap_err();
-        let db_err = err.as_database_error().unwrap();
-        assert_eq!(db_err.code().as_deref(), Some(code), "{db_err}");
-        if code == "54000" {
-            assert!(
-                db_err.message().contains("sealed history offer rate"),
-                "{db_err}"
-            );
-        }
+        assert_eq!(sealed::try_offer(&pool, n, p, NOW).await, code);
     }
 }
 
+#[tokio::test]
+async fn project_and_server_offer_rates_hold_and_fence() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    // Project rate: 240 an hour, over distinct nodes so no node cap applies.
+    let p = Uuid::new_v4();
+    sealed::spread_offers(&pool, Some(p), 239, NOW - 1_000).await;
+    assert_eq!(holds(&pool, &[], &[p]).await, vec![]);
+    assert_eq!(
+        sealed::try_offer(&pool, Uuid::new_v4(), p, NOW).await,
+        "23503"
+    );
+    sealed::spread_offers(&pool, Some(p), 1, NOW - 1_000).await;
+    assert_eq!(
+        holds(&pool, &[], &[p]).await,
+        vec![row(
+            "history_rate_limited",
+            "project_offers",
+            "project",
+            "rows",
+            240,
+            240
+        )]
+    );
+    assert_eq!(
+        sealed::try_offer(&pool, Uuid::new_v4(), p, NOW).await,
+        "54000"
+    );
+    // Server rate: 960 an hour over distinct projects and nodes. 240 are in already.
+    sealed::spread_offers(&pool, None, 719, NOW - 1_000).await;
+    let n = Uuid::new_v4();
+    assert!(holds(&pool, &[n], &[]).await.is_empty());
+    assert_eq!(
+        sealed::try_offer(&pool, n, Uuid::new_v4(), NOW).await,
+        "23503"
+    );
+    sealed::spread_offers(&pool, None, 1, NOW - 1_000).await;
+    assert_eq!(
+        holds(&pool, &[n], &[]).await,
+        vec![row(
+            "history_rate_limited",
+            "offers",
+            "global",
+            "rows",
+            960,
+            960
+        )]
+    );
+    assert_eq!(
+        sealed::try_offer(&pool, n, Uuid::new_v4(), NOW).await,
+        "54000"
+    );
+}
+
+#[tokio::test]
+async fn inventory_report_rate_is_720_per_node_and_11520_in_all() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    // The 0029 lifetime counters are no longer charged: a node at their old
+    // ceiling (4096) still reports.
+    let n = sealed::node(&pool).await;
+    sqlx::query("INSERT INTO profiled_presence_node_storage(node_id,operations) VALUES($1,4096) ON CONFLICT(node_id) DO UPDATE SET operations=4096")
+        .bind(n).execute(&pool).await.unwrap();
+    sealed::inventories(&pool, n, 718, NOW - 1_000).await;
+    assert_eq!(holds(&pool, &[n], &[]).await, vec![]);
+    // Under the limit: reports 719 and 720 are accepted.
+    assert_eq!(sealed::report(&pool, n, 10_001, NOW).await, Ok(()));
+    assert_eq!(sealed::report(&pool, n, 10_002, NOW).await, Ok(()));
+    // At the limit: the 721st is refused, and the poll gate holds the node.
+    assert_eq!(
+        sealed::report(&pool, n, 10_003, NOW).await,
+        Err("54000".to_string())
+    );
+    assert_eq!(
+        holds(&pool, &[n], &[]).await,
+        vec![row(
+            "history_rate_limited",
+            "presence_rate",
+            "node",
+            "rows",
+            720,
+            720
+        )]
+    );
+    // Server-wide: 11,520 an hour over many nodes (718 + 2 above, already in).
+    let m = sealed::node(&pool).await;
+    for _ in 0..22 {
+        sealed::inventories(&pool, Uuid::new_v4(), 500, NOW - 1_000).await;
+    }
+    // 720 + 11,000 = 11,720 > 11,520: the server cap refuses a node with room.
+    assert_eq!(
+        sealed::report(&pool, m, 1, NOW).await,
+        Err("54000".to_string())
+    );
+    assert!(
+        holds(&pool, &[m], &[])
+            .await
+            .iter()
+            .any(|h| h.1 == "presence_rate" && h.2 == "global")
+    );
+}
+
+#[tokio::test]
+async fn live_caps_hold_at_the_limit_and_allow_below_it() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = sealed::replica(&pool).await;
+    // 255 live registrations, 255 live exports, 255 live proposals: one below each cap of 256.
+    for _ in 0..255 {
+        let live = sealed::attempt(&mut tx, true, None).await;
+        sealed::registration(&mut tx, live, n).await;
+        sealed::proposal(&mut tx, live, n).await;
+        let export = sealed::export(&mut tx, p, "verified", 5_000).await;
+        sealed::link_export(&mut tx, live, export).await;
+    }
+    // 1,022 pending decisions: one below the cap of 1,024 less its headroom of 2.
+    for _ in 0..1_022 {
+        sealed::decision(&mut tx, NOW - 1_000).await;
+    }
+    tx.commit().await.unwrap();
+    assert_eq!(holds(&pool, &[n], &[p]).await, vec![]);
+    let mut tx = sealed::replica(&pool).await;
+    let live = sealed::attempt(&mut tx, true, None).await;
+    sealed::registration(&mut tx, live, n).await;
+    sealed::proposal(&mut tx, live, n).await;
+    let export = sealed::export(&mut tx, p, "verified", 5_000).await;
+    sealed::link_export(&mut tx, live, export).await;
+    sealed::decision(&mut tx, NOW - 1_000).await;
+    tx.commit().await.unwrap();
+    let got = holds(&pool, &[n], &[p]).await;
+    assert_eq!(
+        got,
+        vec![
+            row(
+                "history_cap_reached",
+                "intelligence_decisions",
+                "global",
+                "rows",
+                1023,
+                1024
+            ),
+            row(
+                "history_cap_reached",
+                "launch_registrations",
+                "node",
+                "rows",
+                256,
+                256
+            ),
+            row(
+                "history_cap_reached",
+                "source_exports",
+                "project",
+                "rows",
+                256,
+                256
+            ),
+            row(
+                "history_cap_reached",
+                "v2_proposals",
+                "node",
+                "rows",
+                256,
+                256
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn unlinked_verified_exports_stay_live_for_the_pending_window() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let p = Uuid::new_v4();
+    let mut tx = sealed::replica(&pool).await;
+    sealed::export_created(&mut tx, p, "verified", 5_000, NOW - 1_000).await;
+    sealed::export_created(&mut tx, p, "verified", 7_000, NOW - 700_000).await;
+    tx.commit().await.unwrap();
+    assert_eq!(
+        sealed::usage(&pool, "staging_exports", None, NOW, None)
+            .await
+            .1,
+        5_000
+    );
+    assert_eq!(
+        sealed::usage(&pool, "source_exports", Some(p), NOW, None)
+            .await
+            .2,
+        1
+    );
+    // Without a clock (0) the window is off, as for rows written before 0103.
+    assert_eq!(
+        sealed::usage(&pool, "staging_exports", None, 0, None)
+            .await
+            .1,
+        0
+    );
+    let staging: i64 = sqlx::query_scalar("SELECT sealed_staging_live_bytes($1)")
+        .bind(NOW)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(staging, 5_000);
+}
+
+#[tokio::test]
+async fn holds_cover_only_the_listed_projects_and_nodes() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let (p, q) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = sealed::replica(&pool).await;
+    for project in [p, q] {
+        for _ in 0..449 {
+            sealed::artifact(&mut tx, project, NOW - 1_000).await;
+        }
+    }
+    tx.commit().await.unwrap();
+    assert_eq!(holds(&pool, &[], &[p]).await.len(), 1);
+    assert_eq!(holds(&pool, &[], &[p, q]).await.len(), 2);
+    assert!(holds(&pool, &[], &[Uuid::new_v4()]).await.is_empty());
+}
+
+#[tokio::test]
+async fn settled_history_does_not_change_the_holds_or_the_usage() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
+    sealed::offers(&pool, n, p, NOW - 1_000, 30).await;
+    let mut tx = sealed::replica(&pool).await;
+    for _ in 0..449 {
+        sealed::artifact(&mut tx, p, NOW - 1_000).await;
+    }
+    let live = sealed::attempt(&mut tx, true, None).await;
+    sealed::registration(&mut tx, live, n).await;
+    tx.commit().await.unwrap();
+    let kinds = [
+        "admission_artifacts",
+        "intelligence_decisions",
+        "source_exports",
+        "staging_exports",
+        "native_preparation",
+        "v2_proposals",
+        "launch_registrations",
+        "phase_terminal",
+        "presence_operations",
+        "presence_rate",
+        "offers",
+        "project_offers",
+    ];
+    let mut before = Vec::new();
+    for k in kinds {
+        before.push(sealed::usage(&pool, k, Some(n), NOW, None).await);
+    }
+    let held = holds(&pool, &[n], &[p]).await;
+    assert!(!held.is_empty());
+    sealed::settled_history(&pool, 2_000, 2_000, NOW, 86_400_000).await;
+    let mut after = Vec::new();
+    for k in kinds {
+        after.push(sealed::usage(&pool, k, Some(n), NOW, None).await);
+    }
+    assert_eq!(before, after, "settled history is not counted");
+    assert_eq!(held, holds(&pool, &[n], &[p]).await);
+    let gate = aq_history_caps::holds(
+        &mut pool.acquire().await.unwrap(),
+        &[n],
+        &[p],
+        NOW as u64,
+        Some((1 << 40, 1 << 20)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(gate.len(), held.len());
+}
+
+/// The statements of `sealed_history_scoped`, as the poll gate runs them, with
+/// the parameters replaced by literals.
+fn scoped_statements(src: &str, live: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for kind in [
+        "admission_artifacts",
+        "intelligence_decisions",
+        "source_exports",
+        "staging_exports",
+        "native_preparation",
+        "v2_proposals",
+        "launch_registrations",
+        "phase_terminal",
+        "presence_operations",
+        "presence_rate",
+        "offers",
+        "project_offers",
+    ] {
+        let at = if kind.ends_with("_exports") {
+            src.find("p_kind IN ('source_exports','staging_exports')")
+        } else {
+            src.find(&format!("p_kind='{kind}'"))
+        }
+        .unwrap();
+        let rest = &src[at..];
+        let start = rest.find("RETURN QUERY").unwrap() + "RETURN QUERY".len();
+        let end = start + rest[start..].find(";\n ELS").unwrap();
+        let sql = rest[start..end]
+            .replace("p_now_ms", &NOW.to_string())
+            .replace("p_exclude", "NULL::uuid")
+            .replace("p_kind", &format!("'{kind}'"))
+            .replace("ANY(live)", &format!("ANY('{live}'::uuid[])"));
+        out.push((kind.to_string(), sql));
+    }
+    out
+}
+
+#[tokio::test]
+async fn the_gate_and_the_presence_guard_do_not_scan_history() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
+    sealed::offers(&pool, n, p, NOW - 1_000, 5).await;
+    // A few live runs with history of their own, so the live set is not empty.
+    let mut tx = sealed::replica(&pool).await;
+    for _ in 0..40 {
+        let live = sealed::attempt(&mut tx, true, None).await;
+        sealed::registration(&mut tx, live, n).await;
+        let artifact = sealed::artifact(&mut tx, p, NOW - 5_000_000).await;
+        sealed::link_artifact(&mut tx, live, artifact).await;
+    }
+    tx.commit().await.unwrap();
+    sealed::settled_history(&pool, 5_000, 50_000, NOW, 86_400_000).await;
+    let live: String = sqlx::query_scalar(
+        "SELECT COALESCE(array_agg(attempt_id),'{}')::text FROM sealed_live_attempt_ids",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(live.len() > 40, "the live set is not empty");
+    let src: String =
+        sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname='sealed_history_scoped'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let history = [
+        "admission_artifacts",
+        "intelligence_decisions",
+        "profiled_source_exports",
+        "profiled_launches",
+        "profiled_launch_artifacts",
+        "profiled_launch_source_exports",
+        "admission_material_leases",
+        "profiled_v2_proposals",
+        "profiled_launch_registrations",
+        "profiled_phase_terminal_capacity",
+        "profiled_presence_operations",
+        "admission_source_observations",
+        "execution_attempts",
+        "profiled_authority_hot",
+    ];
+    let mut report = String::new();
+    for (kind, sql) in scoped_statements(&src, &live) {
+        let plan: Vec<String> =
+            sqlx::query_scalar(&format!("EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) {sql}"))
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{kind}: {e}
+{sql}"
+                    )
+                });
+        let text = plan.join(
+            "
+",
+        );
+        report.push_str(&format!(
+            "== {kind}
+{text}
+"
+        ));
+        for table in history {
+            assert!(
+                !text.contains(&format!("Seq Scan on {table}")),
+                "{kind} scans {table}:
+{text}"
+            );
+        }
+    }
+    if let Ok(path) = std::env::var("AQ_SEALED_PLANS") {
+        std::fs::write(path, report).unwrap();
+    }
+}
 #[tokio::test]
 async fn phase_a_guards_call_the_live_usage() {
     let db = aq_server::test_support::TestDb::create().await;

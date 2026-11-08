@@ -125,15 +125,34 @@ pub async fn usage(
 }
 
 /// Staging bytes: unreleased transfers, source bases and (live) source exports.
-pub async fn staging_used(conn: &mut PgConnection) -> Result<i64, sqlx::Error> {
-    let sql = if live_schema(&mut *conn).await? {
-        "SELECT sealed_staging_live_bytes()"
+pub async fn staging_used(conn: &mut PgConnection, now_ms: i64) -> Result<i64, sqlx::Error> {
+    if live_schema(&mut *conn).await? {
+        sqlx::query_scalar("SELECT sealed_staging_live_bytes($1)")
+            .bind(now_ms)
+            .fetch_one(&mut *conn)
+            .await
     } else {
-        LEGACY_STAGING
-    };
-    sqlx::query_scalar::<_, i64>(sql)
-        .fetch_one(&mut *conn)
-        .await
+        sqlx::query_scalar(LEGACY_STAGING)
+            .fetch_one(&mut *conn)
+            .await
+    }
+}
+
+/// Records when a source export was reserved (its pending window). A no-op
+/// before migration 0103, which adds the column.
+pub async fn stamp_export(
+    conn: &mut PgConnection,
+    operation: Uuid,
+    now_ms: u64,
+) -> Result<(), sqlx::Error> {
+    if live_schema(&mut *conn).await? {
+        sqlx::query("UPDATE profiled_source_exports SET created_at_ms=$2 WHERE operation_id=$1")
+            .bind(operation)
+            .bind(ms(now_ms))
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,31 +254,33 @@ impl Hold {
     }
 }
 
+type HoldRow = (String, String, String, Option<Uuid>, String, i64, i64);
+
 async fn sql_holds(
     conn: &mut PgConnection,
-    node: Option<Uuid>,
-    project: Option<Uuid>,
+    nodes: &[Uuid],
+    projects: &[Uuid],
     now_ms: u64,
 ) -> Result<Vec<Hold>, sqlx::Error> {
-    let rows: Vec<(String, String, String, String, i64, i64)> = sqlx::query_as(
-        "SELECT hold_code,hold_kind,hold_scope,hold_unit,hold_used,hold_limit FROM sealed_history_holds($1,$2,$3)",
+    let rows: Vec<HoldRow> = sqlx::query_as(
+        "SELECT hold_code,hold_kind,hold_scope,hold_scope_id,hold_unit,hold_used,hold_limit FROM sealed_history_holds($1,$2,$3)",
     )
-    .bind(node)
-    .bind(project)
+    .bind(nodes)
+    .bind(projects)
     .bind(ms(now_ms))
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(code, kind, scope, unit, used, limit)| Hold {
+        .map(|(code, kind, scope, id, unit, used, limit)| Hold {
             code: if code == "history_rate_limited" {
                 Code::RateLimited
             } else {
                 Code::CapReached
             },
-            scope: match (scope.as_str(), node, project) {
-                ("node", Some(n), _) => Scope::Node(n),
-                ("project", _, Some(p)) => Scope::Project(p),
+            scope: match (scope.as_str(), id) {
+                ("node", Some(n)) => Scope::Node(n),
+                ("project", Some(p)) => Scope::Project(p),
                 _ => Scope::Global,
             },
             kind,
@@ -270,19 +291,21 @@ async fn sql_holds(
         .collect())
 }
 
-/// Node and server limits for a poll of `node`. Empty before migration 0103.
-pub async fn node_holds(
+/// Holds for the listed nodes (server limits once) and projects, from one call
+/// that computes each kind's live usage once. Empty before migration 0103.
+pub async fn holds(
     conn: &mut PgConnection,
-    node: Uuid,
+    nodes: &[Uuid],
+    projects: &[Uuid],
     now_ms: u64,
     staging: Option<Staging>,
 ) -> Result<Vec<Hold>, sqlx::Error> {
     if !live_schema(&mut *conn).await? {
         return Ok(Vec::new());
     }
-    let mut holds = sql_holds(&mut *conn, Some(node), None, now_ms).await?;
-    if let Some((max, bundle)) = staging {
-        let used = staging_used(&mut *conn).await?;
+    let mut holds = sql_holds(&mut *conn, nodes, projects, now_ms).await?;
+    if let (Some((max, bundle)), false) = (staging, nodes.is_empty()) {
+        let used = staging_used(&mut *conn, ms(now_ms)).await?;
         let limit = ms(max);
         if used.saturating_add(ms(bundle)) > limit {
             holds.push(Hold {
@@ -298,45 +321,66 @@ pub async fn node_holds(
     Ok(holds)
 }
 
+/// Node and server limits for a poll of `node`. Empty before migration 0103.
+pub async fn node_holds(
+    conn: &mut PgConnection,
+    node: Uuid,
+    now_ms: u64,
+    staging: Option<Staging>,
+) -> Result<Vec<Hold>, sqlx::Error> {
+    holds(conn, &[node], &[], now_ms, staging).await
+}
+
+/// What one poll learns from the holds. A node or server hold stops the poll; a
+/// project hold only drops that project from this poll's candidates.
+#[derive(Debug, Default)]
+pub struct PollGate {
+    pub stop: Option<Hold>,
+    held: Vec<Uuid>,
+}
+
+impl PollGate {
+    pub fn is_held(&self, project: Uuid) -> bool {
+        self.held.contains(&project)
+    }
+}
+
+pub async fn poll_gate(
+    conn: &mut PgConnection,
+    node: Uuid,
+    projects: &[Uuid],
+    now_ms: u64,
+    staging: Option<Staging>,
+) -> Result<PollGate, sqlx::Error> {
+    let mut gate = PollGate::default();
+    for hold in holds(conn, &[node], projects, now_ms, staging).await? {
+        match hold.scope {
+            Scope::Project(p) => gate.held.push(p),
+            _ => gate.stop = gate.stop.or(Some(hold)),
+        }
+    }
+    Ok(gate)
+}
+
 /// Project limits. Empty before migration 0103.
 pub async fn project_holds(
     conn: &mut PgConnection,
     project: Uuid,
     now_ms: u64,
 ) -> Result<Vec<Hold>, sqlx::Error> {
-    if !live_schema(&mut *conn).await? {
-        return Ok(Vec::new());
-    }
-    sql_holds(conn, None, Some(project), now_ms).await
+    holds(conn, &[], &[project], now_ms, None).await
 }
 
-/// Every hold the swarm read shows: each listed node's and server holds (once),
-/// then each bound project's holds.
+/// Every hold the swarm read shows: each listed node's and the server's holds
+/// (once), then each listed project's holds, in one grouped call.
 pub async fn swarm_holds(
     conn: &mut PgConnection,
     nodes: &[Uuid],
+    projects: &[Uuid],
     now_ms: u64,
     staging: Option<Staging>,
 ) -> Result<Vec<Hold>, sqlx::Error> {
-    let mut out: Vec<Hold> = Vec::new();
-    if !live_schema(&mut *conn).await? {
-        return Ok(out);
-    }
-    for node in nodes {
-        for hold in node_holds(&mut *conn, *node, now_ms, staging).await? {
-            if !out.contains(&hold) {
-                out.push(hold);
-            }
-        }
-    }
-    let projects: Vec<Uuid> =
-        sqlx::query_scalar("SELECT project_id FROM project_execution_bindings ORDER BY project_id")
-            .fetch_all(&mut *conn)
-            .await?;
-    for project in projects {
-        out.extend(project_holds(&mut *conn, project, now_ms).await?);
-    }
-    Ok(out)
+    holds(conn, nodes, projects, now_ms, staging).await
 }
 
 #[cfg(test)]

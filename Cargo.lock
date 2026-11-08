@@ -490,6 +490,7 @@ dependencies = [
  "aq-worker-protocol",
  "serde",
  "serde_json",
+ "sqlx",
  "uuid",
 ]
 

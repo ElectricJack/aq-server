@@ -394,7 +394,7 @@ async fn begin(
             "source transfer count limit exceeded".into(),
         ));
     }
-    let used = aq_history_caps::staging_used(&mut tx)
+    let used = aq_history_caps::staging_used(&mut tx, (s.clock)().timestamp_millis())
         .await
         .map_err(internal)?;
     if (used as u64)
@@ -914,7 +914,7 @@ async fn provision_base(
             .execute(&mut *tx)
             .await
             .map_err(internal)?;
-        let used = aq_history_caps::staging_used(&mut tx)
+        let used = aq_history_caps::staging_used(&mut tx, (s.clock)().timestamp_millis())
             .await
             .map_err(internal)?;
         let reserved = rt.config.max_bundle_bytes + 1024 * 1024;

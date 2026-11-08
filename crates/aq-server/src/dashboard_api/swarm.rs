@@ -50,7 +50,15 @@ pub(super) async fn swarm(
         .collect();
     let staging = (state.source_retention.as_ref())
         .map(|r| (r.config.max_staging_bytes, r.config.max_bundle_bytes));
-    let history = aq_history_caps::swarm_holds(&mut tx, &online, now, staging).await?;
+    let projects = (state.config.profiled_execution.as_ref()).map(|c| c.enabled_projects());
+    let history = aq_history_caps::swarm_holds(
+        &mut tx,
+        &online,
+        &projects.unwrap_or_default(),
+        now,
+        staging,
+    )
+    .await?;
     let mut held = Vec::new();
     // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.
     let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;

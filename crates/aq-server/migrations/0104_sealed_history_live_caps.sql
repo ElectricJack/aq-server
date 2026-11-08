@@ -40,13 +40,13 @@ BEGIN
  PERFORM pg_advisory_xact_lock(719247031);
  incoming_metadata:=octet_length(NEW.request_bytes)+COALESCE(octet_length(NEW.verified_bytes),4194304);
  SELECT u.total_bytes,u.scope_bytes INTO total_metadata,project_metadata
- FROM sealed_history_usage('source_exports',NEW.project_id,0,NEW.operation_id) u;
+ FROM sealed_history_usage('source_exports',NEW.project_id,COALESCE(NEW.created_at_ms,0),NEW.operation_id) u;
  IF total_metadata+incoming_metadata>268435456 OR project_metadata+incoming_metadata>67108864
  THEN RAISE EXCEPTION 'source export metadata quota'; END IF;
  IF TG_OP='INSERT' THEN
   IF NEW.state<>'pending' OR NEW.charged_bytes<>NEW.reserved_bytes THEN RAISE EXCEPTION 'source export needs prior reservation'; END IF;
   IF current_setting('transaction_isolation') NOT IN ('read committed','serializable') THEN RAISE EXCEPTION 'source export quota needs current visibility'; END IF;
-  SELECT u.total_rows,u.scope_rows INTO n,pn FROM sealed_history_usage('source_exports',NEW.project_id,0) u;
+  SELECT u.total_rows,u.scope_rows INTO n,pn FROM sealed_history_usage('source_exports',NEW.project_id,COALESCE(NEW.created_at_ms,0)) u;
   IF n>=4096 OR pn>=256
   THEN RAISE EXCEPTION 'source export row quota'; END IF;
  ELSE
@@ -104,6 +104,8 @@ BEGIN
  IF n>=256 OR b+NEW.reserved_bytes>268435456 OR pn>=16 OR pb+NEW.reserved_bytes>16777216 THEN RAISE EXCEPTION 'phase terminal capacity exhausted before grant issuance'; END IF;
  RETURN NEW;
 END $$;
+-- The lifetime counters of 0029 are statistics now: they saturate at their CHECK bounds
+-- (4096 per node, 65536 in all) instead of capping an always-on worker's reports for good.
 CREATE OR REPLACE FUNCTION profiled_presence_operation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE g profiled_presence_storage%ROWTYPE; n profiled_presence_node_storage%ROWTYPE; incoming BIGINT; q JSONB; a JSONB; u RECORD; r RECORD;
 BEGIN
@@ -131,8 +133,8 @@ BEGIN
  IF u.total_rows>=65536 OR u.scope_rows>=4096 OR u.total_bytes+incoming>268435456 OR u.scope_bytes+incoming>16777216
  OR r.total_rows>=11520 OR r.scope_rows>=720
  THEN RAISE EXCEPTION 'scoped presence retention capacity' USING ERRCODE='54000'; END IF;
- UPDATE profiled_presence_storage SET operations=operations+1,logical_bytes=logical_bytes+incoming WHERE singleton;
- UPDATE profiled_presence_node_storage SET operations=operations+1,logical_bytes=logical_bytes+incoming WHERE node_id=NEW.node_id;
+ UPDATE profiled_presence_storage SET operations=LEAST(operations+1,65536),logical_bytes=LEAST(logical_bytes+incoming,268435456) WHERE singleton;
+ UPDATE profiled_presence_node_storage SET operations=LEAST(operations+1,4096),logical_bytes=LEAST(logical_bytes+incoming,16777216) WHERE node_id=NEW.node_id;
  RETURN NEW;
 END $$;
 UPDATE meta SET value='104' WHERE key='state_format_version';
