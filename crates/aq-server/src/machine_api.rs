@@ -27,12 +27,13 @@ pub fn machine_routes(state: AppState) -> Router<AppState> {
             Router::new()
                 .route("/v1/worker/control", post(control))
                 .route("/v1/worker/handoffs", post(handoffs))
+                .route("/v1/worker/lost-attempts", post(lost_attempts))
                 .with_state(state.control_view()),
         )
         .layer(DefaultBodyLimit::max(16 * 1024))
 }
 
-fn mapped(e: McError) -> AppError {
+pub(crate) fn mapped(e: McError) -> AppError {
     match e {
         McError::KeyInUse => AppError::Conflict("machine key is in use by another machine; revoke it from the Swarm page or choose another key".into()),
         McError::Invalid(m) => AppError::BadRequest(m.into()),
@@ -169,6 +170,18 @@ async fn handoffs(
         .await
         .map_err(mapped)?;
     Ok(Json(req))
+}
+
+/// D2 ruling C: a restarted node releases an attempt whose host was lost.
+async fn lost_attempts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(req): ApiJson<aq_protocol::LostAttemptRelease>,
+) -> Result<Json<aq_protocol::LostAttemptReleased>, AppError> {
+    let auth = authenticate_context(&state, &headers).await?;
+    Ok(Json(
+        crate::profiled_execution::lost::release(&state, &auth, &req).await?,
+    ))
 }
 
 /// A node's context measurement renews the configured qualifications it may (spec 0007 §7.3).

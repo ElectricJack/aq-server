@@ -12,6 +12,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 #[path = "native_offers/handoff.rs"]
 mod handoff;
+#[path = "native_offers/lost.rs"]
+mod lost;
 
 #[tokio::test]
 async fn offered_window_preserves_five_seconds_of_fresh_facts_and_allows_delayed_accept() {

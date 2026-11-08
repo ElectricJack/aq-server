@@ -46,7 +46,7 @@ pub enum ClosureSettlement {
     Held(&'static str),
 }
 
-fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRef, AppError> {
+pub(crate) fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRef, AppError> {
     let mut value = serde_json::to_value(value).map_err(|_| AppError::Internal)?;
     value.sort_all_objects();
     Ok(ArtifactRef {
@@ -146,33 +146,7 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         return Ok(ClosureSettlement::Held("closure_has_execution_history"));
     }
     // Effects: no AQ-mediated effect may exist at all for a never-started launch.
-    let operations: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(database)?;
-    let agent: Option<Value> =
-        sqlx::query_scalar("SELECT binding FROM agent_launch_bindings WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(database)?;
-    let mailed = match &agent {
-        None => false,
-        Some(binding) => {
-            let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding}))
-                .map_err(|_| AppError::Internal)?;
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM mailbox_operations WHERE sender_key=$1)",
-            )
-            .bind(key)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(database)?
-        }
-    };
-    if operations != 0 || mailed {
+    if agent_effects_present(&mut tx, attempt).await? {
         return Ok(ClosureSettlement::Held("closure_effects_present"));
     }
     // Retention: the attempt's own verified central export (its whole input).
@@ -215,6 +189,41 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         .map_err(database)?;
     tx.commit().await.map_err(database)?;
     Ok(ClosureSettlement::Settled)
+}
+
+/// Whether the attempt's agent made any AQ-mediated effect: a graph operation, or mail sent
+/// from its session (a retry or closure would leave or repeat it).
+pub(crate) async fn agent_effects_present(
+    conn: &mut sqlx::PgConnection,
+    attempt: Uuid,
+) -> Result<bool, AppError> {
+    let operations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(database)?;
+    let agent: Option<Value> =
+        sqlx::query_scalar("SELECT binding FROM agent_launch_bindings WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(database)?;
+    let mailed = match &agent {
+        None => false,
+        Some(binding) => {
+            let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding}))
+                .map_err(|_| AppError::Internal)?;
+            sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM mailbox_operations WHERE sender_key=$1)",
+            )
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(database)?
+        }
+    };
+    Ok(operations != 0 || mailed)
 }
 
 /// Settles a closed launch, then releases its task claim through B4 when B4

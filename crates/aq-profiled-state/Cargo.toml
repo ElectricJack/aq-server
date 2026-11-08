@@ -6,6 +6,7 @@ publish = false
 description = "The stored profiled execution state projection (moved out of the aq-server lib)"
 
 [dependencies]
+aq-machine-control = { path = "../aq-machine-control", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 aq-worker-protocol.workspace = true
 serde.workspace = true

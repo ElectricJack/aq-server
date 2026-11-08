@@ -24,12 +24,7 @@ pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     } else {
         MIGRATION
     };
-    source
-        .split_once(&format!("FUNCTION {name}("))
-        .and_then(|(_, tail)| tail.split_once("AS $$"))
-        .and_then(|(_, tail)| tail.split_once("$$;"))
-        .map(|(body, _)| body)
-        .ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(source, name).ok_or_else(corrupt)
 }
 
 pub(super) async fn central37_storage_guard(

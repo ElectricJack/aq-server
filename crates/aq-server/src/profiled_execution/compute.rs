@@ -53,6 +53,11 @@ pub(crate) async fn busy_locked(
         else {
             return Ok(true);
         };
+        // A lost attempt (D2 ruling C) is proven dead: no compute; B4 holds the task, not the
+        // node (the 0102 incarnation guard admits it by its release record).
+        if receipt.id.as_str().starts_with("aq.lost-attempt-release/") {
+            continue;
+        }
         let pin = super::results::compute_stop_locked(tx, node, &binding, grant.grant_id, receipt)
             .await?;
         let valid: bool = sqlx::query_scalar("SELECT profiled_compute_stopped_valid($1,$2)")

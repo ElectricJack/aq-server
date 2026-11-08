@@ -345,3 +345,14 @@ pub async fn migrate_profile(
 pub fn admission(store: &Store) -> std::sync::Arc<crate::admission::Admission> {
     store.admission.clone()
 }
+
+/// Whether the node's compute is busy (`compute::busy_locked`, as a native poll sees it).
+pub async fn node_busy(
+    state: &crate::AppState,
+    node: &crate::worker_api::AuthenticatedNode,
+) -> Result<bool, crate::error::AppError> {
+    let internal = |_| crate::error::AppError::Internal;
+    let mut tx = state.store.pool.begin().await.map_err(internal)?;
+    crate::worker_api::lock_current_node(&mut tx, node).await?;
+    crate::profiled_execution::compute::busy_locked(&mut tx, node.id()).await
+}

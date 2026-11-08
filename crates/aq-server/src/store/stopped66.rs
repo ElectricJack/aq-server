@@ -5,12 +5,11 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("stopped disposition66 storage drift".into())
 }
 fn function_body(name: &str) -> Result<&'static str> {
-    include_str!("../../migrations/0066_stopped_dispositions.sql")
-        .split_once(&format!("FUNCTION {name}("))
-        .and_then(|(_, tail)| tail.split_once("AS $$"))
-        .and_then(|(_, tail)| tail.split_once("$$;"))
-        .map(|(body, _)| body)
-        .ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(
+        include_str!("../../migrations/0066_stopped_dispositions.sql"),
+        name,
+    )
+    .ok_or_else(corrupt)
 }
 pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'static str)>> {
     let mut guards = super::auto56::guard_overrides(supported)?;
@@ -20,6 +19,14 @@ pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'sta
     ] {
         guards.retain(|(existing, _)| *existing != name);
         guards.push((name, function_body(name)?));
+    }
+    // Format 102 also admits a stop backed by its lost-attempt release (D2 ruling C).
+    if supported >= 102 {
+        let name = "profiled_stopped_projection_guard";
+        let lost = include_str!("../../migrations/0102_lost_attempt_releases.sql");
+        let body = aq_profiled_state::sql_function_body(lost, name).ok_or_else(corrupt)?;
+        guards.retain(|(existing, _)| *existing != name);
+        guards.push((name, body));
     }
     Ok(guards)
 }

@@ -319,7 +319,9 @@ dependencies = [
  "aq-intelligence-config",
  "aq-protocol",
  "aq-selection",
+ "aq-task-comments",
  "chrono",
+ "serde_json",
  "sqlx",
  "sqlx-postgres",
  "thiserror",
@@ -474,6 +476,7 @@ dependencies = [
 name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
+ "aq-machine-control",
  "aq-session-protocol",
  "aq-worker-protocol",
  "serde",
@@ -501,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "aq-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "serde",

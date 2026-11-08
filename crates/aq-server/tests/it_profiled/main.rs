@@ -24,6 +24,7 @@ mod profiled_source_exports;
 mod profiled_started;
 mod profiled_stopped;
 mod replacement_handoff;
+mod replacement_lost;
 mod replacement_policy_limits;
 mod replacement_release;
 mod replacement_source;
