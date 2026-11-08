@@ -240,6 +240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-history-caps"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+ "sqlx-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "aq-human-cursor"
 version = "0.1.0"
 dependencies = [

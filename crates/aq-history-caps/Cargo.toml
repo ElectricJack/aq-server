@@ -1,0 +1,11 @@
+[package]
+name = "aq-history-caps"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Spec 0008 phase A: live sealed-history usage, the poll gate and swarm holds"
+
+[dependencies]
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+uuid.workspace = true
