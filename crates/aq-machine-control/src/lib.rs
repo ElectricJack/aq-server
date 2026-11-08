@@ -662,6 +662,45 @@ pub async fn warn_widened_bindings(pool: sqlx::PgPool) -> Vec<String> {
     lines
 }
 
+/// Review I7: a node renews qualifications at most once per this interval.
+pub const RENEWAL_INTERVAL_MS: u64 = 600_000;
+/// Review I7, under a transaction lock: why a renewal by `node` of the
+/// configured facts `bases` is refused at `now_ms` (renewals take effect
+/// `delay_ms` later): a renewal of one of them is still pending (not yet
+/// effective), or the node renewed within `RENEWAL_INTERVAL_MS`.
+pub async fn renewal_hold(
+    tx: &mut PgConnection,
+    node: Uuid,
+    bases: &[&str],
+    now_ms: u64,
+    delay_ms: u64,
+) -> Result<Option<&'static str>, Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-context-renewal', 0))")
+        .execute(&mut *tx)
+        .await?;
+    let now = i64::try_from(now_ms).map_err(|_| Error::Invalid("now"))?;
+    let since = now + i64::try_from(delay_ms).map_err(|_| Error::Invalid("delay"))?
+        - RENEWAL_INTERVAL_MS as i64;
+    let (pending, recent): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM context_qualification_renewals WHERE base_renderer_digest = ANY($1) \
+           AND observed_at_ms > $2 AND expires_at_ms > $2), \
+         EXISTS(SELECT 1 FROM context_qualification_renewals WHERE node_id = $3 AND observed_at_ms > $4)",
+    )
+    .bind(bases)
+    .bind(now)
+    .bind(node)
+    .bind(since)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(if pending {
+        Some("renewal_pending: a renewal of this qualification is not yet effective")
+    } else if recent {
+        Some("renewal_too_soon: this node renewed a qualification less than 10 minutes ago")
+    } else {
+        None
+    })
+}
+
 /// The machine key of a live node, if it holds one.
 pub async fn live_machine_key(
     conn: &mut PgConnection,

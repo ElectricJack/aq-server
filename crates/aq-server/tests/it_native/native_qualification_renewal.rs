@@ -230,3 +230,29 @@ async fn control_reports_qualification_pin() {
     let (_, body) = send(&c, "/v1/worker/control", &control).await;
     assert_eq!(body["qualification"], pin, "{body}");
 }
+
+/// Review I7: a renewal is refused (409, typed) while one of the same fact is
+/// pending, and a node renews at most once per 10 minutes.
+#[tokio::test]
+async fn renewals_wait_for_the_pending_one_and_ten_minutes_per_node() {
+    let mut c = setup().await;
+    let now = now_ms(&c);
+    renewable(&mut c, now - 1, now + 3_600_000).await;
+    let body = submission(500);
+    let at = async |c: &mut Case, ms: i64| record_ago(c, -ms, &body).await;
+    let (status, pin) = at(&mut c, -120_000).await;
+    assert_eq!(status, 200, "{pin}");
+    let (status, v) = at(&mut c, 0).await;
+    assert_eq!(status, 409, "{v}");
+    assert!(v.to_string().contains("renewal_too_soon"), "{v}");
+    assert_eq!(renewals(&c).await, 1);
+    let (status, pin) = at(&mut c, 660_000).await;
+    assert_eq!(status, 200, "{pin}");
+    let (status, v) = at(&mut c, 690_000).await;
+    assert_eq!(status, 409, "{v}");
+    assert!(v.to_string().contains("renewal_pending"), "{v}");
+    assert_eq!(renewals(&c).await, 2);
+    let (status, pin) = at(&mut c, 1_320_000).await;
+    assert_eq!(status, 200, "{pin}");
+    assert_eq!(renewals(&c).await, 3);
+}

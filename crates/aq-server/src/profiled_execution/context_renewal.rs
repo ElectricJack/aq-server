@@ -151,6 +151,12 @@ pub async fn record(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
+    let bases: Vec<&str> = renewed.iter().map(|(b, _, _)| b.digest.as_str()).collect();
+    let hold =
+        aq_machine_control::renewal_hold(&mut tx, node.id(), &bases, now_ms, EFFECTIVE_DELAY_MS);
+    if let Some(why) = hold.await.map_err(db)? {
+        return Err(AppError::Conflict(why.into()));
+    }
     for (base, renderer, fact) in &renewed {
         sqlx::query("INSERT INTO context_qualification_renewals(renderer_digest,base_renderer_digest,fact,observed_at_ms,expires_at_ms,node_id,submission,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT (renderer_digest) DO NOTHING")
             .bind(renderer.digest.as_str()).bind(base.digest.as_str()).bind(serde_json::to_value(fact).map_err(db)?)
