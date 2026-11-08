@@ -133,7 +133,9 @@ pub async fn successor_base(
         return Ok(None);
     };
     let mut note = row.note_comment_id;
-    if note.is_none() {
+    // The conclusion is the worker's text, so the predecessor agent authors it.
+    use aq_session_protocol::SessionIdentity::Remote;
+    if let (None, Remote { session_id, .. }) = (note, &r.report.binding.session) {
         let id = aq_machine_control::handoff_note_operation(predecessor);
         let body =
             aq_machine_control::handoff_note(predecessor, row.reason, r.report.conclusion.as_str());
@@ -141,8 +143,10 @@ pub async fn successor_base(
             project_id: admitted.project_id,
             task_id: task,
         };
-        let author = Author::System {
-            component: "aq.swarm.handoff".into(),
+        let (session_id, attempt_id) = (*session_id, predecessor);
+        let author = Author::Agent {
+            session_id,
+            attempt_id,
         };
         match aq_task_comments::add(pool, id, thread, &author, &body, (state.clock)()).await {
             Ok(_) => note = Some(id),

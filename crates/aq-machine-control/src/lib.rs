@@ -128,12 +128,14 @@ pub fn handoff_candidate_operation(predecessor: Uuid) -> Uuid {
 pub fn handoff_note_operation(predecessor: Uuid) -> Uuid {
     Uuid::new_v5(&predecessor, b"aq.swarm.handoff.note")
 }
+/// The node reports `note`; it is marked as worker-reported, never AQ's text.
 pub fn handoff_commit_message(task: Uuid, predecessor: Uuid, note: &str) -> String {
-    format!("AQ: handoff of task {task} from attempt {predecessor}\n\n{note}")
+    format!("AQ: handoff of task {task} from attempt {predecessor}\n\nworker-reported: {note}")
 }
+/// The task comment of a handoff; `conclusion` is quoted as worker text.
 pub fn handoff_note(predecessor: Uuid, reason: HandoffReason, conclusion: &str) -> String {
     format!(
-        "Handoff from attempt {predecessor} ({}). {conclusion}",
+        "Handoff from attempt {predecessor} ({}). Worker-reported conclusion: {conclusion}",
         reason_str(reason)
     )
 }

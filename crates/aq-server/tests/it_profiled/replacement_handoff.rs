@@ -145,9 +145,26 @@ async fn handoff_successor_starts_from_saved_commit() {
     );
     let notes = comments(&h).await;
     assert_eq!(notes.len(), 1);
-    assert_eq!(
-        serde_json::to_value(&notes[0].author).unwrap()["kind"],
-        "system"
+    // Review minor: worker-reported text is the predecessor agent's comment.
+    let author = serde_json::to_value(&notes[0].author).unwrap();
+    assert_eq!(author["kind"], "agent", "{author}");
+    assert_eq!(author["attempt_id"], json!(predecessor), "{author}");
+    assert!(
+        notes[0]
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("Worker-reported conclusion:"),
+        "{:?}",
+        notes[0].body
+    );
+    assert!(
+        sent[0]["params"]["commit"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("\n\nworker-reported: "),
+        "{}",
+        sent[0]
     );
     assert!(
         notes[0]
