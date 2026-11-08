@@ -7,6 +7,7 @@ description = "Swarm read model (spec 0007): capacity assembly, machine reports,
 
 [dependencies]
 aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
+aq-machine-control = { path = "../aq-machine-control" }
 aq-selection = { path = "../aq-selection", version = "=0.1.4" }
 chrono.workspace = true
 schemars = { version = "1", features = ["uuid1"] }

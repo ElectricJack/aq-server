@@ -1,4 +1,5 @@
 use crate::capacity::*;
+use crate::service::ControlFact;
 use aq_dashboard_contract::*;
 
 fn cap_node(health: WorkerHealth, total: Option<u32>) -> NodeCapacity {
@@ -250,6 +251,7 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
         extras: Vec::new(),
         machines: BTreeMap::new(),
         services: BTreeMap::new(),
+        controls: BTreeMap::new(),
         agents: Vec::new(),
     }
 }
@@ -259,6 +261,7 @@ fn extra(n: u128, measurement: Option<HoldCode>) -> NodeExtra {
         worker_version: "0.5.1".into(),
         sandbox_templates: Vec::new(),
         measurement,
+        machine_key: None,
     }
 }
 fn codes(h: &[HoldReason]) -> Vec<HoldCode> {
@@ -490,4 +493,119 @@ fn load_freshness_boundary() {
         assert_eq!(load.cpu_busy_bps, 2350);
         assert_eq!(load.source, LoadSource::Linux);
     }
+}
+
+fn keyed(n: u128, key: &str) -> NodeExtra {
+    NodeExtra {
+        machine_key: Some(key.into()),
+        ..extra(n, None)
+    }
+}
+fn control(desired: MachineDesired) -> ControlFact {
+    ControlFact {
+        desired,
+        generation: 1,
+        since_ms: NOW - 1000,
+        pending_handoffs: 0,
+    }
+}
+fn service_input(desired: MachineDesired, state: ServiceState) -> SwarmInput {
+    let mut i = input(vec![
+        node(1, "desk#1", WorkerHealth::Online, Some(2), 0, vec![]),
+        node(2, "desk#2", WorkerHealth::Online, Some(2), 0, vec![]),
+        node(3, "desk#3", WorkerHealth::Online, Some(2), 0, vec![]),
+    ]);
+    for n in 1..=3 {
+        i.extras.push(keyed(n, "desk"));
+        i.services.insert(
+            uid(n),
+            ServiceFact {
+                state,
+                since_ms: NOW - 1000,
+            },
+        );
+    }
+    i.machines.insert(uid(1), facts("desk", 100, NOW));
+    i.controls.insert("desk".into(), control(desired));
+    i
+}
+#[test]
+fn service_machine_groups_by_server_key_and_carries_control() {
+    let s = assemble(service_input(
+        MachineDesired::Running,
+        ServiceState::Running,
+    ))
+    .unwrap();
+    assert_eq!(s.machines.len(), 1);
+    let m = &s.machines[0];
+    assert_eq!((m.id.as_str(), m.nodes.len()), ("desk", 3));
+    let c = m.control.as_ref().unwrap();
+    assert_eq!(
+        (c.desired, c.generation.as_str(), c.pending_handoffs),
+        (MachineDesired::Running, "1", 0)
+    );
+}
+#[test]
+fn reported_key_held_by_a_service_machine_is_not_merged() {
+    let mut i = service_input(MachineDesired::Running, ServiceState::Running);
+    i.capacity
+        .nodes
+        .push(node(9, "legacy", WorkerHealth::Online, Some(1), 0, vec![]));
+    i.machines.insert(uid(9), facts("desk", 100, NOW));
+    let s = assemble(i).unwrap();
+    let legacy = s
+        .machines
+        .iter()
+        .find(|m| m.id == format!("node:{}", uid(9)))
+        .unwrap();
+    assert!(legacy.control.is_none());
+    assert_eq!(
+        s.machines
+            .iter()
+            .find(|m| m.id == "desk")
+            .unwrap()
+            .nodes
+            .len(),
+        3
+    );
+}
+#[test]
+fn stopped_service_nodes_hold_worker_stopped_and_machine_is_stopped() {
+    let s = assemble(service_input(
+        MachineDesired::Stopped,
+        ServiceState::Stopped,
+    ))
+    .unwrap();
+    let m = &s.machines[0];
+    assert_eq!(m.state, MachineState::Stopped);
+    assert!(codes(&m.holding).contains(&HoldCode::WorkerStopped));
+}
+#[test]
+fn draining_service_node_holds_worker_draining() {
+    let s = assemble(service_input(
+        MachineDesired::Draining,
+        ServiceState::Draining,
+    ))
+    .unwrap();
+    let m = &s.machines[0];
+    assert_eq!(m.state, MachineState::Holding);
+    assert!(codes(&m.nodes[0].holding).contains(&HoldCode::WorkerDraining));
+}
+#[test]
+fn legacy_machine_has_no_control() {
+    let s = assemble(input(vec![node(
+        1,
+        "a",
+        WorkerHealth::Online,
+        Some(1),
+        0,
+        vec![],
+    )]))
+    .unwrap();
+    assert!(s.machines[0].control.is_none());
+}
+#[test]
+fn reason_notes_a_cut_candidate_list() {
+    assert_eq!(reason(None, 3, false), None);
+    assert!(reason(None, 3, true).unwrap().contains("128 most recent"));
 }

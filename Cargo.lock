@@ -781,6 +781,7 @@ name = "aq-swarm"
 version = "0.1.0"
 dependencies = [
  "aq-dashboard-contract",
+ "aq-machine-control",
  "aq-selection",
  "chrono",
  "schemars",

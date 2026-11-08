@@ -286,3 +286,111 @@ async fn bootstrap_advertises_swarm_read_for_owner() {
             .any(|v| v["name"] == "swarm.read" && v["version"] == "1" && v["enabled"] == true)
     );
 }
+
+#[tokio::test]
+async fn service_machine_reports_control_and_service_state() {
+    use aq_machine_control as mc;
+    let now = common::profiled::NOW;
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(f.node.node_id)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut c = pool.acquire().await.unwrap();
+    let caller = mc::claim_key(&mut c, f.node.node_id, "desk").await.unwrap();
+    let hashes = ["a", "b"].map(|s| format!("{s}-{}", Uuid::new_v4()));
+    let new = mc::NewSlot {
+        base_name: "profiled-fixture",
+        worker_version: "0.1.0",
+        protocol_version: 1,
+    };
+    let at = chrono::Utc::now();
+    let minted = mc::mint_slots(&mut c, &caller, 3, &new, &hashes, at)
+        .await
+        .unwrap();
+    for m in &minted {
+        sqlx::query(
+            "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+        )
+        .bind(m.node_id)
+        .bind(now as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    mc::set_desired(
+        &mut c,
+        "desk",
+        mc::DesiredState::Draining,
+        1,
+        owner,
+        Uuid::new_v4(),
+        at,
+    )
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let machines = body["data"]["machines"].as_array().unwrap();
+    assert_eq!(machines.len(), 1, "{body}");
+    let m = &machines[0];
+    assert_eq!(m["id"], "desk");
+    assert_eq!(m["control"]["desired"], "draining");
+    assert_eq!(m["control"]["generation"], "2");
+    let nodes = m["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 3);
+    for n in nodes {
+        assert_eq!(n["service"]["state"], "draining", "{body}");
+        let codes: Vec<&Value> = n["holding"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| &h["code"])
+            .collect();
+        assert!(codes.contains(&&json!("worker_draining")), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn holding_candidates_are_capped_and_most_recent_first() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let n = aq_swarm::assemble::MAX_CANDIDATES + 3;
+    for i in 0..n {
+        sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,state,execution_deadline_ms) VALUES($1,$2,$3,$4,$5,'{}',$6)")
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .bind(f.node.node_id)
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .bind(1_000 + i as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let mut c = pool.acquire().await.unwrap();
+    let ids = [f.node.node_id];
+    let (rows, cut) = aq_swarm::assemble::holding(&mut c, &ids, aq_swarm::assemble::MAX_CANDIDATES)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), aq_swarm::assemble::MAX_CANDIDATES);
+    assert!(cut);
+    let kept: Vec<i64> = sqlx::query_scalar("SELECT execution_deadline_ms FROM execution_attempts WHERE attempt_id=ANY($1) ORDER BY execution_deadline_ms")
+        .bind(rows.iter().map(|r| r.0).collect::<Vec<_>>())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kept[0], 1_003, "the three oldest are dropped");
+    let (rows, cut) = aq_swarm::assemble::holding(&mut c, &ids, n).await.unwrap();
+    assert_eq!((rows.len(), cut), (n, false));
+}

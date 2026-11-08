@@ -53,7 +53,27 @@ pub struct SwarmMachine {
     pub agent_max: Option<u32>,
     /// Cost of a cloud machine; always None until cost reporting exists.
     pub cost: Option<MachineCost>,
+    /// Present only for a service machine (a server-held key); None for legacy and `node:` machines.
+    pub control: Option<MachineControl>,
     pub nodes: Vec<SwarmNode>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineDesired {
+    Running,
+    Draining,
+    Stopped,
+}
+/// The owner's control of a service machine (spec 0007 phase 1).
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MachineControl {
+    pub desired: MachineDesired,
+    /// Decimal compare-and-swap generation for worker.start/stop/drain.
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub generation: String,
+    pub since: Option<Timestamp>,
+    pub pending_handoffs: u32,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

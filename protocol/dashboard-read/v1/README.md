@@ -123,6 +123,8 @@ fell in that window (`samples_15m` is 0). Samples are stored at most once per
 5 s per node. `agent_max` is the sum of the node slot
 totals, and absent when any total is unknown.
 
+Phase 1 service machines: a node enrolled with `aq-worker service` holds a server-side machine key (claimed by its slot 1). That key groups the machine's nodes ahead of any reported key, and a reported key that a service machine holds no longer groups other nodes. A service machine carries `control` (desired state, compare-and-swap generation, its time, pending handoffs). `control` is `null` for legacy and `node:` machines, which the worker actions refuse. Each service node's `service.state` is its machine's desired state.
+
 A node's `holding` lists why placement would refuse it now: capability
 unreported or expired, node spend ceiling, unaccounted spend, disk pressure, a
 missing or expired context measurement for a natively registered node, and

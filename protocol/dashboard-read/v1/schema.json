@@ -1170,6 +1170,41 @@
       ],
       "type": "string"
     },
+    "MachineControl": {
+      "additionalProperties": false,
+      "description": "The owner's control of a service machine (spec 0007 phase 1).",
+      "properties": {
+        "desired": {
+          "$ref": "#/$defs/MachineDesired"
+        },
+        "generation": {
+          "description": "Decimal compare-and-swap generation for worker.start/stop/drain.",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "pending_handoffs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "desired",
+        "generation",
+        "pending_handoffs"
+      ],
+      "type": "object"
+    },
     "MachineCost": {
       "additionalProperties": false,
       "properties": {
@@ -1191,6 +1226,14 @@
         "started_at"
       ],
       "type": "object"
+    },
+    "MachineDesired": {
+      "enum": [
+        "running",
+        "draining",
+        "stopped"
+      ],
+      "type": "string"
     },
     "MachineHardware": {
       "additionalProperties": false,
@@ -3304,6 +3347,17 @@
             "integer",
             "null"
           ]
+        },
+        "control": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineControl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only for a service machine (a server-held key); None for legacy and `node:` machines."
         },
         "cost": {
           "anyOf": [

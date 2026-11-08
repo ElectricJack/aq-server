@@ -8,7 +8,9 @@ use super::{
 };
 use crate::execution::authority::{self, Policy};
 use crate::{store::User, version_info};
-use aq_swarm::assemble::{MAX_AGENTS, MeasuredWindow, NodeExtra, SwarmInput, assemble};
+use aq_swarm::assemble::{
+    MAX_AGENTS, MAX_CANDIDATES, MeasuredWindow, NodeExtra, SwarmInput, assemble,
+};
 
 pub(super) async fn swarm(
     state: &AppState,
@@ -43,8 +45,11 @@ pub(super) async fn swarm(
     let extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
+    let controls = aq_swarm::service::controls(&mut tx, &ids).await?;
     let mut held = Vec::new();
-    for (attempt, id, node) in aq_swarm::assemble::holding(&mut tx, &ids).await? {
+    // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.
+    let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
+    for (attempt, id, node) in candidates {
         let v = authority::load_attempt_locked(state, &mut tx, node, attempt, Policy::IdentityOnly)
             .await
             .map_err(|_| Error::Unavailable)?;
@@ -67,7 +72,7 @@ pub(super) async fn swarm(
         source_revision: info.source_revision,
         running_agents: u32::try_from(held.len()).unwrap_or(u32::MAX),
     };
-    let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.len());
+    let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.len(), cut);
     let data = assemble(SwarmInput {
         now_ms: now,
         server,
@@ -75,6 +80,7 @@ pub(super) async fn swarm(
         extras,
         machines,
         services,
+        controls,
         agents,
     })?;
     fence(state, runtime, user, &a).await?;

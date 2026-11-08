@@ -8,6 +8,12 @@
     "machines": [
       {
         "agent_max": null,
+        "control": {
+          "desired": "running",
+          "generation": "1",
+          "since": null,
+          "pending_handoffs": 0
+        },
         "cost": null,
         "hardware": {
           "disk_free_bytes": 315680000000,
@@ -124,6 +130,7 @@
       },
       {
         "agent_max": null,
+        "control": null,
         "cost": null,
         "hardware": {
           "disk_free_bytes": 315680000000,
