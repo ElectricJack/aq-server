@@ -1828,3 +1828,9 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - Worker: a replay with a new proof held the slot forever; a lost attempt with a claim got its sandbox destroyed.
   - Round 5 is in progress.
   - Scope note for the owner: ruling C retries only lost attempts with no graph or mail effects. True resume (B, unfreezing the stopped contract) is a later owner decision.
+
+- **2026-11-08 07:40 — v1 shut down at the owner's request.**
+  - Ran `aq stop`, which stopped the v1 dashboard server, the daemon and the one global supervisor session. The v1 checkout was not edited.
+  - Before the stop, v1 had no tasks in progress. aq-platform had 7 blocked, 7 paused and 10 ready tasks; aq-worker had 2 blocked, 2 paused and 2 ready.
+  - The 15-minute v1 monitor job is cancelled. From now on, PR merges and these logs are handled as subagents report.
+  - Left running because they aren't v1: the v2 `aq-worker@local` and `aq-sandbox-podman` services, and an unrelated quilt-trader server on :8000.
