@@ -155,6 +155,7 @@ impl ProfiledState {
             && matches!(self.effects, Effects::Quiescent { .. })
     }
 }
+pub mod fairness;
 pub mod replacement;
 pub mod replacement_sql;
 /// The body of `FUNCTION <name>(…) … AS $$<body>$$;` in a migration's SQL (the schema
