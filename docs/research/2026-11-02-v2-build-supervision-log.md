@@ -1868,3 +1868,13 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - Draft #118 is closed as superseded.
   - The dashboard re-pin, aq-dashboard#91, is waiting on CI.
   - Phase B (deletion) still awaits the owner's approval.
+
+- **2026-11-08 — Phase 1 L rerun 3: NOT ACCEPTED.**
+  - Phase A fixed R3 live: 676 total / 211 live artifacts, and the project takes work with no deletion.
+  - Passed: Q1 (three owner-stop cycles, no budget charge), the Q2 resume, re-enrolled work and the W10 renewal takeover.
+  - New defects:
+    - R4, critical: slot recovery overflows the tokio stack, so the service crash-loops. This is a regression from #52.
+    - R5: the retry jitter floor is near 0.
+    - R6: the catalog retry-budget hold is invisible.
+  - Dispatched the worker R4/R5 fix and the server visible-holds fix (R6 plus parked follow-ups).
+  - Lesson W88 added.
