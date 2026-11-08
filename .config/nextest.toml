@@ -39,7 +39,7 @@ fresh-migrations = { max-threads = 1 }
 # that was their own test binary before the groups (tests/<group>/main.rs).
 [[profile.default.overrides]]
 filter = """
-  (binary_id(aq-server::it_native) & (test(/^native_accepted_preparation::/) | test(/^native_offers::/) | test(/^native_preparation::/) | test(/^native_proposal_scope::/) | test(/^native_result_startup::/) | test(/^scoped_presence_inventory::/)))
+  (binary_id(aq-server::it_native) & (test(/^native_accepted_preparation::/) | test(/^native_offers::/) | test(/^native_preparation::/) | test(/^native_proposal_scope::/) | test(/^native_qualification_renewal::/) | test(/^native_result_startup::/) | test(/^scoped_presence_inventory::/)))
   | (binary_id(aq-server::it_phase) & (test(/^phase_execution::/) | test(/^phase_execution_transport::/) | test(/^phase_initial_lease::/) | test(/^phase_never_granted::/) | test(/^phase_refresh_execution::/) | test(/^phase_refresh_terminal::/) | test(/^phase_results::/) | test(/^phase_terminal_closure::/) | test(/^phase_terminal_fixture::/) | test(/^phase_terminal_history::/) | test(/^phase_terminal_started::/) | test(/^phase_terminal_stopped::/) | test(/^terminal_tail::/)))
   | (binary_id(aq-server::it_playbook) & (test(/^project_bindings::/) | test(/^repository_onboarding::/)))
   | (binary_id(aq-server::it_profiled) & test(/^replacement_policy_limits::/))

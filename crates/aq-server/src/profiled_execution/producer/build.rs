@@ -11,7 +11,7 @@ use crate::{
     execution::profiled::{Effects, ProfiledState, Retention, Status, Stop},
     intelligence::resolver::Decision,
     profiled_execution::{
-        artifacts::OwnerKind, context_budget, registration::RegisteredRuntime, source::Observation,
+        artifacts::OwnerKind, registration::RegisteredRuntime, source::Observation,
     },
 };
 use aq_admission::{
@@ -258,19 +258,15 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
-    let counted = context_budget::evaluate(
-        &configuration.context_qualifications,
+    let (counted, fact) = super::super::context_renewal::evaluate(
+        state,
         runtime,
         selected,
         &composition,
         now(state)?,
     )
-    .map_err(|_| refused())?;
-    let fact = configuration
-        .context_qualifications
-        .iter()
-        .find(|f| f.artifact().ok().as_ref() == Some(&counted.proof.qualification))
-        .ok_or_else(|| refused())?;
+    .await?;
+    let fact = &fact;
     let until = (now(state)? / 86_400_000)
         .checked_add(8)
         .and_then(|n| n.checked_mul(86_400_000))

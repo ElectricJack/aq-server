@@ -21,6 +21,7 @@ mod native_material_issuance;
 mod native_offers;
 mod native_preparation;
 mod native_proposal_scope;
+mod native_qualification_renewal;
 mod native_reconciliation;
 mod native_registration;
 mod native_result_startup;

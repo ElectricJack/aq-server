@@ -394,3 +394,81 @@ async fn holding_candidates_are_capped_and_most_recent_first() {
     let (rows, cut) = aq_swarm::assemble::holding(&mut c, &ids, n).await.unwrap();
     assert_eq!((rows.len(), cut), (n, false));
 }
+
+fn measurement_holds(body: &Value) -> Vec<String> {
+    body["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .flat_map(|n| n["holding"].as_array().unwrap())
+        .filter_map(|h| h["code"].as_str().filter(|c| c.starts_with("measurement")))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Spec 0007 §7.3: the swarm read uses renewed context facts, so a node whose
+/// configured measurement expired but was renewed shows no measurement hold.
+#[tokio::test]
+async fn renewed_node_has_no_measurement_hold() {
+    use aq_server::profiled_execution::{config::ProfiledConfig, context_budget::Qualification};
+    let now = common::profiled::NOW;
+    let mut f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let a = |id: &str| json!(common::profiled::artifact(id, id.as_bytes()));
+    let (runtime, qualification) = (a("swarm-runtime"), a("swarm-runtime-qualification"));
+    let configured: Qualification = serde_json::from_value(json!({"schema_version":1,
+        "subject":{"runtime":runtime,"runtime_qualification":qualification,"harness":"h","cli_version":"1",
+            "adapter":a("adapter"),"environment":a("environment"),"harness_qualification":a("harness-q"),
+            "provider":"p","model":"m","native_reasoning":"high","reasoning_configuration_reference":"r@1",
+            "credential_profile":a("credential"),"credential_revision":1,"account_reference":"acct","endpoint_reference":"ep"},
+        "rendering":"utf8_double_newline_v1","maximum_tokens_per_utf8_byte":1,"fixed_overhead_tokens":37,
+        "counting_evidence":a("counting"),"capacity_kind":"qualified_model_window","capacity_tokens":65536,
+        "capacity_evidence":a("capacity"),"observed_at_ms":now - 120_000,"expires_at_ms":now - 1}))
+    .unwrap();
+    let mut config = (*f.state.config).clone();
+    config.profiled_execution = Some(std::sync::Arc::new(ProfiledConfig {
+        revision: 1,
+        qualified_runtimes: vec![],
+        projects: vec![],
+        context_qualifications: vec![configured.clone()],
+        definition_bodies: vec![],
+    }));
+    f.state.config = std::sync::Arc::new(config);
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(f.node.node_id)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2) ON CONFLICT(node_id) DO UPDATE SET state=execution_nodes.state||excluded.state")
+        .bind(f.node.node_id)
+        .bind(json!({"native":{"request":{"runtime":runtime},"qualification":qualification}}))
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(measurement_holds(&body), ["measurement_expired"], "{body}");
+    let mut renewed = configured.clone();
+    renewed.observed_at_ms = now - 60_000;
+    renewed.expires_at_ms = now - 60_000 + 86_400_000;
+    sqlx::query("INSERT INTO context_qualification_renewals(renderer_digest,base_renderer_digest,fact,observed_at_ms,expires_at_ms,node_id,submission,created_at) VALUES($1,$2,$3,$4,$5,$6,'{}',now())")
+        .bind(renewed.artifact().unwrap().digest.as_str())
+        .bind(configured.artifact().unwrap().digest.as_str())
+        .bind(json!(renewed))
+        .bind(renewed.observed_at_ms as i64)
+        .bind(renewed.expires_at_ms as i64)
+        .bind(f.node.node_id)
+        .execute(&pool).await.unwrap();
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(measurement_holds(&body).is_empty(), "{body}");
+}

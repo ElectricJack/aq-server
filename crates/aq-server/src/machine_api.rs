@@ -1,8 +1,8 @@
 //! Service-machine routes (spec 0007 phase 1), under a node credential.
 use aq_machine_control::{self as mc, Error as McError, NewSlot};
 use aq_protocol::{
-    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, SlotEnrollment,
-    SlotsRequest, SlotsResponse, valid_machine_key,
+    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, MeasurementSubmission,
+    QualificationPin, SlotEnrollment, SlotsRequest, SlotsResponse, valid_machine_key,
 };
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
@@ -18,6 +18,10 @@ use crate::worker_api::{authenticate_context, lock_current_node};
 pub fn machine_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/worker/slots", post(slots))
+        .route(
+            "/v1/worker/qualifications",
+            post(qualifications).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
         .with_state(state.clone())
         .merge(
             Router::new()
@@ -164,4 +168,15 @@ async fn handoffs(
     .await
     .map_err(mapped)?;
     Ok(Json(req))
+}
+
+/// A node's context measurement renews the configured qualifications it may (spec 0007 §7.3).
+async fn qualifications(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(req): ApiJson<MeasurementSubmission>,
+) -> Result<Json<QualificationPin>, AppError> {
+    let auth = authenticate_context(&state, &headers).await?;
+    let pin = crate::profiled_execution::context_renewal::record(&state, &auth, &req).await?;
+    Ok(Json(pin))
 }

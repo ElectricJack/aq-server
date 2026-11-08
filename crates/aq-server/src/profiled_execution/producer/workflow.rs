@@ -11,7 +11,7 @@ use crate::{
     intelligence::resolver::{self, ReplacementBudget, ResolveRequest},
     profiled_execution::{
         artifacts::OwnerKind,
-        context_budget, registration,
+        registration,
         replacement::{self, Assessment},
         source, source_exports,
     },
@@ -512,14 +512,14 @@ async fn offers(
         .find(|c| c.digest == selected.choice.composition_digest)
         .ok_or_else(|| refused())?;
     // Qualification and exact startup counting precede expensive source export.
-    context_budget::evaluate(
-        &config.context_qualifications,
+    super::super::context_renewal::evaluate(
+        state,
         &runtime,
         selected,
         &composition.composition,
         now(state)?,
     )
-    .map_err(|_| refused())?;
+    .await?;
     let policy_record = config
         .project_policy_record(policy.project_id)
         .map_err(|_| refused())?;

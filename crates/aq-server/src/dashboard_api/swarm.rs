@@ -25,22 +25,18 @@ pub(super) async fn swarm(
     let cap = super::capacity::capacity(state, runtime, user, scope.clone()).await?;
     let ids: Vec<Uuid> = cap.data.nodes.iter().map(|n| n.node.id).collect();
     let now = stamp(state)?;
-    let windows: Vec<MeasuredWindow> = state
-        .config
-        .profiled_execution
-        .as_ref()
-        .map(|p| {
-            p.context_qualifications
-                .iter()
-                .map(|q| MeasuredWindow {
-                    runtime: q.subject.runtime.clone(),
-                    qualification: q.subject.runtime_qualification.clone(),
-                    observed_at_ms: q.observed_at_ms,
-                    expires_at_ms: q.expires_at_ms,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Renewed facts count: a renewed node does not show measurement_expired.
+    let windows: Vec<MeasuredWindow> =
+        crate::profiled_execution::context_renewal::current_facts(state, now)
+            .await?
+            .into_iter()
+            .map(|q| MeasuredWindow {
+                runtime: q.subject.runtime,
+                qualification: q.subject.runtime_qualification,
+                observed_at_ms: q.observed_at_ms,
+                expires_at_ms: q.expires_at_ms,
+            })
+            .collect();
     let mut tx = tx(runtime).await?;
     let extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
