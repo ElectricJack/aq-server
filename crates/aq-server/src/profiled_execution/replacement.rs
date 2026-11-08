@@ -116,6 +116,21 @@ pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Asses
         .acquire()
         .await
         .map_err(|_| AppError::Internal)?;
+    assess_task_in(state, &mut conn, task, now).await
+}
+/// [`assess_task`] reading the history on `history` (a caller's transaction, its own facts).
+pub async fn assess_task_in(
+    state: &AppState,
+    history: &mut sqlx::PgConnection,
+    task: Uuid,
+    now: u64,
+) -> Result<Assessment, AppError> {
+    let mut conn = state
+        .store
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal)?;
     let disposed = super::disposition::task_disposed(&mut conn, task).await?;
     if disposed {
         return Ok(Assessment::Blocked("task_terminally_disposed"));
@@ -157,13 +172,7 @@ pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Asses
     if let Some(decided) = precheck(&counts) {
         return Ok(decided);
     }
-    let mut conn = state
-        .store
-        .pool
-        .acquire()
-        .await
-        .map_err(|_| AppError::Internal)?;
-    Ok(match load(&mut conn, task, counts.started).await? {
+    Ok(match load(history, task, counts.started).await? {
         Some(priors) => assess(&priors, &Limits::default(), now),
         None => Assessment::Blocked("replacement_lineage_history_unknown"),
     })

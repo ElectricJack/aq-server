@@ -380,12 +380,11 @@ async fn a_lost_release_is_refused_unless_proven_owned_and_held() {
     assert!(e.contains("lost_attempt_boot_unknown"), "{e}");
 }
 
-/// #117 review I1: three crash releases of one lineage. The first two are retried; the third
-/// exhausts the retry budget, so B4 holds the task: the release answers `held` with the
-/// reason, records it for the owner, and the node is cleanly busy (a poll offers nothing)
-/// instead of failing every poll.
+/// #117 review I1 and its re-review: three crash releases of one lineage. The first two are
+/// retried; the third exhausts the retry budget, so B4 holds the task: the release answers
+/// `held` with the reason, records it, and the node is free (not busy, not a 409).
 #[tokio::test]
-async fn a_budget_held_lost_attempt_keeps_the_node_cleanly_busy() {
+async fn a_budget_held_lost_attempt_holds_the_task_not_the_node() {
     let mut h = held(false).await;
     let auth = context(&h.f).await;
     for (generation, offered) in [(2, NOW - 6_000), (3, NOW - 3_000)] {
@@ -408,8 +407,8 @@ async fn a_budget_held_lost_attempt_keeps_the_node_cleanly_busy() {
     let busy = aq_server::test_support::node_busy(&h.f.state, &auth).await;
     assert_eq!(
         busy.map_err(|e| format!("{e:?}")),
-        Ok(true),
-        "busy, not a 409"
+        Ok(false),
+        "free, not a 409"
     );
     // A replay answers the same held state.
     assert_eq!(release(&h, torn_down()).await.unwrap(), held);

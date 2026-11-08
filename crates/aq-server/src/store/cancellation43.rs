@@ -5,12 +5,11 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("native cancellation43 guard drift".into())
 }
 pub(super) fn function_body(name: &str) -> Result<&'static str> {
-    include_str!("../../migrations/0043_native_cancellation.sql")
-        .split_once(&format!("FUNCTION {name}("))
-        .and_then(|(_, tail)| tail.split_once("AS $$"))
-        .and_then(|(_, tail)| tail.split_once("$$;"))
-        .map(|(body, _)| body)
-        .ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(
+        include_str!("../../migrations/0043_native_cancellation.sql"),
+        name,
+    )
+    .ok_or_else(corrupt)
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     for (name, signature, language, set) in [

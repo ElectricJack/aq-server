@@ -11,12 +11,7 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("replacement52 release/schedule storage drift".into())
 }
 pub(super) fn function_body(name: &str) -> Result<&'static str> {
-    MIGRATION
-        .split_once(&format!("FUNCTION {name}("))
-        .and_then(|(_, tail)| tail.split_once("AS $$"))
-        .and_then(|(_, tail)| tail.split_once("$$;"))
-        .map(|(body, _)| body)
-        .ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(MIGRATION, name).ok_or_else(corrupt)
 }
 pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'static str)>> {
     if supported < 52 {

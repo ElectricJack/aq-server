@@ -190,3 +190,29 @@ pub async fn record(
     .await?;
     Ok(())
 }
+
+/// The system comment on a task that B4 holds after its attempt was lost (a fixed template,
+/// no worker text): the hold is where the owner acts. Posted once per attempt.
+pub async fn post_hold_comment(
+    pool: &sqlx::PgPool,
+    attempt: Uuid,
+    thread: aq_task_comments::Thread,
+    reason: LostReason,
+    held: &str,
+    now: DateTime<Utc>,
+) {
+    let lost = match reason {
+        LostReason::LostAfterCrash => "a crash",
+        LostReason::LostAfterReboot => "a reboot",
+    };
+    let body = format!(
+        "AQ: this task is held. Its last attempt ({attempt}) was lost after {lost} and its retry budget is exhausted after lost attempts (hold reason: {held}). An owner can retire the task or release the hold."
+    );
+    let author = aq_task_comments::Author::System {
+        component: "aq.swarm".into(),
+    };
+    let id = Uuid::new_v5(&attempt, b"aq.lost-attempt-hold");
+    if let Err(e) = aq_task_comments::add(pool, id, thread, &author, &body, now).await {
+        tracing::warn!(%attempt, error = ?e, "lost-attempt hold comment not posted");
+    }
+}

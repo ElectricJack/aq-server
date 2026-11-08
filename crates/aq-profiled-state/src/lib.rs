@@ -157,3 +157,10 @@ impl ProfiledState {
 }
 pub mod replacement;
 pub mod replacement_sql;
+/// The body of `FUNCTION <name>(…) … AS $$<body>$$;` in a migration's SQL (the schema
+/// attestation compares it with the installed function's source).
+pub fn sql_function_body<'a>(sql: &'a str, name: &str) -> Option<&'a str> {
+    let (_, tail) = sql.split_once(&format!("FUNCTION {name}("))?;
+    let (_, tail) = tail.split_once("AS $$")?;
+    tail.split_once("$$;").map(|(body, _)| body)
+}

@@ -43,8 +43,7 @@ pub async fn release(
         if proof != request.proof {
             return Err(refused("lost_attempt_released_with_another_proof"));
         }
-        tx.commit().await.map_err(database)?;
-        return retry(state, attempt, reason, charged).await;
+        return retry(state, tx, attempt, reason, charged).await;
     }
     let found = lost::check_locked(&mut tx, node.id(), request)
         .await
@@ -117,43 +116,50 @@ pub async fn release(
         .map_err(database)?;
     let now_ms = u64::try_from(now.timestamp_millis()).map_err(|_| AppError::Internal)?;
     super::cancellation::settle_stopped_locked(&mut tx, attempt, now_ms).await?;
-    tx.commit().await.map_err(database)?;
-    retry(state, attempt, found.reason, found.charged).await
+    retry(state, tx, attempt, found.reason, found.charged).await
 }
-/// Releases the failed attempt's task claim for a retry, when B4 admits it.
+/// Decides under the release's transaction (attempt locked, failure visible) whether B4 retries
+/// the task (its claim is released after the commit), else records the hold reason in that
+/// transaction and names it in a system task comment. The node is free either way.
 async fn retry(
     state: &AppState,
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     attempt: Uuid,
     reason: aq_protocol::LostReason,
     charged: bool,
 ) -> Result<LostAttemptReleased, AppError> {
-    let (task, holds): (Uuid, bool) =
-        sqlx::query_as("SELECT task_id,holds_task FROM execution_attempts WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(database)?;
+    let (task, holds, project): (Uuid, bool, Option<String>) = sqlx::query_as(
+        "SELECT task_id,holds_task,state#>>'{offer,manifest,bindings,project_id}' FROM execution_attempts WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(database)?;
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
-    let held = match holds {
-        false => None,
-        true => match replacement::assess_task(state, task, now).await? {
-            replacement::Assessment::Replace(r) if r.predecessor == attempt => {
-                replacement::release(state, task, &r).await?;
-                None
-            }
-            replacement::Assessment::Blocked(why) => Some(why.to_owned()),
-            _ => Some("lost_attempt_release_not_admitted".to_owned()),
+    let (release, held) = match holds {
+        false => (None, None),
+        true => match replacement::assess_task_in(state, &mut tx, task, now).await? {
+            replacement::Assessment::Replace(r) if r.predecessor == attempt => (Some(r), None),
+            replacement::Assessment::Blocked(why) => (None, Some(why)),
+            _ => (None, Some("lost_attempt_release_not_admitted")),
         },
     };
-    // The node stays busy while B4 holds the task (`compute::busy_locked`); the reason is
-    // recorded for the owner.
-    let mut conn = state.store.pool.acquire().await.map_err(database)?;
     let mc = super::super::machine_api::mapped;
-    lost::record_held(&mut conn, attempt, held.as_deref())
+    lost::record_held(&mut tx, attempt, held)
         .await
         .map_err(mc)?;
-    if let Some(why) = &held {
+    tx.commit().await.map_err(database)?;
+    if let Some(r) = release {
+        replacement::release(state, task, &r).await?;
+    }
+    if let (Some(why), Some(project_id)) = (held, project.and_then(|p| p.parse().ok())) {
         tracing::warn!(%attempt, held = why, "lost attempt failed; its task stays held");
+        let thread = aq_task_comments::Thread {
+            project_id,
+            task_id: task,
+        };
+        let now = (state.clock)();
+        lost::post_hold_comment(&state.store.pool, attempt, thread, reason, why, now).await;
     }
     Ok(LostAttemptReleased {
         schema_version: 1,
@@ -161,6 +167,6 @@ async fn retry(
         reason,
         charged,
         released: held.is_none(),
-        held,
+        held: held.map(str::to_owned),
     })
 }

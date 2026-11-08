@@ -319,6 +319,7 @@ dependencies = [
  "aq-intelligence-config",
  "aq-protocol",
  "aq-selection",
+ "aq-task-comments",
  "chrono",
  "serde_json",
  "sqlx",

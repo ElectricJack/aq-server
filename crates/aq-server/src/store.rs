@@ -395,11 +395,11 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
     }
     if supported >= 43 {
         never_granted40::validate_native_cancellation(&mut tx, supported).await?;
-        compute41::validate(&mut tx).await?;
+        compute41::validate(&mut tx, supported).await?;
         cancellation43::validate(&mut tx).await?;
     } else if supported >= 41 {
         never_granted40::validate_compute_reuse(&mut tx).await?;
-        compute41::validate(&mut tx).await?;
+        compute41::validate(&mut tx, supported).await?;
     } else if supported >= 40 {
         never_granted40::validate(&mut tx).await?;
     }

@@ -5,12 +5,11 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("phase never-granted owner40 guard drift".into())
 }
 pub(super) fn function_body(name: &str) -> Result<&'static str> {
-    include_str!("../../migrations/0040_phase_never_granted.sql")
-        .split_once(&format!("FUNCTION {name}("))
-        .and_then(|(_, tail)| tail.split_once("AS $$"))
-        .and_then(|(_, tail)| tail.split_once("$$;"))
-        .map(|(body, _)| body)
-        .ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(
+        include_str!("../../migrations/0040_phase_never_granted.sql"),
+        name,
+    )
+    .ok_or_else(corrupt)
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     validate_composed(tx, false, false, 40).await
@@ -50,11 +49,7 @@ async fn validate_composed(
         } else if compute_reuse && name == "profiled_close_expired_ungranted" {
             super::compute41::function_body(name)?
         } else {
-            sql.split_once(&format!("FUNCTION {name}("))
-                .and_then(|(_, tail)| tail.split_once("AS $$"))
-                .and_then(|(_, tail)| tail.split_once("$$;"))
-                .map(|(body, _)| body)
-                .ok_or_else(corrupt)?
+            aq_profiled_state::sql_function_body(sql, name).ok_or_else(corrupt)?
         };
         let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname=$2")
             .bind(format!("{name}({signature})"))
