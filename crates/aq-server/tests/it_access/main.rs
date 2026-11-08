@@ -15,6 +15,7 @@ mod agent_task_comments;
 mod graph_mutations;
 mod image_labels;
 mod intelligence;
+mod machine_store;
 mod messaging;
 mod observation_owner_peer;
 mod observation_transport;

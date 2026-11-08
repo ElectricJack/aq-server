@@ -304,6 +304,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-machine-control"
+version = "0.1.0"
+dependencies = [
+ "aq-protocol",
+ "chrono",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-notifications"
 version = "0.1.0"
 dependencies = [
@@ -601,6 +613,7 @@ dependencies = [
  "aq-human-work",
  "aq-intelligence-config",
  "aq-lifecycle-api",
+ "aq-machine-control",
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
