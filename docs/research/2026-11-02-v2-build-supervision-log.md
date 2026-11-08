@@ -1853,3 +1853,18 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - R3 falls under the owner's retention decision of 2026-11-07. Dispatched spec 0008 (Opus): an inventory generated from the code, then phase A, where caps count only live rows, a rate limit is added and refusals become visible. Phase B (deletion after 7 days plus a 1 KB summary) needs owner approval of the spec.
     - R1 fix dispatched (Opus, aq-worker).
   - State: `aq-node@ms1` is stopped and disabled. PR heads: aq-server#115 7dddd714, aq-worker#50 8cd2d580.
+
+- **2026-11-08 — Spec 0008 phase A merged.**
+  - aq-server#119 was squash-merged as b57b5c5c after an Opus review and two fix rounds.
+  - What it adds:
+    - one SQL "live" definition (0103);
+    - quota triggers that count only live rows (0104);
+    - an offer-rate fence (0105): 30 offers per node per hour, 240 per project and 960 in total;
+    - a poll gate that holds a node visibly (`history_rate_limited`, `history_cap_reached`) instead of a silent 409 loop.
+  - Fixes from review:
+    - the live counts now use a partial index on live attempts (the first version scanned all history under a lock);
+    - held projects are skipped before the fair-share take, so they can't starve the others;
+    - the catalog attestation lists the exact new indexes instead of exempting a prefix.
+  - Draft #118 is closed as superseded.
+  - The dashboard re-pin, aq-dashboard#91, is waiting on CI.
+  - Phase B (deletion) still awaits the owner's approval.
