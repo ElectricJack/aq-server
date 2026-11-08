@@ -299,3 +299,81 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
     );
     assert_eq!(count("SELECT count(*) FROM execution_attempts").await, 1);
 }
+
+/// #116 I1, M1: a handoff successor is exempt from the lineage budgets, so a refused one would be
+/// skipped forever. After `STUCK_SKIPS` consecutive refused polls (and not before) the task is
+/// held visibly as `handoff_successor_stuck`: recorded once, one system comment, its work view.
+/// AQ keeps trying it.
+#[tokio::test]
+async fn a_handoff_successor_refused_on_every_poll_is_held_after_stuck_skips_not_before() {
+    use aq_machine_control::holds;
+    let (c, predecessor) = handed_off().await;
+    let pool = &c.env.env.pool;
+    sqlx::query("UPDATE attempt_handoffs SET candidate_operation_id=$2,candidate_oid=$3 WHERE attempt_id=$1")
+        .bind(predecessor).bind(handoff::candidate_operation(predecessor)).bind("7".repeat(40))
+        .execute(pool).await.unwrap();
+    let task = c.env.lineage.task_id;
+    let hold_comment = Uuid::new_v5(&task, b"aq.task-hold/1");
+    let skips = || async {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT skips FROM successor_skips WHERE task_id=$1 AND predecessor=$2",
+        )
+        .bind(task)
+        .bind(predecessor)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    };
+    let posted = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM task_comments WHERE comment_id=$1")
+            .bind(hold_comment)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    for n in 1..=holds::STUCK_SKIPS {
+        let (status, body) = native_offer::poll(&c).await;
+        assert_eq!(status, 200, "poll {n}: {body}");
+        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+        else {
+            panic!("{body}")
+        };
+        assert!(page.offers.is_empty(), "{body}");
+        assert_eq!(skips().await, Some(n));
+        if n < holds::STUCK_SKIPS {
+            assert!(
+                super::holds::hold_rows(&c, task).await.is_empty(),
+                "not held after {n} skips"
+            );
+            assert_eq!(posted().await, 0);
+        }
+    }
+    let readiness = super::holds::work(&c, task).await;
+    assert_eq!(readiness["state"], "held", "{readiness}");
+    let reasons = readiness["reasons"].to_string();
+    assert!(
+        reasons.contains("\"hold_reason\":\"handoff_successor_stuck\""),
+        "{readiness}"
+    );
+    assert_eq!(
+        super::holds::hold_rows(&c, task).await,
+        [("handoff_successor_stuck".to_owned(), hold_comment, true)]
+    );
+    // AQ keeps trying it; the hold and its one comment stay as they are.
+    let (status, body) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 1));
+    assert_eq!(posted().await, 1);
+    let comments = super::holds::system_comments(&c, task).await;
+    let held: Vec<_> = comments
+        .iter()
+        .filter(|(id, _)| *id == hold_comment)
+        .collect();
+    assert_eq!(held.len(), 1, "{comments:?}");
+    assert!(
+        held[0]
+            .1
+            .contains("its handoff successor was refused on 20 polls in a row"),
+        "{held:?}"
+    );
+}

@@ -157,6 +157,8 @@ pub struct SwarmInput {
     pub controls: BTreeMap<String, ControlFact>,
     pub agents: Vec<(Uuid, SessionSummary)>,
     pub history: Vec<aq_history_caps::Hold>,
+    /// R6: current task holds per (project, reason code), `aq_machine_control::holds::counts`.
+    pub task_holds: Vec<(Uuid, String, i64)>,
 }
 
 /// The reason copy for a code (message, remedy).
@@ -226,12 +228,37 @@ pub fn hold(code: HoldCode) -> HoldReason {
             "Live history cap reached",
             Some("Wait for running agents to settle"),
         ),
+        TasksHeld => (
+            "Tasks are held",
+            Some("Open a held task to see why; an owner can retire it"),
+        ),
     };
     HoldReason {
         code,
         message: message.into(),
         remedy: remedy.map(Into::into),
     }
+}
+
+/// R6: one reason per project with held tasks, counted by hold reason code.
+pub fn task_hold_reasons(counts: &[(Uuid, String, i64)]) -> Vec<HoldReason> {
+    let mut by_project: BTreeMap<Uuid, Vec<(&str, i64)>> = BTreeMap::new();
+    for (project, code, n) in counts {
+        by_project.entry(*project).or_default().push((code, *n));
+    }
+    (by_project.into_iter())
+        .map(|(project, codes)| {
+            let total: i64 = codes.iter().map(|(_, n)| n).sum();
+            let each: Vec<String> = codes.iter().map(|(c, n)| format!("{c} {n}")).collect();
+            let mut reason = hold(HoldCode::TasksHeld);
+            let tasks = if total == 1 { "task" } else { "tasks" };
+            reason.message = format!(
+                "Project {project}: {total} {tasks} held ({})",
+                each.join(", ")
+            );
+            reason
+        })
+        .collect()
 }
 
 /// A spec 0008 history hold with its own counted message.
@@ -276,6 +303,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
         controls,
         agents,
         history,
+        task_holds,
     } = input;
     let held: BTreeSet<&str> = extras
         .iter()
@@ -481,6 +509,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             .filter(|h| !matches!(h.scope, aq_history_caps::Scope::Node(_)))
             .map(history_reason),
     );
+    reasons.extend(task_hold_reasons(&task_holds));
     Ok(Swarm {
         server,
         machines: out,

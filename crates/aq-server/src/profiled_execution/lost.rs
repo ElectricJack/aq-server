@@ -17,7 +17,7 @@ use crate::{
     worker_api::AuthenticatedNode,
 };
 use aq_admission::LaunchBinding;
-use aq_machine_control::lost;
+use aq_machine_control::{holds, lost};
 use aq_protocol::{LostAttemptRelease, LostAttemptReleased};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -128,7 +128,7 @@ async fn retry(
     reason: aq_protocol::LostReason,
     charged: bool,
 ) -> Result<LostAttemptReleased, AppError> {
-    let (task, holds, project): (Uuid, bool, Option<String>) = sqlx::query_as(
+    let (task, holding, project): (Uuid, bool, Option<String>) = sqlx::query_as(
         "SELECT task_id,holds_task,state#>>'{offer,manifest,bindings,project_id}' FROM execution_attempts WHERE attempt_id=$1",
     )
     .bind(attempt)
@@ -136,9 +136,9 @@ async fn retry(
     .await
     .map_err(database)?;
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
-    let (release, held) = match holds {
+    let (release, held) = match holding {
         false => (None, None),
-        true => match replacement::assess_task_in(state, &mut tx, task, now).await? {
+        true => match replacement::assess_task_in(&mut tx, task, now).await? {
             replacement::Assessment::Replace(r) if r.predecessor == attempt => (Some(r), None),
             replacement::Assessment::Blocked(why) => (None, Some(why)),
             _ => (None, Some("lost_attempt_release_not_admitted")),
@@ -148,18 +148,31 @@ async fn retry(
     lost::record_held(&mut tx, attempt, held)
         .await
         .map_err(mc)?;
+    // R6: the hold is the task's too (its work view and the swarm read), named once.
+    let (at, project) = ((state.clock)(), project.and_then(|p| p.parse().ok()));
+    let noted = match (held, project) {
+        (Some(why), Some(p)) => {
+            let comment = Some(lost::hold_comment_id(attempt));
+            holds::note(&mut tx, p, task, why, Some(attempt), comment, at)
+                .await
+                .map_err(mc)?
+        }
+        _ => None,
+    };
     tx.commit().await.map_err(database)?;
     if let Some(r) = release {
         replacement::release(state, task, &r).await?;
     }
-    if let (Some(why), Some(project_id)) = (held, project.and_then(|p| p.parse().ok())) {
-        tracing::warn!(%attempt, held = why, "lost attempt failed; its task stays held");
+    if let (Some(why), Some(project_id), Some(noted)) = (held, project, noted) {
+        if noted.new {
+            tracing::info!(%attempt, %task, held = why, "lost attempt failed; its task stays held");
+        }
         let thread = aq_task_comments::Thread {
             project_id,
             task_id: task,
         };
-        let now = (state.clock)();
-        lost::post_hold_comment(&state.store.pool, attempt, thread, reason, why, now).await;
+        let body = lost::hold_comment_body(attempt, reason, why);
+        holds::post(&state.store.pool, &noted, thread, &body, at).await;
     }
     Ok(LostAttemptReleased {
         schema_version: 1,

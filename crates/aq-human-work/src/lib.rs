@@ -172,27 +172,41 @@ impl Hold {
     }
 }
 
+/// A server-side hold of the task itself (R6): AQ does not offer it, for `code` (a server reason
+/// code, `phrase` its fixed description), about `attempt_id` (with its authority `status`).
+pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Value {
+    let message = format!("AQ does not offer this task: {phrase} (hold reason: {code}).");
+    json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code})
+}
+
 /// Work-view readiness. The state is the first match of: the task's own
 /// `draft`, `completed` or `canceled` state; `running` while the holding
-/// attempt executes; `held` when it has stopped but keeps the task claim;
-/// `waiting` for an unsatisfied blocker; `unknown` for a truncated Context;
-/// otherwise `ready`. `reasons` explains a stopped attempt's hold in any state.
+/// attempt executes; `held` when it has stopped but keeps the task claim, or
+/// an active task has a server-side hold ([`task_hold`]); `waiting` for an
+/// unsatisfied blocker; `unknown` for a truncated Context; otherwise `ready`.
+/// `reasons` explains a stopped attempt's hold in any state, then the task's hold.
 pub fn readiness(
     task_state: Option<&str>,
     hold: Option<&Hold>,
+    held: Option<Value>,
     blockers: Vec<Value>,
     complete: bool,
 ) -> Value {
     let open = blockers.iter().any(|b| b["satisfied"] != true);
+    let held = held.filter(|_| task_state == Some("active"));
     let state = match task_state {
         Some(s @ ("completed" | "canceled" | "draft")) => s,
         _ if hold.is_some_and(Hold::running) => "running",
-        _ if hold.is_some() => "held",
+        _ if hold.is_some() || held.is_some() => "held",
         _ if open => "waiting",
         _ if !complete => "unknown",
         _ => "ready",
     };
-    let reasons: Vec<Value> = hold.and_then(Hold::reason).into_iter().collect();
+    let reasons: Vec<Value> = hold
+        .and_then(Hold::reason)
+        .into_iter()
+        .chain(held)
+        .collect();
     json!({"state":state,"blockers":blockers,"complete":complete,"reasons":reasons})
 }
 
@@ -449,24 +463,24 @@ mod tests {
     fn a_stopped_holding_attempt_is_held_not_running() {
         let a = Uuid::new_v4();
         let live = Hold::from_authority(a, &authority("granted", "running", Value::Null));
-        let r = readiness(Some("active"), Some(&live), vec![], true);
+        let r = readiness(Some("active"), Some(&live), None, vec![], true);
         assert_eq!(r["state"], "running");
         assert_eq!(r["reasons"], json!([]));
 
         // QA P1-01: the MS1 cancel drill's attempt finished with stop proof.
         let cancelled =
             Hold::from_authority(a, &authority("finished", "stopped", json!(Uuid::new_v4())));
-        let r = readiness(Some("active"), Some(&cancelled), vec![], true);
+        let r = readiness(Some("active"), Some(&cancelled), None, vec![], true);
         assert_eq!(r["state"], "held");
         assert_eq!(r["reasons"][0]["code"], "cancelled_attempt_holds_task");
         assert_eq!(r["reasons"][0]["attempt_id"], json!(a));
 
         let finished = Hold::from_authority(a, &authority("finished", "stopped", Value::Null));
-        let r = readiness(Some("active"), Some(&finished), vec![], true);
+        let r = readiness(Some("active"), Some(&finished), None, vec![], true);
         assert_eq!(r["reasons"][0]["code"], "attempt_stopped_not_released");
 
         let unproven = Hold::from_authority(a, &authority("finished", "unknown", Value::Null));
-        let r = readiness(Some("active"), Some(&unproven), vec![], true);
+        let r = readiness(Some("active"), Some(&unproven), None, vec![], true);
         assert_eq!(r["state"], "held");
         assert_eq!(r["reasons"][0]["code"], "attempt_finished_stop_unconfirmed");
 
@@ -476,11 +490,11 @@ mod tests {
             &authority("cancelling", "running", json!(Uuid::new_v4())),
         );
         assert_eq!(
-            readiness(None, Some(&cancelling), vec![], true)["state"],
+            readiness(None, Some(&cancelling), None, vec![], true)["state"],
             "running"
         );
         // The task's own terminal state wins; the hold is still explained.
-        let r = readiness(Some("canceled"), Some(&cancelled), vec![], true);
+        let r = readiness(Some("canceled"), Some(&cancelled), None, vec![], true);
         assert_eq!(r["state"], "canceled");
         assert_eq!(r["reasons"][0]["code"], "cancelled_attempt_holds_task");
     }
@@ -489,22 +503,64 @@ mod tests {
     fn unheld_readiness_keeps_its_order() {
         let open = vec![json!({"satisfied":false})];
         assert_eq!(
-            readiness(Some("active"), None, open, true)["state"],
+            readiness(Some("active"), None, None, open, true)["state"],
             "waiting"
         );
         let done = vec![json!({"satisfied":true})];
         assert_eq!(
-            readiness(Some("active"), None, done.clone(), false)["state"],
+            readiness(Some("active"), None, None, done.clone(), false)["state"],
             "unknown"
         );
         assert_eq!(
-            readiness(Some("active"), None, done, true)["state"],
+            readiness(Some("active"), None, None, done, true)["state"],
             "ready"
         );
         assert_eq!(
-            readiness(Some("draft"), None, vec![], true)["state"],
+            readiness(Some("draft"), None, None, vec![], true)["state"],
             "draft"
         );
+    }
+
+    #[test]
+    fn a_task_hold_makes_an_active_task_held_with_its_reason() {
+        let a = Uuid::new_v4();
+        let held = || {
+            Some(task_hold(
+                a,
+                "finished",
+                "lineage_retry_budget_exhausted",
+                "its retry budget is exhausted",
+            ))
+        };
+        let r = readiness(Some("active"), None, held(), vec![], true);
+        assert_eq!(r["state"], "held");
+        assert_eq!(r["reasons"][0]["code"], "task_held");
+        assert_eq!(
+            r["reasons"][0]["hold_reason"],
+            "lineage_retry_budget_exhausted"
+        );
+        assert_eq!(r["reasons"][0]["attempt_id"], json!(a));
+        assert!(
+            r["reasons"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("its retry budget is exhausted")
+        );
+        // A retired or completed task is not held, and no hold leaves it ready.
+        let r = readiness(Some("canceled"), None, held(), vec![], true);
+        assert_eq!(
+            (r["state"].as_str(), r["reasons"].as_array().unwrap().len()),
+            (Some("canceled"), 0)
+        );
+        assert_eq!(
+            readiness(Some("active"), None, None, vec![], true)["state"],
+            "ready"
+        );
+        // A stopped attempt's hold is listed first.
+        let stopped = Hold::from_authority(a, &authority("finished", "stopped", Value::Null));
+        let r = readiness(Some("active"), Some(&stopped), held(), vec![], true);
+        assert_eq!(r["reasons"][0]["code"], "attempt_stopped_not_released");
+        assert_eq!(r["reasons"][1]["code"], "task_held");
     }
 
     #[test]

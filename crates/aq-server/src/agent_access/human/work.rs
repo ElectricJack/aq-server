@@ -67,9 +67,16 @@ pub(super) async fn work(
             .map(|state| aq_human_work::Hold::from_authority(attempt, &state)),
         None => None,
     };
+    // R6: the hold the offer path recorded on the task, as it recorded it.
+    let held = aq_machine_control::holds::current(&r.pool, p, id).await;
+    let held = (held.map_err(|_| unavailable())?).map(|h| {
+        let phrase = aq_machine_control::holds::phrase(&h.reason);
+        aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
+    });
     let readiness = aq_human_work::readiness(
         root["task_state"].as_str(),
         hold.as_ref(),
+        held,
         blockers,
         complete,
     );

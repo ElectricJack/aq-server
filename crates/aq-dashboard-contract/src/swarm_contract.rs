@@ -250,6 +250,8 @@ pub enum HoldCode {
     HistoryRateLimited,
     // Spec 0008: a live sealed-history cap holds new work.
     HistoryCapReached,
+    // R6: a project has tasks a server-side hold keeps from being offered.
+    TasksHeld,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -292,6 +294,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(HoldCode::HistoryCapReached).unwrap(),
             "history_cap_reached"
+        );
+        assert_eq!(
+            serde_json::to_value(HoldCode::TasksHeld).unwrap(),
+            "tasks_held"
         );
         assert_eq!(
             serde_json::to_value(IntelligenceClass::Deep).unwrap(),

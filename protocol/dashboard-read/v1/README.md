@@ -137,7 +137,14 @@ slots, so neither appears as a hold.
 (30 an hour per node, 240 per project, 960 in all), the inventory report rate, or a
 live sealed-history cap holds new offers. On a node they apply to that node; in
 `waiting.reasons`, a message starting `Project <id>:` applies to one project and one
-starting `Server:` to all. A node's `slots.total` is absent when the
+starting `Server:` to all.
+`tasks_held` (R6, `waiting.reasons` only) says a project has tasks that a server-side hold
+keeps from being offered: an exhausted retry, time or cost budget, a lost attempt whose
+retry was not admitted, or a successor refused on 20 polls in a row. Its message is
+`Project <id>: <n> task(s) held (<reason code> <count>, ...)`, counting holds a poll saw in
+the last 15 minutes. Each held task names its hold in its work view
+(`readiness.reasons`, code `task_held`, human-graph-1) and in one system comment.
+A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
 reserved for placement and are not produced yet. Each `agents` entry is a running

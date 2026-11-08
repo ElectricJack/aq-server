@@ -33,15 +33,16 @@ These additions serve the dashboard Work view. Counts are decimal strings.
 - **Readiness and blockers (X8).** Work data is `{task_id,task_state,version,readiness:{state,blockers,complete,reasons},parent,execution}`. Blockers are live `blocks` edges that target the task. `satisfied` is true only for a `completed` source and null when the source is not in the Context. The state is the first match in this order:
   1. `draft`, `completed` or `canceled` from the task state.
   2. `running` when an attempt holds the task and is still executing: its authority status is not `finished`, `declined` or `never_granted`, and it has no Stopped or NotStarted proof.
-  3. `held` when an attempt holds the task but has stopped or finished. The task is not running and no new attempt starts until the claim is released.
+  3. `held` when an attempt holds the task but has stopped or finished, or when an active task has a `task_held` hold (below). The task is not running and no new attempt starts until the claim is released or the hold clears.
   4. `waiting` when any blocker is not satisfied.
   5. `unknown` when the Context was truncated.
   6. `ready` otherwise.
 
-  `reasons` (at most 4, empty unless a stopped attempt holds the task, in any state) explains a hold as `{code,attempt_id,status,message}`. `code` is one of:
+  `reasons` (at most 4, empty unless a stopped attempt holds the task, in any state, or the active task has a `task_held` hold) explains a hold as `{code,attempt_id,status,message}` (plus `hold_reason` for `task_held`). `code` is one of:
   - `cancelled_attempt_holds_task`: the attempt was cancelled (B3) and has stopped. A cancelled attempt keeps its retained source for a replacement (B4), so it keeps the claim until the task is retried or the owner abandons the attempt. This is a known limitation.
   - `attempt_stopped_not_released`: the attempt finished and stopped; the claim stays until its result is settled, the task is retried or the attempt is abandoned.
   - `attempt_finished_stop_unconfirmed`: the attempt finished but no stop proof is recorded yet.
+  - `task_held` (R6, added 2026-11-08): AQ does not offer this active task, because a server-side hold was recorded on it: an exhausted retry, time or cost budget (`lineage_retry_budget_exhausted`, `replacement_policy_retry_budget_exhausted`, ...), a lost attempt whose retry was not admitted, or a successor refused on 20 polls in a row (`handoff_successor_stuck`, `replacement_successor_stuck`; AQ keeps trying those). `hold_reason` carries the server reason code (only on this code), `attempt_id` and `status` the attempt the hold is about, and `message` a fixed phrase for the code. The state is `held`. The hold lasts until the task has a new attempt; the same hold is named once in a system comment on the task. A reader that does not know `task_held` should show the task as not running.
 
   `held` and `reasons` were added on 2026-11-06 (QA P1-01). A reader that does not know `held` should show the task as not running.
 - **Attached execution (X12).** `execution`, and each entry of a task page's `executions`, is `{task_id,attempt_id,session_id,status}` for the `profiled_v1` attempt holding the task in this project. Pages list only tasks that have one.

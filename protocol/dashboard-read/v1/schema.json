@@ -957,7 +957,8 @@
         "no_eligible_machine",
         "no_free_slot",
         "history_rate_limited",
-        "history_cap_reached"
+        "history_cap_reached",
+        "tasks_held"
       ],
       "type": "string"
     },

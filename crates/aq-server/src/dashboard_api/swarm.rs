@@ -12,6 +12,11 @@ use aq_swarm::assemble::{
     MAX_AGENTS, MAX_CANDIDATES, MeasuredWindow, NodeExtra, SwarmInput, assemble,
 };
 
+fn projects_of(state: &AppState) -> Vec<Uuid> {
+    (state.config.profiled_execution.as_ref())
+        .map(|c| c.enabled_projects())
+        .unwrap_or_default()
+}
 pub(super) async fn swarm(
     state: &AppState,
     runtime: &Runtime,
@@ -50,15 +55,12 @@ pub(super) async fn swarm(
         .collect();
     let staging = (state.source_retention.as_ref())
         .map(|r| (r.config.max_staging_bytes, r.config.max_bundle_bytes));
-    let projects = (state.config.profiled_execution.as_ref()).map(|c| c.enabled_projects());
-    let history = aq_history_caps::swarm_holds(
-        &mut tx,
-        &online,
-        &projects.unwrap_or_default(),
-        now,
-        staging,
-    )
-    .await?;
+    let history =
+        aq_history_caps::swarm_holds(&mut tx, &online, &projects_of(state), now, staging).await?;
+    // R6: tasks a server-side hold keeps from being offered, per project and reason.
+    let at = (state.clock)();
+    let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state), at).await;
+    let task_holds = task_holds.map_err(|_| Error::Unavailable)?;
     let mut held = Vec::new();
     // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.
     let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
@@ -97,6 +99,7 @@ pub(super) async fn swarm(
         controls,
         agents,
         history,
+        task_holds,
     })?;
     fence(state, runtime, user, &a).await?;
     envelope(state, scope, data, reason.as_deref())

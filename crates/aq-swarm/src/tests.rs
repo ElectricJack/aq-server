@@ -260,6 +260,7 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
         controls: BTreeMap::new(),
         agents: Vec::new(),
         history: Vec::new(),
+        task_holds: Vec::new(),
     }
 }
 fn extra(n: u128, measurement: Option<HoldCode>) -> NodeExtra {
@@ -677,4 +678,54 @@ fn history_holds_join_the_node_and_the_waiting_reasons() {
                         uid(7)
                     ))
     );
+}
+
+#[test]
+fn task_holds_are_counted_per_project_in_the_waiting_reasons() {
+    let mut i = input(vec![node(1, "a", WorkerHealth::Online, Some(1), 0, vec![])]);
+    assert!(
+        !assemble(input(vec![node(
+            1,
+            "a",
+            WorkerHealth::Online,
+            Some(1),
+            0,
+            vec![]
+        )]))
+        .unwrap()
+        .waiting
+        .reasons
+        .iter()
+        .any(|r| r.code == HoldCode::TasksHeld),
+        "no hold, no reason"
+    );
+    i.task_holds = vec![
+        (uid(7), "handoff_successor_stuck".into(), 1),
+        (
+            uid(7),
+            "replacement_policy_retry_budget_exhausted".into(),
+            2,
+        ),
+        (uid(8), "lineage_retry_budget_exhausted".into(), 1),
+    ];
+    let s = assemble(i).unwrap();
+    let held: Vec<&HoldReason> = (s.waiting.reasons.iter())
+        .filter(|r| r.code == HoldCode::TasksHeld)
+        .collect();
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(
+        held[0].message,
+        format!(
+            "Project {}: 3 tasks held (handoff_successor_stuck 1, replacement_policy_retry_budget_exhausted 2)",
+            uid(7)
+        )
+    );
+    assert_eq!(
+        held[1].message,
+        format!(
+            "Project {}: 1 task held (lineage_retry_budget_exhausted 1)",
+            uid(8)
+        )
+    );
+    assert!(held[0].remedy.is_some());
 }

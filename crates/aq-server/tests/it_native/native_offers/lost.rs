@@ -66,17 +66,43 @@ async fn running(c: &mut Case, offer: &NativeOffer) -> Uuid {
     started::record(&state, &auth, &start).await.unwrap();
     g.grant.binding.attempt_id
 }
-async fn crash_release(c: &Case, attempt: Uuid) -> aq_protocol::LostAttemptReleased {
-    let request = LostAttemptRelease {
+fn crash_request(attempt: Uuid) -> LostAttemptRelease {
+    LostAttemptRelease {
         schema_version: 1,
         attempt_id: attempt,
         proof: StopProof::CgroupTeardown {
             invocation_id: "0123456789abcdef0123456789abcdef".into(),
             unit: "aq-node@ms1.service".into(),
         },
-    };
-    lost::release(&c.env.env.state, &auth(c).await, &request)
+    }
+}
+/// The server state over a pool of one connection (#117 review): the release transaction holds
+/// it, so any read of the release on a second pool connection times out instead of passing.
+async fn one_connection(c: &Case) -> (aq_server::AppState, sqlx::PgPool) {
+    let options = (*c.env.env.pool.connect_options()).clone();
+    let small = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect_with(options)
         .await
+        .unwrap();
+    let mut state = c.env.env.state.clone();
+    state.store = state.store.clone().with_pool_for_testing(small.clone());
+    (state, small)
+}
+async fn crash_release(c: &Case, attempt: Uuid) -> aq_protocol::LostAttemptReleased {
+    let (state, small) = one_connection(c).await;
+    let auth = auth(c).await;
+    // The bound is real: with its one connection taken, the release cannot run.
+    let held = small.acquire().await.unwrap();
+    let starved = lost::release(&state, &auth, &crash_request(attempt)).await;
+    assert!(starved.is_err(), "a one-connection pool is exhausted");
+    drop(held);
+    let request = crash_request(attempt);
+    let released = lost::release(&state, &auth, &request);
+    tokio::time::timeout(std::time::Duration::from_secs(30), released)
+        .await
+        .expect("the release holds no second pool connection")
         .unwrap()
 }
 
@@ -91,6 +117,10 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
         let released = crash_release(&c, attempt).await;
         if round < 3 {
             assert!(released.released, "crash {round} is retried: {released:?}");
+            assert!(
+                super::holds::hold_rows(&c, task).await.is_empty(),
+                "no hold yet"
+            );
             let (status, body) = native_offer::poll(&c).await;
             assert_eq!(status, 200, "{body}");
             offer = offers(&body).remove(0);
@@ -142,11 +172,30 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     .unwrap();
     assert_eq!(comments.len(), 1, "{comments:?}");
     assert!(
-        comments[0].1.contains("lineage_retry_budget_exhausted")
-            && comments[0]
-                .1
-                .contains("retry budget is exhausted after lost attempts"),
+        comments[0].1.contains(
+            "was lost after a crash, and its retry budget is exhausted (hold reason: lineage_retry_budget_exhausted)"
+        ),
         "{comments:?}"
+    );
+    // The task's own hold (R6) is that one comment's: the polls since add none.
+    let rows = super::holds::hold_rows(&c, task).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "lineage_retry_budget_exhausted");
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT comment_id FROM task_comments WHERE task_id=$1 AND author_kind='system'",
+    )
+    .bind(task)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(ids, [rows[0].1]);
+    assert!(rows[0].2, "marked on record");
+    let readiness = super::holds::work(&c, task).await;
+    assert!(
+        readiness["reasons"]
+            .to_string()
+            .contains("\"hold_reason\":\"lineage_retry_budget_exhausted\""),
+        "{readiness}"
     );
     let reason: Option<String> = sqlx::query_scalar(
         "SELECT held_reason FROM lost_attempt_releases l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND l.held_reason IS NOT NULL",
