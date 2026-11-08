@@ -1818,3 +1818,13 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - D3: pin before polling;
     - D4: per-slot credentials.
   - **Ruling:** the stopped proof gets an explicit `proof_kind` (aq-protocol 0.1.2), instead of synthesizing guardian evidence. A server PR goes first, then #51.
+- **15:03:** ruling C is implemented for phase 1, after a ruling-B proof-kind change hit aq-admission's frozen stopped contract.
+  - **aq-server #117:** `POST /v1/worker/lost-attempts` (aq-protocol 0.1.2 `LostAttemptRelease`) releases a prior-execution-uncertain hold on a reboot or cgroup proof, and normal replacement retries the task.
+    - A reboot release isn't charged; a crash release is.
+    - Migration 0102.
+  - **aq-worker #51:** D1–D4, plus a lost guardian with an outside proof posts the release, keeps the sandbox and frees the slot.
+  - **Both reviews:** merge after fixes.
+    - Server: a budget-refused release made polls return 409; refusal tests were missing.
+    - Worker: a replay with a new proof held the slot forever; a lost attempt with a claim got its sandbox destroyed.
+  - Round 5 is in progress.
+  - Scope note for the owner: ruling C retries only lost attempts with no graph or mail effects. True resume (B, unfreezing the stopped contract) is a later owner decision.
