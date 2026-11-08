@@ -94,16 +94,29 @@ impl NodeExtra {
     }
 }
 
-/// `(session, node)` of task-holding attempts, one more than `MAX_AGENTS`
-/// so the caller can tell the read was cut.
-pub async fn running(
+/// `(attempt, session, node)` of task-holding attempts. These are candidates
+/// only: a stopped attempt keeps its task until released, so the caller keeps
+/// the ones the overview read counts as running (`AuthorityView::running_at`).
+pub async fn holding(
     conn: &mut sqlx::PgConnection,
     ids: &[Uuid],
-) -> sqlx::Result<Vec<(Uuid, Uuid)>> {
-    sqlx::query_as("SELECT session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY node_id, session_id LIMIT 65")
+) -> sqlx::Result<Vec<(Uuid, Uuid, Uuid)>> {
+    sqlx::query_as("SELECT attempt_id, session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY node_id, session_id")
         .bind(ids)
         .fetch_all(conn)
         .await
+}
+
+/// The read's coverage reason: the capacity gap plus a note when the agent list was cut.
+pub fn reason(capacity: Option<String>, running: usize) -> Option<String> {
+    let cut =
+        (running > MAX_AGENTS).then(|| "More than 64 running agents; some are not shown".into());
+    let all = capacity
+        .into_iter()
+        .chain(cut)
+        .collect::<Vec<String>>()
+        .join("; ");
+    Some(all).filter(|r| !r.is_empty())
 }
 
 pub struct SwarmInput {

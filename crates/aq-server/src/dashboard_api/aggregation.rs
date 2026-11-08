@@ -9,7 +9,7 @@ use super::{
 use crate::{
     execution::{
         authority::{self, Policy},
-        profiled::{Retention, Status, Stop},
+        profiled::{Retention, Status},
     },
     profiled_execution::{human_results, settlement},
     store::User,
@@ -484,13 +484,11 @@ async fn attempts(
         if !ids.contains(&v.project_id) {
             return Err(Error::Unavailable);
         }
-        if v.active_at(stamp(state)?).is_ok() {
-            if matches!(v.stop, Some(Stop::Running)) {
-                running += 1;
-                *c.per_project_running.entry(v.project_id).or_insert(0) += 1;
-            } else {
-                unknown_running = true;
-            }
+        if v.running_at(stamp(state)?) {
+            running += 1;
+            *c.per_project_running.entry(v.project_id).or_insert(0) += 1;
+        } else if v.active_at(stamp(state)?).is_ok() {
+            unknown_running = true;
         }
         if v.holds_task
             && (matches!(v.status, Status::Cancelling | Status::Unknown)
