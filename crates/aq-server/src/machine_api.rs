@@ -65,8 +65,11 @@ async fn slots(
         .begin()
         .await
         .map_err(|_| AppError::Internal)?;
+    // The machine lock precedes the node lock, as in revocation (review I3).
+    let key = &req.machine_key;
+    mc::lock_machine(&mut tx, key).await.map_err(mapped)?;
     lock_current_node(&mut tx, &auth).await?;
-    let caller = mc::claim_key(&mut tx, auth.id(), &req.machine_key)
+    let caller = mc::claim_key(&mut tx, auth.id(), key)
         .await
         .map_err(mapped)?;
     let credentials: Vec<String> = (1..req.slots).map(|_| new_node_credential()).collect();

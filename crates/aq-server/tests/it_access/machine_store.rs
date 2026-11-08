@@ -386,6 +386,40 @@ async fn accepts_new_work_follows_desired() {
     assert!(!mc::accepts_new_work(&mut c, ids[0]).await.unwrap());
 }
 
+/// Review I3: a revoke racing a slot mint waits for it, so no minted sibling
+/// stays live.
+#[tokio::test]
+async fn concurrent_mint_and_revoke_leave_no_live_sibling() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let first = machine(&pool, 1).await[0];
+    let mut mint = pool.begin().await.unwrap();
+    let caller = mc::claim_key(&mut mint, first, "desk").await.unwrap();
+    mc::mint_slots(&mut mint, &caller, 3, &new_slot(), &hashes(2), now())
+        .await
+        .unwrap();
+    let revoke = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let n = mc::revoke_machine(&mut tx, "desk", now()).await.unwrap();
+            tx.commit().await.unwrap();
+            n
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!revoke.is_finished(), "the revoke waits for the mint");
+    mint.commit().await.unwrap();
+    assert_eq!(revoke.await.unwrap(), 3);
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nodes WHERE machine_key='desk' AND revoked_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 0);
+}
+
 #[tokio::test]
 async fn revoke_machine_revokes_every_slot_and_clears_control() {
     let db = TestDb::create().await;

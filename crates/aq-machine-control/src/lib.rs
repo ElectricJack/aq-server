@@ -197,12 +197,23 @@ pub async fn machine_of(conn: &mut PgConnection, node: Uuid) -> Result<MachineNo
     })
 }
 
+/// Review I3: the per-machine-key transaction lock that serializes claiming,
+/// minting and revocation. A caller that also locks node rows takes it first.
+pub async fn lock_machine(tx: &mut PgConnection, key: &str) -> Result<(), Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-machine:' || $1, 0))")
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
+}
+
 /// The caller has no key: sets (key, slot 1), unless another live node holds
 /// (key, 1). A caller that already holds this key as slot 1 is unchanged.
 pub async fn claim_key(tx: &mut PgConnection, node: Uuid, key: &str) -> Result<MachineNode, Error> {
     if !valid_machine_key(key) {
         return Err(Error::Invalid("machine_key"));
     }
+    lock_machine(tx, key).await?;
     let me = machine_of(tx, node).await?;
     if let Some(held) = &me.machine_key {
         return if held == key && me.slot == Some(1) {
@@ -253,6 +264,7 @@ pub async fn mint_slots(
     if hashes.len() + 1 < wanted as usize {
         return Err(Error::Invalid("credential_hashes"));
     }
+    lock_machine(tx, key).await?;
     let mut out = Vec::new();
     for slot in 2..=wanted {
         let existing: Option<Uuid> = sqlx::query_scalar(
@@ -625,6 +637,7 @@ pub async fn revoke_machine(
     if !valid_machine_key(machine) {
         return Err(Error::Invalid("machine"));
     }
+    lock_machine(tx, machine).await?;
     let n =
         sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL")
             .bind(machine)
