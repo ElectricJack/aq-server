@@ -335,11 +335,13 @@ available, expected_generation}`, where `expected_generation` is the
 `server.owner_availability.generation` the page last read (a positive decimal
 string; `"1"` while the switch is unset).
 
-- `available: true` turns the switch on and records an owner `available`
-  observation for every enabled credential (credential-wide: no model, no
-  node). While the switch is on, the server keeps those observations fresh, so
-  availability stays on until the owner switches it off. It never refreshes
-  over unexpired negative worker feedback for the same credential.
+- `available: true` turns the switch on. It writes no observation: while the
+  switch is on, selection treats every authorized credential as attested
+  available by the owner (credential-wide: no model, no node), so availability
+  stays on until the owner switches it off. A credential with unexpired
+  negative feedback in the node's observations is not attested. An offer made
+  under the switch is refused at accept or grant only if the switch changed
+  (a new generation) since its selection.
 - `available: false` turns it off: polls make no new offer and run no selection.
   Manual observations are still accepted, but the switch holds.
 
