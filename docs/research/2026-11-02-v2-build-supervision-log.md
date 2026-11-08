@@ -1787,3 +1787,6 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - A: add a native-exec-interactive profile (recommended);
     - B: make the driver a named read-only image;
     - C: keep Claude watch-only.
+- **10:33:** merged aq-dashboard #90 (8392a544), swarm phase 1 dashboard (worker controls, Add machine, availability switch, re-pinned to 7529e623). The Opus review found the I1 allow_enrolled_nodes misread and the I2 operation-key leak across machines; both fixed.
+  - Phase 1's server, worker and dashboard work is all merged.
+  - Dispatched L0 plus live acceptance L on aq-ms1 and this desktop: the systemd user service is installed per the plan, `aq-worker@local` is untouched, and the terminal steps wait on W13.
