@@ -116,7 +116,11 @@ Swarm read fields:
   relevant observations gets no attestation, so the feedback still holds it
   off. The offer, preparation, initial-grant and grant-replay fences recompute
   the attestation from the decision's own `now_ms` and the switch's current
-  generation, so they refuse only when the owner flipped the switch. While
+  generation, so they refuse only when the owner flipped the switch. The
+  phase-execution health check (Prepare, delegated renewals, the
+  phase-refresh profile) adds the same attestation at its own check time.
+  Setting the state the switch already has keeps its generation, and a switch
+  turned on by a user who is no longer an owner counts as unset. While
   the switch is off, polls make no offer and run no selection. When it was
   never set, the old attestation rules apply.
 - **Q3 (enrolled nodes are allowed).** `allow_enrolled_nodes` defaults to on.
@@ -138,9 +142,6 @@ count stays 81.
 
 ## Limits
 
-- **Phase execution health.** The synthesized attestation applies to
-  selection and its admission fences. The phase-execution health check still
-  reads observation rows only.
 - **Sealed history caps.** Every offered attempt writes two
   `intelligence_decisions` rows. One is linked to the attempt's sealed launch
   and is kept forever, by the AQ-08 rule that referenced rows are pinned. The
