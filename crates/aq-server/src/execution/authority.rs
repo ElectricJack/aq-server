@@ -103,6 +103,9 @@ impl AuthorityView {
             Ok(())
         }
     }
+    pub fn running_at(&self, now: u64) -> bool {
+        self.active_at(now).is_ok() && matches!(self.stop, Some(super::profiled::Stop::Running))
+    }
     pub fn active_at(&self, now: u64) -> Result<()> {
         if !self.holds_task
             || self.revoked

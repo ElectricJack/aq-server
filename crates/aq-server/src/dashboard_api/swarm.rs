@@ -6,6 +6,7 @@ use super::{
     service::{auth, envelope, fence, session, stamp, tx},
     *,
 };
+use crate::execution::authority::{self, Policy};
 use crate::{store::User, version_info};
 use aq_swarm::assemble::{MAX_AGENTS, MeasuredWindow, NodeExtra, SwarmInput, assemble};
 
@@ -42,7 +43,15 @@ pub(super) async fn swarm(
     let extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
-    let held = aq_swarm::assemble::running(&mut tx, &ids).await?;
+    let mut held = Vec::new();
+    for (attempt, id, node) in aq_swarm::assemble::holding(&mut tx, &ids).await? {
+        let v = authority::load_attempt_locked(state, &mut tx, node, attempt, Policy::IdentityOnly)
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        if v.running_at(now) {
+            held.push((id, node));
+        }
+    }
     tx.commit().await?;
     let mut agents = Vec::new();
     for (id, node) in held.iter().take(MAX_AGENTS) {
@@ -56,16 +65,9 @@ pub(super) async fn swarm(
     let server = SwarmServer {
         version: info.server_version,
         source_revision: info.source_revision,
-        running_agents: cap.data.slots.occupied.value.unwrap_or(0),
+        running_agents: u32::try_from(held.len()).unwrap_or(u32::MAX),
     };
-    let reason = [
-        cap.coverage.reason.clone(),
-        (held.len() > MAX_AGENTS).then(|| "More than 64 running agents; some are not shown".into()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<String>>()
-    .join("; ");
+    let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.len());
     let data = assemble(SwarmInput {
         now_ms: now,
         server,
@@ -76,10 +78,5 @@ pub(super) async fn swarm(
         agents,
     })?;
     fence(state, runtime, user, &a).await?;
-    envelope(
-        state,
-        scope,
-        data,
-        Some(reason).filter(|r| !r.is_empty()).as_deref(),
-    )
+    envelope(state, scope, data, reason.as_deref())
 }

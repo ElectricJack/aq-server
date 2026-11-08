@@ -1,5 +1,7 @@
 //! Swarm read (spec 0007 phase 2): machine grouping, load, agents, states.
 use crate::common;
+use aq_server::execution::profiled::{Status, Stop};
+use aq_session_protocol::ProfiledGrant;
 use axum::{
     Router,
     body::Body,
@@ -38,6 +40,33 @@ fn swarm_fixture(value: &Value) {
     }
 }
 
+/// Makes the fixture's attempt a running one (granted, stop `Running`).
+fn make_running(f: &mut common::profiled::Fixture) {
+    let now = common::profiled::NOW;
+    f.profiled.status = Status::Granted;
+    f.profiled.execution_deadline_ms = Some(now + 60_000);
+    f.profiled.grant = Some(ProfiledGrant {
+        binding: f.profiled.offer.binding.clone(),
+        grant_id: Uuid::new_v4(),
+        expires_at_ms: now + 5_000,
+    });
+    f.profiled.stop = Stop::Running;
+}
+
+async fn overview_running(app: &Router) -> Value {
+    read(app, "/api/v1/overview").await.1["data"]["counts"]["running"]["value"].clone()
+}
+
+fn listed_agents(body: &Value) -> Vec<&Value> {
+    body["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .flat_map(|n| n["agents"].as_array().unwrap())
+        .collect()
+}
+
 async fn add_node(pool: &sqlx::PgPool, name: &str, seen_ms: Option<u64>) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,last_seen_at) VALUES($1,$2,$3,'t',1,now(),to_timestamp($4::double precision/1000))")
@@ -74,7 +103,8 @@ async fn swarm_requires_owner() {
 #[tokio::test]
 async fn swarm_groups_nodes_reports_load_and_lists_running_agents() {
     let now = common::profiled::NOW;
-    let f = common::profiled::fixture().await;
+    let mut f = common::profiled::fixture().await;
+    make_running(&mut f);
     let attempt = common::profiled::insert(&f).await;
     let pool = f.db.pool().await;
     sqlx::query(
@@ -149,8 +179,62 @@ async fn swarm_groups_nodes_reports_load_and_lists_running_agents() {
         .unwrap_or_else(|| panic!("agent missing: {body}"));
     assert_eq!(agent["provider"], detail["data"]["profile"]["provider"]);
     assert_eq!(agent["model"], detail["data"]["profile"]["model"]);
-    assert!(body["data"]["server"]["running_agents"].as_u64().unwrap() >= 1);
+    assert_eq!(body["data"]["server"]["running_agents"], 1, "{body}");
+    assert_eq!(listed_agents(&body).len(), 1);
+    assert_eq!(overview_running(&app).await, json!(1));
     swarm_fixture(&body);
+}
+
+#[tokio::test]
+async fn swarm_stopped_attempt_holding_its_task_is_not_a_running_agent() {
+    use aq_server::execution::authority::hot::{HotState, LaunchOwner};
+    let now = common::profiled::NOW;
+    let f = common::profiled::fixture().await;
+    let attempt = common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(f.node.node_id)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let mut hot = HotState::from_compat(&f.profiled).unwrap();
+    sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
+        .bind(attempt)
+        .bind(json!(hot))
+        .execute(&pool)
+        .await
+        .unwrap();
+    hot.status = Status::Finished;
+    hot.owner = Some(LaunchOwner {
+        guardian_id: Uuid::new_v4(),
+        launch_id: Uuid::new_v4(),
+        reservation_id: Uuid::new_v4(),
+    });
+    hot.stop = Stop::Stopped {
+        receipt: common::profiled::artifact("stop", b"stop"),
+    };
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(json!(hot))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let held: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(held, "the stopped attempt must still hold its task");
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["server"]["running_agents"], 0, "{body}");
+    assert!(listed_agents(&body).is_empty(), "{body}");
+    assert_eq!(overview_running(&app).await, json!(0));
 }
 
 #[tokio::test]
