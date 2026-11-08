@@ -100,8 +100,10 @@ async fn retained_installation_json_bytes_refuse_new_grant_under_shared_budget()
     let c = setup().await;
     let pool = &c.case.env.env.pool;
     // Synthetic historical storage padding, deliberately not a usable receipt.
-    // Quotas must count all retained bytes, including unusable/corrupt history.
-    sqlx::query("INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) SELECT gen_random_uuid(),gen_random_uuid(),m.request_digest,m.node_id,m.boot_id,gen_random_uuid(),NULL,gen_random_uuid(),'synthetic-quota',1,'synthetic-quota','{}'::jsonb,md5(g::text)||md5((g+1000)::text),'expired',1,2 FROM admission_material_leases m CROSS JOIN generate_series(1,66) g WHERE m.lease_id=$1").bind(c.plan.materials[0].lease_id).execute(pool).await.unwrap();
+    // Quotas must count all live retained bytes, including unusable/corrupt history.
+    // Spec 0008: the padding leases are admitted for the fixture's live attempt, as in
+    // production; leases of settled attempts no longer count.
+    sqlx::query("INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) SELECT gen_random_uuid(),gen_random_uuid(),m.request_digest,m.node_id,m.boot_id,m.prospective_attempt_id,m.prospective_attempt_id,gen_random_uuid(),'synthetic-quota',1,'synthetic-quota','{}'::jsonb,md5(g::text)||md5((g+1000)::text),'admitted',1,2 FROM admission_material_leases m CROSS JOIN generate_series(1,66) g WHERE m.lease_id=$1").bind(c.plan.materials[0].lease_id).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO admission_material_receipts(lease_id,operation_id,receipt_digest,receipt) SELECT lease_id,operation_id,repeat('a',64),jsonb_build_object('synthetic_retained_padding',repeat('x',64000)) FROM admission_material_leases WHERE purpose='synthetic-quota'").execute(pool).await.unwrap();
     let bytes:i64=sqlx::query_scalar("SELECT sum(octet_length(r.receipt::text)) FROM admission_material_receipts r JOIN admission_material_leases m USING(lease_id) WHERE m.node_id=$1").bind(c.request.identity.node_id).fetch_one(pool).await.unwrap();
     assert!(bytes > 4194304);

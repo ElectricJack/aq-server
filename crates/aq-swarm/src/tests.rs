@@ -259,6 +259,7 @@ fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
         services: BTreeMap::new(),
         controls: BTreeMap::new(),
         agents: Vec::new(),
+        history: Vec::new(),
     }
 }
 fn extra(n: u128, measurement: Option<HoldCode>) -> NodeExtra {
@@ -632,5 +633,48 @@ fn busy_node_is_not_held_for_a_lapsed_capability_report() {
     assert_eq!(
         codes(&state("laptop").holding),
         vec![HoldCode::CapabilityExpired]
+    );
+}
+
+#[test]
+fn history_holds_join_the_node_and_the_waiting_reasons() {
+    use aq_history_caps::{Code, Hold, Scope};
+    let mut i = input(vec![node(1, "a", WorkerHealth::Online, Some(1), 0, vec![])]);
+    i.history = vec![
+        Hold {
+            code: Code::RateLimited,
+            kind: "offers".into(),
+            scope: Scope::Node(uid(1)),
+            bytes: false,
+            used: 30,
+            limit: 30,
+        },
+        Hold {
+            code: Code::CapReached,
+            kind: "admission_artifacts".into(),
+            scope: Scope::Project(uid(7)),
+            bytes: false,
+            used: 449,
+            limit: 512,
+        },
+    ];
+    let s = assemble(i).unwrap();
+    let n = &s.machines[0].nodes[0];
+    assert_eq!(codes(&n.holding), vec![HoldCode::HistoryRateLimited]);
+    assert_eq!(
+        n.holding[0].message,
+        "Offer rate limit reached: 30 offers in the last hour (limit 30)"
+    );
+    assert!(matches!(s.machines[0].state, MachineState::Holding));
+    assert!(
+        s.waiting
+            .reasons
+            .iter()
+            .any(|r| r.code == HoldCode::HistoryCapReached
+                && r.message
+                    == format!(
+                        "Project {}: live admission artifacts cap reached: 449 of 512",
+                        uid(7)
+                    ))
     );
 }

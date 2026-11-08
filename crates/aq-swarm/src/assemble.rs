@@ -156,6 +156,7 @@ pub struct SwarmInput {
     pub services: BTreeMap<Uuid, ServiceFact>,
     pub controls: BTreeMap<String, ControlFact>,
     pub agents: Vec<(Uuid, SessionSummary)>,
+    pub history: Vec<aq_history_caps::Hold>,
 }
 
 /// The reason copy for a code (message, remedy).
@@ -215,11 +216,33 @@ pub fn hold(code: HoldCode) -> HoldReason {
             "Every slot on an eligible machine is busy",
             Some("Wait for a running agent to finish, or add a machine"),
         ),
+        HistoryRateLimited => (
+            "Offer rate limit reached",
+            Some(
+                "Wait for the hour to pass; if this repeats, look for a task that fails in a loop",
+            ),
+        ),
+        HistoryCapReached => (
+            "Live history cap reached",
+            Some("Wait for running agents to settle"),
+        ),
     };
     HoldReason {
         code,
         message: message.into(),
         remedy: remedy.map(Into::into),
+    }
+}
+
+/// A spec 0008 history hold with its own counted message.
+pub fn history_reason(h: &aq_history_caps::Hold) -> HoldReason {
+    HoldReason {
+        code: match h.code {
+            aq_history_caps::Code::RateLimited => HoldCode::HistoryRateLimited,
+            aq_history_caps::Code::CapReached => HoldCode::HistoryCapReached,
+        },
+        message: h.message(),
+        remedy: Some(h.remedy().into()),
     }
 }
 
@@ -252,6 +275,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
         services,
         controls,
         agents,
+        history,
     } = input;
     let held: BTreeSet<&str> = extras
         .iter()
@@ -276,6 +300,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             })
             .unwrap_or_else(|| format!("node:{id}"));
         let mut codes: Vec<HoldCode> = Vec::new();
+        let mut node_history: Vec<HoldReason> = Vec::new();
         if n.health == WorkerHealth::Online {
             // Live acceptance D7: a service slot reports its capabilities once
             // per attempt, so the report lapses while its agent runs. A busy
@@ -290,6 +315,12 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
                 Some(ServiceState::Draining) => codes.push(HoldCode::WorkerDraining),
                 _ => {}
             }
+            node_history.extend(
+                history
+                    .iter()
+                    .filter(|h| h.scope == aq_history_caps::Scope::Node(id))
+                    .map(history_reason),
+            );
         }
         let agents = agents
             .iter()
@@ -323,7 +354,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
             agent_channel: ReportedState::Unreported,
             last_seen_at: n.last_seen_at.clone(),
             slots: n.slots.clone(),
-            holding: codes.into_iter().map(hold).collect(),
+            holding: codes.into_iter().map(hold).chain(node_history).collect(),
             agents,
         };
         built.push(Built { key, facts, node });
@@ -443,7 +474,13 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
     }
     out.sort_by(|a, b| (&a.label, &a.id).cmp(&(&b.label, &b.id)));
 
-    let reasons = waiting(&out);
+    let mut reasons = waiting(&out);
+    reasons.extend(
+        history
+            .iter()
+            .filter(|h| !matches!(h.scope, aq_history_caps::Scope::Node(_)))
+            .map(history_reason),
+    );
     Ok(Swarm {
         server,
         machines: out,

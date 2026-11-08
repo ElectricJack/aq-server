@@ -442,3 +442,107 @@ async fn assigned_native_http_ranges_require_exact_sealed_binding_and_live_offer
             .contains_key(artifact_api::RETENTION_HEADER)
     );
 }
+
+#[tokio::test]
+async fn orphaned_and_settled_artifacts_do_not_count_toward_the_project_cap() {
+    let f = fixture().await;
+    let project = f.selection.lineage.project_id;
+    let pool = f.db.pool().await;
+    let now = NOW as i64;
+    // 600 unlinked rows older than the 10-minute pending window: orphans.
+    let mut tx = crate::common::sealed::replica(&pool).await;
+    for _ in 0..600 {
+        crate::common::sealed::artifact(&mut tx, project, now - 700_000).await;
+    }
+    tx.commit().await.unwrap();
+    let retain = |name: &str| {
+        let a = artifact(name, b"x");
+        let state = f.state.clone();
+        async move {
+            artifacts::retain(
+                &state,
+                Retain {
+                    artifact_id: Uuid::new_v4(),
+                    project_id: project,
+                    owner: OwnerKind::GraphSnapshot,
+                    artifact: a,
+                    kind: ArtifactKind::Context,
+                    bytes: b"x",
+                    retain_until_ms: NOW + 60_000,
+                },
+            )
+            .await
+        }
+    };
+    retain("live-cap-context-1")
+        .await
+        .expect("orphans are not live");
+    // 511 pending rows plus the one just retained make 512 live rows.
+    let mut tx = crate::common::sealed::replica(&pool).await;
+    for _ in 0..511 {
+        crate::common::sealed::artifact(&mut tx, project, now - 1_000).await;
+    }
+    tx.commit().await.unwrap();
+    assert!(retain("live-cap-context-2").await.is_err());
+}
+
+#[tokio::test]
+async fn a_just_inserted_unlinked_export_is_written_with_its_time_and_counted_by_the_trigger() {
+    let f = fixture().await;
+    let project = f.selection.lineage.project_id;
+    let pool = f.db.pool().await;
+    let operation = Uuid::new_v4();
+    let request = serde_json::to_vec(
+        &json!({"schema_version":"1","operation_id":operation,"project_id":project}),
+    )
+    .unwrap();
+    let digest: String = sqlx::query_scalar("SELECT encode(sha256($1),'hex')")
+        .bind(&request)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    // The project's binding row (this fixture has none), then triggers and keys back on.
+    sqlx::query("SET session_replication_role='replica'")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}'::jsonb,1,'{}'::jsonb) ON CONFLICT DO NOTHING")
+        .bind(project).execute(&mut *conn).await.unwrap();
+    sqlx::query("SET session_replication_role='origin'")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    aq_history_caps::insert_export(
+        &mut conn,
+        (operation, project),
+        (&request, &digest),
+        (1_048_577, NOW as i64),
+    )
+    .await
+    .unwrap();
+    let stored: Option<i64> = sqlx::query_scalar(
+        "SELECT created_at_ms FROM profiled_source_exports WHERE operation_id=$1",
+    )
+    .bind(operation)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        Some(NOW as i64),
+        "written by the INSERT the trigger sees"
+    );
+    // Verified and not yet linked by any run: inside the window it still counts, after it does not.
+    sqlx::query("SET session_replication_role='replica'")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_source_exports SET state='verified',verified_bytes=$2,verified_digest=encode(sha256($2),'hex'),charged_bytes=5000 WHERE operation_id=$1")
+        .bind(operation).bind(b"{}".as_slice()).execute(&mut *conn).await.unwrap();
+    for (at, rows) in [(NOW as i64 + 1_000, 1), (NOW as i64 + 700_000, 0)] {
+        let u =
+            crate::common::sealed::usage(&pool, "source_exports", Some(project), at, None).await;
+        assert_eq!(u.2, rows, "at {at}");
+    }
+}

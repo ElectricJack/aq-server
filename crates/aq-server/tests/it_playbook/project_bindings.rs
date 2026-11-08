@@ -46,6 +46,54 @@ async fn missing_intelligence_registry_refuses_new_selection_and_offer_fence_exp
         "{error:?}"
     );
 }
+/// 1,024 retained decisions: unlinked and recent (pending, hence live), or linked to
+/// finished runs (settled).
+async fn fill_decisions(f: &SelectionFixture, live: bool) {
+    use crate::common::sealed;
+    let now = (f.env.state.clock)().timestamp_millis();
+    let (node, project) = (Uuid::new_v4(), f.lineage.project_id);
+    let mut tx = sealed::replica(&f.env.pool).await;
+    for _ in 0..1024 {
+        if live {
+            sealed::decision(&mut tx, now - 1_000).await;
+        } else {
+            let attempt = sealed::attempt(&mut tx, false, Some("finished")).await;
+            let decision = sealed::decision(&mut tx, now - 86_400_000).await;
+            sealed::offer(&mut tx, attempt, decision, node, project, now - 86_400_000).await;
+        }
+    }
+    tx.commit().await.unwrap();
+}
+async fn resolve_once(f: &SelectionFixture) -> Result<(), aq_server::error::AppError> {
+    use aq_server::intelligence::resolver::{self, ResolveRequest};
+    let request = ResolveRequest {
+        operation_id: Uuid::new_v4(),
+        lineage: f.lineage.clone(),
+        project: f.frozen.clone(),
+        compositions: f.input.compositions.clone(),
+        replacement: None,
+        record_refused: true,
+    };
+    resolver::resolve_trusted(&f.env.state, f.actor, request)
+        .await
+        .map(|_| ())
+}
+#[tokio::test]
+async fn live_decisions_at_1024_block_a_new_selection() {
+    let f = selection_fixture().await;
+    fill_decisions(&f, true).await;
+    let error = resolve_once(&f).await.unwrap_err();
+    assert!(
+        matches!(error, aq_server::error::AppError::Conflict(ref r) if r.contains("retention limit")),
+        "{error:?}"
+    );
+}
+#[tokio::test]
+async fn settled_decisions_at_1024_do_not_block_a_new_selection() {
+    let f = selection_fixture().await;
+    fill_decisions(&f, false).await;
+    resolve_once(&f).await.unwrap();
+}
 #[tokio::test]
 async fn revisioned_binding_replay_history_and_retained_snapshot_survive_updates() {
     let env = setup(false).await;

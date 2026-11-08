@@ -328,7 +328,9 @@ pub async fn reserve(
         if now == 0 || now < observation.observed_at_ms || now >= observation.expires_at_ms {
             return Err(unavailable());
         }
-        let used:i64=sqlx::query_scalar("SELECT (COALESCE((SELECT sum((manifest->>'manifest_bytes')::BIGINT+(manifest->>'bundle_bytes')::BIGINT) FROM source_transfers WHERE NOT staging_released),0)+COALESCE((SELECT sum(reserved_bytes) FROM source_bases),0)+COALESCE((SELECT sum(charged_bytes) FROM profiled_source_exports),0))::BIGINT").fetch_one(&mut *tx).await.map_err(database)?;
+        let used = aq_history_caps::staging_used(&mut tx, now as i64)
+            .await
+            .map_err(database)?;
         if used < 0
             || (used as u64)
                 .checked_add(reserved_bytes)
@@ -338,16 +340,19 @@ pub async fn reserve(
                 "source staging quota exhausted".into(),
             ));
         }
-        let capacity=sqlx::query("SELECT count(*) AS total_count,count(*) FILTER(WHERE project_id=$1) AS project_count,COALESCE(sum(octet_length(request_bytes)+COALESCE(octet_length(verified_bytes),4194304)),0)::BIGINT AS total_bytes,COALESCE(sum(octet_length(request_bytes)+COALESCE(octet_length(verified_bytes),4194304)) FILTER(WHERE project_id=$1),0)::BIGINT AS project_bytes FROM profiled_source_exports").bind(request.project_id).fetch_one(&mut *tx).await.map_err(database)?;
+        let kind = aq_history_caps::Kind::SourceExports;
+        let capacity = aq_history_caps::usage(&mut tx, kind, Some(request.project_id), now)
+            .await
+            .map_err(database)?;
         let incoming = request_bytes.len() as i64 + 4_194_304;
-        if capacity.get::<i64, _>("total_count") >= 4096
-            || capacity.get::<i64, _>("project_count") >= 256
+        if capacity.total_rows >= 4096
+            || capacity.scope_rows >= 256
             || capacity
-                .get::<i64, _>("total_bytes")
+                .total_bytes
                 .checked_add(incoming)
                 .is_none_or(|n| n > 268_435_456)
             || capacity
-                .get::<i64, _>("project_bytes")
+                .scope_bytes
                 .checked_add(incoming)
                 .is_none_or(|n| n > 67_108_864)
         {
@@ -355,7 +360,12 @@ pub async fn reserve(
                 "source export metadata quota exhausted".into(),
             ));
         }
-        sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) VALUES($1,$2,$3,$4,$5,$5,'pending')").bind(request.operation_id).bind(request.project_id).bind(&request_bytes).bind(request_digest.as_str()).bind(reserved_bytes as i64).execute(&mut *tx).await.map_err(database)?;
+        let ids = (request.operation_id, request.project_id);
+        let request = (&request_bytes[..], request_digest.as_str());
+        let reservation = (reserved_bytes as i64, now as i64);
+        aq_history_caps::insert_export(&mut tx, ids, request, reservation)
+            .await
+            .map_err(database)?;
         reserved_bytes
     };
     tx.commit().await.map_err(database)?;

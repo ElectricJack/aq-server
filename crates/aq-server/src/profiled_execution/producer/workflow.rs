@@ -400,15 +400,34 @@ async fn offers(
     if busy {
         return Ok(page);
     }
+    // Spec 0008: one grouped read. A node or server hold ends the poll before any write;
+    // a project hold drops that project from the candidates (it is never charged a turn).
     let config = state
         .config
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
+    let staging = (state.source_retention.as_ref())
+        .map(|r| (r.config.max_staging_bytes, r.config.max_bundle_bytes));
+    let mut conn = state.store.pool.acquire().await.map_err(|_| refused())?;
+    let gate = aq_history_caps::poll_gate(
+        &mut conn,
+        auth.id(),
+        &config.enabled_projects(),
+        now(state)?,
+        staging,
+    )
+    .await
+    .map_err(|_| refused())?;
+    drop(conn);
+    if let Some(h) = &gate.stop {
+        tracing::info!(node_id = %auth.id(), "{}; no new offers", h.log_line());
+        return Ok(page);
+    }
     let candidates = config
         .projects
         .iter()
-        .filter(|p| p.enabled)
+        .filter(|p| p.enabled && !gate.is_held(p.project_id))
         .map(|p| fairness::Candidate {
             project_id: p.project_id,
             priority: p.priority,
@@ -416,9 +435,13 @@ async fn offers(
         .collect::<Vec<_>>();
     let graph = state.agent_access.as_ref().ok_or_else(|| refused())?;
     let polled_at = now(state)?;
-    let recorded = on_heap(|| fairness::recorded(&state.store.pool)).await?;
+    let recorded = on_heap(|| fairness::recorded(&state.store.pool))
+        .await
+        .map_err(db)?;
     let served = if recorded {
-        on_heap(|| fairness::served(&state.store.pool)).await?
+        on_heap(|| fairness::served(&state.store.pool))
+            .await
+            .map_err(db)?
     } else {
         Default::default()
     };
@@ -444,7 +467,8 @@ async fn offers(
                 .ok_or_else(|| refused())?;
             if recorded {
                 on_heap(|| fairness::record(&state.store.pool, policy.project_id, polled_at))
-                    .await?;
+                    .await
+                    .map_err(db)?;
             }
             let record =
                 on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;

@@ -132,7 +132,12 @@ unreported or expired, node spend ceiling, unaccounted spend, disk pressure, a
 missing or expired context measurement for a natively registered node, and
 `worker_stopped` or `worker_draining` from the worker service state. Offline and
 revoked workers show as state, and a full concurrency ceiling shows as no free
-slots, so neither appears as a hold. A node's `slots.total` is absent when the
+slots, so neither appears as a hold.
+`history_rate_limited` and `history_cap_reached` (spec 0008) say that the offer rate
+(30 an hour per node, 240 per project, 960 in all), the inventory report rate, or a
+live sealed-history cap holds new offers. On a node they apply to that node; in
+`waiting.reasons`, a message starting `Project <id>:` applies to one project and one
+starting `Server:` to all. A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
 reserved for placement and are not produced yet. Each `agents` entry is a running

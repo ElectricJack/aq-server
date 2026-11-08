@@ -215,7 +215,8 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
         .execute(&mut *occupied)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT gen_random_uuid(),$1 FROM generate_series(1,16)").bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
+    // Spec 0008: capacity counts live attempts only, so the occupants hold their tasks.
+    sqlx::query("WITH a AS (INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),TRUE,'{}'::jsonb FROM generate_series(1,16) RETURNING attempt_id) INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT attempt_id,$1 FROM a").bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
     occupied.commit().await.unwrap();
     let result = phase_execution::prepare(
         &f.c.env.env.state,
@@ -231,6 +232,54 @@ async fn actual_grant_cannot_commit_without_reserved_terminal_capacity() {
     fixture::assert_unissued(&f.c).await;
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_phase_terminal_capacity),(SELECT count(*) FROM profiled_owner_journals WHERE phase<>'reserved')").fetch_one(pool).await.unwrap();
     assert_eq!(counts, (16, 0));
+}
+
+/// Occupies `n` terminal reservations of the node, with attempts that hold their task
+/// (`live`) or are released and finished, then asks the actual phase owner for a grant
+/// on the current store (the frozen 32 fixture lacks tables the grant path reads today).
+/// Returns whether the grant was issued and how many reservations exist afterwards.
+async fn grant_with_occupants(n: i64, live: bool) -> (bool, i64) {
+    let f = prepared(true).await;
+    let pool = &f.c.env.env.pool;
+    let (holds, state) = if live {
+        ("TRUE", "{}")
+    } else {
+        ("FALSE", r#"{"status":"finished"}"#)
+    };
+    let mut occupied = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role='replica'")
+        .execute(&mut *occupied)
+        .await
+        .unwrap();
+    sqlx::query(&format!("WITH a AS (INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),{holds},'{state}'::jsonb FROM generate_series(1,{n}) RETURNING attempt_id) INSERT INTO profiled_phase_terminal_capacity(attempt_id,node_id) SELECT attempt_id,$1 FROM a")).bind(f.prepared.original.identity.node_id).execute(&mut *occupied).await.unwrap();
+    occupied.commit().await.unwrap();
+    let result = phase_execution::prepare(
+        &f.c.env.env.state,
+        &auth(&f.c).await,
+        &f.prepared,
+        Uuid::new_v4(),
+    )
+    .await;
+    let count = sqlx::query_scalar("SELECT count(*) FROM profiled_phase_terminal_capacity")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    (result.is_ok(), count)
+}
+
+#[tokio::test]
+async fn live_terminal_capacity_allows_the_sixteenth_reservation() {
+    assert_eq!(grant_with_occupants(15, true).await, (true, 16));
+}
+
+#[tokio::test]
+async fn live_terminal_capacity_refuses_the_seventeenth_reservation() {
+    assert_eq!(grant_with_occupants(16, true).await, (false, 16));
+}
+
+#[tokio::test]
+async fn settled_terminal_capacity_does_not_block_a_new_grant() {
+    assert_eq!(grant_with_occupants(16, false).await, (true, 17));
 }
 
 #[path = "schema33_phase_terminal/legacy_parent.rs"]

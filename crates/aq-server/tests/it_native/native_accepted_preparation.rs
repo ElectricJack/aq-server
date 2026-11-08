@@ -464,6 +464,56 @@ async fn fill_retained_quota(c: &Case) {
     // Finite retained synthetic historical payloads; no fabricated live authority.
     sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) SELECT $1,md5(n::text)::uuid,'cancel',repeat('a',64),jsonb_build_object('retained_history',repeat('x',262000)) FROM generate_series(1,16) n").bind(c.request.identity.node_id).execute(&c.env.env.pool).await.unwrap();
 }
+/// 256 retained proposals of the node, written with triggers off: attempts that hold
+/// their task (`live`) or are released and finished.
+async fn fill_proposals(c: &Case, node: Uuid, live: bool) {
+    let mut tx = crate::common::sealed::replica(&c.env.env.pool).await;
+    for _ in 0..256 {
+        let attempt = if live {
+            crate::common::sealed::attempt(&mut tx, true, None).await
+        } else {
+            crate::common::sealed::attempt(&mut tx, false, Some("finished")).await
+        };
+        crate::common::sealed::proposal(&mut tx, attempt, node).await;
+    }
+    tx.commit().await.unwrap();
+}
+/// A published offer and the Proposal request for it, before any Proposal exists.
+async fn offered() -> (Case, ProposalRequest) {
+    let mut c = native_offer::setup().await;
+    configure(&mut c).await;
+    let (status, body) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let offer = page.offers.remove(0);
+    let negotiation = phase::Negotiation {
+        contract: phase::contract_artifact().unwrap(),
+        features: phase::required_features(),
+    };
+    let q = ProposalRequest {
+        identity: c.request.identity.clone(),
+        binding: offer.offered.offer.binding.clone(),
+        negotiation,
+    };
+    (c, q)
+}
+#[tokio::test]
+async fn live_proposals_at_the_cap_block_a_new_proposal() {
+    let (c, q) = offered().await;
+    fill_proposals(&c, q.identity.node_id, true).await;
+    let proposed = owner::propose(&c.env.env.state, &auth(&c).await, &q).await;
+    assert!(proposed.is_err());
+}
+#[tokio::test]
+async fn settled_proposals_at_the_cap_do_not_block_a_new_proposal() {
+    let (c, q) = offered().await;
+    fill_proposals(&c, q.identity.node_id, false).await;
+    let proposed = owner::propose(&c.env.env.state, &auth(&c).await, &q).await;
+    assert!(proposed.is_ok(), "{proposed:?}");
+}
 #[tokio::test]
 async fn shared_bytes_quota_rolls_back_new_accept_but_never_forgets_exact_replay() {
     let (c, _, q) = setup().await;
