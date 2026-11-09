@@ -147,6 +147,8 @@ Each finding gives what happened, how it was handled, and what v2 should do diff
 
 | W89 | **A registered project is not yet a working project.** The owner asked to add AQ v2's own six repositories and begin self-improvement. The live stack could register paused bindings and separate task graphs, but its execution catalog and source policy were configured for the scratch repository. The convenience CLI onboarding command is a placeholder, aq-server's `.gitattributes` is rejected by the checkout profile, and automatic PR publication is held as unsupported. A successful project-list response therefore cannot establish self-hosting readiness. **v2:** distinguish registration from execution activation, keep unqualified projects paused, and prove one real task from source checkout through checks and reviewable delivery before calling a project usable. Address blockers to that workflow before expanding swarm infrastructure. **New.** |
 
+| W90 | **A technically complete editor can still miss the operator’s workflow.** The first v2 intelligence editor exposed profile details through a card/form. The owner needed repeated per-provider model and effort edits, spreadsheet rows, Add row, and separate Settings tabs. Reworking the interface immediately made that intended workflow concrete. **v2:** establish the everyday edit sequence and visible controls before building a general configuration form; backend completion alone does not establish MVP usability. **New.** |
+
 ## Proposed new v2 work
 
 These items had no owner in the plan (marked **new** above). Each is a candidate task:
