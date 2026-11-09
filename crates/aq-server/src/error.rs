@@ -7,7 +7,7 @@ use aq_protocol::{
     UPDATES_UNAVAILABLE,
 };
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::identity::IdentityError;
@@ -45,6 +45,8 @@ pub enum AppError {
     Maintenance(String),
     UpdatesUnavailable(String),
     InvalidVersion(String),
+    /// A row lock timed out or deadlocked (55P03, 40P01, 40001): 503 with `Retry-After`.
+    Busy,
     Internal,
 }
 
@@ -67,7 +69,7 @@ impl AppError {
             }
             AppError::EnrollmentInvalid => StatusCode::BAD_REQUEST,
             AppError::UpdateInProgress(_) => StatusCode::CONFLICT,
-            AppError::Maintenance(_) | AppError::UpdatesUnavailable(_) => {
+            AppError::Maintenance(_) | AppError::UpdatesUnavailable(_) | AppError::Busy => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             AppError::InvalidVersion(_) => StatusCode::BAD_REQUEST,
@@ -114,6 +116,7 @@ impl AppError {
             AppError::Maintenance(m) => (MAINTENANCE, m.clone()),
             AppError::UpdatesUnavailable(m) => (UPDATES_UNAVAILABLE, m.clone()),
             AppError::InvalidVersion(m) => (INVALID_VERSION, m.clone()),
+            AppError::Busy => ("overloaded", "row lock contended; retry the same operation".into()),
             AppError::Internal => (INTERNAL, "internal server error".to_string()),
         };
         ApiError {
@@ -138,6 +141,9 @@ impl IntoResponse for AppError {
         };
         tracing::warn!(status=context.status, code=%context.code, "API request refused");
         let mut response = (self.status(), Json(body)).into_response();
+        if matches!(self, AppError::Busy) {
+            (response.headers_mut()).insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
         response.extensions_mut().insert(context);
         response
     }
@@ -162,18 +168,34 @@ impl From<IdentityError> for AppError {
     }
 }
 
+/// A database failure: `Busy` when it is row-lock contention, else `Internal`.
+pub fn db(e: sqlx::Error) -> AppError {
+    if aq_machine_control::is_contention(&e) {
+        return AppError::Busy;
+    }
+    tracing::warn!(error = %e, "database error");
+    AppError::Internal
+}
 impl From<aq_machine_control::Error> for AppError {
     fn from(error: aq_machine_control::Error) -> Self {
+        if let aq_machine_control::Error::Db(e) = error {
+            return db(e);
+        }
         tracing::warn!(%error, "machine control store error");
         AppError::Internal
     }
 }
 impl From<StoreError> for AppError {
     fn from(e: StoreError) -> Self {
-        if matches!(e, StoreError::EmailTaken) {
-            return AppError::Conflict("a user with that email already exists".to_string());
+        match e {
+            StoreError::EmailTaken => {
+                AppError::Conflict("a user with that email already exists".to_string())
+            }
+            StoreError::Database(e) => db(e),
+            e => {
+                tracing::error!(error = %e, "store error");
+                AppError::Internal
+            }
         }
-        tracing::error!(error = %e, "store error");
-        AppError::Internal
     }
 }

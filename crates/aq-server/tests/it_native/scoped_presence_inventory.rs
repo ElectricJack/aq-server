@@ -274,3 +274,151 @@ async fn snapshot_row_lock_timeout_is_retryable_not_internal() {
     holder.rollback().await.unwrap();
     record(&c, &next).await;
 }
+
+/// Posts `r` to the worker's inventory-v2 route: (status, Retry-After, body).
+async fn post_inventory(c: &Case, r: &InventoryV2) -> (u16, Option<String>, Value) {
+    let env = &c.c.env.env;
+    let path = "/v1/worker/profiled/inventory-v2";
+    let bytes = serde_json::to_vec(r).unwrap();
+    let response = common::native_offer::post(&env.state, &env.credential, path, bytes).await;
+    let status = response.status().as_u16();
+    let after = response.headers().get("retry-after");
+    let after = after.map(|v| v.to_str().unwrap().to_owned());
+    let body = axum::body::to_bytes(response.into_body(), 65_536).await;
+    (
+        status,
+        after,
+        serde_json::from_slice(&body.unwrap()).unwrap_or(Value::Null),
+    )
+}
+fn next_inventory(r: &InventoryV2) -> InventoryV2 {
+    let mut next = r.clone();
+    next.operation_id = Uuid::new_v4();
+    next.sequence += 1;
+    next
+}
+/// Holds `sql` (a row lock on `id`) in an open transaction until it is dropped.
+async fn hold(c: &Case, sql: &str, id: Uuid) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut tx = c.c.env.env.pool.begin().await.unwrap();
+    sqlx::query(sql).bind(id).execute(&mut *tx).await.unwrap();
+    tx
+}
+const NODE_LOCK: &str = "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE";
+
+/// M1/M6: a lock timeout on a worker endpoint is a retryable 503 with
+/// `Retry-After`, never a 500. While another transaction holds the node row,
+/// inventory-v2's 150 ms node lock times out (55P03); once it is released the
+/// same request records.
+#[tokio::test]
+async fn inventory_v2_node_lock_timeout_is_a_retryable_503() {
+    let c = setup().await;
+    let node = c.request.identity.node_id;
+    let held = hold(&c, NODE_LOCK, node).await;
+    let (status, after, body) = post_inventory(&c, &c.request).await;
+    assert_eq!((status, after.as_deref()), (503, Some("1")), "{body}");
+    assert_eq!(body["error"], "overloaded", "{body}");
+    drop(held);
+    let (status, after, body) = post_inventory(&c, &c.request).await;
+    assert_eq!((status, after), (200, None), "{body}");
+    serde_json::from_value::<InventoryReceipt>(body)
+        .unwrap()
+        .validate_for(&c.request)
+        .unwrap();
+}
+
+/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
+/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
+/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
+/// kept it while it waited on the attempt row, so inventory-v2's node lock
+/// timed out. Here a worker write holds the attempt row while the read loops.
+/// A locking reader (the old read's loader) still fails the write; the Swarm
+/// read takes no row lock, so every write records and every read answers.
+#[tokio::test]
+async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
+    let mut c = setup().await;
+    let (status, _, body) = post_inventory(&c, &c.request).await;
+    assert_eq!(status, 200, "{body}");
+    c.c.request.inventory_sequence = c.request.sequence;
+    let (status, body) = common::native_offer::poll(&c.c).await;
+    assert_eq!(status, 200, "{body}");
+    let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
+    let node = c.request.identity.node_id;
+    let attempt: Uuid = sqlx::query_scalar(
+        "SELECT attempt_id FROM execution_attempts WHERE node_id=$1 AND holds_task",
+    )
+    .bind(node)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let app = aq_server::build_admin_router(state.clone());
+    let (status, body) =
+        common::selection::call(&app, "/api/v1/swarm", None, "owner@localhost").await;
+    assert_eq!(status, 200, "{body}");
+    let held = hold(
+        &c,
+        "SELECT 1 FROM execution_attempts WHERE attempt_id=$1 FOR UPDATE",
+        attempt,
+    )
+    .await;
+
+    // Failure case: a reader that locks the node row first (the old read).
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let locking = tokio::spawn({
+        let (state, pool, stop) = (state.clone(), pool.clone(), stop.clone());
+        async move {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let mut tx = pool.begin().await.unwrap();
+                sqlx::query("SET LOCAL lock_timeout='250ms'")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                let policy = aq_server::execution::authority::Policy::IdentityOnly;
+                let read = aq_server::execution::authority::load_attempt_locked(
+                    &state, &mut tx, node, attempt, policy,
+                );
+                assert!(
+                    read.await.is_err(),
+                    "the held attempt row times the locking read out"
+                );
+            }
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let mut request = next_inventory(&c.request);
+    let (status, after, body) = post_inventory(&c, &request).await;
+    assert_eq!((status, after.as_deref()), (503, Some("1")), "{body}");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    locking.await.unwrap();
+
+    // Success case: the Swarm read loops on the same node and attempt.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = tokio::spawn({
+        let (app, stop) = (app.clone(), stop.clone());
+        async move {
+            let mut statuses = vec![];
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let (status, body) =
+                    common::selection::call(&app, "/api/v1/swarm", None, "owner@localhost").await;
+                statuses.push((
+                    status.as_u16(),
+                    body["data"]["server"]["running_agents"].clone(),
+                ));
+            }
+            statuses
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    for _ in 0..5 {
+        request = next_inventory(&request);
+        let (status, _, body) = post_inventory(&c, &request).await;
+        assert_eq!(status, 200, "{body}");
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let reads = reader.await.unwrap();
+    drop(held);
+    assert!(
+        reads.len() >= 2,
+        "the read looped while the writes ran: {reads:?}"
+    );
+    assert!(reads.iter().all(|r| *r == (200, json!(0))), "{reads:?}");
+}

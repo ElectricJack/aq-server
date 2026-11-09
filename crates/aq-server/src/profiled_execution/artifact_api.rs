@@ -29,9 +29,7 @@ fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("artifact is not currently available to this assignment".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 pub fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/worker/profiled/artifact", post(fetch))

@@ -15,9 +15,7 @@ pub(crate) fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Forbidden("delegated permit scope or authority unavailable; stop and preserve".into())
 }
-pub(crate) fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+pub(crate) use crate::error::db;
 pub(crate) fn now(state: &AppState) -> Result<u64, AppError> {
     u64::try_from((state.clock)().timestamp_millis()).map_err(|_| refused())
 }

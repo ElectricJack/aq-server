@@ -224,6 +224,7 @@ pub fn project(
         effects: Some(state.effects),
         release_ready,
         retention_released: release_ready,
+        rows: super::Rows::Lock,
     })
 }
 
@@ -236,6 +237,7 @@ pub(super) async fn load_adopted_locked(
     node: Uuid,
     attempt_id: Uuid,
     policy: super::Policy,
+    rows: super::Rows,
 ) -> super::Result<Option<super::AuthorityView>> {
     use super::{
         AuthorityError, Policy,
@@ -246,23 +248,15 @@ pub(super) async fn load_adopted_locked(
     if node.is_nil() || attempt_id.is_nil() {
         return Err(AuthorityError::Identity);
     }
-    let revoked: bool =
-        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR UPDATE")
-            .bind(node)
-            .fetch_optional(&mut **tx)
-            .await?
-            .ok_or(AuthorityError::NotFound)?;
-    if revoked && !matches!(policy, Policy::TerminalHistorical | Policy::IdentityOnly) {
-        return Err(AuthorityError::Revoked);
-    }
-    let common=sqlx::query("SELECT kind,task_id,offer_id,session_id,execution_deadline_ms,holds_task FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 FOR UPDATE")
+    let revoked = super::node_revoked(tx, node, policy, rows).await?;
+    let common=sqlx::query(&rows.sql("SELECT kind,task_id,offer_id,session_id,execution_deadline_ms,holds_task FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2", "FOR UPDATE"))
         .bind(attempt_id).bind(node).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::NotFound)?;
     if common.get::<String, _>("kind") != "profiled_v1" {
         return Ok(None);
     }
     // Cache hits fetch only immutable identity/digest columns, never launch,
     // selection, spec or historical-state JSON. All joined rows have SQL guards.
-    let Some(row)=sqlx::query("SELECT h.state,h.record_revision,h.authority_revision,h.grant_revision,l.decision_id,l.source_observation_id,l.execution_spec_digest,l.manifest_digest,s.selection_digest FROM profiled_authority_hot h JOIN profiled_launches l ON l.attempt_id=h.attempt_id JOIN intelligence_attempt_selections s ON s.attempt_id=h.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE h.attempt_id=$1 FOR UPDATE OF h FOR SHARE OF l,s,d")
+    let Some(row)=sqlx::query(&rows.sql("SELECT h.state,h.record_revision,h.authority_revision,h.grant_revision,l.decision_id,l.source_observation_id,l.execution_spec_digest,l.manifest_digest,s.selection_digest FROM profiled_authority_hot h JOIN profiled_launches l ON l.attempt_id=h.attempt_id JOIN intelligence_attempt_selections s ON s.attempt_id=h.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE h.attempt_id=$1", "FOR UPDATE OF h FOR SHARE OF l,s,d"))
         .bind(attempt_id).fetch_optional(&mut **tx).await? else {return Ok(None);};
     let digest = |field: &str| -> super::Result<Digest> {
         serde_json::from_value(serde_json::Value::String(row.get(field)))
@@ -300,6 +294,7 @@ pub(super) async fn load_adopted_locked(
             common.get("execution_deadline_ms"),
             common.get("holds_task"),
             revoked,
+            rows,
         )
         .await?;
         if verified.selection_digest.as_ref() != Some(&key.selection_digest)

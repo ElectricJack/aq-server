@@ -45,9 +45,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, AppError>;
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn bad(s: &str) -> AppError {
     AppError::BadRequest(s.into())
 }

@@ -61,17 +61,11 @@ async fn read_inner(
 ) -> Result<TailReply> {
     let config = configured(state)?;
     let terminal = identity(state, id).await?;
-    let mut tx = persistence::begin(state).await?;
-    // N-01: a ~5/s tail poll shares the node lock with its own info/watch reads
-    // and overview/result reads. Wait for it within the 3 s read deadline
-    // instead of failing at the pool's 100 ms lock timeout.
-    sqlx::query(
-        "SELECT set_config('lock_timeout','1s',true),set_config('statement_timeout','2s',true)",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
-    let view = authority::load_locked(
+    let mut tx = persistence::begin_read(state).await?;
+    // N-01, M1: a ~5/s tail poll is a snapshot read and waits on no row lock.
+    let sql = "SELECT set_config('statement_timeout','2s',true)";
+    (sqlx::query(sql).execute(&mut *tx).await).map_err(|_| AppError::Internal)?;
+    let view = authority::read(
         state,
         &mut tx,
         &terminal.session,
@@ -100,16 +94,15 @@ async fn read_inner(
         query.after_sequence,
         checked_at,
     )?;
-    let active =
-        match authority::load_locked(state, &mut tx, &terminal.session, Policy::TerminalActive)
-            .await
-        {
-            Ok(_) => true,
-            Err(
-                authority::AuthorityError::Database(_) | authority::AuthorityError::InvalidState,
-            ) => return Err(AppError::Internal),
-            Err(_) => false,
-        };
+    let active = match authority::read(state, &mut tx, &terminal.session, Policy::TerminalActive)
+        .await
+    {
+        Ok(_) => true,
+        Err(authority::AuthorityError::Database(_) | authority::AuthorityError::InvalidState) => {
+            return Err(AppError::Internal);
+        }
+        Err(_) => false,
+    };
     let before_commit = now(state);
     if before_commit < checked_at
         || before_commit >= access.valid_until_ms

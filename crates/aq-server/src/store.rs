@@ -439,6 +439,32 @@ pub struct Store {
     pub(crate) recovery_test: std::sync::Arc<crate::execution::testing::Controls>,
 }
 
+/// A small pool over `pool`'s server whose sessions set their statement and lock
+/// timeouts; a named pool also ends transactions left idle for 2 s.
+fn timed(
+    pool: &PgPool,
+    max: u32,
+    acquire: Duration,
+    statement: &'static str,
+    lock: &'static str,
+    name: Option<&'static str>,
+) -> PgPool {
+    let options = pool.connect_options().as_ref().clone();
+    let options = name.map_or(options.clone(), |n| options.application_name(n));
+    let idle = if name.is_some() { "2s" } else { "0" };
+    PgPoolOptions::new()
+        .max_connections(max)
+        .acquire_timeout(acquire)
+        .after_connect(move |connection, _| {
+            Box::pin(async move {
+                let sql = "SELECT set_config('statement_timeout',$1,false),set_config('lock_timeout',$2,false),set_config('idle_in_transaction_session_timeout',$3,false)";
+                let set = sqlx::query(sql).bind(statement).bind(lock).bind(idle);
+                set.execute(&mut *connection).await.map(|_| ())
+            })
+        })
+        .connect_lazy_with(options)
+}
+
 impl Store {
     /// Terminal authentication and data use independent connections; never the
     /// execution renewal/cancellation pool. Held polls release SQL before wait.
@@ -589,129 +615,35 @@ impl Store {
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(2))
             .connect_lazy_with(pool.connect_options().as_ref().clone());
-        let renewal_pool = PgPoolOptions::new()
-            .max_connections(2)
-            .acquire_timeout(Duration::from_millis(250))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='750ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='150ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET idle_in_transaction_session_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(
-                pool.connect_options()
-                    .as_ref()
-                    .clone()
-                    .application_name("aq-native-renewal"),
-            );
-        let presence_pool = PgPoolOptions::new()
-            .max_connections(2)
-            .acquire_timeout(Duration::from_millis(250))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='750ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='150ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET idle_in_transaction_session_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(
-                pool.connect_options()
-                    .as_ref()
-                    .clone()
-                    .application_name("aq-material-presence"),
-            );
-        let notification_pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(Duration::from_secs(2))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='3s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(pool.connect_options().as_ref().clone());
-        let observation_pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(Duration::from_secs(2))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='3s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(pool.connect_options().as_ref().clone());
-        let terminal_pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(Duration::from_secs(1))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='750ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='100ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET idle_in_transaction_session_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(
-                pool.connect_options()
-                    .as_ref()
-                    .clone()
-                    .application_name("aq-terminal"),
-            );
+        let ms = Duration::from_millis;
+        let renewal_pool = timed(
+            &pool,
+            2,
+            ms(250),
+            "750ms",
+            "150ms",
+            Some("aq-native-renewal"),
+        );
+        let presence_pool = timed(
+            &pool,
+            2,
+            ms(250),
+            "750ms",
+            "150ms",
+            Some("aq-material-presence"),
+        );
+        let notification_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
+        let observation_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
+        let terminal_pool = timed(&pool, 4, ms(1000), "750ms", "100ms", Some("aq-terminal"));
         // Human tail/info/output reads and worker uploads (QA N-01: 2 was too few).
-        let terminal_data_pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(Duration::from_secs(1))
-            .after_connect(|connection, _| {
-                Box::pin(async move {
-                    sqlx::query("SET statement_timeout='750ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET lock_timeout='100ms'")
-                        .execute(&mut *connection)
-                        .await?;
-                    sqlx::query("SET idle_in_transaction_session_timeout='2s'")
-                        .execute(&mut *connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect_lazy_with(
-                pool.connect_options()
-                    .as_ref()
-                    .clone()
-                    .application_name("aq-terminal-data"),
-            );
+        let terminal_data_pool = timed(
+            &pool,
+            4,
+            ms(1000),
+            "750ms",
+            "100ms",
+            Some("aq-terminal-data"),
+        );
         Ok(Store {
             #[cfg(feature = "test-support")]
             fixture_profile: None,

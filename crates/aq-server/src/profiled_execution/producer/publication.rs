@@ -11,10 +11,8 @@ use crate::{
 use aq_admission::startup::NativeOffer;
 use aq_selection::ExecutionTarget;
 
+use crate::error::db;
 use uuid::Uuid;
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
 pub async fn publish(
     state: &AppState,
     auth: &AuthenticatedNode,

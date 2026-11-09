@@ -10,7 +10,7 @@ use aq_worker_protocol::*;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, FromRequest, Path, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -21,6 +21,10 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (code, message) = match self {
             Self::Refused(code, message) => (code, message),
+            Self::Database(e) if aq_machine_control::is_contention(&e) => (
+                ErrorCode::Overloaded,
+                "row lock contended; retry the same operation",
+            ),
             other => {
                 tracing::error!(error=%other, "execution storage failure");
                 (ErrorCode::Internal, "execution storage failure")
@@ -35,7 +39,7 @@ impl IntoResponse for Error {
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
         };
-        (
+        let response = (
             status,
             Json(ProtocolError {
                 code,
@@ -43,8 +47,9 @@ impl IntoResponse for Error {
                 retryable: matches!(code, ErrorCode::Overloaded | ErrorCode::Internal),
                 operation_id: None,
             }),
-        )
-            .into_response()
+        );
+        let retry = (code == ErrorCode::Overloaded).then_some([(header::RETRY_AFTER, "1")]);
+        (retry, response).into_response()
     }
 }
 

@@ -26,9 +26,7 @@ fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("accepted preparation v2 is not currently available".into())
 }
-pub(super) fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+pub(super) use crate::error::db;
 pub(super) fn now(state: &AppState) -> Result<u64, AppError> {
     u64::try_from((state.clock)().timestamp_millis())
         .ok()

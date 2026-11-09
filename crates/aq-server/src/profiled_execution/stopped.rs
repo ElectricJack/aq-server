@@ -19,9 +19,7 @@ use sqlx::Row;
 fn conflict() -> AppError {
     AppError::Conflict("stopped evidence conflicts with original launch owner".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
     let mut value = serde_json::to_value(value).map_err(|_| AppError::Internal)?;
     value.sort_all_objects();

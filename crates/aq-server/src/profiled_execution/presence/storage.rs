@@ -25,12 +25,11 @@ pub(super) struct Head {
 }
 /// Lock and statement timeouts are retryable (503); anything else is a logged 500.
 pub(super) fn db(e: sqlx::Error) -> AppError {
-    if e.as_database_error().is_some_and(|e| {
-        matches!(
-            e.code().as_deref(),
-            Some("54000" | "55P03" | "57014" | "40001")
-        )
-    }) {
+    if aq_machine_control::is_contention(&e) {
+        AppError::Busy
+    } else if (e.as_database_error())
+        .is_some_and(|e| matches!(e.code().as_deref(), Some("54000" | "57014")))
+    {
         unavailable()
     } else {
         tracing::warn!(error = %e, "scoped presence store error");

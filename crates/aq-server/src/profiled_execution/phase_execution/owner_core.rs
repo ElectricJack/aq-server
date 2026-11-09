@@ -7,9 +7,7 @@ fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("phase execution authority is not currently available".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn execution_clock(
     time: u64,
     expiry: u64,

@@ -770,3 +770,306 @@ async fn migrated(db: &TestDb) -> PgPool {
     db.store().await;
     db.pool().await
 }
+
+/// The migrated database through a pool wide enough for a holder, the action
+/// under test and a probe at once.
+async fn wide(db: &TestDb) -> PgPool {
+    let options = migrated(db).await.connect_options().as_ref().clone();
+    let wide = sqlx::postgres::PgPoolOptions::new().max_connections(8);
+    wide.connect_with(options).await.unwrap()
+}
+
+/// A machine "desk" of `n` live nodes whose ids ascend while their heap order
+/// descends (the highest id is inserted first). Returns the ids ascending.
+async fn reversed_machine(pool: &PgPool, n: u128) -> Vec<Uuid> {
+    let ids: Vec<Uuid> = (1..=n).map(|i| Uuid::from_u128(i << 64)).collect();
+    for (slot, id) in ids.iter().enumerate().rev() {
+        sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,$2,$3,'0.1.0',1,$4,'desk',$5)")
+            .bind(id).bind(format!("desk-{}", slot + 1)).bind(format!("hash-{id}")).bind(now()).bind(slot as i32 + 1)
+            .execute(pool).await.unwrap();
+    }
+    ids
+}
+
+/// The owner actions that lock several node rows, and the touch they replaced.
+#[derive(Debug, Clone, Copy)]
+enum Locker {
+    UnorderedTouch,
+    Switch,
+    Stop,
+    Revoke,
+}
+async fn act(c: &mut sqlx::PgConnection, locker: Locker, who: Uuid) -> Result<(), Error> {
+    let op = Uuid::new_v4();
+    match locker {
+        Locker::UnorderedTouch => {
+            let touch = "UPDATE nodes SET machine_key=machine_key WHERE revoked_at IS NULL";
+            sqlx::query(touch).execute(c).await.map(|_| ())?
+        }
+        Locker::Switch => mc::set_owner_availability(c, true, 1, who, op, now())
+            .await
+            .map(|_| ())?,
+        Locker::Stop => {
+            let stopped = DesiredState::Stopped;
+            mc::set_desired(&mut *c, "desk", stopped, 1, who, op, now()).await?;
+            mc::request_handoffs(c, "desk", now()).await.map(|_| ())?
+        }
+        Locker::Revoke => mc::revoke_machine(c, "desk", now()).await.map(|_| ())?,
+    }
+    Ok(())
+}
+
+/// Runs `locker` in its own transaction while another holds the lowest node's
+/// row, waits until it blocks, and reports whether the highest node's row was
+/// still free (an id-ordered locker holds nothing while it waits on the
+/// lowest). The action then commits once the holder lets go.
+async fn locks_lowest_first(pool: &PgPool, ids: &[Uuid], locker: Locker, who: Uuid) -> bool {
+    let (low, high) = (ids[0], *ids.last().unwrap());
+    let mut holder = pool.begin().await.unwrap();
+    let lock = "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE";
+    sqlx::query(lock)
+        .bind(low)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let run = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            act(&mut tx, locker, who).await?;
+            tx.commit().await.map_err(Error::from)
+        }
+    });
+    let waiting = "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'";
+    for _ in 0..200 {
+        let n: i64 = sqlx::query_scalar(waiting).fetch_one(pool).await.unwrap();
+        if n > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!run.is_finished(), "{locker:?} waits for the lowest node");
+    let mut probe = pool.begin().await.unwrap();
+    let free = sqlx::query(&format!("{lock} NOWAIT"))
+        .bind(high)
+        .execute(&mut *probe)
+        .await;
+    if let Err(e) = &free {
+        assert!(mc::is_lock_timeout(e), "{locker:?}: {e}");
+    }
+    probe.rollback().await.unwrap();
+    holder.rollback().await.unwrap();
+    run.await.unwrap().unwrap();
+    free.is_ok()
+}
+
+/// N1: the availability switch, Stop and Revoke lock every node they touch in
+/// id order, whatever the heap order, so two of them over shared nodes wait for
+/// each other instead of deadlocking (40P01). The old unordered touch fails the
+/// same probe: it locks in heap order, highest id first here.
+#[tokio::test]
+async fn multi_node_owner_actions_lock_nodes_in_id_order() {
+    let db = TestDb::create().await;
+    let pool = wide(&db).await;
+    let ids = reversed_machine(&pool, 4).await;
+    let who = owner(&pool).await;
+    assert!(!locks_lowest_first(&pool, &ids, Locker::UnorderedTouch, who).await);
+    for locker in [Locker::Switch, Locker::Stop, Locker::Revoke] {
+        assert!(
+            locks_lowest_first(&pool, &ids, locker, who).await,
+            "{locker:?}"
+        );
+    }
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE revoked_at IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(live, 0, "the revoke committed");
+}
+
+/// N1: the switch and Stop/Start run concurrently over the same nodes, then a
+/// Revoke races a switch: no deadlock. A real lock-order inversion between two
+/// transactions is reported as 40P01, so the check below would see one.
+#[tokio::test]
+async fn switch_and_stop_or_revoke_run_concurrently_without_deadlock() {
+    let db = TestDb::create().await;
+    let pool = wide(&db).await;
+    let ids = reversed_machine(&pool, 4).await;
+    let who = owner(&pool).await;
+    // Failure case: two transactions taking two nodes in opposite order deadlock.
+    let (mut a, mut b) = (pool.begin().await.unwrap(), pool.begin().await.unwrap());
+    let lock = "SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE";
+    sqlx::query(lock)
+        .bind(ids[0])
+        .execute(&mut *a)
+        .await
+        .unwrap();
+    sqlx::query(lock)
+        .bind(ids[1])
+        .execute(&mut *b)
+        .await
+        .unwrap();
+    let (ra, rb) = tokio::join!(
+        sqlx::query(lock).bind(ids[1]).execute(&mut *a),
+        sqlx::query(lock).bind(ids[0]).execute(&mut *b)
+    );
+    let deadlocked = [ra.err(), rb.err()].into_iter().flatten();
+    assert_eq!(deadlocked.filter(mc::is_serialization_failure).count(), 1);
+    drop((a, b));
+
+    let deadlock =
+        |r: &Result<(), Error>| matches!(r, Err(Error::Db(e)) if mc::is_serialization_failure(e));
+    let switches = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut results = vec![];
+            for i in 0..20 {
+                let mut tx = pool.begin().await.unwrap();
+                let generation = mc::owner_availability(&mut tx).await.unwrap().generation;
+                let r = mc::set_owner_availability(
+                    &mut tx,
+                    i % 2 == 0,
+                    generation,
+                    who,
+                    Uuid::new_v4(),
+                    now(),
+                )
+                .await;
+                results.push(match r {
+                    Ok(_) => tx.commit().await.map_err(Error::from),
+                    Err(e) => Err(e),
+                });
+            }
+            results
+        }
+    });
+    let controls = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut results = vec![];
+            for i in 0..20 {
+                let mut tx = pool.begin().await.unwrap();
+                let generation = mc::control(&mut tx, "desk").await.unwrap().generation;
+                let desired = [DesiredState::Stopped, DesiredState::Running][i % 2];
+                let r = mc::set_desired(
+                    &mut tx,
+                    "desk",
+                    desired,
+                    generation,
+                    who,
+                    Uuid::new_v4(),
+                    now(),
+                )
+                .await;
+                let r = match r {
+                    Ok(_) => mc::request_handoffs(&mut tx, "desk", now())
+                        .await
+                        .map(|_| ()),
+                    Err(e) => Err(e),
+                };
+                results.push(match r {
+                    Ok(()) => tx.commit().await.map_err(Error::from),
+                    Err(e) => Err(e),
+                });
+            }
+            results
+        }
+    });
+    let (switches, controls) = (switches.await.unwrap(), controls.await.unwrap());
+    assert!(
+        switches.iter().chain(&controls).all(|r| r.is_ok()),
+        "{switches:?} {controls:?}"
+    );
+    let revoke = {
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            mc::revoke_machine(&mut tx, "desk", now()).await?;
+            tx.commit().await.map_err(Error::from)
+        }
+    };
+    let switch = async {
+        let mut tx = pool.begin().await.unwrap();
+        let generation = mc::owner_availability(&mut tx).await.unwrap().generation;
+        mc::set_owner_availability(&mut tx, false, generation, who, Uuid::new_v4(), now()).await?;
+        tx.commit().await.map_err(Error::from)
+    };
+    let (revoked, switched) = tokio::join!(revoke, switch);
+    assert!(
+        !deadlock(&revoked) && !deadlock(&switched),
+        "{revoked:?} {switched:?}"
+    );
+    assert!(
+        revoked.is_ok() && switched.is_ok(),
+        "{revoked:?} {switched:?}"
+    );
+}
+
+/// N2: a no-op switch (the state it already has, at the current generation) and
+/// a stale one write no node row and wait on no node lock: every live node keeps
+/// its `xmin` while another transaction holds one of them. A real flip still
+/// touches every live node (the I2 race needs it).
+#[tokio::test]
+async fn no_op_switch_writes_and_locks_no_node_row() {
+    let db = TestDb::create().await;
+    let pool = wide(&db).await;
+    let ids = reversed_machine(&pool, 3).await;
+    let who = owner(&pool).await;
+    let mut c = pool.acquire().await.unwrap();
+    mc::set_owner_availability(&mut c, true, 1, who, Uuid::new_v4(), now())
+        .await
+        .unwrap();
+    let xmins = || async {
+        let sql = "SELECT xmin::text FROM nodes WHERE revoked_at IS NULL ORDER BY id";
+        sqlx::query_scalar::<_, String>(sql)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+    };
+    let before = xmins().await;
+    assert_eq!(before.len(), 3);
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(ids[1])
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let quick = std::time::Duration::from_millis(500);
+    let same = mc::set_owner_availability(&mut tx, true, 2, who, Uuid::new_v4(), now());
+    let same = tokio::time::timeout(quick, same)
+        .await
+        .expect("no node lock wait")
+        .unwrap();
+    assert_eq!((same.state, same.generation), (Availability::On, 2));
+    let stale = mc::set_owner_availability(&mut tx, false, 1, who, Uuid::new_v4(), now());
+    let stale = tokio::time::timeout(quick, stale)
+        .await
+        .expect("no node lock wait");
+    assert!(
+        matches!(stale, Err(Error::Conflict { generation: 2 })),
+        "{stale:?}"
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(xmins().await, before, "no node row written");
+    // Failure case: a real flip waits for the held node, then writes every live node.
+    let flip = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let r = mc::set_owner_availability(&mut tx, false, 2, who, Uuid::new_v4(), now()).await;
+            tx.commit().await.unwrap();
+            r
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!flip.is_finished(), "a flip locks the held node");
+    holder.rollback().await.unwrap();
+    let flipped = flip.await.unwrap().unwrap();
+    assert_eq!((flipped.state, flipped.generation), (Availability::Off, 3));
+    let after = xmins().await;
+    assert!(
+        after.iter().zip(&before).all(|(a, b)| a != b),
+        "{after:?} {before:?}"
+    );
+}
