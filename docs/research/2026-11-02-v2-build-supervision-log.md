@@ -1898,3 +1898,11 @@ Each entry records what was observed, the action taken, and anything waiting on 
   - R5: retries use equal jitter, with at least 5 tries and 10 s.
   - The guardian.rs CI failure was a timing flake: 5 s waits on a slow runner, and a rerun passed. A follow-up will make those tests tolerant of slow runners.
   - Dispatched L rerun 4 with a release worker build.
+
+- **2026-11-08 — Spec 0007 phase 1 live acceptance ACCEPTED (rerun 4).**
+  - Release worker build on aq-ms1. Passed: install, graceful handoff, crash recovery under ruling C (release and dev builds), Stop/Start, owner stops not charged (Q1), sticky availability (Q2), revoke and re-enroll (Q3), the handoff successor, the W10 measurement takeover, preparation retry, and visible retry-budget holds.
+  - Pending owner: Step 2 terminal control (W13) and the A1 600-attempt soak.
+  - New findings:
+    - M1, important: an open dashboard causes nodes-row lock timeouts; dispatched together with N1/N2.
+    - M2, M3, M4: minor.
+  - `aq-node@ms1` is left enabled and running.
