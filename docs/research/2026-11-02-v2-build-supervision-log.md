@@ -1907,3 +1907,13 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - M2, M3, M4: minor.
   - `aq-node@ms1` is left enabled and running.
 - **2026-11-08:** phase 1 evidence merged: aq-server#115 (aabfcb2c) and aq-worker#50 (b3a56df1).
+
+- **2026-11-08 — Node-row lock contention fixed (M1, N1, N2).**
+  - aq-server#121 squash-merged as a5966547.
+  - Human reads (Swarm, sessions, overview, observations, terminal inspect/output/tail) went through the worker's authority loader, which took `FOR UPDATE` on the node row. That starved `inventory-v2`, whose lock_timeout is 150 ms.
+  - The fix:
+    - those reads now use `REPEATABLE READ READ ONLY` snapshots;
+    - multi-node owner actions lock in id order with a 1 s timeout;
+    - a no-op availability switch touches nothing;
+    - lock contention now returns 503 with `Retry-After`.
+  - The worker side, retrying a transient 503 from inventory-v2, is aq-worker#54, in CI.
