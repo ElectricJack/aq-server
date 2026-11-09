@@ -14,6 +14,8 @@ use uuid::Uuid;
 mod handoff;
 #[path = "native_offers/history_caps.rs"]
 mod history_caps;
+#[path = "native_offers/holds.rs"]
+mod holds;
 #[path = "native_offers/lost.rs"]
 mod lost;
 

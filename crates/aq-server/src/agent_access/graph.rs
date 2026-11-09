@@ -491,7 +491,7 @@ pub(super) async fn read(state: &AppState, p: &Principal, q: &Value) -> Result<V
 
 #[async_trait::async_trait]
 impl crate::row_retention::TaskState for Runtime {
-    async fn completed(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<bool> {
+    async fn node(&self, workspace: Uuid, task: Uuid) -> anyhow::Result<Value> {
         let raw = self
             .get(&format!("/v1/workspaces/{workspace}/nodes/{task}"), &[])
             .await
@@ -503,7 +503,7 @@ impl crate::row_retention::TaskState for Runtime {
                 && raw["kind"] == "task",
             "invalid retention Graph observation"
         );
-        Ok(raw["task_state"] == "completed" && raw["deleted"] == false && raw["retired"] == false)
+        Ok(raw)
     }
 }
 

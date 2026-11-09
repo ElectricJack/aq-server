@@ -7,6 +7,7 @@ description = "The stored profiled execution state projection (moved out of the 
 
 [dependencies]
 aq-machine-control = { path = "../aq-machine-control", version = "=0.1.0" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 aq-worker-protocol.workspace = true
 serde.workspace = true

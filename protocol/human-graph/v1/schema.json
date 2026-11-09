@@ -1418,14 +1418,20 @@
       },
       "HumanHoldReason": {
         "type": "object",
-        "description": "Why a task whose holding attempt no longer runs is still held.",
+        "description": "Why a task whose holding attempt no longer runs is still held, or (task_held) why AQ does not offer the task.",
         "properties": {
           "code": {
             "enum": [
               "cancelled_attempt_holds_task",
               "attempt_stopped_not_released",
-              "attempt_finished_stop_unconfirmed"
+              "attempt_finished_stop_unconfirmed",
+              "task_held"
             ]
+          },
+          "hold_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
           },
           "attempt_id": {
             "type": "string",

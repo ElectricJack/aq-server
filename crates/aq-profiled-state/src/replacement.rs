@@ -12,6 +12,33 @@ pub const MAX_SANDBOX_MS: u64 = 240 * 60_000;
 /// Replacement evidence is a fresh observation, matching the budget snapshot.
 pub const EVIDENCE_TTL_MS: u64 = 2_000;
 
+/// Mirrors aq-selection `global_budget` for a successor's charged attempts.
+pub fn pinned_block(limits: (u32, u64), charged: u32, elapsed_ms: u64) -> Option<&'static str> {
+    if charged >= limits.0 {
+        Some("replacement_policy_retry_budget_exhausted")
+    } else if elapsed_ms >= limits.1 {
+        Some("replacement_policy_time_budget_exhausted")
+    } else {
+        None
+    }
+}
+/// The B4 successor's evidence of `r`, fresh for `EVIDENCE_TTL_MS` (None if that overflows).
+pub fn evidence(
+    r: &Replacement,
+    lineage: aq_selection::TaskLineage,
+    now: u64,
+) -> Option<aq_selection::ReplacementEvidence> {
+    Some(aq_selection::ReplacementEvidence {
+        lineage,
+        predecessor_attempt_id: r.predecessor,
+        stop_receipt: r.stop_receipt.clone(),
+        retained_source_receipt: r.retained_source_receipt.clone(),
+        effect_reconciliation_receipt: r.effect_reconciliation_receipt.clone(),
+        observed_at_ms: now,
+        expires_at_ms: now.checked_add(EVIDENCE_TTL_MS)?,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_attempts: u32,
@@ -189,6 +216,50 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pinned_block_mirrors_the_policy_retry_and_time_limits() {
+        let limits = (2, 3_600_000);
+        assert_eq!(pinned_block(limits, 1, 3_599_999), None);
+        assert_eq!(
+            pinned_block(limits, 2, 0),
+            Some("replacement_policy_retry_budget_exhausted")
+        );
+        assert_eq!(
+            pinned_block(limits, 1, 3_600_000),
+            Some("replacement_policy_time_budget_exhausted")
+        );
+    }
+    #[test]
+    fn evidence_carries_the_predecessor_receipts_for_its_ttl() {
+        let receipt = |id: &str| ArtifactRef {
+            id: aq_session_protocol::Text::new(id).unwrap(),
+            version: aq_session_protocol::Text::new("1").unwrap(),
+            digest: aq_session_protocol::Digest::of(id.as_bytes()),
+        };
+        let r = Replacement {
+            predecessor: Uuid::from_u128(1),
+            attempts_started: 1,
+            exempt_attempts: 0,
+            elapsed_ms: 1,
+            sandbox_ms: 0,
+            stop_receipt: receipt("stop"),
+            retained_source_receipt: receipt("retained"),
+            effect_reconciliation_receipt: receipt("effects"),
+            needs_release: true,
+        };
+        let lineage = aq_selection::TaskLineage {
+            project_id: Uuid::from_u128(2),
+            workspace_id: Uuid::from_u128(3),
+            task_id: Uuid::from_u128(4),
+        };
+        let e = evidence(&r, lineage.clone(), 1_000).unwrap();
+        assert_eq!(e.predecessor_attempt_id, r.predecessor);
+        assert_eq!(e.stop_receipt, receipt("stop"));
+        assert_eq!(e.retained_source_receipt, receipt("retained"));
+        assert_eq!(e.effect_reconciliation_receipt, receipt("effects"));
+        assert_eq!(e.expires_at_ms, 1_000 + EVIDENCE_TTL_MS);
+        assert!(evidence(&r, lineage, u64::MAX).is_none());
+    }
     use super::*;
     use aq_session_protocol::{Digest, Text};
 

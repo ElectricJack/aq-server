@@ -306,13 +306,13 @@ pub async fn attempt_counts(pool: &sqlx::PgPool, task: Uuid) -> Result<AttemptCo
     )
 }
 pub async fn attempt_counts_locked(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conn: &mut sqlx::PgConnection,
     task: Uuid,
 ) -> Result<AttemptCounts, AppError> {
     counts(
         sqlx::query(COUNTS)
             .bind(task)
-            .fetch_one(&mut **tx)
+            .fetch_one(conn)
             .await
             .map_err(|_| AppError::Internal)?,
     )

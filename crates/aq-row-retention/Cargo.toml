@@ -7,6 +7,7 @@ description = "DEP6 row retention: bounded deletes of settled execution rows"
 
 [dependencies]
 anyhow.workspace = true
+serde_json.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 sqlx-postgres.workspace = true

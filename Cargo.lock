@@ -328,6 +328,7 @@ version = "0.1.0"
 dependencies = [
  "aq-intelligence-config",
  "aq-protocol",
+ "aq-row-retention",
  "aq-selection",
  "aq-task-comments",
  "chrono",
@@ -487,6 +488,7 @@ name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
  "aq-machine-control",
+ "aq-selection",
  "aq-session-protocol",
  "aq-worker-protocol",
  "serde",
@@ -601,6 +603,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "serde_json",
  "sqlx",
  "sqlx-postgres",
  "tokio",
