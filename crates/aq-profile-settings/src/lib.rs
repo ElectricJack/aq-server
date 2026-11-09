@@ -86,22 +86,48 @@ pub fn prepare(
         || req.name.trim().is_empty()
         || req.name.len() > 128
         || req.description.len() > 2000
-        || req.candidates.is_empty()
         || req.candidates.len() > 16
     {
         return Err(invalid(
-            "Enter a profile name and between one and sixteen model choices",
+            "Enter a profile name and at most sixteen model choices",
         ));
     }
-    let old = current
-        .artifact()
-        .catalog
-        .intelligence
-        .iter()
-        .find(|p| p.id == req.profile_id && p.version == req.profile_version)
-        .ok_or_else(|| conflict("This profile changed. Reload profiles before saving"))?;
-    // Existing unconfigured candidates can be retained while editing labels.
-    // New execution choices must correspond to installed, qualified harness facts.
+    let creating = req.profile_version == 0;
+    let initial = Intelligence {
+        id: req.profile_id.clone(),
+        version: 0,
+        name: None,
+        description: None,
+        candidates: Vec::new(),
+        selection_policy: None,
+    };
+    let old = if creating {
+        let prefix = format!("intelligence:{}@", req.profile_id);
+        if current
+            .artifact()
+            .catalog
+            .intelligence
+            .iter()
+            .any(|p| p.id == req.profile_id)
+            || state
+                .known_identities
+                .keys()
+                .any(|key| key.starts_with(&prefix))
+        {
+            return Err(conflict("A profile with this identity already exists"));
+        }
+        &initial
+    } else {
+        current
+            .artifact()
+            .catalog
+            .intelligence
+            .iter()
+            .find(|p| p.id == req.profile_id && p.version == req.profile_version)
+            .ok_or_else(|| conflict("This profile changed. Reload this row before saving"))?
+    };
+    // Keeping an existing provider mapping does not require that provider to
+    // be installed now. Newly chosen execution settings still need known facts.
     for candidate in &req.candidates {
         if old
             .candidates
@@ -127,15 +153,26 @@ pub fn prepare(
         }
     }
     let mut profile = old.clone();
-    profile.name = if old.name.is_none() && req.name.trim() == old.id {
+    profile.name = if !creating && old.name.is_none() && req.name.trim() == old.id {
         None
     } else {
         Some(req.name.trim().into())
     };
     profile.description =
         (!req.description.trim().is_empty()).then(|| req.description.trim().into());
-    profile.candidates = req.candidates.clone();
-    if value(&profile)? == value(old)? {
+    profile.candidates = if req.candidates.is_empty() {
+        // An empty spreadsheet row is explicitly unconfigured, not runnable.
+        vec![ModelCandidate {
+            id: "configuration-required".into(),
+            provider: "configuration-required".into(),
+            model: "configuration-required".into(),
+            reasoning_configuration_reference: "configuration-required:1".into(),
+            harnesses: vec!["configuration-required".into()],
+        }]
+    } else {
+        req.candidates.clone()
+    };
+    if !creating && value(&profile)? == value(old)? {
         return Ok(Prepared {
             catalog: current.clone(),
             profile,
@@ -147,23 +184,28 @@ pub fn prepare(
     let old_key = aq_profiles::key(&old.id, old.version);
     let new_key = aq_profiles::key(&profile.id, profile.version);
     let mut catalog = current.artifact().catalog.clone();
-    *catalog
-        .intelligence
-        .iter_mut()
-        .find(|p| p.id == old.id && p.version == old.version)
-        .ok_or(Error::Internal)? = profile.clone();
-    let mut references = BTreeMap::from([(old_key.clone(), new_key.clone())]);
-    for agent in &mut catalog.agents {
-        if agent.intelligence != old_key {
-            continue;
+    let mut references = BTreeMap::new();
+    if creating {
+        catalog.intelligence.push(profile.clone());
+    } else {
+        *catalog
+            .intelligence
+            .iter_mut()
+            .find(|p| p.id == old.id && p.version == old.version)
+            .ok_or(Error::Internal)? = profile.clone();
+        references.insert(old_key.clone(), new_key.clone());
+        for agent in &mut catalog.agents {
+            if agent.intelligence != old_key {
+                continue;
+            }
+            let old_agent = aq_profiles::key(&agent.id, agent.version);
+            agent.version = version(state, "agent", &agent.id, agent.version)?;
+            agent.intelligence = new_key.clone();
+            references.insert(old_agent, aq_profiles::key(&agent.id, agent.version));
         }
-        let old_agent = aq_profiles::key(&agent.id, agent.version);
-        agent.version = version(state, "agent", &agent.id, agent.version)?;
-        agent.intelligence = new_key.clone();
-        references.insert(old_agent, aq_profiles::key(&agent.id, agent.version));
     }
     let catalog = aq_profiles::validate(catalog, current.artifact().instructions.clone())
-        .map_err(|_| invalid("The edited profile is invalid. Check its name and model choices"))?;
+        .map_err(|_| invalid("The profile row is invalid. Check its name and model choices"))?;
     Ok(Prepared {
         catalog,
         profile,

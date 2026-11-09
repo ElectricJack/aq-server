@@ -624,3 +624,54 @@ fn intelligence_settings_configured_choice_reaches_future_composition_and_keeps_
     );
     assert_eq!(current.artifact().catalog.intelligence[0].version, 1);
 }
+
+#[tokio::test]
+async fn intelligence_settings_adds_spreadsheet_rows_without_assigning_them_or_losing_existing_choices()
+ {
+    let (_db, app, pool, mut request, project) = settings_fixture().await;
+    request["profile_id"] = json!("new-profile");
+    request["profile_version"] = json!(0);
+    request["name"] = json!("New profile");
+    request["candidates"] = json!([]);
+    let (status, saved) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["profile"]["version"], 1);
+    assert_eq!(saved["profile"]["name"], "New profile");
+    assert_eq!(
+        saved["profile"]["candidates"][0]["provider"],
+        "configuration-required"
+    );
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        binding["allowed_intelligence_profiles"],
+        json!(["engineering@1"])
+    );
+    assert_eq!(binding["allowed_agent_profiles"], json!(["implementer@1"]));
+    assert_eq!(binding["catalog_digest"], saved["active_digest"]);
+    let (status, read) = call(&app, INTELLIGENCE_SETTINGS, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["profiles"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        read["profiles"][0]["candidates"],
+        serde_json::to_value(&seed().artifact().catalog.intelligence[0].candidates).unwrap()
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true)
+            .await
+            .1,
+        saved
+    );
+    request["expected_revision"] = saved["revision"].clone();
+    request["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request), true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+}
