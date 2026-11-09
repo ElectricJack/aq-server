@@ -27,9 +27,7 @@ pub struct InstallReport {
 fn conflict(message: &str) -> AppError {
     AppError::Conflict(message.into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn record(
     config: &ProfiledConfig,
     configuration_digest: &Digest,

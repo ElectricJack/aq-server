@@ -9,9 +9,7 @@ use uuid::Uuid;
 pub(super) fn conflict() -> AppError {
     AppError::Conflict("launch owner journal conflict or unavailable".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 pub async fn record_reserved(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,

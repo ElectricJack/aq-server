@@ -9,9 +9,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn decode<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, AppError> {
     serde_json::from_value(v).map_err(|_| AppError::Internal)
 }

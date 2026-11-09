@@ -28,9 +28,7 @@ pub(crate) const INPUT_UNKNOWN_SQL: &str = "EXISTS(SELECT 1 FROM terminal_sessio
 
 const NUDGE_BODY: &str = "AQ stall check: no progress has been observed for this session. At your next safe boundary, continue the task or report what is blocking you.";
 
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 
 pub async fn input_state(
     tx: &mut Transaction<'_, Postgres>,

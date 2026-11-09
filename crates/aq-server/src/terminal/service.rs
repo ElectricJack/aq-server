@@ -507,18 +507,16 @@ pub async fn inspect(state: &AppState, actor: Uuid, id: Uuid) -> Result<Terminal
     let state = state.terminal_read_view();
     let config = configured(&state)?;
     let t = identity(&state, id).await?;
-    let mut tx = super::persistence::begin(&state).await?;
-    let view =
-        authority::load_locked(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
+    let mut tx = super::persistence::begin_read(&state).await?;
+    let view = authority::read(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
     authorize(&state, &mut tx, &view, &t, actor, Right::Inspect).await?;
     let loaded = load(&state, &mut tx, &t, &view).await?;
-    let active =
-        match authority::load_locked(&state, &mut tx, &t.session, Policy::TerminalActive).await {
-            Ok(_) => true,
-            Err(authority::AuthorityError::InvalidState) => return Err(AppError::Internal),
-            Err(authority::AuthorityError::Database(_)) => return Err(AppError::Internal),
-            Err(_) => false,
-        };
+    let active = match authority::read(&state, &mut tx, &t.session, Policy::TerminalActive).await {
+        Ok(_) => true,
+        Err(authority::AuthorityError::InvalidState) => return Err(AppError::Internal),
+        Err(authority::AuthorityError::Database(_)) => return Err(AppError::Internal),
+        Err(_) => false,
+    };
     let disconnected = !active
         || loaded.runtime_id != config.runtime_id
         || now(&state).saturating_sub(loaded.peer_observed_at) > 25000;
@@ -545,9 +543,8 @@ pub async fn output(
     let state = state.terminal_read_view();
     let config = configured(&state)?;
     let t = identity(&state, id).await?;
-    let mut tx = super::persistence::begin(&state).await?;
-    let view =
-        authority::load_locked(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
+    let mut tx = super::persistence::begin_read(&state).await?;
+    let view = authority::read(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
     let mut access = authorize(&state, &mut tx, &view, &t, actor, Right::Inspect).await?;
     let loaded = load(&state, &mut tx, &t, &view).await?;
     access.session_revision = loaded.authority_revision;
@@ -570,14 +567,13 @@ pub async fn output(
         .into_iter()
         .find(|s| s.subscription_id == query.subscription_id)
         .ok_or(AppError::Internal)?;
-    let active =
-        match authority::load_locked(&state, &mut tx, &t.session, Policy::TerminalActive).await {
-            Ok(_) => true,
-            Err(
-                authority::AuthorityError::Database(_) | authority::AuthorityError::InvalidState,
-            ) => return Err(AppError::Internal),
-            Err(_) => false,
-        };
+    let active = match authority::read(&state, &mut tx, &t.session, Policy::TerminalActive).await {
+        Ok(_) => true,
+        Err(authority::AuthorityError::Database(_) | authority::AuthorityError::InvalidState) => {
+            return Err(AppError::Internal);
+        }
+        Err(_) => false,
+    };
     tx.commit().await.map_err(|_| AppError::Internal)?;
     let pending = || OutputReply::Pending {
         terminal: t.clone(),
@@ -819,9 +815,8 @@ pub async fn receipt(
     let state = state.terminal_read_view();
     let config = configured(&state)?;
     let t = identity(&state, id).await?;
-    let mut tx = begin(&state).await?;
-    let view =
-        authority::load_locked(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
+    let mut tx = super::persistence::begin_read(&state).await?;
+    let view = authority::read(&state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
     let (mut access, inspect) =
         match authorize(&state, &mut tx, &view, &t, actor, Right::Inspect).await {
             Ok(a) => (a, true),

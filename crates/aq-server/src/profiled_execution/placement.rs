@@ -162,9 +162,7 @@ fn convert<T: serde::de::DeserializeOwned>(value: impl Serialize) -> Result<T, A
     serde_json::from_value(serde_json::to_value(value).map_err(|_| AppError::Internal)?)
         .map_err(|_| AppError::Internal)
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 
 fn policy(state: &AppState, project_id: Uuid) -> Option<PlacementPolicy> {
     state

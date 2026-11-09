@@ -52,10 +52,9 @@ pub(in crate::dashboard_api) async fn operations(
         .ok_or_else(|| AppError::NotFound("session not found".into()))?;
     let attempt: Uuid = row.get("attempt_id");
     let node: Uuid = row.get("node_id");
-    let view =
-        authority::load_attempt_locked(state, &mut tx, node, attempt, Policy::TerminalHistorical)
-            .await
-            .map_err(AppError::from)?;
+    let view = authority::read_attempt(state, &mut tx, node, attempt, Policy::TerminalHistorical)
+        .await
+        .map_err(AppError::from)?;
     if scope.project().is_some_and(|p| p != view.project_id) {
         return Err(AppError::NotFound("session not found".into()).into());
     }

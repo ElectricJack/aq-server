@@ -39,9 +39,7 @@ pub fn admin_routes() -> Router<AppState> {
         // A JSON string can expand each source byte into six escaped bytes.
         .layer(DefaultBodyLimit::max(6 * MAX_ARTIFACT_BYTES + 4096))
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn invalid() -> AppError {
     AppError::BadRequest("invalid profile catalog artifact".into())
 }

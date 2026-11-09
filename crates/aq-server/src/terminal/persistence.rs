@@ -6,7 +6,11 @@ use super::{
     protection::{Context, Purpose, Sealed},
 };
 use crate::{
-    AppState, error::AppError, execution::authority::AuthorityView, session_access, store::Role,
+    AppState,
+    error::AppError,
+    execution::authority::{AuthorityView, Rows},
+    session_access,
+    store::Role,
 };
 use aq_session_protocol::{Digest, SessionIdentity, TerminalIdentity, Text, Validate};
 use aq_terminal_relay::{Access, AsyncJournal, Ledger, api::MutationReply, draft::Effect};
@@ -66,13 +70,13 @@ pub async fn scopes(
     terminal: &TerminalIdentity,
     actor: Uuid,
 ) -> Result<Scopes> {
-    let role = session_access::current_role_locked(tx, actor).await?;
+    let role = session_access::current_role(tx, actor, view.rows).await?;
     let inspection = match session_access::require_inspect_locked(state, tx, view, actor).await {
         Ok(v) => Some(v),
         Err(AppError::Forbidden(_)) => None,
         Err(e) => return Err(e),
     };
-    let row=sqlx::query("SELECT can_control,expires_at_ms FROM terminal_control_acl WHERE terminal_id=$1 AND principal_id=$2 FOR SHARE").bind(terminal.terminal_id).bind(actor).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?;
+    let row=sqlx::query(&view.rows.sql("SELECT can_control,expires_at_ms FROM terminal_control_acl WHERE terminal_id=$1 AND principal_id=$2", "FOR SHARE")).bind(terminal.terminal_id).bind(actor).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?;
     let checked = now(state);
     let inspect_until = inspection
         .filter(|v| checked < v.valid_until_ms)
@@ -136,8 +140,8 @@ pub async fn load(
     terminal
         .validate()
         .map_err(|_| AppError::BadRequest("invalid terminal identity".into()))?;
-    require_owner(state, tx).await?;
-    let row=sqlx::query("SELECT identity::text,authority_revision,ledger_revision,runtime_id,protection_version,key_id,nonce,ciphertext,observed_at_ms,last_output_at_ms,execution_spec_digest,launch_manifest_digest,input_mode,controller_generation,pending_bytes,controller_principal FROM terminal_sessions WHERE terminal_id=$1 FOR UPDATE").bind(terminal.terminal_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(||AppError::NotFound("terminal not found".into()))?;
+    owner(state, tx, view.rows).await?;
+    let row=sqlx::query(&view.rows.sql("SELECT identity::text,authority_revision,ledger_revision,runtime_id,protection_version,key_id,nonce,ciphertext,observed_at_ms,last_output_at_ms,execution_spec_digest,launch_manifest_digest,input_mode,controller_generation,pending_bytes,controller_principal FROM terminal_sessions WHERE terminal_id=$1", "FOR UPDATE")).bind(terminal.terminal_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(||AppError::NotFound("terminal not found".into()))?;
     let exact: TerminalIdentity =
         serde_json::from_str(row.get::<&str, _>(0)).map_err(|_| AppError::Internal)?;
     if exact != *terminal || view.session != terminal.session {
@@ -499,11 +503,17 @@ pub async fn install(state: &AppState) -> Result<()> {
     tx.commit().await.map_err(|_| AppError::Internal)
 }
 pub async fn require_owner(state: &AppState, tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    let current: Option<String> =
-        sqlx::query_scalar("SELECT value FROM meta WHERE key='terminal_relay_owner' FOR SHARE")
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(|_| AppError::Internal)?;
+    owner(state, tx, Rows::Lock).await
+}
+async fn owner(state: &AppState, tx: &mut Transaction<'_, Postgres>, rows: Rows) -> Result<()> {
+    let sql = rows.sql(
+        "SELECT value FROM meta WHERE key='terminal_relay_owner'",
+        "FOR SHARE",
+    );
+    let current: Option<String> = sqlx::query_scalar(&sql)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
     if current.as_deref() != Some(configured(state)?.runtime_id.to_string().as_str()) {
         return Err(AppError::IdentityUnavailable(
             "terminal runtime owner changed or not installed".into(),
@@ -522,5 +532,12 @@ pub async fn begin(state: &AppState) -> Result<Transaction<'static, Postgres>> {
         .await
         .map_err(|_| AppError::Internal)?;
     require_owner(state, &mut tx).await?;
+    Ok(tx)
+}
+/// M1: a human read's transaction: a read-only snapshot that takes no row locks.
+pub async fn begin_read(state: &AppState) -> Result<Transaction<'static, Postgres>> {
+    let snapshot = crate::execution::authority::snapshot(&state.store.pool).await;
+    let mut tx = snapshot.map_err(crate::error::db)?;
+    owner(state, &mut tx, Rows::Snapshot).await?;
     Ok(tx)
 }

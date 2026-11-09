@@ -36,9 +36,7 @@ type Result<T> = std::result::Result<T, AppError>;
 pub const SUSPEND_WINDOW_MS: u64 = 300_000;
 pub const MAX_SUMMARY_BYTES: u32 = 16_384;
 
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn json_err(_: serde_json::Error) -> AppError {
     AppError::Internal
 }

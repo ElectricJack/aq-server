@@ -31,14 +31,8 @@ async fn authorize(
             .await
             .map_err(|_| invalid())?;
     let node = node.ok_or_else(|| AppError::NotFound("session not found".into()))?;
-    let view = authority::load_attempt_locked(
-        state,
-        tx,
-        node,
-        attempt,
-        AuthorityPolicy::TerminalHistorical,
-    )
-    .await?;
+    let historical = AuthorityPolicy::TerminalHistorical;
+    let view = authority::read_attempt(state, tx, node, attempt, historical).await?;
     if view.kind != Kind::ProfiledV1 {
         return Err(AppError::NotFound("profiled session not found".into()));
     }
@@ -84,12 +78,8 @@ pub async fn events(
     {
         return Err(AppError::BadRequest("invalid observation page".into()));
     }
-    let mut tx = state
-        .store
-        .observation_pool
-        .begin()
-        .await
-        .map_err(|_| invalid())?;
+    let snapshot = authority::snapshot(&state.store.observation_pool).await;
+    let mut tx = snapshot.map_err(crate::error::db)?;
     let (binding, access) = authorize(state, &mut tx, actor, attempt).await?;
     let node = node_of(&binding).map_err(|_| invalid())?;
     let latest: Option<i64> =
@@ -194,12 +184,8 @@ pub async fn usage(
     actor: Uuid,
     attempt: Uuid,
 ) -> std::result::Result<SessionUsage, AppError> {
-    let mut tx = state
-        .store
-        .observation_pool
-        .begin()
-        .await
-        .map_err(|_| invalid())?;
+    let snapshot = authority::snapshot(&state.store.observation_pool).await;
+    let mut tx = snapshot.map_err(crate::error::db)?;
     let (binding, access) = authorize(state, &mut tx, actor, attempt).await?;
     let row=sqlx::query("SELECT revision,last_recorded_at_ms,projection FROM observation_attempt_projections WHERE attempt_id=$1").bind(attempt).fetch_optional(&mut *tx).await.map_err(|_|invalid())?;
     let (revision, last, projection) = if let Some(row) = row {

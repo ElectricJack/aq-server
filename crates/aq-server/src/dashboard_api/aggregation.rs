@@ -307,7 +307,7 @@ pub(super) async fn overview(
     // Re-read bindings after all owner awaits. A different workspace/name/revision
     // must never be attached to observations made against the original binding.
     let mut transaction = tx(runtime).await?;
-    let latest = sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(&ids).fetch_all(&mut *transaction).await?;
+    let latest = sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id").bind(&ids).fetch_all(&mut *transaction).await?;
     if latest.len() != projects.len()
         || latest.iter().any(|r| {
             projects
@@ -472,15 +472,11 @@ async fn attempts(
     for row in rows.iter().take(MEMBERS) {
         let mut transaction = tx(runtime).await?;
         let node = row.get("node_id");
-        let v = authority::load_attempt_locked(
-            state,
-            &mut transaction,
-            node,
-            row.get("attempt_id"),
-            Policy::IdentityOnly,
-        )
-        .await
-        .map_err(|_| Error::Unavailable)?;
+        let attempt = row.get("attempt_id");
+        let v =
+            authority::read_attempt(state, &mut transaction, node, attempt, Policy::IdentityOnly)
+                .await
+                .map_err(|_| Error::Unavailable)?;
         if !ids.contains(&v.project_id) {
             return Err(Error::Unavailable);
         }

@@ -127,9 +127,7 @@ async fn show(
 fn bad(reason: &str) -> AppError {
     AppError::BadRequest(reason.into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn slug(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 100

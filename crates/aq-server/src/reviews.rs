@@ -45,9 +45,7 @@ pub fn deserialize_config<'de, D: serde::Deserializer<'de>>(
         })
         .transpose()
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn invalid() -> AppError {
     AppError::BadRequest("invalid review request".into())
 }

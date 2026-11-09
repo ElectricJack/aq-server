@@ -351,7 +351,7 @@ async fn projects(runtime: &Runtime, scope: &Scope) -> Result<Vec<ProjectPin>> {
 async fn fence_projects(runtime: &Runtime, expected: &[ProjectPin]) -> Result<()> {
     let mut tx = service::tx(runtime).await?;
     let ids: Vec<_> = expected.iter().map(|p| p.project.id).collect();
-    let rows = sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(ids).fetch_all(&mut *tx).await?;
+    let rows = sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id").bind(ids).fetch_all(&mut *tx).await?;
     if rows.len() != expected.len()
         || rows.iter().any(|r| {
             expected

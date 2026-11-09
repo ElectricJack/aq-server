@@ -65,9 +65,7 @@ pub struct Page {
     pub after: Option<Uuid>,
     pub limit: Option<u32>,
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn invalid() -> AppError {
     AppError::BadRequest("invalid result metadata query".into())
 }

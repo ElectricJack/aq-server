@@ -148,7 +148,7 @@ pub async fn lock_current_node(
     .bind(context.verifier.as_str())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|_| AppError::Internal)?;
+    .map_err(crate::error::db)?;
     current.ok_or(AppError::CredentialRevoked)
 }
 /// Existing callers keep the Node snapshot API and its authentication behavior.

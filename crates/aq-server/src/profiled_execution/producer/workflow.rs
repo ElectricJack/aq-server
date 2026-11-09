@@ -32,9 +32,7 @@ use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
 const MAX_SKIPPED: usize = 8;
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 async fn runtime(
     state: &AppState,
     auth: &AuthenticatedNode,

@@ -11,7 +11,7 @@ use aq_session_protocol::{Digest, SessionIdentity};
 use aq_worker_protocol::{AttemptRef, GraphBinding, NodeIdentity, SourceBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -55,11 +55,55 @@ impl From<AuthorityError> for AppError {
             | AuthorityError::StaleBoot
             | AuthorityError::Identity
             | AuthorityError::Unsupported => Self::Conflict(error.to_string()),
-            AuthorityError::InvalidState | AuthorityError::Database(_) => Self::Internal,
+            AuthorityError::Database(e) => crate::error::db(e),
+            AuthorityError::InvalidState => Self::Internal,
         }
     }
 }
 type Result<T> = std::result::Result<T, AuthorityError>;
+/// Row locks a load takes. Write paths lock the node and attempt rows; reads
+/// (M1: dashboard and terminal views, in REPEATABLE READ READ ONLY) take none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rows {
+    Lock,
+    Snapshot,
+}
+impl Rows {
+    pub fn sql(self, query: &str, lock: &str) -> String {
+        match self {
+            Rows::Lock => format!("{query} {lock}"),
+            Rows::Snapshot => query.into(),
+        }
+    }
+}
+/// M1: a read's transaction: one MVCC snapshot, and READ ONLY refuses any row lock.
+pub async fn snapshot(pool: &sqlx::PgPool) -> sqlx::Result<Transaction<'static, Postgres>> {
+    let mut tx = pool.begin().await?;
+    let sql = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY";
+    sqlx::query(sql).execute(&mut *tx).await?;
+    Ok(tx)
+}
+/// Whether `node` is revoked (it must exist), under its row lock unless `rows` is a snapshot.
+async fn node_revoked(
+    tx: &mut PgConnection,
+    node: Uuid,
+    policy: Policy,
+    rows: Rows,
+) -> Result<bool> {
+    let sql = rows.sql(
+        "SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1",
+        "FOR UPDATE",
+    );
+    let revoked: Option<bool> = sqlx::query_scalar(&sql)
+        .bind(node)
+        .fetch_optional(tx)
+        .await?;
+    let revoked = revoked.ok_or(AuthorityError::NotFound)?;
+    if revoked && !matches!(policy, Policy::TerminalHistorical | Policy::IdentityOnly) {
+        return Err(AuthorityError::Revoked);
+    }
+    Ok(revoked)
+}
 #[derive(Debug, Clone)]
 pub struct AuthorityView {
     pub kind: Kind,
@@ -94,6 +138,8 @@ pub struct AuthorityView {
     /// retention and effects before a producer clears the common task claim.
     pub release_ready: bool,
     pub retention_released: bool,
+    /// How the view was read; ACL and ledger reads made for it read the same way.
+    pub rows: Rows,
 }
 impl AuthorityView {
     pub fn require_session(&self, expected: &SessionIdentity) -> Result<()> {
@@ -152,8 +198,34 @@ pub async fn load_locked(
     expected: &SessionIdentity,
     policy: Policy,
 ) -> Result<AuthorityView> {
+    load(state, tx, expected, policy, Rows::Lock).await
+}
+/// `load_locked` for a read (M1): the same checks on its snapshot, with no row locks.
+pub async fn read(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    expected: &SessionIdentity,
+    policy: Policy,
+) -> Result<AuthorityView> {
+    load(state, tx, expected, policy, Rows::Snapshot).await
+}
+async fn load(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    expected: &SessionIdentity,
+    policy: Policy,
+    rows: Rows,
+) -> Result<AuthorityView> {
     let (identity, attempt) = remote(expected)?;
-    let view = load_attempt_locked(state, tx, identity.node_id, attempt.attempt_id, policy).await?;
+    let view = load_attempt(
+        state,
+        tx,
+        identity.node_id,
+        attempt.attempt_id,
+        policy,
+        rows,
+    )
+    .await?;
     view.require_session(expected)?;
     Ok(view)
 }
@@ -164,46 +236,61 @@ pub async fn load_attempt_locked(
     attempt: Uuid,
     policy: Policy,
 ) -> Result<AuthorityView> {
-    if let Some(view) = hot::load_adopted_locked(Some(state), tx, node, attempt, policy).await? {
-        return Ok(view);
-    }
-    load_record_locked(tx, node, attempt, policy, || {
-        (state.clock)().timestamp_millis().max(0) as u64
-    })
-    .await
+    load_attempt(state, tx, node, attempt, policy, Rows::Lock).await
+}
+/// `load_attempt_locked` for a read (M1): no row locks.
+pub async fn read_attempt(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    attempt: Uuid,
+    policy: Policy,
+) -> Result<AuthorityView> {
+    load_attempt(state, tx, node, attempt, policy, Rows::Snapshot).await
+}
+async fn load_attempt(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    attempt: Uuid,
+    policy: Policy,
+    rows: Rows,
+) -> Result<AuthorityView> {
+    let hot = hot::load_adopted_locked(Some(state), tx, node, attempt, policy, rows).await?;
+    let clock = || (state.clock)().timestamp_millis().max(0) as u64;
+    let mut view = match hot {
+        Some(view) => view,
+        None => load_record_locked(tx, node, attempt, policy, rows, clock).await?,
+    };
+    view.rows = rows;
+    Ok(view)
 }
 pub async fn load_source_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
     attempt: Uuid,
 ) -> Result<AuthorityView> {
+    let policy = Policy::SourceRetention;
     if let Some(view) =
-        hot::load_adopted_locked(None, tx, node, attempt, Policy::SourceRetention).await?
+        hot::load_adopted_locked(None, tx, node, attempt, policy, Rows::Lock).await?
     {
         return Ok(view);
     }
-    load_record_locked(tx, node, attempt, Policy::SourceRetention, || 0).await
+    load_record_locked(tx, node, attempt, policy, Rows::Lock, || 0).await
 }
 async fn load_record_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
     attempt: Uuid,
     policy: Policy,
+    rows: Rows,
     clock: impl Fn() -> u64,
 ) -> Result<AuthorityView> {
     if node.is_nil() || attempt.is_nil() {
         return Err(AuthorityError::Identity);
     }
-    let revoked: Option<bool> =
-        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1 FOR UPDATE")
-            .bind(node)
-            .fetch_optional(&mut **tx)
-            .await?;
-    let revoked = revoked.ok_or(AuthorityError::NotFound)?;
-    if revoked && !matches!(policy, Policy::TerminalHistorical | Policy::IdentityOnly) {
-        return Err(AuthorityError::Revoked);
-    }
-    let row=sqlx::query("SELECT kind,state,task_id,offer_id,session_id,holds_task,record_revision,authority_revision,grant_revision,execution_deadline_ms FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2 FOR UPDATE").bind(attempt).bind(node).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::NotFound)?;
+    let revoked = node_revoked(tx, node, policy, rows).await?;
+    let row=sqlx::query(&rows.sql("SELECT kind,state,task_id,offer_id,session_id,holds_task,record_revision,authority_revision,grant_revision,execution_deadline_ms FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2", "FOR UPDATE")).bind(attempt).bind(node).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::NotFound)?;
     let body: Value = row.get("state");
     let kind: String = row.get("kind");
     let mut view = if kind == "legacy_fixture" {
@@ -267,15 +354,18 @@ async fn load_record_locked(
                 .disposition
                 .as_ref()
                 .is_some_and(|d| d.retention_release),
+            rows: Rows::Lock,
         }
     } else if kind == "profiled_v1" {
+        let deadline = row.get("execution_deadline_ms");
         load_profiled_compat(
             tx,
             body,
             attempt,
-            row.get("execution_deadline_ms"),
+            deadline,
             row.get("holds_task"),
             revoked,
+            rows,
         )
         .await?
     } else {
@@ -323,11 +413,12 @@ async fn load_profiled_compat(
     execution_deadline_ms: Option<i64>,
     holds_task: bool,
     revoked: bool,
+    rows: Rows,
 ) -> Result<AuthorityView> {
     let value: ProfiledState =
         serde_json::from_value(body).map_err(|_| AuthorityError::InvalidState)?;
     value.validate().map_err(|_| AuthorityError::InvalidState)?;
-    let immutable=sqlx::query("SELECT l.launch_binding,l.launch_manifest,l.source_binding,l.manifest_digest,l.execution_spec_digest,l.execution_spec,s.selection_digest,s.selection,d.decision#>'{outcome,resolved}' AS admitted_selection FROM profiled_launches l JOIN intelligence_attempt_selections s ON s.attempt_id=l.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1 FOR SHARE OF l,s,d").bind(attempt).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::InvalidState)?;
+    let immutable=sqlx::query(&rows.sql("SELECT l.launch_binding,l.launch_manifest,l.source_binding,l.manifest_digest,l.execution_spec_digest,l.execution_spec,s.selection_digest,s.selection,d.decision#>'{outcome,resolved}' AS admitted_selection FROM profiled_launches l JOIN intelligence_attempt_selections s ON s.attempt_id=l.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1", "FOR SHARE OF l,s,d")).bind(attempt).fetch_optional(&mut **tx).await?.ok_or(AuthorityError::InvalidState)?;
     if immutable.get::<Value, _>("launch_binding")
         != serde_json::to_value(&value.offer.binding).map_err(|_| AuthorityError::InvalidState)?
         || immutable.get::<Value, _>("launch_manifest")
@@ -448,5 +539,6 @@ async fn load_profiled_compat(
         effects: Some(value.effects),
         release_ready,
         retention_released: release_ready,
+        rows: Rows::Lock,
     })
 }

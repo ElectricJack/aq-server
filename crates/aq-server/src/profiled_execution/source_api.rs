@@ -77,9 +77,7 @@ fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("native source is not currently available to this assignment".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn version(headers: &HeaderMap) -> Result<(), AppError> {
     if headers.get_all(VERSION_HEADER).iter().count() != 1
         || headers.get(VERSION_HEADER).is_none_or(|v| v != "1")

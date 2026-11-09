@@ -61,10 +61,10 @@ pub(super) async fn swarm(
     let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state)).await;
     let task_holds = task_holds.map_err(|_| Error::Unavailable)?;
     let mut held = Vec::new();
-    // No unlocked authority read exists, so the locking read is bounded: the most recent candidates only.
+    // M1: a snapshot read, no row locks; still bounded to the most recent candidates.
     let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
     for (attempt, id, node) in candidates {
-        let v = authority::load_attempt_locked(state, &mut tx, node, attempt, Policy::IdentityOnly)
+        let v = authority::read_attempt(state, &mut tx, node, attempt, Policy::IdentityOnly)
             .await
             .map_err(|_| Error::Unavailable)?;
         if v.running_at(now) {

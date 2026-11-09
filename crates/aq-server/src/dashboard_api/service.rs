@@ -32,7 +32,7 @@ pub(super) fn timestamp(ms: u64) -> Result<Timestamp> {
     ))
 }
 pub(super) async fn tx(runtime: &Runtime) -> Result<Transaction<'_, Postgres>> {
-    let mut tx = runtime.pool.begin().await?;
+    let mut tx = authority::snapshot(&runtime.pool).await?;
     sqlx::query("SELECT set_config('statement_timeout','500ms',true),set_config('lock_timeout','250ms',true)").execute(&mut *tx).await?;
     Ok(tx)
 }
@@ -46,7 +46,7 @@ pub(super) struct Auth {
 pub(super) async fn auth(state: &AppState, runtime: &Runtime, user: &User) -> Result<Auth> {
     let mut tx = tx(runtime).await?;
     let row = sqlx::query(
-        "SELECT role,email,issuer,subject,xmin::text AS version FROM users WHERE id=$1 FOR SHARE",
+        "SELECT role,email,issuer,subject,xmin::text AS version FROM users WHERE id=$1",
     )
     .bind(user.id)
     .fetch_optional(&mut *tx)
@@ -62,7 +62,7 @@ pub(super) async fn auth(state: &AppState, runtime: &Runtime, user: &User) -> Re
     let grants = if owner {
         vec![]
     } else {
-        sqlx::query("SELECT session_key,session_identity,revision,expires_at_ms FROM session_inspection_acl WHERE principal_id=$1 AND can_inspect AND expires_at_ms>$2 ORDER BY session_key LIMIT 257 FOR SHARE").bind(user.id).bind(now as i64).fetch_all(&mut *tx).await?
+        sqlx::query("SELECT session_key,session_identity,revision,expires_at_ms FROM session_inspection_acl WHERE principal_id=$1 AND can_inspect AND expires_at_ms>$2 ORDER BY session_key LIMIT 257").bind(user.id).bind(now as i64).fetch_all(&mut *tx).await?
     };
     let complete = grants.len() <= runtime::MEMBERS;
     let mut pins = vec![];
@@ -711,10 +711,9 @@ pub(super) async fn session(
         .ok_or_else(|| AppError::NotFound("session not found".into()))?;
     let attempt: Uuid = row.get("attempt_id");
     let node: Uuid = row.get("node_id");
-    let view =
-        authority::load_attempt_locked(state, &mut tx, node, attempt, Policy::TerminalHistorical)
-            .await
-            .map_err(AppError::from)?;
+    let view = authority::read_attempt(state, &mut tx, node, attempt, Policy::TerminalHistorical)
+        .await
+        .map_err(AppError::from)?;
     if scope.project().is_some_and(|p| p != view.project_id) {
         return Err(AppError::NotFound("session not found".into()).into());
     }

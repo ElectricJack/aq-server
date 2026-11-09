@@ -38,9 +38,7 @@ fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("private material delivery is not currently authorized".into())
 }
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 fn same(a: &impl serde::Serialize, b: &impl serde::Serialize) -> Result<bool, AppError> {
     Ok(serde_json::to_value(a).map_err(|_| AppError::Internal)?
         == serde_json::to_value(b).map_err(|_| AppError::Internal)?)

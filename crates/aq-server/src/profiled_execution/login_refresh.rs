@@ -57,9 +57,7 @@ pub struct Lineage {
     pub entries: Vec<Entry>,
 }
 
-fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+use crate::error::db;
 
 /// Serializes writers of one lineage for the rest of `tx`, then reads it.
 pub async fn lineage_locked(

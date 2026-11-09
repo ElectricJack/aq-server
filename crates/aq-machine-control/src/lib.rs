@@ -210,6 +210,30 @@ pub async fn machine_of(conn: &mut PgConnection, node: Uuid) -> Result<MachineNo
 
 /// Review I3: the per-machine-key transaction lock that serializes claiming,
 /// minting and revocation. A caller that also locks node rows takes it first.
+/// N1/N2: an owner action that locks node rows waits at most this long for each.
+/// It bounds how long the action can hold the rows it already has.
+pub const OWNER_LOCK_TIMEOUT: &str = "1s";
+async fn bound(tx: &mut PgConnection) -> Result<(), Error> {
+    sqlx::query("SELECT set_config('lock_timeout',$1,true)")
+        .bind(OWNER_LOCK_TIMEOUT)
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
+}
+/// N1: locks the live node rows (all of them, or one machine's) in id order, so
+/// two owner actions that lock several nodes wait for each other instead of
+/// deadlocking (40P01). Callers then update the rows they hold.
+pub async fn lock_live_nodes(tx: &mut PgConnection, key: Option<&str>) -> Result<(), Error> {
+    sqlx::query(
+        "SELECT id FROM nodes WHERE revoked_at IS NULL AND ($1::text IS NULL OR machine_key=$1) \
+         ORDER BY id FOR UPDATE",
+    )
+    .bind(key)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
 pub async fn lock_machine(tx: &mut PgConnection, key: &str) -> Result<(), Error> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-machine:' || $1, 0))")
         .bind(key)
@@ -374,7 +398,9 @@ pub async fn set_desired(
     // Review I2: touch the machine's live node rows first. A publication holds
     // its node row lock while it re-checks the gate, so it either commits
     // before this change (and its attempt is then handed off) or fails to
-    // serialize after it.
+    // serialize after it. N1: locked in id order, with a bounded wait.
+    bound(tx).await?;
+    lock_live_nodes(tx, Some(key)).await?;
     sqlx::query(
         "UPDATE nodes SET machine_key=machine_key WHERE machine_key=$1 AND revoked_at IS NULL",
     )
@@ -763,6 +789,7 @@ pub async fn revoke_machine(
     machine: &str,
     now: DateTime<Utc>,
 ) -> Result<u32, Error> {
+    bound(tx).await?;
     if let Some(id) = machine.strip_prefix("node:") {
         let id: Uuid = id.parse().map_err(|_| Error::Invalid("machine"))?;
         // Fix round 2: under the node row lock, so a racing slot claim (which
@@ -790,6 +817,7 @@ pub async fn revoke_machine(
         return Err(Error::Invalid("machine"));
     }
     lock_machine(tx, machine).await?;
+    lock_live_nodes(tx, Some(machine)).await?;
     let n =
         sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL")
             .bind(machine)
@@ -874,6 +902,10 @@ pub fn is_lock_timeout(e: &sqlx::Error) -> bool {
         .and_then(|d| d.code())
         .is_some_and(|c| c == "55P03")
 }
+/// A lock timeout, deadlock or serialization failure: contention a caller may retry.
+pub fn is_contention(e: &sqlx::Error) -> bool {
+    is_lock_timeout(e) || is_serialization_failure(e)
+}
 /// SQLSTATE 40001 (serialization failure) or 40P01 (deadlock).
 pub fn is_serialization_failure(e: &sqlx::Error) -> bool {
     e.as_database_error()
@@ -910,19 +942,34 @@ pub async fn set_owner_availability(
     operation_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<OwnerAvailability, Error> {
+    // The effective state: a former owner's switch is unset, so setting it
+    // again writes a new row under the current owner.
+    let unchanged = |current: &OwnerAvailability| {
+        let same = matches!(
+            (current.state, available),
+            (Availability::On, true) | (Availability::Off, false)
+        );
+        same && current.generation == expected_generation
+    };
+    // N2: a no-op or a stale generation locks and writes no node row.
+    let current = owner_availability(tx).await?;
+    if unchanged(&current) {
+        return Ok(current);
+    }
+    if current.generation != expected_generation {
+        let generation = current.generation;
+        return Err(Error::Conflict { generation });
+    }
     // Fix round 3 (I2 race): touch the live node rows first, as set_desired
     // does, so a publication racing this change waits or fails to serialize.
+    // N1: locked in id order, with a bounded wait. The state is re-read under them.
+    bound(tx).await?;
+    lock_live_nodes(tx, None).await?;
     sqlx::query("UPDATE nodes SET machine_key=machine_key WHERE revoked_at IS NULL")
         .execute(&mut *tx)
         .await?;
-    // The effective state: a former owner's switch is unset, so setting it
-    // again writes a new row under the current owner.
     let current = owner_availability(tx).await?;
-    let same = matches!(
-        (current.state, available),
-        (Availability::On, true) | (Availability::Off, false)
-    );
-    if same && current.generation == expected_generation {
+    if unchanged(&current) {
         return Ok(current);
     }
     let done = if expected_generation == 1 {

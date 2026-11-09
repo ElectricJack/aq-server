@@ -14,9 +14,7 @@ use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 pub(super) type Result<T> = std::result::Result<T, AppError>;
-pub(super) fn db(_: sqlx::Error) -> AppError {
-    AppError::Internal
-}
+pub(super) use crate::error::db;
 pub(super) fn conflict() -> AppError {
     AppError::Conflict("settlement identity, accepted evidence or owner changed".into())
 }
