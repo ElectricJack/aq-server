@@ -1,0 +1,5 @@
+aq-node@ms1: removed
+configuration and state purged
+ls: cannot access '~/.local/state/agent-q/service/ms1': No such file or directory
+ls: cannot access '/run/user/1000/aq/ms1': No such file or directory
+ls: cannot access '~/.config/agent-q/service/ms1': No such file or directory

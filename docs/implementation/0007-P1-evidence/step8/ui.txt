@@ -1,0 +1,5 @@
+dialog: "Each running agent on desktop is stopped, its work is saved as a commit with a handoff note, and a fresh agent continues it from that commit. This machine takes no new work until you start it."
+dialog: "0 running agents will be handed off."
+submitted Stop worker at 2026-11-08T17:01:43.943Z
+dialog: "Revoking removes the credentials of every worker node on desktop. Its service stops taking work, and the machine leaves the Swarm page. Stop it first so running agents hand off their work. To use it again, enroll it with a new code."
+submitted Revoke machine at 2026-11-08T17:01:56.770Z

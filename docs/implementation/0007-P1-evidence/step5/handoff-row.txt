@@ -1,0 +1,1 @@
+ 8d502ade-46f7-577b-a7bf-90479e7b111a | f85cc3e1-a0f7-4aa8-9e53-02cee8aef93a | owner_stop   | 2026-11-08 16:41:57.169502+00 | c9fcdcf6-6a2e-5dbd-89ff-c63afdea2c2d | 095339dfaf2314cfb45c708ba26d1a12dbb654d4 | c7d110b0-c714-573d-adf4-1ad579f46496

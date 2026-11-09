@@ -1,0 +1,40 @@
+2026-11-08T16:59:03.235661Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T16:59:03.440857Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T16:59:25.461524Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=c194839e-33dd-468e-a148-f579d5a80427 status=503 code=unavailable
+2026-11-08T16:59:36.161666Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=0e6e2285-3574-4fa6-9a80-b7e1fa842aca status=503 code=unavailable
+2026-11-08T16:59:39.192694Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T16:59:39.348871Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T16:59:48.144138Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=c7d6823d-36a1-4dbb-9f57-5dce8b861cf6 status=503 code=unavailable
+2026-11-08T16:59:58.944279Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=e879fa3f-7482-45d9-a7ac-4425f1216f0c status=503 code=unavailable
+2026-11-08T17:00:03.344921Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=493d8cc0-4e5f-4312-8d88-ec37c6094ea1 status=503 code=unavailable
+2026-11-08T17:00:59.383581Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=530f92f6-fc4b-41b3-ae3f-28d148aaf594 status=503 code=unavailable
+2026-11-08T17:01:11.638571Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T17:01:11.811970Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T17:01:36.661076Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=a7411c3c-9b77-44ab-96a9-e27585ab7d24 status=503 code=unavailable
+2026-11-08T17:01:48.012869Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=ae66731f-2221-4c11-9cad-6f8990283b06 status=503 code=unavailable
+2026-11-08T17:01:48.360773Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=c247e47b-262e-486b-8a52-d8ebd1fcb4ba status=503 code=unavailable
+2026-11-08T17:01:59.116465Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:00.078360Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:05.072233Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:05.080518Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:10.082961Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:20.075575Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:36.264970Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:02:51.268803Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:03:07.440956Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:03:12.438771Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:03:22.444920Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:03:38.642833Z  WARN aq_server::error: API request refused status=401 code=credential_revoked
+2026-11-08T17:03:40.413584Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=45f3b2dc-47b2-4f06-b2f5-2c7c093f5722 status=503 code=unavailable
+2026-11-08T17:03:51.308595Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=6aff5573-ad26-478f-a1b1-fbe997c754f1 status=503 code=unavailable
+2026-11-08T17:03:58.270307Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T17:03:58.430336Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T17:04:02.384236Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T17:04:02.558372Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T17:04:03.306498Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=90b6f47a-59b3-4eae-8a89-86a034fc5fef status=503 code=unavailable
+2026-11-08T17:05:07.934680Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=87750162-796e-4e7f-804d-c527b525d3e2 status=503 code=unavailable
+2026-11-08T17:05:10.797656Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T17:05:10.953226Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T17:05:12.234573Z  WARN aq_server::dashboard_api::errors: human API request refused request_id=30d9bb31-e0f5-4b2f-b180-61a85b03e50a status=503 code=unavailable
+2026-11-08T17:05:14.876102Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400000
+2026-11-08T17:05:15.062371Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent

@@ -1,0 +1,10 @@
+$ up.sh service-status   (2026-11-08T22:17:26Z)
+aq-node@ms1 (systemd-user): active
+machine desktop: 2 slot(s)
+slot 1: not held
+slot 2: not held
+{"id": "desktop", "state": "holding", "control": {"desired": "running", "generation": "13", "since": "2026-11-08T22:01:19.611Z", "pending_handoffs": 0}, "services": [{"node": "863c386e-d38b-49a7-88c1-42bee4d9e4dc", "name": "DESKTOP-EB8UOME", "health": "online", "service": {"state": "running", "since": "2026-11-08T22:01:19.611Z"}}, {"node": "1e1ec4e3-822a-41f0-809f-cb625a1dd08f", "name": "DESKTOP-EB8UOME#2", "health": "online", "service": {"state": "running", "since": "2026-11-08T22:01:19.611Z"}}]}
+{"id": "node:b1225fe8-604a-46a9-a88d-3b040cc6ba4e", "state": "offline", "control": null, "services": [{"node": "b1225fe8-604a-46a9-a88d-3b040cc6ba4e", "name": "ms1-desktop", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:9975d20c-6a26-497a-95b0-128b16c3f494", "state": "offline", "control": null, "services": [{"node": "9975d20c-6a26-497a-95b0-128b16c3f494", "name": "e0-local-development", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:188de335-4fc9-4e85-b15b-138f01999775", "state": "offline", "control": null, "services": [{"node": "188de335-4fc9-4e85-b15b-138f01999775", "name": "ms1-node", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:085affc7-71d7-417c-8978-d5b18c1e51fe", "state": "offline", "control": null, "services": [{"node": "085affc7-71d7-417c-8978-d5b18c1e51fe", "name": "ms1-node-spare", "health": "offline", "service": {"state": "unreported", "since": null}}]}

@@ -1,0 +1,30 @@
+2026-11-09T00:59:46.702939Z  INFO aq_worker::client: probe succeeded
+Stopping aq-node@ms1.service - AQ worker service (ms1)...
+2026-11-09T01:00:10.228627Z  INFO aq_agent_channel: agent credential rotated attempt_id=cdba941b-0f26-553b-82aa-e4dcabbad742 version=2
+2026-11-09T01:00:13.629161Z  INFO aq_agent_channel: agent channel closed attempt_id=cdba941b-0f26-553b-82aa-e4dcabbad742 reason="stopped by the node"
+Stopped aq-node@ms1.service - AQ worker service (ms1).
+aq-node@ms1.service: Consumed 10.490s CPU time, 52.4M memory peak, 0B memory swap peak.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-09T01:00:16.141241Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=3589d00ea9544b05820241af3a118b5d unit=aq-node@ms1.service
+2026-11-09T01:00:16.369505Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-09T01:00:16.933682Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:00:16.991865Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:00:21.305808Z  INFO aq_agent_channel: agent channel open attempt_id=7db55543-ed08-574c-b452-79c9a62995ff
+aq-node@ms1.service: Sent signal SIGKILL to main process 2305352 (aq-worker) on client request.
+aq-node@ms1.service: Main process exited, code=killed, status=9/KILL
+aq-node@ms1.service: Failed with result 'signal'.
+aq-node@ms1.service: Consumed 7.261s CPU time, 51.8M memory peak, 0B memory swap peak.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 1.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-09T01:01:43.794186Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=75756f0443d540dfa7959773775f267f unit=aq-node@ms1.service
+2026-11-09T01:01:44.012693Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-09T01:01:44.013063Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-09T01:01:44.013063Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-09T01:01:44.053200Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="91ab3cae-d220-48b4-a9d7-211508007c40"
+2026-11-09T01:01:44.053218Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="2d03692c-f0d1-4fe5-9a17-fa833db288f1"
+2026-11-09T01:01:44.660342Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:01:55.239919Z  WARN aq_worker::service: lost attempt released: its unsaved work was not salvaged; its sandbox is kept for release-sandbox attempt=7db55543-ed08-574c-b452-79c9a62995ff record={"attempt_id":"7db55543-ed08-574c-b452-79c9a62995ff","ch
+2026-11-09T01:01:55.753380Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:01:58.437016Z  INFO aq_agent_channel: agent channel open attempt_id=da24c7e2-4362-5296-a4f3-0614f257565f

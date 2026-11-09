@@ -1,0 +1,4 @@
+aq-node@ms1 (systemd-user): inactive
+machine desktop: 2 slot(s)
+slot 1: not held
+slot 2: held until the owner releases it: host stop unproven: the guardian was lost and no reboot or unit teardown proves its processes stopped: guardian lost; stop remains uncertain

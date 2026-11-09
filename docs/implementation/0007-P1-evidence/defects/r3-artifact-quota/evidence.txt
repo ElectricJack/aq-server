@@ -1,0 +1,62 @@
+# admission_artifacts per owner_kind for project e0000000-0000-4000-8000-000000000002 (2026-11-08T16:59:47Z)
+composition|180|442302
+startup|132|285955
+source_retention|76|164610
+graph_snapshot|34|39805
+selection|33|98517
+outcome|33|66112
+catalog|24|67086
+
+512|512|0
+
+# guard (excerpt)
+ SELECT count(*),COALESCE(sum(octet_length(body)),0) INTO total_count,total_bytes FROM admission_artifacts;
+ SELECT count(*),COALESCE(sum(octet_length(body)),0) INTO project_count,project_bytes FROM admission_artifacts WHERE owner_key=NEW.owner_key;
+ IF total_count>=4096 OR project_count>=512 OR total_bytes+COALESCE(octet_length(NEW.body),0)>268435456
+    OR project_bytes+COALESCE(octet_length(NEW.body),0)>67108864 THEN RAISE EXCEPTION 'admission artifact quota'; END IF;
+
+# postgres
+2026-11-08 16:52:26.143 UTC [386964] ERROR:  admission artifact quota
+2026-11-08 16:52:26.143 UTC [386964] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:52:26.143 UTC [386964] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+2026-11-08 16:53:03.295 UTC [386743] ERROR:  admission artifact quota
+2026-11-08 16:53:03.295 UTC [386743] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:53:03.295 UTC [386743] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+--
+2026-11-08 16:54:10.397 UTC [386924] ERROR:  admission artifact quota
+2026-11-08 16:54:10.397 UTC [386924] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:54:10.397 UTC [386924] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+--
+2026-11-08 16:56:19.801 UTC [386965] ERROR:  admission artifact quota
+2026-11-08 16:56:19.801 UTC [386965] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:56:19.801 UTC [386965] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+--
+2026-11-08 16:59:03.440 UTC [393507] ERROR:  admission artifact quota
+2026-11-08 16:59:03.440 UTC [393507] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:59:03.440 UTC [393507] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+--
+2026-11-08 16:59:39.348 UTC [393538] ERROR:  admission artifact quota
+2026-11-08 16:59:39.348 UTC [393538] CONTEXT:  PL/pgSQL function admission_artifact_insert_guard() line 9 at RAISE
+2026-11-08 16:59:39.348 UTC [393538] STATEMENT:  INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2
+
+# server (aq_refusal=debug)
+2026-11-08T16:59:03.235661Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400
+2026-11-08T16:59:03.440663Z DEBUG aq_refusal: profiled refusal at=crates/aq-server/src/profiled_execution/artifacts.rs:264:354
+2026-11-08T16:59:03.440857Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T16:59:39.192694Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage_elapsed_ms=0 sandbox_ms_charged=0 max_attempts=3 max_sandbox_ms=14400
+2026-11-08T16:59:39.348670Z DEBUG aq_refusal: profiled refusal at=crates/aq-server/src/profiled_execution/artifacts.rs:264:354
+2026-11-08T16:59:39.348871Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+
+# service journal
+2026-11-08T16:52:26.144379Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:52:26.171764Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 409 Conflict slot=1
+2026-11-08T16:53:03.296303Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:53:03.322863Z  WARN aq_node_service::supervisor: attempt failed, retrying in 60s: native endpoint returned 409 Conflict slot=1
+2026-11-08T16:54:10.398441Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:54:10.427870Z  WARN aq_node_service::supervisor: attempt failed, retrying in 120s: native endpoint returned 409 Conflict slot=1
+2026-11-08T16:56:19.802695Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:56:19.832313Z  WARN aq_node_service::supervisor: attempt failed, retrying in 240s: native endpoint returned 409 Conflict slot=1
+2026-11-08T16:59:03.441499Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:59:03.468539Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 409 Conflict slot=1
+2026-11-08T16:59:39.349641Z  WARN aq_worker::native::http::control: native endpoint refused path=/v1/worker/profiled/poll status=409 Conflict body={"kind":"failure","body":{"schema_version":1,"code":"conflict","operation_id":null}}
+2026-11-08T16:59:39.377617Z  WARN aq_node_service::supervisor: attempt failed, retrying in 60s: native endpoint returned 409 Conflict slot=1

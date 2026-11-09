@@ -1,0 +1,5 @@
+crash 1 (release build) kill 2026-11-09T01:10:33.606Z attempt ae21e441-426c-5427-9795-39faa8d026b2 NRestarts=0
+crash 1: retry 3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96 offered 01:11:00 NRestarts=1
+service binary now debug 63b3f6087e587d9b
+crash 2 (debug build on restart) kill 2026-11-09T01:11:20.621Z attempt 3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96 NRestarts=1
+after crash 2: 01:12:33 NRestarts=2 active=active overflows=0 attempts=2

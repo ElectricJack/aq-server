@@ -1,0 +1,9 @@
+t4 ran alone 01:19:08-01:21:27 (attempt 4b729a8b); the first try did not seed t5 in time
+t5 running with step1 at 01:22:38
+t6 seeded 01:22:38
+sandboxes=2 at 01:22:50; t6 attempts=1
+aq-863c386ed38b49a788c142bee4d9e4dc-d7ae175e1a775ff48b44d5eeb198a321 Up 17 seconds
+aq-1e1ec4e3822a41f0809fcb625a1dd08f-122abd4501785f25931a7b003b6b4c80 Up 2 seconds
+2026-11-09T01:19:08.146867Z  INFO aq_agent_channel: agent channel open attempt_id=4b729a8b-9639-5dfe-ada3-066fe15a2523
+2026-11-09T01:22:30.304098Z  INFO aq_agent_channel: agent channel open attempt_id=d7ae175e-1a77-5ff4-8b44-d5eeb198a321
+2026-11-09T01:22:45.941267Z  INFO aq_agent_channel: agent channel open attempt_id=122abd45-0178-5f25-931a-7b003b6b4c80

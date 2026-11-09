@@ -1,0 +1,4 @@
+dialog: "AQ stops starting new agents until you turn availability back on. Running agents continue."
+submitted Turn off availability at 2026-11-08T17:00:10.382Z
+dialog: "AQ keeps your subscription available for new agents until you turn it off."
+submitted Keep available at 2026-11-08T17:01:06.456Z

@@ -1,0 +1,33 @@
+Sun Nov  8 16:30:28 UTC 2026
+is-active: active
+aq-node@ms1 (systemd-user): active
+machine desktop: 2 slot(s)
+{"id": "desktop", "state": "online", "control": {"desired": "running", "generation": "1", "since": "2026-11-08T11:33:36.336Z", "pending_handoffs": 0}, "services": [{"node": "f85cc3e1-a0f7-4aa8-9e53-02cee8aef93a", "name": "DESKTOP-EB8UOME", "health": "online", "service": {"state": "running", "since": "2026-11-08T16:29:43.094Z"}}, {"node": "480dc9a2-9e87-47fe-bf6f-1e81e474effb", "name": "DESKTOP-EB8UOME#2", "health": "online", "service": {"state": "running", "since": "2026-11-08T16:29:43.119Z"}}]}
+{"id": "node:b1225fe8-604a-46a9-a88d-3b040cc6ba4e", "state": "offline", "control": null, "services": [{"node": "b1225fe8-604a-46a9-a88d-3b040cc6ba4e", "name": "ms1-desktop", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:9975d20c-6a26-497a-95b0-128b16c3f494", "state": "offline", "control": null, "services": [{"node": "9975d20c-6a26-497a-95b0-128b16c3f494", "name": "e0-local-development", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:188de335-4fc9-4e85-b15b-138f01999775", "state": "offline", "control": null, "services": [{"node": "188de335-4fc9-4e85-b15b-138f01999775", "name": "ms1-node", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+{"id": "node:085affc7-71d7-417c-8978-d5b18c1e51fe", "state": "offline", "control": null, "services": [{"node": "085affc7-71d7-417c-8978-d5b18c1e51fe", "name": "ms1-node-spare", "health": "offline", "service": {"state": "unreported", "since": null}}]}
+                         renderer_digest                          | observed_at_ms | expires_at_ms |               node_id                
+------------------------------------------------------------------+----------------+---------------+--------------------------------------
+ d8f869e2b1c5435db6cf2a264ae9430d608d53505c1da368bd65cc4a9dfb2349 |  1794155456355 | 1794241856355 | f85cc3e1-a0f7-4aa8-9e53-02cee8aef93a
+ ce78139504e91b520f6abcc60e04fc180c01e20d88bb9fea2be2aee3c7b0b1ad |  1794137870294 | 1794224270294 | 06b87ad1-2750-4acf-82bf-05fac118265b
+ 5c675e6432955b19ac856f0128de65060761e355aa463bd886b526e4c17e019b |  1794136111814 | 1794222511814 | 37d67aa8-d3d6-47ae-bd95-0a4ac36449fe
+ 040e3adbb4748f7372608e9563b1c006164dc7513fbbaa2fddad99603dcec25b |  1794135700952 | 1794222100952 | d94b6dd7-5daa-4189-b953-9200f754b6c6
+ e5f7183f8fc20c8ed5de3902ab320fd7f94a4db396b0abf87000484f8807e920 |  1794135151375 | 1794221551375 | bc162c83-8695-48e0-b175-934eeae45eb8
+(5 rows)
+
+aq-480dc9a29e8747febf6f1e81e474effb-d314be1ac6a65535b938f67b240d3fd8 Up 12 seconds
+aq-f85cc3e1a0f74aa89e5302cee8aef93a-da0d5b91d8165e999bed5e930932a3dd Up 7 seconds
+/run/user/1000/aq/ms1/1:
+total 0
+drwx------ 3 jkern jkern  80 Nov  8 08:29 .
+drwx------ 4 jkern jkern  80 Nov  8 08:29 ..
+srw------- 1 jkern jkern   0 Nov  8 08:29 git.sock
+drwx------ 5 jkern jkern 100 Nov  8 08:30 host
+
+/run/user/1000/aq/ms1/2:
+total 0
+drwx------ 3 jkern jkern  80 Nov  8 08:29 .
+drwx------ 4 jkern jkern  80 Nov  8 08:29 ..
+srw------- 1 jkern jkern   0 Nov  8 08:29 git.sock
+drwx------ 5 jkern jkern 100 Nov  8 08:30 host

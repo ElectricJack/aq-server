@@ -1,0 +1,28 @@
+aq-node@ms1.service: Sent signal SIGKILL to main process 1286920 (aq-worker) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1286973 (aq-git) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1286974 (aq-git) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1286976 (aq-git) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1286975 (aq-git) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287539 (aq-session-host) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287558 (tmux: server) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287562 (memfd:aq-observ) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287565 (tmux: client) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287882 (aq-session-host) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287903 (tmux: server) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287907 (memfd:aq-observ) on client request.
+aq-node@ms1.service: Sending signal SIGKILL to process 1287910 (tmux: client) on client request.
+aq-node@ms1.service: Main process exited, code=killed, status=9/KILL
+aq-node@ms1.service: Failed with result 'signal'.
+aq-node@ms1.service: Consumed 1min 17.812s CPU time, 243.7M memory peak, 0B memory swap peak.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 1.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T16:33:40.058161Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=168a2b5c9ac844bd86999f8bdadc635c unit=aq-node@ms1.service
+2026-11-08T16:33:40.292833Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T16:33:40.293426Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T16:33:40.293434Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T16:33:40.332146Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="00c0836d-f559-4b2a-ba62-01f1dee5895b"
+2026-11-08T16:33:40.332146Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="9cc9c76c-fa51-44f2-9d65-6d53eb4fd2f5"
+2026-11-08T16:33:53.283183Z  WARN aq_worker::service: lost attempt released: its unsaved work was not salvaged; its sandbox is kept for release-sandbox attempt=48ba8b42-918f-55dd-8d23-cb1ad22fc73f record={"attempt_id":"48ba8b42-918f-55dd-8d23-cb1ad22fc73f","charged":true,"claim_unreported":false,"held":null,"proof":{"invocation_id":"168a2b5c9ac844bd86999f8bdadc635c","proof_kind":"cgroup_teardown",
+2026-11-08T16:33:53.838593Z  WARN aq_worker::service: lost attempt released: its unsaved work was not salvaged; its sandbox is kept for release-sandbox attempt=5bd4bb55-4679-5f9b-9d0a-3036324c11c9 record={"attempt_id":"5bd4bb55-4679-5f9b-9d0a-3036324c11c9","charged":true,"claim_unreported":false,"held":null,"proof":{"invocation_id":"168a2b5c9ac844bd86999f8bdadc635c","proof_kind":"cgroup_teardown",
+2026-11-08T16:33:58.535386Z  INFO aq_worker::client: probe succeeded

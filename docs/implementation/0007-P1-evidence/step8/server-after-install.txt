@@ -1,0 +1,6 @@
+2026-11-08T17:03:58.270307Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage
+2026-11-08T17:03:58.430078Z DEBUG aq_refusal: profiled refusal at=crates/aq-server/src/profiled_execution/artifacts.rs:264:354
+2026-11-08T17:03:58.430336Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent
+2026-11-08T17:04:02.384236Z  INFO aq_server::profiled_execution::producer::workflow: replacement attempt admitted within the lineage budget task_id=e0a20000-0000-4000-8000-0000000007c3 predecessor=5cc6a724-286d-5afd-9338-500427139954 attempts_started=1 lineage
+2026-11-08T17:04:02.558123Z DEBUG aq_refusal: profiled refusal at=crates/aq-server/src/profiled_execution/artifacts.rs:264:354
+2026-11-08T17:04:02.558372Z  WARN aq_server::profiled_execution::control_api: native control request refused status=409 code=Conflict error=conflict reason=inline artifact owner unavailable or inconsistent

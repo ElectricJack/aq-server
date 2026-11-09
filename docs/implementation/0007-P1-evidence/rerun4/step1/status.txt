@@ -1,0 +1,11 @@
+seeded 00:57:53; running 00:58:50
+is-active: active NRestarts=0
+aq-node@ms1 (systemd-user): active
+machine desktop: 2 slot(s)
+slot 1: not held
+slot 2: not held
+cdba941b-0f26-553b-82aa-e4dcabbad742|863c386e-d38b-49a7-88c1-42bee4d9e4dc
+aq-863c386ed38b49a788c142bee4d9e4dc-cdba941b0f26553b82aae4dcabbad742 Up 1 second
+desktop online [] {'desired': 'running', 'generation': '13', 'since': '2026-11-08T22:01:19.611Z', 'pending_handoffs': 0}
+DESKTOP-EB8UOME online {'state': 'running', 'since': '2026-11-08T22:01:19.611Z'} [] 1
+DESKTOP-EB8UOME#2 online {'state': 'running', 'since': '2026-11-08T22:01:19.611Z'} [] 0

@@ -30,6 +30,12 @@
 #   remote | sync   (D1) local bare remote in the aq-git volume; central fetch
 #   publication    (D1) delivery evidence, source head and the remote's main
 #   status | down | node-stop
+#   service-status  (swarm phase 1) `aq-worker service status` of the service
+#                   profile (AQ_MS1_SERVICE_PROFILE, default ms1) and each swarm
+#                   machine's id, state, control and node service states
+#   handoffs | renewals | decisions   (swarm phase 1) the newest attempt_handoffs
+#                   rows, context_qualification_renewals rows, and the
+#                   intelligence_decisions row count
 #   all             up, seed, node, import-login, live, server-restart, gaps
 #
 # Never prints, logs or passes the Claude token in argv: the live tests read
@@ -390,6 +396,23 @@ for w in json.load(sys.stdin): print("worker", w["name"], w["id"], w["status"], 
   echo "dashboard: $AQ_DEV_SERVER_URL/   worker API: $AQ_DEV_WORKER_URL   graph: $AQ_DEV_GRAPH_URL"
 }
 
+# Read-only SQL on the stack's database (swarm phase 1 evidence).
+db() {
+  docker exec -i "$STACK-postgres-1" sh -ec \
+    'PGPASSWORD="$(cat /run/secrets/postgres_password)" psql -h 127.0.0.1 -U agent_q -d agent_q -P pager=off -c "$0"' "$1"
+}
+
+cmd_service_status() {
+  local profile=${AQ_MS1_SERVICE_PROFILE:-ms1} bin
+  bin=$(command -v aq-worker || echo "$HOME/.local/share/agent-q/runtime/aq-worker")
+  "$bin" service status --profile "$profile" || true
+  curl -fsS "$AQ_DEV_SERVER_URL/api/v1/swarm" | python3 -c 'import json,sys
+for m in json.load(sys.stdin)["data"]["machines"]:
+    print(json.dumps({"id": m["id"], "state": m["state"], "control": m.get("control"),
+                      "services": [{"node": n["node"]["id"], "name": n.get("name"), "health": n.get("health"),
+                                    "service": n.get("service")} for n in m.get("nodes", [])]}))'
+}
+
 cmd_stats_summary() {
   python3 - "$1" <<'EOF'
 import csv, re, sys, collections
@@ -436,6 +459,10 @@ case ${1:-} in
   gaps) cmd_gaps ;;
   graph) cmd_graph ;;
   status) cmd_status ;;
+  service-status) cmd_service_status ;;
+  handoffs) db "SELECT attempt_id, node_id, reason, requested_at, candidate_operation_id, candidate_oid, note_comment_id FROM attempt_handoffs ORDER BY requested_at DESC LIMIT 5" ;;
+  renewals) db "SELECT renderer_digest, observed_at_ms, expires_at_ms, node_id FROM context_qualification_renewals ORDER BY observed_at_ms DESC LIMIT 5" ;;
+  decisions) db "SELECT count(*) FROM intelligence_decisions" ;;
   rebuild-server) cmd_rebuild_server ;;
   profiled) cmd_profiled ;;
   media) cmd_media ;;
@@ -448,5 +475,5 @@ case ${1:-} in
   publication) (cd "$SRV" && python3 scripts/ms1-profiled.py publication) ;;
   down) cmd_node_stop; compose down ;;
   all) cmd_up; cmd_seed; cmd_node; cmd_import_login; cmd_live; cmd_server_restart; cmd_gaps ;;
-  *) sed -n '2,34p' "$0"; exit 2 ;;
+  *) sed -n '2,40p' "$0"; exit 2 ;;
 esac

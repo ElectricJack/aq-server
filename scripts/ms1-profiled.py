@@ -98,6 +98,11 @@ POLICY_BODY = {"schema_version": 1, "kind": "aq.default-completion.v1", "deliver
 # fast-forwarding main on its remote and its source follows main (the head AQ
 # published), so a dependent task starts from its predecessor's commit.
 D1 = os.environ.get("AQ_MS1_D1") == "1"
+# Spec 0007 Q3 (swarm phase 1): enrolled service machines are allowed on the
+# credential and the project binding without a node-id edit. The server's
+# default is on; AQ_MS1_ENROLLED_NODES=0 writes an explicit false on both,
+# which keeps only the listed node ids (allowed_node_ids stays as it is).
+ENROLLED_NODES = os.environ.get("AQ_MS1_ENROLLED_NODES", "1") != "0"
 TARGET = "refs/heads/main"
 PUBLICATION = {"mode": "fast_forward", "target": TARGET}
 if D1:
@@ -432,6 +437,7 @@ def build():
                                        "endpoint_reference": ENDPOINT, "revision": CREDENTIAL_REVISION,
                                        "enabled": True, "provisionable": False},
                         "allowed_node_ids": allowed,
+                        "allow_enrolled_nodes": ENROLLED_NODES,
                         "secret_file": "/var/lib/aq/credentials/owner-claude-subscription",
                         "delivery_mode": "server_material_v1"}],
                     "qualified_harnesses": [harness]}
@@ -543,6 +549,9 @@ def binding_rev(built, catalog_digest, current):
                                           wall_time_ms=EXECUTION_MS, memory_bytes=MEMORY_BYTES, cpu_millis=CPU_MILLIS,
                                           process_limit=PROCESS_LIMIT, cost_limit_microunits=None, currency=None,
                                           require_hard_cost_enforcement=False),
+                # The server omits a true flag from the binding it returns, so only false is sent:
+                # an explicit true would differ from the current binding on every apply.
+                **({} if ENROLLED_NODES else {"allow_enrolled_nodes": False}),
                 **({"publication": PUBLICATION} if D1 else {}))
 
 

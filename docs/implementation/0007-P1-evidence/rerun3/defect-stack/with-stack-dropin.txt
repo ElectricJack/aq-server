@@ -1,0 +1,10 @@
+NRestarts before=0 now=0 active=active
+2026-11-08T22:10:38.853280Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:10:38.853817Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:10:39.015795Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="df7d55ad-afb2-495b-854c-e1b91b8e4857"
+2026-11-08T22:10:40.162614Z  WARN aq_worker::service: lost attempt released: its unsaved work was not salvaged; its sandbox is kept for release-sandbox attempt=bdd7e0f7-ba98-5aeb-9e10-93892b19af4e record={"attempt_id":"bdd7e0f7-ba98-5aeb-9e10-93892b19af4e","charged":true,"claim_unreported":false,"held":null,"proof":{"invocation_
+2026-11-08T22:10:43.752604Z  INFO aq_worker::client: probe succeeded
+2026-11-08T22:10:45.466280Z  INFO aq_worker::client: probe succeeded
+2026-11-08T22:10:53.102588Z  INFO aq_agent_channel: agent channel open attempt_id=c2540fad-e5d0-565b-ab45-5ecb936bfe08
+2026-11-08T22:11:05.804687Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-08T22:11:05.836189Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 500 Internal Server Error slot=2

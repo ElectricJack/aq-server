@@ -1,0 +1,9 @@
+2026-11-09T01:26:39Z
+aq-node@ms1 is-active=active is-enabled=enabled NRestarts=0 binary=fb6aec21745def49 (release)
+Environment=RUST_LOG=info
+stop.conf
+aq-node@ms1 (systemd-user): active
+machine desktop: 2 slot(s)
+slot 1: not held
+slot 2: not held
+aq-worker@local=active

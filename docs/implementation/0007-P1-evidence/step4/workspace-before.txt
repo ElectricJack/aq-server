@@ -1,0 +1,4 @@
+/aq/work/p1-rerun/r2/step1.txt
+/aq/work/p1-rerun/r2/step2.txt
+/aq/work/p1-rerun/r2/step3.txt
+/aq/work/p1-rerun/r2/step4.txt

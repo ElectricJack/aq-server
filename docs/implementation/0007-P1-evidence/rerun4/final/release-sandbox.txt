@@ -1,0 +1,17 @@
+error: attempt 7db55543-ed08-574c-b452-79c9a62995ff is still held for salvage by slot 1's recovery; its sandbox holds unsaved work. Pass --force to release it a
+error: attempt ae21e441-426c-5427-9795-39faa8d026b2 is still held for salvage by slot 1's recovery; its sandbox holds unsaved work. Pass --force to release it a
+error: attempt 3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96 is still held for salvage by slot 1's recovery; its sandbox holds unsaved work. Pass --force to release it a
+aq-188de3354fc94e85b15b138f01999775-2f28ecd79d6c548f94e94560cb5bc38a Exited (137) 2 days ago
+aq-3763fb5f501e45d1b7cc93b729b6098c-5553adcaf2b859828796f4eb37a3f255 Exited (0) 14 hours ago
+aq-863c386ed38b49a788c142bee4d9e4dc-7db55543ed08574cb45279c9a62995ff Exited (137) 24 minutes ago
+aq-863c386ed38b49a788c142bee4d9e4dc-ae21e441426c5427979539faa8d026b2 Exited (137) 15 minutes ago
+aq-863c386ed38b49a788c142bee4d9e4dc-3d1fb3a8db515d789c096f4f8ee28c96 Exited (137) 14 minutes ago
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261109T011055Z-7c7c/lost-ae21e441-426c-5427-9795-39faa8d026b2.json
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261109T011055Z-7c7c/lost-proof-ae21e441-426c-5427-9795-39faa8d026b2.json
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261109T011144Z-2c88/lost-3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96.json
+~/.local/state/agent-q/service/ms1/slots/1/archive/20261109T011144Z-2c88/lost-proof-3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96.json
+operator release: attempt 7db55543-ed08-574c-b452-79c9a62995ff sandbox(es) aq-863c386ed38b49a788c142bee4d9e4dc-7db55543ed08574cb45279c9a62995ff destroyed; reason recorded as destroy evidence
+operator release: attempt ae21e441-426c-5427-9795-39faa8d026b2 sandbox(es) aq-863c386ed38b49a788c142bee4d9e4dc-ae21e441426c5427979539faa8d026b2 destroyed; reason recorded as destroy evidence
+operator release: attempt 3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96 sandbox(es) aq-863c386ed38b49a788c142bee4d9e4dc-3d1fb3a8db515d789c096f4f8ee28c96 destroyed; reason recorded as destroy evidence
+aq-188de3354fc94e85b15b138f01999775-2f28ecd79d6c548f94e94560cb5bc38a Exited (137) 2 days ago
+aq-3763fb5f501e45d1b7cc93b729b6098c-5553adcaf2b859828796f4eb37a3f255 Exited (0) 14 hours ago

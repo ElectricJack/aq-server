@@ -1,0 +1,279 @@
+2026-11-08T22:03:45.737162Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 216ms attempt=1
+2026-11-08T22:03:45.737536Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 329ms attempt=1
+2026-11-08T22:03:45.955250Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 696ms attempt=2
+2026-11-08T22:03:46.068759Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 771ms attempt=2
+2026-11-08T22:03:46.653499Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 9ms attempt=3
+2026-11-08T22:03:46.664576Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 20ms attempt=4
+2026-11-08T22:03:46.959806Z  WARN aq_node_service::supervisor: the attempt stays in current for recovery slot=1
+2026-11-08T22:03:46.959865Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native request transport failed; disposition unknown slot=1
+2026-11-08T22:04:13.547528Z  INFO aq_agent_channel: agent credential rotated attempt_id=bdd7e0f7-ba98-5aeb-9e10-93892b19af4e version=3
+thread 'tokio-rt-worker' (1861037) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1894610 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1894617 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1895201 (aq-session-host) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1895234 (tmux: server) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1895238 (memfd:aq-observ) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901147 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901148 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1895238 (memfd:aq-observ) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Unit process 1895238 (memfd:aq-observ) remains running after unit stopped.
+aq-node@ms1.service: Consumed 6min 44.027s CPU time, 290.5M memory peak, 0B memory swap peak.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 1.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:04:28.006855Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=5de38d72da10405a8bd0f94ed24f5c18 unit=aq-node@ms1.service
+2026-11-08T22:04:28.250936Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:28.251752Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:28.251755Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:28.270775Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="c4866715-2513-46e0-8a67-ffe4e2d6cdf6"
+2026-11-08T22:04:28.272677Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="ff5dd1a5-e7b7-4ea6-8123-bb178d22b403"
+thread 'tokio-rt-worker' (1901418) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1901471 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901472 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901473 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901478 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 2.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:04:39.251825Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=04400005c9ca49899a7b503fca555950 unit=aq-node@ms1.service
+2026-11-08T22:04:39.500808Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:39.501344Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:39.501352Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:39.521756Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="0178d35d-13c3-4d2c-a14f-123fa2f7b3b1"
+2026-11-08T22:04:39.521750Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="1fcdfeee-b8c0-406e-a05c-e9e5ec7f2b73"
+thread 'tokio-rt-worker' (1901746) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1901777 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901778 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901779 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1901780 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 3.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:04:50.337018Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=c89de187578d4038b867f2f8ad35961a unit=aq-node@ms1.service
+2026-11-08T22:04:50.578130Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:04:50.578668Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:04:50.578813Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:04:50.595382Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="c7f57bb9-6101-44f0-bf17-d261e200313f"
+2026-11-08T22:04:50.595409Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="df8d8c88-40d9-48d1-a924-ec1d642d4e4e"
+thread 'tokio-rt-worker' (1902043) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1902072 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902073 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902074 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902075 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 4.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:01.325224Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=65a76a154e87422ea3aae5fd45b16dfa unit=aq-node@ms1.service
+2026-11-08T22:05:01.594686Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:01.595242Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:01.595251Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:01.615570Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="5b30dc08-8096-4555-8d41-45ce3e6067b0"
+2026-11-08T22:05:01.616077Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="18cdd613-b568-4a9c-9d50-f7e69b9419dc"
+thread 'tokio-rt-worker' (1902404) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1902438 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902439 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902440 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902445 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 5.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:12.588678Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=cfb0716beb7f4a6199b87593801736b0 unit=aq-node@ms1.service
+2026-11-08T22:05:12.829536Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:12.830137Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:12.830142Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:12.856151Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="81ec2df7-eaf9-491f-bf60-01b6741603e0"
+2026-11-08T22:05:12.858182Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="79e8f754-758f-4b96-957e-01d1e76aeb3c"
+thread 'tokio-rt-worker' (1902715) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1902741 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902742 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902744 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1902749 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 6.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:23.906251Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=ee97d734c4b14e6da78962be56f8172f unit=aq-node@ms1.service
+2026-11-08T22:05:24.144229Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:24.144966Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:24.144984Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:24.164032Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="083582ae-6ad4-4de8-85dd-62fafcc647af"
+2026-11-08T22:05:24.164073Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="50ed7359-268e-470b-afd0-42150ff2b666"
+thread 'tokio-rt-worker' (1903019) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1903043 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903044 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903045 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903046 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 7.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:34.906283Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=d161625722824838afc7c3903546a061 unit=aq-node@ms1.service
+2026-11-08T22:05:35.138822Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:35.139419Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:35.139419Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:35.186175Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="20f79dde-af1b-4db5-bfd5-9cc22aa9d0c2"
+2026-11-08T22:05:35.186175Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="6f32b667-06f5-4cba-bbd7-6ea16511439f"
+thread 'tokio-rt-worker' (1903315) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1903335 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903336 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903337 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903338 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 8.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:45.987229Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=520f990b16574bc8bcdcd152b918bc00 unit=aq-node@ms1.service
+2026-11-08T22:05:46.250046Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:46.250575Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:46.250592Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:46.295494Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="6bfca87c-6f8d-4913-8439-d495482fec1b"
+2026-11-08T22:05:46.295494Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="215b2668-5815-4ac2-82f6-8afaf27065de"
+thread 'tokio-rt-worker' (1903587) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1903639 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903638 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903645 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903646 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 9.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:05:57.007822Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=e09c5a69252b49ccaaf62fe1581160de unit=aq-node@ms1.service
+2026-11-08T22:05:57.252996Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:05:57.253494Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:05:57.253501Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:05:57.288749Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="95315203-47c5-4b0b-ab53-3c7272317677"
+2026-11-08T22:05:57.288755Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="d107a7c2-f816-4d77-81ac-eac9962e3c1a"
+thread 'tokio-rt-worker' (1903936) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1903973 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903974 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903975 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1903976 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 10.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:06:07.995448Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=e7cd71b81f0b4f8f8dee37d28389dfb2 unit=aq-node@ms1.service
+2026-11-08T22:06:08.253480Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:06:08.254039Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:06:08.254123Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:06:08.302743Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="5a70275a-c675-429b-8157-2141c3049e03"
+2026-11-08T22:06:08.308135Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="77580f40-a8d0-441c-a182-170ef0459f81"
+thread 'tokio-rt-worker' (1904306) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1904343 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904344 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904345 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904350 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 11.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:06:19.334022Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=dd31a6f2ab7442b1b46a6443555c9ff6 unit=aq-node@ms1.service
+2026-11-08T22:06:19.626142Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:06:19.626698Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:06:19.626704Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:06:19.667926Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="591bcee4-b903-4850-8b07-bcdeb253a952"
+2026-11-08T22:06:19.667952Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="2e083047-cd03-4e91-b0b0-c1395513104d"
+thread 'tokio-rt-worker' (1904601) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1904629 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904630 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904631 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904632 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 12.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:06:30.309580Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=9bc1c8dd4f3948018b1f0522ffbd8ec1 unit=aq-node@ms1.service
+2026-11-08T22:06:30.561973Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:06:30.562595Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:06:30.562722Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:06:30.619144Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="9e72359e-7f5d-4672-9bc1-dfd6cb890cd9"
+2026-11-08T22:06:30.625171Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="d4c89bac-7b1e-489f-a36c-223ea734cf98"
+thread 'tokio-rt-worker' (1904907) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1904948 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904949 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904950 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1904955 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 13.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:06:41.549702Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=43963de710d8469694b8c531e8f4dea7 unit=aq-node@ms1.service
+2026-11-08T22:06:41.794296Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:06:41.794881Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:06:41.794901Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:06:41.841706Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="b2a084f4-f4d2-48df-bb34-1e9d3f73ae66"
+2026-11-08T22:06:41.841706Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="d844c8e2-6af9-414f-82a7-d9a3e99722fb"
+thread 'tokio-rt-worker' (1905203) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1905227 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905228 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905229 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905230 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 14.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:06:52.604640Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=7facf79cd4794e60b6ecfbe4631bafb2 unit=aq-node@ms1.service
+2026-11-08T22:06:52.874360Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:06:52.875320Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:06:52.875325Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:06:52.946513Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="0c1e9ae7-c501-4e0d-8dab-771d3ba64b07"
+2026-11-08T22:06:52.952338Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="044d83fd-42d1-4be0-8d3f-5e107c078ee8"
+thread 'tokio-rt-worker' (1905510) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1905577 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905578 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905581 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905586 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+aq-node@ms1.service: Scheduled restart job, restart counter is at 15.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-08T22:07:03.882596Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=098c1578e2b74df6ae734eaae52dbbdb unit=aq-node@ms1.service
+2026-11-08T22:07:04.164764Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-08T22:07:04.165306Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-08T22:07:04.165317Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-08T22:07:04.206597Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="f08b8a47-2906-4990-8230-6e262d8e0b41"
+2026-11-08T22:07:04.206600Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="6a7d9ef3-3955-4e51-b000-686ad567474c"
+thread 'tokio-rt-worker' (1905929) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+aq-node@ms1.service: Main process exited, code=dumped, status=6/ABRT
+aq-node@ms1.service: Killing process 1905957 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905958 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905959 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Killing process 1905960 (aq-git) with signal SIGKILL.
+aq-node@ms1.service: Failed with result 'core-dump'.
+Stopped aq-node@ms1.service - AQ worker service (ms1).

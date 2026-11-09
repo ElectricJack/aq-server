@@ -1,0 +1,4 @@
+aq-node@ms1 (systemd-user): active
+machine desktop: 2 slot(s)
+slot 1: not held
+slot 2: not held
