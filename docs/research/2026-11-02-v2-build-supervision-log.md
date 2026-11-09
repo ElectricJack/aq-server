@@ -1890,3 +1890,11 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - A handoff successor is held as stuck after 10 minutes and 20 skips.
   - The dashboard re-pin is dispatched.
   - aq-worker#53 (R4/R5) is in fix round 1.
+
+- **2026-11-08 — R4/R5 fix merged.**
+  - aq-worker#53 squash-merged as b8959743.
+  - R4 root cause: nested inline recovery futures of about 80 KB, plus serde journal decode that needs 1.7 MiB of stack in dev builds. ms1 runs a dev-profile bundle.
+  - The fix boxes the futures and decodes on a scoped 8 MiB thread. Small-stack tests now fail on the reverted tree.
+  - R5: retries use equal jitter, with at least 5 tries and 10 s.
+  - The guardian.rs CI failure was a timing flake: 5 s waits on a slow runner, and a rerun passed. A follow-up will make those tests tolerant of slow runners.
+  - Dispatched L rerun 4 with a release worker build.
