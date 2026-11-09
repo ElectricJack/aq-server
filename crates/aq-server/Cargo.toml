@@ -9,6 +9,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+aq-profile-settings = { path = "../aq-profile-settings" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"
 http-body = "=1.1.0"

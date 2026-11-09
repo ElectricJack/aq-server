@@ -484,6 +484,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-profile-settings"
+version = "0.1.0"
+dependencies = [
+ "aq-profiles",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
@@ -652,6 +665,7 @@ dependencies = [
  "aq-playbook-domain",
  "aq-playbook-host",
  "aq-playbooks-compiler",
+ "aq-profile-settings",
  "aq-profiled-state",
  "aq-profiles",
  "aq-protocol",

@@ -374,3 +374,253 @@ async fn catalogs_require_owner_and_csrf_and_reject_bad_ids() {
         0
     );
 }
+
+// Intelligence Settings: real owner routes and transaction boundaries.
+const INTELLIGENCE_SETTINGS: &str = "/api/settings/intelligence";
+async fn settings_fixture() -> (TestDb, Router, sqlx::PgPool, Value, Uuid) {
+    let (db, app, pool) = setup().await;
+    let catalog = seed();
+    assert_eq!(
+        call(&app, ACTIVATE, Some(activation(&catalog, 0)), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let project = Uuid::new_v4();
+    let binding = json!({"schema_version":1,"project_id":project,"name":"Example project","enabled":false,
+        "repository_id":Uuid::new_v4(),"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured",
+        "graph_adapter_reference":"aq.graph.configured","graph_workspace_id":Uuid::new_v4(),"catalog_digest":catalog.digest(),
+        "allowed_agent_profiles":["implementer@1"],"allowed_intelligence_profiles":["engineering@1"],
+        "allowed_execution_profiles":["confined-development@1"],"allowed_node_ids":[],"allowed_worker_groups":[],
+        "allowed_environments":["confined-worktree"],"policy":{"identity":"example","revision":"1","digest":"a".repeat(64)},
+        "context":[],"ceilings":{"permissions":[],"context_bytes":65536,"wall_time_ms":900000,"memory_bytes":1073741824,
+        "cpu_millis":1000,"process_limit":512,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
+    let observation = json!({"repository_id":binding["repository_id"],"graph_workspace_id":binding["graph_workspace_id"],
+        "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","repository":"verified","graph":"verified",
+        "repository_generation":1,"observed_at_ms":1,"expires_at_ms":30001});
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,$3)")
+        .bind(project).bind(binding).bind(observation).execute(&pool).await.unwrap();
+    let profile = &catalog.artifact().catalog.intelligence[0];
+    let req = json!({"operation_id":Uuid::new_v4(),"expected_revision":"1","profile_id":profile.id,"profile_version":profile.version,
+        "name":"Standard engineering","description":"The owner's engineering profile","candidates":profile.candidates});
+    (db, app, pool, req, project)
+}
+
+#[tokio::test]
+async fn intelligence_settings_updates_catalog_and_project_pins_and_replays() {
+    let (_db, app, pool, request, project) = settings_fixture().await;
+    let old = seed();
+    let (status, snapshot) = call(&app, INTELLIGENCE_SETTINGS, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(snapshot["revision"], "1");
+    assert_eq!(
+        snapshot["profiles"][0]["projects"][0]["id"],
+        project.to_string()
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, saved) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["disposition"], "saved");
+    assert_eq!(saved["revision"], "2");
+    assert_eq!(saved["profile"]["version"], 2);
+    assert_eq!(saved["profile"]["name"], "Standard engineering");
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(binding["enabled"], false);
+    assert_eq!(binding["allowed_agent_profiles"], json!(["implementer@2"]));
+    assert_eq!(
+        binding["allowed_intelligence_profiles"],
+        json!(["engineering@2"])
+    );
+    assert_eq!(binding["catalog_digest"], saved["active_digest"]);
+    let raw: Vec<u8> =
+        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
+            .bind(saved["active_digest"].as_str().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let catalog = ValidatedCatalog::from_artifact(&raw).unwrap();
+    assert_eq!(
+        catalog.artifact().catalog.agents[0].intelligence,
+        "engineering@2"
+    );
+    assert_eq!(catalog.artifact().instructions, old.artifact().instructions);
+    let retained: Vec<u8> =
+        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
+            .bind(old.digest())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retained, old.canonical_bytes().unwrap());
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true)
+            .await
+            .1,
+        saved
+    );
+    assert_eq!(
+        call(
+            &app,
+            &format!(
+                "{INTELLIGENCE_SETTINGS}/operations/{}",
+                request["operation_id"].as_str().unwrap()
+            ),
+            None,
+            false
+        )
+        .await
+        .1,
+        saved
+    );
+    let mut stale = request.clone();
+    stale["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(stale), true).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut changed = request;
+    changed["description"] = json!("Different request under the same identity");
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(changed), true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_artifacts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn intelligence_settings_binding_failure_rolls_back_activation_and_artifacts() {
+    let (_db, app, pool, request, _) = settings_fixture().await;
+    sqlx::query("CREATE FUNCTION fail_settings_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'simulated binding storage failure'; END $$").execute(&pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER settings_failure BEFORE UPDATE ON project_execution_bindings FOR EACH ROW EXECUTE FUNCTION fail_settings_test()").execute(&pool).await.unwrap();
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request), true)
+            .await
+            .0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 1);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_artifacts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM project_execution_binding_history")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn intelligence_settings_rejects_unconfigured_models_and_keeps_drafts_unchanged() {
+    let (_db, app, _pool, mut request, _) = settings_fixture().await;
+    request["candidates"][0]["model"] = json!("unconfigured-model");
+    let (status, body) = call(&app, INTELLIGENCE_SETTINGS, Some(request), true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["message"].as_str().unwrap().contains("not configured"));
+    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 1);
+}
+
+#[tokio::test]
+async fn intelligence_settings_two_editors_cannot_overwrite_each_other() {
+    let (_db, app, _pool, first, _) = settings_fixture().await;
+    let mut second = first.clone();
+    second["operation_id"] = json!(Uuid::new_v4());
+    second["name"] = json!("Other editor");
+    let (a, b) = tokio::join!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(first), true),
+        call(&app, INTELLIGENCE_SETTINGS, Some(second), true)
+    );
+    let mut statuses = [a.0.as_u16(), b.0.as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [200, 409]);
+}
+
+#[tokio::test]
+async fn intelligence_settings_noop_save_does_not_republish_or_repin() {
+    let (_db, app, pool, mut request, _) = settings_fixture().await;
+    request["name"] = json!("engineering");
+    request["description"] = json!("");
+    let (status, response) = call(&app, INTELLIGENCE_SETTINGS, Some(request), true).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["disposition"], "unchanged");
+    assert_eq!(response["revision"], "1");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM project_execution_binding_history")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn intelligence_settings_configured_choice_reaches_future_composition_and_keeps_old_artifacts() {
+    use aq_profile_settings::{ModelChoice, SaveRequest};
+    use sha2::{Digest, Sha256};
+    let current = seed();
+    let state = aq_profiles::ActivationState {
+        revision: 1,
+        active_digest: Some(current.digest().into()),
+        known_identities: current.artifact().identities.clone(),
+        retained: Default::default(),
+    };
+    let mut candidate = current.artifact().catalog.intelligence[0].candidates[0].clone();
+    candidate.provider = "configured-provider".into();
+    candidate.model = "configured-model".into();
+    candidate.reasoning_configuration_reference = "deep@1".into();
+    candidate.harnesses = vec!["codex".into()];
+    let choice = ModelChoice {
+        provider: candidate.provider.clone(),
+        model: candidate.model.clone(),
+        reasoning_configuration_reference: candidate.reasoning_configuration_reference.clone(),
+        reasoning: "deep".into(),
+        harness: "codex".into(),
+    };
+    let request = SaveRequest {
+        operation_id: Uuid::new_v4(),
+        expected_revision: "1".into(),
+        profile_id: "engineering".into(),
+        profile_version: 1,
+        name: "Engineering".into(),
+        description: "".into(),
+        candidates: vec![candidate],
+    };
+    let prepared = aq_profile_settings::prepare(&current, &state, &request, &[choice]).unwrap();
+    let catalog = &prepared.catalog;
+    let context = |id: &str| json!({"source":{"identity":id,"digest":format!("{:x}",Sha256::digest(b"Rules")),"revision":"1"},"text":"Rules","delivery":"startup","required":true,"omission_priority":0});
+    let p = &catalog.artifact().catalog.execution[0].permissions;
+    let composition:aq_profiles::CompileRequest=serde_json::from_value(json!({
+        "profile":{"catalog_digest":catalog.digest(),"agent_profile":"implementer@2","project_binding_id":Uuid::new_v4(),"expected_project_revision":2,"task_context_revision":"task:1"},
+        "ceilings":{"installation":p,"project":p,"execution":p,"caller":p},"available_tools":["task.read","knowledge.read","source.write"],"available_adapters":["codex"],"harness":"codex","environment":"confined-worktree",
+        "platform":context("platform:1"),"project":context("project:1"),"assignment":context("assignment:1"),"context":[],"overrides":[]
+    })).unwrap();
+    let compiled = aq_profiles::compile(catalog, &composition, &"a".repeat(64)).unwrap();
+    assert!(
+        compiled.composition_valid,
+        "{:?}",
+        compiled.blocking_reasons
+    );
+    assert_eq!(
+        compiled.explanation.selection.candidates[0].model,
+        "configured-model"
+    );
+    assert_eq!(
+        compiled.explanation.selection.candidates[0].reasoning_configuration_reference,
+        "deep@1"
+    );
+    assert_eq!(current.artifact().catalog.intelligence[0].version, 1);
+}

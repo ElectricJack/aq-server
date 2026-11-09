@@ -273,6 +273,7 @@ fn spa(path: &str) -> bool {
             "overview" | "supervisor" | "work" | "results" | "decisions" | "agents" | "playbooks"
             | "knowledge" | "settings",
         ] => true,
+        ["settings", "intelligence"] => true,
         ["work" | "decisions" | "agents" | "knowledge", id] | ["playbooks", "runs", id] => {
             segment(id)
         }
@@ -388,6 +389,7 @@ pub(crate) fn routes(assets: Arc<DashboardAssets>) -> Router<AppState> {
         "/knowledge",
         "/knowledge/{nodeId}",
         "/settings",
+        "/settings/intelligence",
     ] {
         router = router.route(path, handler(index.clone(), true));
     }
