@@ -1917,3 +1917,8 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - a no-op availability switch touches nothing;
     - lock contention now returns 503 with `Retry-After`.
   - The worker side, retrying a transient 503 from inventory-v2, is aq-worker#54, in CI.
+
+- **2026-11-08 — Phase 1 complete; holding before phase 3.**
+  - aq-worker#54 (transient 503 resend for inventory-v2, register and the heartbeat) squash-merged as 4d85e963.
+  - Spec 0007 phases 1 and 2 are done. Owner items: W13 (terminal input), the A1 soak, and the phase B retention question.
+  - Holding new heavy dispatches (the phase 3 plan and implementation). The owner rule of 2026-11-03 is to pause v2 work at 80% weekly Claude usage. The last reading was 84%, and the v1 usage reader is gone with v1. Waiting for the owner to say whether to continue.
