@@ -1,0 +1,10 @@
+2026-11-09T01:04:40.545732Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:04:40.572693Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 500 Internal Server Error slot=2
+2026-11-09T01:06:56.592562Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:06:56.620584Z  WARN aq_node_service::supervisor: attempt failed, retrying in 60s: native endpoint returned 500 Internal Server Error slot=2
+2026-11-09T01:09:11.506252Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:09:11.536607Z  WARN aq_node_service::supervisor: attempt failed, retrying in 120s: native endpoint returned 500 Internal Server Error slot=2
+2026-11-09T01:13:09.675773Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:13:09.707992Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 500 Internal Server Error slot=1
+2026-11-09T01:14:02.631984Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:14:02.668136Z  WARN aq_node_service::supervisor: attempt failed, retrying in 60s: native endpoint returned 500 Internal Server Error slot=1

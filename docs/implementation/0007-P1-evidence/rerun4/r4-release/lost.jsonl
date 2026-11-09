@@ -1,0 +1,1 @@
+{"attempt_id":"7db55543-ed08-574c-b452-79c9a62995ff","node_id":"863c386e-d38b-49a7-88c1-42bee4d9e4dc","proof_kind":"cgroup_teardown","proof":{"unit": "aq-node@ms1.service", "proof_kind": "cgroup_teardown", "invocation_id": "75756f0443d540dfa7959773775f267f"},"reason":"lost_after_crash","charged":tru

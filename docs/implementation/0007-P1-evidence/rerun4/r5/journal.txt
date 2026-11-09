@@ -1,0 +1,24 @@
+aq-node@ms1.service: Scheduled restart job, restart counter is at 2.
+Starting aq-node@ms1.service - AQ worker service (ms1)...
+Started aq-node@ms1.service - AQ worker service (ms1).
+2026-11-09T01:11:31.713229Z  INFO aq_worker::service: the unit's cgroup holds no process of a previous invocation invocation=86ad58aeb038408d93422512d5909174 unit=aq-node@ms1.service
+2026-11-09T01:11:31.965293Z  INFO aq_worker::service: worker service starting profile=ms1 machine=desktop slots=2 runtime=/run/user/1000/aq/ms1
+2026-11-09T01:11:31.965863Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/2/git.sock
+2026-11-09T01:11:31.965878Z  WARN aq_node_service::git: removed the socket of a killed aq-git socket=/run/user/1000/aq/ms1/1/git.sock
+2026-11-09T01:11:32.006658Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="7b524db0-2426-4e8a-ac8b-6d59c6ed43d7"
+2026-11-09T01:11:32.006658Z  WARN aq_node_service::git: cleared the ownership fence of a killed aq-git (no process held its owner lock) incarnation="d3aafb7d-9375-4281-a0b6-af5e8579fa87"
+2026-11-09T01:11:33.674600Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:11:43.986035Z  WARN aq_worker::service: lost attempt released: its unsaved work was not salvaged; its sandbox is kept for release-sandbox attempt=3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96 record={"attempt_id":"3d1fb3a8-db51-5d78-9c09-6f4f8ee28c96","ch
+2026-11-09T01:11:46.043227Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:13:09.675773Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:13:09.707992Z  WARN aq_node_service::supervisor: attempt failed, retrying in 30s: native endpoint returned 500 Internal Server Error slot=1
+2026-11-09T01:13:42.256303Z  INFO aq_worker::client: probe succeeded
+2026-11-09T01:13:59.834882Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 262ms attempt=1
+2026-11-09T01:13:59.835075Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 276ms attempt=1
+2026-11-09T01:14:00.098576Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 535ms attempt=2
+2026-11-09T01:14:00.112721Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 861ms attempt=2
+2026-11-09T01:14:00.634940Z  WARN aq_worker::native::http: native request transport failed; disposition unknown; retrying in 1.091s attempt=3
+2026-11-09T01:14:02.631984Z  WARN aq_worker::native::http: native endpoint refused path=/v1/worker/profiled/inventory-v2 status=500 Internal Server Error body={"error":"internal","message":"internal server error"}
+2026-11-09T01:14:02.668136Z  WARN aq_node_service::supervisor: attempt failed, retrying in 60s: native endpoint returned 500 Internal Server Error slot=1
+2026-11-09T01:14:09.254341Z  INFO aq_agent_channel: agent channel open attempt_id=353c452a-0bd3-53e7-afec-f2779f06b669
+2026-11-09T01:14:20.886012Z  INFO aq_agent_channel: agent channel closed attempt_id=353c452a-0bd3-53e7-afec-f2779f06b669 reason="stopped by the node"

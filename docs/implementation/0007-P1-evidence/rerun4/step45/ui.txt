@@ -1,0 +1,8 @@
+dialog: "Each running agent on desktop is stopped, its work is saved as a commit with a handoff note, and a fresh agent continues it from that commit. This machine takes no new work until you start it."
+dialog: "1 running agent will be handed off."
+submitted Stop worker at 2026-11-09T01:03:23.188Z
+handed off 01:03:42
+dialog: "desktop takes new work again. Handoffs already requested continue."
+submitted Start worker at 2026-11-09T01:03:52.526Z
+running|15
+successor offered 01:03:59

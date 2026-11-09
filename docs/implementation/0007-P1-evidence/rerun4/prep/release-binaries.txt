@@ -1,0 +1,11 @@
+fb6aec21745def49 ~/.local/share/aq-ms1/runtime/aq-worker
+fb6aec21745def49 ~/.local/share/aq-ms1/runtime/aq-sandbox-driver
+36cc2bc692245bb9 ~/.local/share/aq-ms1/runtime/aq-session-host
+82379105e7f6f17f ~/.local/share/aq-ms1/runtime/aq-agent
+[profile.release]
+lto = "thin"
+strip = true
+
+# CI-only images: no ThinLTO, low optimization. Release artifacts keep
+# [profile.release]. (aq-server's Dockerfile.worker defines the same profile
+# with --config for pinned sources that predate it.)
