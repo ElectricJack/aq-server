@@ -1906,3 +1906,4 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - M1, important: an open dashboard causes nodes-row lock timeouts; dispatched together with N1/N2.
     - M2, M3, M4: minor.
   - `aq-node@ms1` is left enabled and running.
+- **2026-11-08:** phase 1 evidence merged: aq-server#115 (aabfcb2c) and aq-worker#50 (b3a56df1).
