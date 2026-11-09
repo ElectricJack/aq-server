@@ -1878,3 +1878,15 @@ Each entry records what was observed, the action taken, and anything waiting on 
     - R6: the catalog retry-budget hold is invisible.
   - Dispatched the worker R4/R5 fix and the server visible-holds fix (R6 plus parked follow-ups).
   - Lesson W88 added.
+
+- **2026-11-08 — Visible task holds merged (R6).**
+  - aq-server#120 was squash-merged as b88c51f8, after an Opus review, one fix round and a clean re-review.
+  - What it adds:
+    - Retry-budget, quarantine and stuck-successor holds are recorded in `task_holds` (0106), with one fixed-template system comment each.
+    - The task view and `/api/v1/swarm` (`tasks_held`) read one view.
+    - Holds are cleared by a trigger on a new attempt or release, and by a sweep when the task closes.
+    - Hold comments map each reason code to a fixed phrase.
+    - The lost-release retry runs on one connection.
+    - A handoff successor is held as stuck after 10 minutes and 20 skips.
+  - The dashboard re-pin is dispatched.
+  - aq-worker#53 (R4/R5) is in fix round 1.
