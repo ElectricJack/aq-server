@@ -109,6 +109,22 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let (status, discovery) = call(&admin, &discover, None, None, false).await;
     assert_eq!(status, StatusCode::OK, "{discovery}");
     assert_eq!(discovery["conversation"]["id"], conversation);
+    let message_operation = Uuid::new_v4();
+    let message_id = Uuid::new_v4();
+    let send = json!({"operation_id":message_operation,"kind":"supervisor.message.send","subject":{"type":"conversation","id":conversation,"revision":"1"},"expected_versions":{"conversation":"1"},"payload":{"operation_id":message_operation,"message_id":message_id,"expected_conversation_revision":"1","body":"Project message receipt QA","context":[],"attachments":[]}});
+    let (status, sent) = call(&admin, "/api/v1/actions", Some(send), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["data"]["disposition"], "confirmed");
+    let (status, looked) = call(
+        &admin,
+        &format!("/api/v1/operations/{message_operation}"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{looked}");
+    assert_eq!(looked["data"]["disposition"], "confirmed");
     let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"enabled":false});
     assert_eq!(
         call(&admin, &uri, Some(stop), None, true).await.0,

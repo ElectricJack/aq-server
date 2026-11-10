@@ -92,9 +92,15 @@ impl ActionKind for SendMessage {
         }
         let mut tx = self.0.tx().await.map_err(ApiError::from)?;
         owner(&mut tx, user).await.map_err(ApiError::from)?;
-        let conversation = definition(&mut tx, None, false)
-            .await
-            .map_err(ApiError::from)?;
+        let conversation = definition(
+            &mut tx,
+            operation
+                .and_then(|op| op.subject_refs.first())
+                .and_then(|r| r.id.parse().ok()),
+            false,
+        )
+        .await
+        .map_err(ApiError::from)?;
         tx.commit().await?;
         if let Some(op) = operation {
             if op.subject_refs.len() != 1

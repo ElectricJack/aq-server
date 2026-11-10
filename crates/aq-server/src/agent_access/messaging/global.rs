@@ -62,7 +62,7 @@ fn stamp(state: &AppState) -> Result<u64> {
         .filter(|n| *n > 0)
         .ok_or_else(unavailable)
 }
-use aq_supervisor_control::wire::{Conversation, Runtime};
+use aq_supervisor_control::wire::{Conversation, Runtime, author, recipient};
 fn runtime() -> Runtime {
     Runtime::unavailable()
 }
@@ -190,12 +190,6 @@ async fn definition(
             _ => unavailable(),
         })
 }
-fn recipient(conversation: Uuid) -> Value {
-    json!({"kind":"global_supervisor","conversation_id":conversation})
-}
 fn key(conversation: Uuid) -> Result<String> {
     digest(&recipient(conversation)).map_err(|_| unavailable())
-}
-fn author(id: Uuid) -> Value {
-    json!({"kind":"owner","user_id":id})
 }

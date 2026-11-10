@@ -55,3 +55,10 @@ pub struct Discovery {
     pub runtime: Runtime,
     pub limits: Limits,
 }
+
+pub fn recipient(conversation: Uuid) -> Value {
+    serde_json::json!({"kind":"global_supervisor","conversation_id":conversation})
+}
+pub fn author(id: Uuid) -> Value {
+    serde_json::json!({"kind":"owner","user_id":id})
+}
