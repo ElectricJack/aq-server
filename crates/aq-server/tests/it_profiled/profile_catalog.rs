@@ -605,7 +605,8 @@ fn intelligence_settings_configured_choice_reaches_future_composition_and_keeps_
         candidates: vec![candidate],
         delete: None,
     };
-    let prepared = aq_profile_settings::prepare(&current, &state, &request, &[choice]).unwrap();
+    let prepared =
+        aq_profile_settings::prepare(&current, &state, &request, &[choice], false).unwrap();
     let catalog = &prepared.catalog;
     let context = |id: &str| json!({"source":{"identity":id,"digest":format!("{:x}",Sha256::digest(b"Rules")),"revision":"1"},"text":"Rules","delivery":"startup","required":true,"omission_priority":0});
     let p = &catalog.artifact().catalog.execution[0].permissions;
@@ -799,43 +800,183 @@ async fn intelligence_settings_deletes_unused_rows_retains_history_and_replays()
 }
 
 #[tokio::test]
-async fn intelligence_settings_refuses_deleting_agent_or_project_references() {
+async fn intelligence_settings_deleting_used_profiles_returns_agent_and_project_to_router() {
     let (_db, app, pool, mut request, project) = settings_fixture().await;
     request["delete"] = json!(true);
-    let (status, blocked) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
-    assert!(
-        blocked["message"]
-            .as_str()
-            .unwrap()
-            .contains("agent profile")
+    let (status, deleted) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["disposition"], "deleted");
+    assert_eq!(deleted["routing"]["mode"], "automatic");
+    assert_eq!(
+        deleted["routing"]["agent_profiles"],
+        json!(["implementer", "reviewer", "researcher", "supervisor"])
     );
-    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 1);
-    request.as_object_mut().unwrap().remove("delete");
-    request["operation_id"] = json!(Uuid::new_v4());
-    request["profile_id"] = json!("project-allowed-row");
-    request["profile_version"] = json!(0);
-    request["name"] = json!("Project allowed row");
-    request["candidates"] = json!([]);
-    let (status, added) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    let router_ref = deleted["routing"]["profile_reference"].as_str().unwrap();
+    let current = call(&app, INTELLIGENCE_SETTINGS, None, false).await.1;
+    assert!(
+        current["profiles"].as_array().unwrap().is_empty(),
+        "Internal routing must not appear as an editable profile row"
+    );
+    let artifact = call(
+        &app,
+        &format!("{STATE}/{}", deleted["active_digest"].as_str().unwrap()),
+        None,
+        false,
+    )
+    .await
+    .1;
+    let catalog = &artifact["artifact"]["catalog"];
+    assert_eq!(catalog["agents"][0]["intelligence"], router_ref);
+    assert_eq!(catalog["agents"][0]["version"], 2);
+    assert_eq!(catalog["intelligence"][0]["automatic_routing"], true);
+    assert!(catalog["intelligence"][0]["selection_policy"].is_object());
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        binding["allowed_intelligence_profiles"],
+        json!([router_ref])
+    );
+    assert_eq!(binding["allowed_agent_profiles"], json!(["implementer@2"]));
+    assert_eq!(
+        binding["allowed_execution_profiles"],
+        json!(["confined-development@1"])
+    );
+    assert_eq!(binding["enabled"], false);
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request), true)
+            .await
+            .1,
+        deleted
+    );
+    // A project-only assignment also returns to the existing router.
+    let mut create = json!({"operation_id":Uuid::new_v4(),"expected_revision":current["revision"],"profile_id":"project-only",
+        "profile_version":0,"name":"Project only","description":"","candidates":[]});
+    let (status, added) = call(&app, INTELLIGENCE_SETTINGS, Some(create.clone()), true).await;
     assert_eq!(status, StatusCode::OK, "{added}");
-    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{allowed_intelligence_profiles}',binding->'allowed_intelligence_profiles' || '\"project-allowed-row@1\"'::jsonb) WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
-    request["operation_id"] = json!(Uuid::new_v4());
-    request["expected_revision"] = added["revision"].clone();
-    request["profile_version"] = json!(1);
-    request["delete"] = json!(true);
-    let (status, blocked) = call(&app, INTELLIGENCE_SETTINGS, Some(request), true).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
-    assert!(
-        blocked["message"]
-            .as_str()
-            .unwrap()
-            .contains("Example project")
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{allowed_intelligence_profiles}','[\"project-only@1\"]'::jsonb) WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
+    create["operation_id"] = json!(Uuid::new_v4());
+    create["expected_revision"] = added["revision"].clone();
+    create["profile_version"] = json!(1);
+    create["delete"] = json!(true);
+    let (status, removed) = call(&app, INTELLIGENCE_SETTINGS, Some(create), true).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["routing"]["profile_reference"], router_ref);
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        binding["allowed_intelligence_profiles"],
+        json!([router_ref])
     );
-    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 2);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_artifacts")
-        .fetch_one(&pool)
-        .await
+}
+
+#[test]
+fn automatic_router_prefers_configured_models_and_retains_recipe_and_permission_boundaries() {
+    use aq_profile_settings::{ModelChoice, SaveRequest};
+    let current = seed();
+    let state = aq_profiles::ActivationState {
+        revision: 1,
+        active_digest: Some(current.digest().into()),
+        known_identities: current.artifact().identities.clone(),
+        retained: Default::default(),
+    };
+    let profile = &current.artifact().catalog.intelligence[0];
+    let request = SaveRequest {
+        operation_id: Uuid::new_v4(),
+        expected_revision: "1".into(),
+        profile_id: profile.id.clone(),
+        profile_version: profile.version,
+        name: profile.id.clone(),
+        description: "".into(),
+        candidates: profile.candidates.clone(),
+        delete: Some(true),
+    };
+    let choice: ModelChoice = serde_json::from_value(json!({"provider":"configured-provider","model":"configured-model","reasoning_configuration_reference":"configured-high@1","reasoning":"high","harness":"codex","preference_only":false})).unwrap();
+    let prepared =
+        aq_profile_settings::prepare(&current, &state, &request, &[choice], true).unwrap();
+    let catalog = &prepared.catalog.artifact().catalog;
+    let router = catalog
+        .intelligence
+        .iter()
+        .find(|p| p.automatic_routing == Some(true))
         .unwrap();
-    assert_eq!(count, 2, "Blocked deletion must publish nothing");
+    assert_eq!(router.candidates.len(), 1);
+    assert_eq!(router.candidates[0].model, "configured-model");
+    assert_eq!(
+        router.candidates[0].reasoning_configuration_reference,
+        "configured-high@1"
+    );
+    assert!(
+        router
+            .selection_policy
+            .as_ref()
+            .unwrap()
+            .fallback_on
+            .contains(&aq_profiles::FallbackReason::Unavailable)
+    );
+    for (previous, next) in current
+        .artifact()
+        .catalog
+        .agents
+        .iter()
+        .zip(&catalog.agents)
+    {
+        assert_eq!(previous.role, next.role);
+        assert_eq!(previous.behaviors, next.behaviors);
+        assert_eq!(previous.capabilities, next.capabilities);
+        assert_eq!(previous.execution, next.execution);
+        assert_eq!(previous.allowed_overrides, next.allowed_overrides);
+        assert_eq!(
+            next.intelligence,
+            aq_profiles::key(&router.id, router.version)
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&current.artifact().catalog.execution).unwrap(),
+        serde_json::to_value(&catalog.execution).unwrap()
+    );
+    assert!(
+        current
+            .artifact()
+            .catalog
+            .intelligence
+            .iter()
+            .any(|p| p.id == request.profile_id)
+    );
+}
+
+#[test]
+fn automatic_routing_keeps_agent_and_intelligence_reference_namespaces_separate() {
+    let seed = seed();
+    let mut catalog = seed.artifact().catalog.clone();
+    catalog.agents[0].id = "engineering".into();
+    let current = aq_profiles::validate(catalog, seed.artifact().instructions.clone()).unwrap();
+    let state = aq_profiles::ActivationState {
+        revision: 1,
+        active_digest: Some(current.digest().into()),
+        known_identities: current.artifact().identities.clone(),
+        retained: Default::default(),
+    };
+    let request: aq_profile_settings::SaveRequest = serde_json::from_value(json!({"operation_id":Uuid::new_v4(),"expected_revision":"1",
+        "profile_id":"engineering","profile_version":1,"name":"Engineering","description":"","candidates":[],"delete":true})).unwrap();
+    let prepared = aq_profile_settings::prepare(&current, &state, &request, &[], true).unwrap();
+    let binding = json!({"catalog_digest":current.digest(),"allowed_agent_profiles":["engineering@1"],"allowed_intelligence_profiles":["engineering@1"]});
+    let updated = aq_profile_settings::update_binding(
+        &binding,
+        prepared.catalog.digest(),
+        &prepared.references,
+    )
+    .unwrap();
+    assert_eq!(updated["allowed_agent_profiles"], json!(["engineering@2"]));
+    assert_eq!(
+        updated["allowed_intelligence_profiles"],
+        json!(["router@1"])
+    );
 }

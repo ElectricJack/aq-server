@@ -43,3 +43,5 @@ No new database migration or integration test binary is needed. New routes use t
 Each worktree uses its own Cargo target. Tests run under `timeout`. Record tests, source and rollback evidence, publish draft PRs, and leave merges subject to independent review. Deploy the requested local change with a rollback copy and verify worker heartbeats continue. No v1 process or checkout is changed.
 
 Owner followup: import active saved v1 defaults and discover provider model/effort metadata through legitimate interfaces. Preserve raw native options, separate preferences from runtime qualification, retain stale snapshots on refresh failure, and expose source/freshness. Use the host refresh helper plus a bounded metadata file; do not add provider credentials to the browser or daemon config, start v1, or run generation calls.
+
+Owner correction: deletion must not be blocked by references. Remove the named assignment, version affected agent recipes, repin affected project references, and hand future work to AQ's automatic model selection. Keep old sessions/artifacts and source/permission boundaries unchanged. No manual detachment or unconfigured-profile hold.

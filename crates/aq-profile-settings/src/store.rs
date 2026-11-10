@@ -75,7 +75,13 @@ pub async fn read(pool: &PgPool, choices: &[ModelChoice]) -> Result<Value> {
         if projects.len() > 256 {
             return Err(conflict("Project limit exceeded"));
         }
-        for profile in &catalog.artifact().catalog.intelligence {
+        for profile in catalog
+            .artifact()
+            .catalog
+            .intelligence
+            .iter()
+            .filter(|p| p.automatic_routing != Some(true))
+        {
             let key = aq_profiles::key(&profile.id, profile.version);
             let mut profile = value(profile)?;
             profile["projects"] = Value::Array(projects.iter().filter_map(|row| {
@@ -147,17 +153,13 @@ pub async fn save(
         ));
     }
     let current = current.ok_or_else(|| conflict("No profile catalog is active"))?;
-    let prepared = prepare(&current, &state, &req, choices)?;
-    if prepared.deleted {
-        let reference = aq_profiles::key(&prepared.profile.id, prepared.profile.version);
-        let project: Option<String> = sqlx::query_scalar("SELECT binding->>'name' FROM project_execution_bindings WHERE binding->>'catalog_digest'=$1 AND binding->'allowed_intelligence_profiles' ? $2 ORDER BY project_id LIMIT 1")
-            .bind(current.digest()).bind(reference).fetch_optional(&mut *tx).await?;
-        if let Some(project) = project {
-            return Err(conflict(&format!(
-                "This profile is allowed by project {project}. Remove that assignment before deleting it"
-            )));
-        }
-    }
+    let project_uses_profile = if req.delete == Some(true) {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE binding->>'catalog_digest'=$1 AND binding->'allowed_intelligence_profiles' ? $2)")
+            .bind(current.digest()).bind(aq_profiles::key(&req.profile_id, req.profile_version)).fetch_one(&mut *tx).await?
+    } else {
+        false
+    };
+    let prepared = prepare(&current, &state, &req, choices, project_uses_profile)?;
     let mut updated = Vec::new();
     let mut revision = state.revision;
     let op_count: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_operations")
@@ -253,7 +255,10 @@ pub async fn save(
         sqlx::query("UPDATE profile_catalog_registry SET revision=$1,active_digest=$2,state=$3 WHERE singleton")
             .bind(next.revision as i64).bind(prepared.catalog.digest()).bind(next_state).execute(&mut *tx).await?;
     }
-    let response = json!({"operation_id":req.operation_id,"disposition":if prepared.deleted {"deleted"} else if prepared.changed {"saved"} else {"unchanged"},"revision":revision.to_string(),"active_digest":prepared.catalog.digest(),"profile":prepared.profile,"updated_projects":updated});
+    let mut response = json!({"operation_id":req.operation_id,"disposition":if prepared.deleted {"deleted"} else if prepared.changed {"saved"} else {"unchanged"},"revision":revision.to_string(),"active_digest":prepared.catalog.digest(),"profile":prepared.profile,"updated_projects":updated});
+    if let Some(routing) = prepared.routing {
+        response["routing"] = routing;
+    }
     sqlx::query("INSERT INTO profile_catalog_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)")
         .bind(actor).bind(req.operation_id).bind(payload_digest).bind(&response).execute(&mut *tx).await?;
     tx.commit().await?;

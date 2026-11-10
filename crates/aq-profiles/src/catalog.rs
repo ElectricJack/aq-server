@@ -79,6 +79,8 @@ pub struct ModelCandidate {
 #[serde(deny_unknown_fields)]
 pub struct Intelligence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_routing: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

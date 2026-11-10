@@ -1,5 +1,6 @@
 //! Owner profile editing: versioned artifacts and project references move atomically.
 pub mod inspection;
+mod routing;
 mod store;
 use aq_profiles::{ActivationState, Intelligence, ModelCandidate, ValidatedCatalog};
 use serde::{Deserialize, Serialize};
@@ -139,12 +140,14 @@ pub struct Prepared {
     pub references: BTreeMap<String, String>,
     pub changed: bool,
     pub deleted: bool,
+    pub routing: Option<Value>,
 }
 pub fn prepare(
     current: &ValidatedCatalog,
     state: &ActivationState,
     req: &SaveRequest,
     choices: &[ModelChoice],
+    project_uses_profile: bool,
 ) -> Result<Prepared> {
     if req.operation_id.is_nil()
         || req.name.trim().is_empty()
@@ -158,6 +161,7 @@ pub fn prepare(
     }
     let creating = req.profile_version == 0;
     let initial = Intelligence {
+        automatic_routing: None,
         id: req.profile_id.clone(),
         version: 0,
         name: None,
@@ -194,31 +198,9 @@ pub fn prepare(
         if creating {
             return Err(invalid("Unsaved rows are removed locally"));
         }
-        let key = aq_profiles::key(&old.id, old.version);
-        if let Some(agent) = current
-            .artifact()
-            .catalog
-            .agents
-            .iter()
-            .find(|a| a.intelligence == key)
-        {
-            return Err(conflict(&format!(
-                "This profile is used by agent profile {}. Change that assignment before deleting it",
-                agent.id
-            )));
-        }
-        let mut catalog = current.artifact().catalog.clone();
-        catalog.intelligence.retain(|p| p.id != old.id);
-        let catalog = aq_profiles::validate(catalog, current.artifact().instructions.clone())
-            .map_err(|_| invalid("This profile cannot be removed from the active catalog"))?;
-        return Ok(Prepared {
-            catalog,
-            profile: old.clone(),
-            references: BTreeMap::new(),
-            changed: true,
-            deleted: true,
-        });
+        return routing::remove(current, state, old, choices, project_uses_profile);
     }
+
     // Keeping an existing provider mapping does not require that provider to
     // be installed now. Newly chosen execution settings still need known facts.
     for candidate in &req.candidates {
@@ -272,6 +254,7 @@ pub fn prepare(
             references: BTreeMap::new(),
             changed: false,
             deleted: false,
+            routing: None,
         });
     }
     profile.version = version(state, "intelligence", &profile.id, profile.version)?;
@@ -287,7 +270,7 @@ pub fn prepare(
             .iter_mut()
             .find(|p| p.id == old.id && p.version == old.version)
             .ok_or(Error::Internal)? = profile.clone();
-        references.insert(old_key.clone(), new_key.clone());
+        references.insert(format!("intelligence:{old_key}"), new_key.clone());
         for agent in &mut catalog.agents {
             if agent.intelligence != old_key {
                 continue;
@@ -295,7 +278,10 @@ pub fn prepare(
             let old_agent = aq_profiles::key(&agent.id, agent.version);
             agent.version = version(state, "agent", &agent.id, agent.version)?;
             agent.intelligence = new_key.clone();
-            references.insert(old_agent, aq_profiles::key(&agent.id, agent.version));
+            references.insert(
+                format!("agent:{old_agent}"),
+                aq_profiles::key(&agent.id, agent.version),
+            );
         }
     }
     let catalog = aq_profiles::validate(catalog, current.artifact().instructions.clone())
@@ -306,6 +292,7 @@ pub fn prepare(
         references,
         changed: true,
         deleted: false,
+        routing: None,
     })
 }
 pub fn update_binding(
@@ -315,13 +302,19 @@ pub fn update_binding(
 ) -> Result<Value> {
     let mut out = binding.clone();
     out["catalog_digest"] = json!(digest);
-    for field in ["allowed_agent_profiles", "allowed_intelligence_profiles"] {
+    for (field, namespace) in [
+        ("allowed_agent_profiles", "agent"),
+        ("allowed_intelligence_profiles", "intelligence"),
+    ] {
         let entries = out
             .get_mut(field)
             .and_then(Value::as_array_mut)
             .ok_or(Error::Internal)?;
         for entry in entries {
-            if let Some(replacement) = entry.as_str().and_then(|key| references.get(key)) {
+            if let Some(replacement) = entry
+                .as_str()
+                .and_then(|key| references.get(&format!("{namespace}:{key}")))
+            {
                 *entry = json!(replacement);
             }
         }
