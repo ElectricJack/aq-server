@@ -96,14 +96,13 @@ async fn connect(
     }
     let mut runtime = s.runtime.0.lock().await;
     let screen = screen(&mut runtime, id)?;
-    if let Some(expected) = c.expected_generation {
-        if screen.generation != expected
+    if let Some(expected) = c.expected_generation
+        && (screen.generation != expected
             || !screen
                 .controller
-                .is_some_and(|(client, a, _)| client == c.client_id && a == actor)
-        {
-            return Err(conflict("Terminal control changed; reconnect"));
-        }
+                .is_some_and(|(client, a, _)| client == c.client_id && a == actor))
+    {
+        return Err(conflict("Terminal control changed; reconnect"));
     }
     if screen.commands.values().any(|cmd| {
         cmd.disposition == "unknown"
