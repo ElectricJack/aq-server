@@ -82,3 +82,14 @@ a fresh enrolled report keeps the worker visible without overriding a revoke or
 explicit machine Stop. Raw output masks existing agent/subscription credential
 prefixes incrementally, preserving byte geometry and emitting ordinary keystrokes
 without lookahead buffering. Terminal performance QA submits no model turn.
+
+
+## Saved intelligence and Codex manual launch
+
+Worker launch has inline Provider and Intelligence profile selectors (owner request, 2026-11-10). The server resolves an exact saved profile/version/candidate from the active Settings catalog into a retained session model, effort, provider and known options; future profile edits/deletions do not rewrite running sessions. Native task routing/qualifications are separate and unchanged. A stale selection requires choosing again; an uncertain retry uses its original operation ID and selection.
+
+Migration 108 adds original-worker manual provider capabilities. Legacy workers report only Claude. A Codex-capable worker must explicitly install `[manual.codex]` with `executable` (absolute path inside the sandbox template) and `auth_file` (absolute owner-only ChatGPT auth document on the worker). No API key is accepted. The installed template must actually contain that executable. Missing/invalid subscription material excludes Codex from advertised choices. Do not advertise manual support as native qualification.
+
+Codex receives only its private auth document in isolated `/aq/home/.codex`, with a generated nonsecret config, explicit model/effort overrides, and no initial prompt. No host config/plugin directory is copied. The fixed external sandbox remains the isolation boundary. Stop removes the sandbox's Codex login file and retains source; the launcher also wipes the file on normal CLI exit. The browser uses the same authenticated raw PTY transport for both providers.
+
+CLI flags were checked against installed Codex 0.166.0 and current [official configuration reference](https://developers.openai.com/codex/config-reference/); [official authentication guidance](https://developers.openai.com/codex/auth) documents copying a protected ChatGPT auth cache to an isolated/headless environment. Account/model access remains subject to the provider; a saved preference is not a claim of provider availability.

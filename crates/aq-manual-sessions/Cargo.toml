@@ -6,6 +6,7 @@ publish.workspace = true
 [dependencies]
 axum = { workspace = true, features = ["ws"] }
 futures-util = "0.3"
+aq-profile-settings = { path = "../aq-profile-settings" }
 aq-human-http = { path = "../aq-human-http" }
 chrono.workspace = true
 serde.workspace = true

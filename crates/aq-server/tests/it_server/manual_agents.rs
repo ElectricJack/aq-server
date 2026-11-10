@@ -51,11 +51,23 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let repo = f.profiled.source.repository_id;
     let node = f.node.node_id;
     let digest = "a".repeat(64);
-    let catalog = json!({"catalog":{"intelligence":[{"id":"manual-model","version":1,"candidates":[{"provider":"anthropic","model":"fixture-model"}]}]}});
+    let catalog = json!({"catalog":{"intelligence":[{"id":"manual-model","name":"Standard","version":1,"candidates":[{"id":"claude","provider":"anthropic","model":"fixture-model","harnesses":["claude"],"reasoning_configuration_reference":"fixture-medium@1"},{"id":"codex","provider":"openai","model":"gpt-test","harnesses":["codex"],"reasoning_configuration_reference":"fixture-high@1"}]}]}});
     sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)").bind(&digest).bind(serde_json::to_vec(&catalog).unwrap()).bind(f.actor).execute(&pool).await.unwrap();
     let binding = json!({"enabled":true,"name":"manual fixture","repository_id":repo,"catalog_digest":digest,"allowed_intelligence_profiles":["manual-model@1"],"allowed_node_ids":[],"allowed_worker_groups":[]});
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')").bind(project).bind(binding).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+        .bind(&digest)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let preferences = tempfile::tempdir().unwrap();
+    let preferences_path = preferences.path().join("models.json");
+    std::fs::write(&preferences_path,serde_json::to_vec(&json!([
+        {"provider":"anthropic","model":"fixture-model","reasoning_configuration_reference":"fixture-medium@1","reasoning":"medium","harness":"claude"},
+        {"provider":"openai","model":"gpt-test","reasoning_configuration_reference":"fixture-high@1","reasoning":"high","harness":"codex","options":{"service_tier":"fast"}}
+    ])).unwrap()).unwrap();
     let mut config = (*f.state.config).clone();
+    config.intelligence_preferences_file = Some(preferences_path);
     config.profiled_execution=Some(serde_json::from_value(json!({"revision":1,"qualified_runtimes":[],"projects":[{"project_id":project,"enabled":true,"priority":0,"source":{"kind":"immutable","object":{"format":"sha1","hex":"a".repeat(40)}},"retention_handle":Uuid::new_v4()}]})).unwrap());
     f.state.config = Arc::new(config);
     let admin = build_admin_router(f.state.clone());
@@ -85,6 +97,120 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::OK
     );
+    let selected = json!({"profile_id":"manual-model","profile_version":1,"candidate_id":"codex"});
+    let selected_id = Uuid::new_v4();
+    let selected_launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
+    let selected_body = json!({"operation_id":selected_id,"intelligence_profile":selected});
+    assert_eq!(
+        call(
+            &admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+        "old worker does not advertise Codex"
+    );
+    let mut upgraded_poll = poll.clone();
+    upgraded_poll["providers"] = json!(["anthropic", "openai"]);
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/manual-agents",
+            Some(upgraded_poll),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let choices = call(&admin, "/api/manual-agents", None, None, false)
+        .await
+        .1;
+    assert_eq!(choices["launch_profiles"].as_array().unwrap().len(), 2);
+    let (status, chosen) = call(
+        &admin,
+        &selected_launch,
+        Some(selected_body.clone()),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{chosen}");
+    assert_eq!(chosen["spec"]["model"], "gpt-test");
+    assert_eq!(chosen["spec"]["reasoning"], "high");
+    assert_eq!(chosen["spec"]["options"]["service_tier"], "fast");
+    assert_eq!(
+        call(
+            &admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .1,
+        chosen
+    );
+    let mut changed = selected_body.clone();
+    changed["intelligence_profile"]["candidate_id"] = json!("claude");
+    assert_eq!(
+        call(&admin, &selected_launch, Some(changed), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let mut stale = selected_body.clone();
+    stale["operation_id"] = json!(Uuid::new_v4());
+    stale["intelligence_profile"]["profile_version"] = json!(2);
+    assert_eq!(
+        call(&admin, &selected_launch, Some(stale), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let deleted_digest = "b".repeat(64);
+    let mut deleted_catalog = catalog.clone();
+    deleted_catalog["catalog"]["intelligence"][0]["candidates"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| c["provider"] != "openai");
+    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)").bind(&deleted_digest).bind(serde_json::to_vec(&deleted_catalog).unwrap()).bind(f.actor).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+        .bind(&deleted_digest)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &admin,
+            &selected_launch,
+            Some(selected_body.clone()),
+            None,
+            true
+        )
+        .await
+        .1,
+        chosen,
+        "exact retry retains admitted snapshot after a profile is edited/deleted"
+    );
+    let mut removed = selected_body.clone();
+    removed["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(&admin, &selected_launch, Some(removed), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    sqlx::query("DELETE FROM manual_agent_sessions WHERE id=$1")
+        .bind(selected_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let id = Uuid::new_v4();
     let launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
     assert_eq!(

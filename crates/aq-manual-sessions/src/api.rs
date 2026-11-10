@@ -34,7 +34,12 @@ async fn binding(s: &Service, id: Uuid) -> Result<Value> {
     b.filter(|v| v["enabled"] == true)
         .ok_or_else(|| conflict("Start this project before launching an agent"))
 }
-async fn spec(s: &Service, project: Uuid, node: Uuid) -> Result<Value> {
+async fn spec(
+    s: &Service,
+    project: Uuid,
+    node: Uuid,
+    selected: Option<&intelligence::Selection>,
+) -> Result<Value> {
     let source = s
         .sources
         .get(&project)
@@ -51,6 +56,12 @@ async fn spec(s: &Service, project: Uuid, node: Uuid) -> Result<Value> {
         .is_some_and(|v| !v.is_empty())
     {
         return Err(conflict("Manual worker-group placement is not configured"));
+    }
+    if let Some(selected) = selected {
+        let choice = intelligence::resolve(s, selected).await?;
+        return Ok(
+            json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"reasoning_configuration_reference":choice["reasoning_configuration_reference"],"options":choice["options"],"harness":choice["harness"],"intelligence_profile":selected,"profile_name":choice["name"]}),
+        );
     }
     let artifact: Vec<u8> =
         sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
@@ -106,25 +117,50 @@ async fn list(
             projects.push(json!({"id":id,"name":b["name"],"repository_id":b["repository_id"]}));
         }
     }
+    let profiles = intelligence::choices(&s).await?;
     Ok(Json(
-        json!({"sessions":rows,"workers":reports,"slots":slots,"projects":projects,"server_time_ms":now()}),
+        json!({"launch_profiles":profiles,"sessions":rows,"workers":reports,"slots":slots,"projects":projects,"server_time_ms":now()}),
     ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Launch {
+    operation_id: Uuid,
+    #[serde(default)]
+    intelligence_profile: Option<intelligence::Selection>,
+}
+fn same_launch(
+    old: &Session,
+    node: Uuid,
+    project: Uuid,
+    selected: &Option<intelligence::Selection>,
+) -> bool {
+    old.node_id == node
+        && old.project_id == project
+        && old.spec.get("intelligence_profile")
+            == selected
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .ok()
+                .flatten()
+                .as_ref()
 }
 async fn start(
     State(s): State<Service>,
     headers: HeaderMap,
     Path((node, project)): Path<(Uuid, Uuid)>,
-    Json(op): Json<Operation>,
+    Json(op): Json<Launch>,
 ) -> Result<Json<Session>> {
     let actor = (s.owner)(headers).await?;
     valid_id(op.operation_id)?;
     if let Ok(old) = session(&s, op.operation_id).await {
-        if old.node_id == node && old.project_id == project {
+        if same_launch(&old, node, project, &op.intelligence_profile) {
             return Ok(Json(old));
         }
         return Err(conflict("Launch identity is already used"));
     }
-    let spec = spec(&s, project, node).await?;
+    let spec = spec(&s, project, node, op.intelligence_profile.as_ref()).await?;
     let mut tx = s.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(107107)")
         .execute(&mut *tx)
@@ -139,7 +175,7 @@ async fn start(
             "There are already 256 pending or running manual agents",
         ));
     }
-    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.repositories @> $3::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["repository_id"]])).fetch_one(&mut *tx).await?;
+    let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN manual_worker_reports r ON r.node_id=n.id WHERE n.id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2 AND r.repositories @> $3::jsonb AND r.providers @> $4::jsonb)").bind(node).bind(now()-15000).bind(json!([spec["repository_id"]])).bind(json!([spec["provider"]])).fetch_one(&mut *tx).await?;
     if !available {
         return Err(conflict(
             "This worker has not reported interactive support for the project",
@@ -160,10 +196,10 @@ async fn start(
             "This worker already has 32 pending or running sessions",
         ));
     }
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting for a slot',$6,$6) ON CONFLICT(id) DO NOTHING").bind(op.operation_id).bind(actor).bind(node).bind(project).bind(spec).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting for a slot',$6,$6) ON CONFLICT(id) DO NOTHING").bind(op.operation_id).bind(actor).bind(node).bind(project).bind(&spec).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     let saved = session(&s, op.operation_id).await?;
-    if saved.node_id != node || saved.project_id != project {
+    if !same_launch(&saved, node, project, &op.intelligence_profile) {
         return Err(conflict("Launch identity is already used"));
     }
     Ok(Json(saved))

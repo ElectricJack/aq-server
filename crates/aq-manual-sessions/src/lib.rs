@@ -1,5 +1,6 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
+mod intelligence;
 mod stream;
 mod terminal;
 mod worker;
@@ -20,6 +21,17 @@ pub type Auth =
     Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub struct Error(pub StatusCode, pub &'static str);
+impl Error {
+    pub fn enrolled_worker_required() -> Self {
+        Self(
+            StatusCode::FORBIDDEN,
+            "Manual sessions require an enrolled worker credential",
+        )
+    }
+    pub fn from_response(response: Response) -> Self {
+        Self(response.status(), "Manual session access refused")
+    }
+}
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         (
@@ -58,6 +70,7 @@ pub struct Service {
     pub sources: Arc<BTreeMap<Uuid, Value>>,
     runtime: Runtime,
     origin: Option<(String, bool)>,
+    choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
 }
 impl Service {
     pub fn new(
@@ -74,7 +87,12 @@ impl Service {
             sources: Arc::new(sources),
             runtime,
             origin: None,
+            choices: Arc::new(Vec::new()),
         }
+    }
+    pub fn intelligence_choices(mut self, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
+        self.choices = Arc::new(choices);
+        self
     }
     pub fn browser_origin(mut self, origin: String, development: bool) -> Self {
         self.origin = Some((origin, development));

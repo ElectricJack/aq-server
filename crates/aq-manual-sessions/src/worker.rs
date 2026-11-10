@@ -9,6 +9,8 @@ use axum::{
 struct Poll {
     max_slots: u32,
     repositories: Vec<Uuid>,
+    #[serde(default = "legacy_providers")]
+    providers: Vec<String>,
     #[serde(default)]
     busy: bool,
     #[serde(default)]
@@ -25,6 +27,9 @@ struct Report {
     #[serde(default)]
     acknowledged: Vec<Uuid>,
 }
+fn legacy_providers() -> Vec<String> {
+    vec!["anthropic".into()]
+}
 pub(super) fn routes() -> Router<Service> {
     Router::new()
         .route("/v1/worker/manual-agents", post(poll))
@@ -36,7 +41,14 @@ async fn poll(
     Json(v): Json<Poll>,
 ) -> Result<Json<Value>> {
     let node = (s.node)(headers.clone()).await?;
-    if !(1..=8).contains(&v.max_slots) || v.repositories.len() > 16 || v.reports.len() > 32 {
+    if !(1..=8).contains(&v.max_slots)
+        || v.repositories.len() > 16
+        || v.reports.len() > 32
+        || v.providers.len() > 2
+        || v.providers
+            .iter()
+            .any(|p| !["anthropic", "openai"].contains(&p.as_str()))
+    {
         return Err(bad("Invalid manual worker bounds"));
     }
     for r in &v.reports {
@@ -67,7 +79,7 @@ async fn poll(
     if desired.as_deref() == Some("stopped") {
         sqlx::query("UPDATE manual_agent_sessions SET desired_running=false WHERE node_id=$1 AND stopped_at_ms IS NULL").bind(node).execute(&mut *tx).await?;
     }
-    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms) VALUES($1,$2,$3,$4) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,repositories=EXCLUDED.repositories,observed_at_ms=EXCLUDED.observed_at_ms").bind(node).bind(v.max_slots as i32).bind(json!(v.repositories)).bind(at).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms,providers) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,repositories=EXCLUDED.repositories,observed_at_ms=EXCLUDED.observed_at_ms,providers=EXCLUDED.providers").bind(node).bind(v.max_slots as i32).bind(json!(v.repositories)).bind(at).bind(json!(v.providers)).execute(&mut *tx).await?;
     let mut owned = Vec::new();
     for r in &v.reports {
         let changed=sqlx::query("UPDATE manual_agent_sessions SET status=$3,stage=$4,updated_at_ms=CASE WHEN status<>$3 OR stage<>$4 THEN $5 ELSE updated_at_ms END,worker_seen_at_ms=$5,stopped_at_ms=CASE WHEN $3 IN ('stopped','failed') THEN $5 ELSE NULL END WHERE id=$1 AND node_id=$2 AND stopped_at_ms IS NULL AND NOT(status='pending' AND $3='running') RETURNING id").bind(r.id).bind(node).bind(&r.status).bind(&r.stage).bind(at).fetch_optional(&mut *tx).await?;

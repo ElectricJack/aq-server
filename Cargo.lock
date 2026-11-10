@@ -346,6 +346,7 @@ name = "aq-manual-sessions"
 version = "0.1.0"
 dependencies = [
  "aq-human-http",
+ "aq-profile-settings",
  "axum",
  "chrono",
  "futures-util",
