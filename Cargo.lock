@@ -488,6 +488,7 @@ name = "aq-profile-settings"
 version = "0.1.0"
 dependencies = [
  "aq-profiles",
+ "aq-selection",
  "serde",
  "serde_json",
  "sqlx",

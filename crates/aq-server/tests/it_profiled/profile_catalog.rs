@@ -30,6 +30,7 @@ async fn setup_with(extra: &str) -> (TestDb, Router, sqlx::PgPool) {
     let config: Config = toml::from_str(&format!(
         r#"format_version=1
 environment="development"
+{extra}
 [server]
 admin_bind="127.0.0.1:0"
 worker_bind="127.0.0.1:0"
@@ -40,7 +41,7 @@ dev_email="owner@localhost"
 [bootstrap]
 owner_email="owner@localhost"
 enabled=true
-{extra}"#
+"#
     ))
     .unwrap();
     let state = AppState {
@@ -589,6 +590,10 @@ fn intelligence_settings_configured_choice_reaches_future_composition_and_keeps_
         reasoning_configuration_reference: candidate.reasoning_configuration_reference.clone(),
         reasoning: "deep".into(),
         harness: "codex".into(),
+        preference_only: false,
+        options: Default::default(),
+        source: None,
+        observed_at: None,
     };
     let request = SaveRequest {
         operation_id: Uuid::new_v4(),
@@ -673,5 +678,61 @@ async fn intelligence_settings_adds_spreadsheet_rows_without_assigning_them_or_l
             .await
             .0,
         StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn intelligence_settings_imports_preferences_without_qualifying_a_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = directory.path().join("models.json");
+    let cached = json!([{"provider":"openai","model":"legacy-default-model","harness":"codex",
+        "reasoning_configuration_reference":"v1-low-fast@1","reasoning":"low (fast service)","preference_only":false,
+        "options":{"reasoning_effort":"low","service_tier":"fast"}}, {"provider":"google","model":"discovered-model","harness":"gemini",
+        "reasoning_configuration_reference":"discovered-medium@1","reasoning":"medium","preference_only":true,
+        "source":"Gemini CLI account catalog","observed_at":"2026-11-09T00:00:00Z","options":{"thinking_level":"medium"}}]);
+    std::fs::write(&cache, serde_json::to_vec(&cached).unwrap()).unwrap();
+    let extra = format!(
+        "intelligence_preferences_file={}\n",
+        serde_json::to_string(cache.to_str().unwrap()).unwrap()
+    );
+    let (_db, app, pool) = setup_with(&extra).await;
+    let catalog = seed();
+    assert_eq!(
+        call(&app, ACTIVATE, Some(activation(&catalog, 0)), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, read) = call(&app, INTELLIGENCE_SETTINGS, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["model_choices"].as_array().unwrap().len(), 2);
+    assert_eq!(read["model_choices"][1]["model"], "discovered-model");
+    std::fs::write(&cache, serde_json::to_vec(&json!([cached[0]])).unwrap()).unwrap();
+    let refreshed = call(&app, INTELLIGENCE_SETTINGS, None, false).await.1;
+    assert_eq!(
+        refreshed["model_choices"].as_array().unwrap().len(),
+        1,
+        "Cache refresh requires no daemon restart"
+    );
+    assert_eq!(read["model_choices"][0]["preference_only"], true);
+    assert_eq!(read["model_choices"][0]["options"]["service_tier"], "fast");
+    let request = json!({"operation_id":Uuid::new_v4(),"expected_revision":"1","profile_id":"legacy-default",
+        "profile_version":0,"name":"Legacy default","description":"Imported preference",
+        "candidates":[{"id":"codex","provider":"openai","model":"legacy-default-model",
+            "reasoning_configuration_reference":"v1-low-fast@1","harnesses":["codex"]}]});
+    let (status, saved) = call(&app, INTELLIGENCE_SETTINGS, Some(request), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["profile"]["candidates"][0]["model"],
+        "legacy-default-model"
+    );
+    assert_eq!(saved["updated_projects"], json!([]));
+    let registry_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM intelligence_registry")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        registry_rows, 0,
+        "Preferences must not register credentials or qualified harnesses"
     );
 }

@@ -17,21 +17,12 @@ pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
     }
 }
 fn choices(state: &AppState) -> Vec<ModelChoice> {
-    state
-        .config
+    let config = &state.config;
+    let harnesses = config
         .intelligence
         .iter()
-        .flat_map(|registry| registry.config.qualified_harnesses.iter())
-        .flat_map(|harness| {
-            harness.models.iter().map(|m| ModelChoice {
-                provider: m.provider.clone(),
-                model: m.model.clone(),
-                reasoning: m.native_reasoning.clone(),
-                reasoning_configuration_reference: m.reasoning_configuration_reference.clone(),
-                harness: harness.harness.clone(),
-            })
-        })
-        .collect()
+        .flat_map(|r| &r.config.qualified_harnesses);
+    aq_profile_settings::model_choices(harnesses, config.intelligence_preferences_file.as_deref())
 }
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

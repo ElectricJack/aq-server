@@ -29,7 +29,7 @@ pub fn profile_error(error: aq_profiles::Error) -> Error {
         _ => invalid("invalid profile catalog artifact"),
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelChoice {
     pub provider: String,
@@ -37,6 +37,67 @@ pub struct ModelChoice {
     pub reasoning_configuration_reference: String,
     pub reasoning: String,
     pub harness: String,
+    /// Saved preference only; selection still requires independent qualification.
+    #[serde(default)]
+    pub preference_only: bool,
+    /// Original provider options, including service tier and thinking budget.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<String>,
+}
+/// A host refresh tool writes this metadata cache atomically. Failure leaves
+/// configured/imported preferences usable; no credentials or launch facts enter here.
+pub fn cached_choices(path: Option<&std::path::Path>) -> Vec<ModelChoice> {
+    use std::io::Read;
+    let read = || -> Option<Vec<ModelChoice>> {
+        let mut file = std::fs::File::open(path?).ok()?.take(2_097_153);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
+        if bytes.len() > 2_097_152 {
+            return None;
+        }
+        let choices: Vec<ModelChoice> = serde_json::from_slice(&bytes).ok()?;
+        (choices.len() <= 4096).then_some(choices)
+    };
+    read().unwrap_or_default()
+}
+/// Settings preferences do not enter the runtime qualification registry.
+pub fn model_choices<'a>(
+    harnesses: impl Iterator<Item = &'a aq_selection::InstalledHarness>,
+    cache: Option<&std::path::Path>,
+) -> Vec<ModelChoice> {
+    let mut choices: Vec<_> = harnesses
+        .flat_map(|h| {
+            h.models.iter().map(|m| ModelChoice {
+                provider: m.provider.clone(),
+                model: m.model.clone(),
+                reasoning_configuration_reference: m.reasoning_configuration_reference.clone(),
+                reasoning: m.native_reasoning.clone(),
+                harness: h.harness.clone(),
+                preference_only: false,
+                options: BTreeMap::new(),
+                source: Some("Qualified worker configuration".into()),
+                observed_at: None,
+            })
+        })
+        .collect();
+    for preference in cached_choices(cache) {
+        if !choices.iter().any(|c| {
+            c.provider == preference.provider
+                && c.model == preference.model
+                && c.reasoning_configuration_reference
+                    == preference.reasoning_configuration_reference
+                && c.harness == preference.harness
+        }) {
+            let mut preference = preference.clone();
+            preference.preference_only = true;
+            choices.push(preference);
+        }
+    }
+    choices
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,7 +209,7 @@ pub fn prepare(
             })
         {
             return Err(invalid(
-                "This model and reasoning choice is not configured for agent launches",
+                "This model and reasoning preference is not configured in Settings",
             ));
         }
     }

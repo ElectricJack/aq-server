@@ -40,6 +40,8 @@ pub struct Config {
     /// C3b environment template allowlist (C4); absent means no sandbox pins.
     #[serde(default, deserialize_with = "crate::templates::deserialize")]
     pub templates: Option<std::sync::Arc<crate::templates::Allowlist>>,
+    #[serde(default)]
+    pub intelligence_preferences_file: Option<PathBuf>,
     pub format_version: u32,
     pub environment: Environment,
     pub server: ServerConfig,
@@ -335,6 +337,7 @@ mod tests {
 
     fn cfg(env: Environment, dev: bool) -> Config {
         Config {
+            intelligence_preferences_file: None,
             delegated_permits: None,
             playbooks: None,
             reviews: None,

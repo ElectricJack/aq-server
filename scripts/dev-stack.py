@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import stat
@@ -61,7 +62,7 @@ def intelligence_section():
     those enter through `aq-server import-login`."""
     name = os.environ.get("AQ_DEV_INTELLIGENCE_FILE")
     if not name:
-        return ""
+        return "", ""
     import tomllib
     path = Path(name)
     try:
@@ -74,9 +75,18 @@ def intelligence_section():
         raise ValueError("AQ_DEV_INTELLIGENCE_FILE must be a small regular TOML file with only [intelligence] tables") from None
     # MS1: optionally also the matching [profiled_execution] tables and the
     # private result-media store the dashboard's Results view requires.
-    if "intelligence" not in tables or not set(tables) <= {"intelligence", "profiled_execution", "result_media"}:
+    if "intelligence" not in tables or not set(tables) <= {"intelligence", "intelligence_preferences_file", "profiled_execution", "result_media"}:
         raise ValueError("AQ_DEV_INTELLIGENCE_FILE must contain only [intelligence] (and [profiled_execution], [result_media]) tables")
-    return "\n" + text if text.endswith("\n") else "\n" + text + "\n"
+    prefix = ""
+    if "intelligence_preferences_file" in tables:
+        path = tables["intelligence_preferences_file"]
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise ValueError("intelligence_preferences_file must be an absolute metadata path")
+        text, count = re.subn(r'(?m)^intelligence_preferences_file\s*=.*(?:\n|$)', '', text)
+        if count != 1:
+            raise ValueError("Use a single-line intelligence_preferences_file assignment")
+        prefix = "intelligence_preferences_file = " + json.dumps(path) + "\n"
+    return prefix, "\n" + text if text.endswith("\n") else "\n" + text + "\n"
 
 
 def public_origin():
@@ -157,7 +167,8 @@ id = "dev-terminal-1"
 file = "/run/aq-dev/terminal_protection_key"
 '''
     generated = config
-    config += intelligence_section()
+    root_options, operator_tables = intelligence_section()
+    config = root_options + config + operator_tables
     if target.exists() and target.read_text() != config:
         # MS1: an operator may replace only the appended operator section of an
         # existing vault (revisioned [intelligence]/[profiled_execution]); every
