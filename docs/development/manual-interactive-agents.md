@@ -75,3 +75,10 @@ and bounded queues disconnect slow peers. Raw input is ephemeral and never
 replayed on reconnect. Owner browser Origin is checked before WebSocket upgrade;
 node credentials stay on the host and out of URLs/PTYs. There is no durable
 transcript or durable per-key delivery claim for this SSH-style byte stream.
+
+The scoped ms1 deployment runs `aq-ms1-terminal.service` beside `aq-node@ms1`.
+Manual worker heartbeats remain authoritative while its finite task loop is paused;
+a fresh enrolled report keeps the worker visible without overriding a revoke or
+explicit machine Stop. Raw output masks existing agent/subscription credential
+prefixes incrementally, preserving byte geometry and emitting ordinary keystrokes
+without lookahead buffering. Terminal performance QA submits no model turn.

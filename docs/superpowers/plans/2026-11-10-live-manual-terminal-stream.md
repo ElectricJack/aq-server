@@ -7,7 +7,7 @@ with the console. Restore the responsive interaction that v1 provided.
 shows a disposable tmux PTY attachment with bounded raw WebSocket bytes. The v2
 manual adapter instead waits for a worker cycle and an input receipt, starts
 separate Podman commands, captures tmux history, and resets xterm on each screen.
-The dedicated no-inference baseline took 15330 ms to show an 18-character string.
+The dedicated no-inference baseline took 15330 ms to show an 19-character string.
 Captures omit live cursor/mode state, so re-rendering them is not PTY parity.
 
 **My call:** keep manual lifecycle and project/worker authorization, and replace
