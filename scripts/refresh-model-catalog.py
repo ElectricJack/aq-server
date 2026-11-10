@@ -139,10 +139,11 @@ def public_choices(catalog, observed):
     return result
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = (json.dumps(value, indent=2) + "\n").encode()
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
+        os.fchmod(temporary.fileno(), mode)
         temporary.write(raw)
         temporary.flush()
         os.fsync(temporary.fileno())
@@ -214,7 +215,7 @@ def main():
     if not result or len(result) > 4096 or len(json.dumps(result).encode()) > 2_097_152:
         raise ValueError("catalog empty or exceeds Settings limits; old cache preserved")
     atomic_json(state_path, previous)
-    atomic_json(args.output, result)
+    atomic_json(args.output, result, 0o644)
     print(json.dumps({"choices": len(result), "models": len({(c["provider"], c["model"]) for c in result}), "providers": sorted({c["provider"] for c in result}), "sources": {k: v["status"] for k, v in previous.items()}}))
 
 
