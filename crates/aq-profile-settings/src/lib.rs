@@ -109,6 +109,8 @@ pub struct SaveRequest {
     pub name: String,
     pub description: String,
     pub candidates: Vec<ModelCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete: Option<bool>,
 }
 fn invalid(message: &str) -> Error {
     Error::Invalid(message.into())
@@ -136,6 +138,7 @@ pub struct Prepared {
     pub profile: Intelligence,
     pub references: BTreeMap<String, String>,
     pub changed: bool,
+    pub deleted: bool,
 }
 pub fn prepare(
     current: &ValidatedCatalog,
@@ -187,6 +190,35 @@ pub fn prepare(
             .find(|p| p.id == req.profile_id && p.version == req.profile_version)
             .ok_or_else(|| conflict("This profile changed. Reload this row before saving"))?
     };
+    if req.delete == Some(true) {
+        if creating {
+            return Err(invalid("Unsaved rows are removed locally"));
+        }
+        let key = aq_profiles::key(&old.id, old.version);
+        if let Some(agent) = current
+            .artifact()
+            .catalog
+            .agents
+            .iter()
+            .find(|a| a.intelligence == key)
+        {
+            return Err(conflict(&format!(
+                "This profile is used by agent profile {}. Change that assignment before deleting it",
+                agent.id
+            )));
+        }
+        let mut catalog = current.artifact().catalog.clone();
+        catalog.intelligence.retain(|p| p.id != old.id);
+        let catalog = aq_profiles::validate(catalog, current.artifact().instructions.clone())
+            .map_err(|_| invalid("This profile cannot be removed from the active catalog"))?;
+        return Ok(Prepared {
+            catalog,
+            profile: old.clone(),
+            references: BTreeMap::new(),
+            changed: true,
+            deleted: true,
+        });
+    }
     // Keeping an existing provider mapping does not require that provider to
     // be installed now. Newly chosen execution settings still need known facts.
     for candidate in &req.candidates {
@@ -239,6 +271,7 @@ pub fn prepare(
             profile,
             references: BTreeMap::new(),
             changed: false,
+            deleted: false,
         });
     }
     profile.version = version(state, "intelligence", &profile.id, profile.version)?;
@@ -272,6 +305,7 @@ pub fn prepare(
         profile,
         references,
         changed: true,
+        deleted: false,
     })
 }
 pub fn update_binding(

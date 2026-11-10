@@ -37,3 +37,11 @@ python3 scripts/refresh-model-catalog.py --output /path/to/model-choices.json --
 ```
 
 Validation adds a real PostgreSQL test for preference import with no runtime registration, cache changes without daemon restart, and preservation of native service options; five Python checks cover absent effort metadata, partial budget bounds, non-completion model exclusion and atomic replacement; eight Intelligence component tests pass. Build budgets remain 81 integration binaries and aq-server at 109094 lines.
+
+## Row deletion (owner followup)
+
+Every row has Delete; unsaved rows are removed locally. Saved rows require an inline confirmation naming the row and all-provider scope. The existing owner mutation accepts optional `delete: true`, with the same revision/profile-version checks and recoverable operation ID. Absent delete flags are omitted from canonical requests so pre-upgrade operation receipts continue to replay.
+
+Deletion refuses profiles referenced by active agent definitions or by project intelligence allowlists, identifying the dependency. An unused row is removed from a newly activated catalog while old artifacts and identity history remain. Project catalog digests advance in the same transaction; profile assignments, permissions and enabled flags are preserved. Returning to a retained catalog reuses identical artifact bytes and exact environment pins rather than inserting duplicates. Replays return the original deletion receipt.
+
+Validation: 18 catalog/inspection tests pass, including deletion, replay, retained artifacts and refused agent/project dependencies; 12 Intelligence UI checks cover confirmation/cancel, focus, local draft deletion, blocked-row draft preservation and interrupted-delete reconciliation. Confirm controls remain in the Actions cell and receive focus/scroll on phones. Live qualification uses a temporary named row so imported defaults remain intact.

@@ -603,6 +603,7 @@ fn intelligence_settings_configured_choice_reaches_future_composition_and_keeps_
         name: "Engineering".into(),
         description: "".into(),
         candidates: vec![candidate],
+        delete: None,
     };
     let prepared = aq_profile_settings::prepare(&current, &state, &request, &[choice]).unwrap();
     let catalog = &prepared.catalog;
@@ -735,4 +736,106 @@ async fn intelligence_settings_imports_preferences_without_qualifying_a_runtime(
         registry_rows, 0,
         "Preferences must not register credentials or qualified harnesses"
     );
+}
+
+#[tokio::test]
+async fn intelligence_settings_deletes_unused_rows_retains_history_and_replays() {
+    let (_db, app, pool, mut request, project) = settings_fixture().await;
+    request["profile_id"] = json!("temporary-row");
+    request["profile_version"] = json!(0);
+    request["name"] = json!("Temporary row");
+    request["candidates"] = json!([]);
+    let (status, added) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    request["operation_id"] = json!(Uuid::new_v4());
+    request["expected_revision"] = added["revision"].clone();
+    request["profile_version"] = json!(1);
+    request["delete"] = json!(true);
+    let (status, removed) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["disposition"], "deleted");
+    let current = call(&app, INTELLIGENCE_SETTINGS, None, false).await.1;
+    assert!(
+        current["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != "temporary-row")
+    );
+    let old = call(
+        &app,
+        &format!("{STATE}/{}", added["active_digest"].as_str().unwrap()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(old.0, StatusCode::OK);
+    assert!(
+        old.1["artifact"]["catalog"]["intelligence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == "temporary-row")
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(request), true)
+            .await
+            .1,
+        removed
+    );
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(binding["catalog_digest"], removed["active_digest"]);
+    assert_eq!(
+        binding["allowed_intelligence_profiles"],
+        json!(["engineering@1"])
+    );
+    assert_eq!(binding["enabled"], false);
+    assert_eq!(removed["revision"], "3");
+}
+
+#[tokio::test]
+async fn intelligence_settings_refuses_deleting_agent_or_project_references() {
+    let (_db, app, pool, mut request, project) = settings_fixture().await;
+    request["delete"] = json!(true);
+    let (status, blocked) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert!(
+        blocked["message"]
+            .as_str()
+            .unwrap()
+            .contains("agent profile")
+    );
+    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 1);
+    request.as_object_mut().unwrap().remove("delete");
+    request["operation_id"] = json!(Uuid::new_v4());
+    request["profile_id"] = json!("project-allowed-row");
+    request["profile_version"] = json!(0);
+    request["name"] = json!("Project allowed row");
+    request["candidates"] = json!([]);
+    let (status, added) = call(&app, INTELLIGENCE_SETTINGS, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{allowed_intelligence_profiles}',binding->'allowed_intelligence_profiles' || '\"project-allowed-row@1\"'::jsonb) WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
+    request["operation_id"] = json!(Uuid::new_v4());
+    request["expected_revision"] = added["revision"].clone();
+    request["profile_version"] = json!(1);
+    request["delete"] = json!(true);
+    let (status, blocked) = call(&app, INTELLIGENCE_SETTINGS, Some(request), true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert!(
+        blocked["message"]
+            .as_str()
+            .unwrap()
+            .contains("Example project")
+    );
+    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 2);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM profile_catalog_artifacts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2, "Blocked deletion must publish nothing");
 }
