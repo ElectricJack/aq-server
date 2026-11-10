@@ -126,7 +126,7 @@ pub(super) fn assemble(
         adapter: adapter.clone(),
         environment: environment.clone(),
         required_capabilities: serde_json::from_value(
-            json!([{"id":"aq.harness.startup-context","version":1},{"id":"aq.harness.stop","version":1},{"id":"aq.terminal","version":1}]),
+            json!([{"id":"aq.harness.startup-context","version":1},{"id":"aq.harness.confined-worktree","version":1},{"id":"aq.harness.stop","version":1},{"id":"aq.terminal","version":1}]),
         )?,
     };
     let host = HostPlan {
@@ -261,4 +261,69 @@ pub(super) fn install(config: &ServiceConfig, turn: &Config) -> Result<()> {
     file.sync_all()?;
     std::fs::rename(temp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let examples: Value = serde_json::from_str(include_str!(
+            "../../../aq-central-authority/artifacts/examples.json"
+        ))
+        .unwrap();
+        let prior: CentralPlan = serde_json::from_value(examples["plan"].clone()).unwrap();
+        let config = ServiceConfig {
+            database_url: "postgres://localhost/test".into(),
+            conversation_id: prior.subject.conversation_id(),
+            authority_id: Uuid::new_v4(),
+            root: root.clone(),
+            workspace: root.join("workspace"),
+            homes: root.join("homes"),
+            helper: PathBuf::from("/usr/local/bin/aq-session-host"),
+            tmux: PathBuf::from("/usr/bin/tmux"),
+            tmux_version: "tmux 3.3a".into(),
+            native: PathBuf::from("/opt/aq/bin/codex"),
+            native_digest: Digest::of(b"native"),
+            image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
+            secret_file: root.join("subscription.json"),
+            server_origin: "http://server:8081".into(),
+        };
+        let control = Control {
+            actor: prior.subject.actor_id(),
+            enabled: true,
+            revision: 1,
+            profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","catalog_digest":Digest::of(b"catalog")}),
+            owner: Some(Uuid::new_v4()),
+            project: None,
+            label: "Global supervisor".into(),
+        };
+        let turn = dispatch::Turn {
+            batch: prior.batch,
+            dispatch_id: Uuid::new_v4(),
+            host_operation_id: Uuid::new_v4(),
+            input: b"Actual immutable owner input".to_vec(),
+        };
+        let candidate = assemble(
+            &config,
+            &control,
+            &Digest::of(b"policy"),
+            1,
+            Uuid::new_v4(),
+            turn,
+        )
+        .unwrap();
+        candidate.host.digest().unwrap();
+        crate::validate_join(&candidate.central, &candidate.host).unwrap();
+        assert!(
+            candidate
+                .host
+                .harness
+                .required_capabilities
+                .iter()
+                .any(|c| c.id.as_str() == "aq.harness.confined-worktree")
+        );
+    }
 }

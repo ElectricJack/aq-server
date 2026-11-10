@@ -196,6 +196,18 @@ fn archive_turn(config: &ServiceConfig, turn: &Config) -> Result<()> {
 }
 pub async fn run(path: &Path) -> Result<()> {
     let config = ServiceConfig::load(path)?;
+    let mounts = std::fs::read_to_string("/proc/mounts")?;
+    ensure!(
+        Path::new("/.dockerenv").is_file()
+            && mounts.lines().any(|l| {
+                let f = l.split_whitespace().collect::<Vec<_>>();
+                f.get(1) == Some(&"/")
+                    && f.get(3)
+                        .is_some_and(|flags| flags.split(',').any(|v| v == "ro"))
+            }),
+        "central subscription requires a read-only container root"
+    );
+
     ensure!(
         unsafe { libc::geteuid() } == 0,
         "central service requires UID separation"
@@ -526,43 +538,66 @@ async fn step(
                 .await?
                 .map_or(1, |s| s.run.plan().generation + 1);
             let session = Uuid::new_v4();
-            let turn =
-                dispatch::prepare_turn(pool, ctl.actor, reservation.id, generation, session, now())
-                    .await
-                    .map_err(api_error)?;
-            let candidate =
-                plan::assemble(config, ctl, &actor.policy_digest, generation, session, turn)?;
-            plan::install(config, &candidate)?;
-            let (_, host) = installed(config)?.context("installed supervisor turn missing")?;
-            let state = host
-                .start(
-                    candidate.central.clone(),
-                    candidate.host.clone(),
-                    protected_read(&candidate.startup_file, 1048576)?,
-                    candidate.central.max_permit_ms,
-                )
-                .await?;
-            host.enable_replies(ctl.actor, now()).await?;
-            report(
-                pool,
+            start_turn(
                 config,
+                pool,
                 instance,
-                "working",
-                "Working on the conversation",
-                Some(&state),
+                ctl,
+                &actor.policy_digest,
+                reservation.id,
+                generation,
+                session,
             )
             .await?;
         }
         PreviewStatus::ReservationOutstanding => {
-            report(
-                pool,
-                config,
-                instance,
-                "uncertain",
-                "An earlier reservation needs inspection",
-                None,
-            )
-            .await?;
+            // A dispatch recorded before plan installation is recoverable only
+            // if its generation never entered central authority. Preserve its
+            // immutable input and operation/session IDs; never retarget an
+            // admitted, handed-off or uncertain generation.
+            let prior = aq_supervisor_control::authority::sessions(pool)
+                .inspect(ctl.actor)
+                .await?;
+            let closed = prior.as_ref().is_none_or(|s| {
+                matches!(
+                    s.run.phase(),
+                    Phase::StoppedReported | Phase::CancelledBeforeStart
+                )
+            });
+            let next = prior.as_ref().map_or(1, |s| s.run.plan().generation + 1);
+            let row=sqlx::query("SELECT a.current_reservation,d.generation,d.session_id FROM central_supervisor_actors a LEFT JOIN central_supervisor_dispatches d ON d.actor_id=a.actor_id AND d.reservation_id=a.current_reservation WHERE a.actor_id=$1").bind(ctl.actor).fetch_one(pool).await?;
+            let generation = row
+                .get::<Option<i64>, _>("generation")
+                .map_or(next, |g| g as u64);
+            if closed && generation == next {
+                let reservation: Uuid = row
+                    .get::<Option<Uuid>, _>("current_reservation")
+                    .context("retained reservation missing")?;
+                let session = row
+                    .get::<Option<Uuid>, _>("session_id")
+                    .unwrap_or_else(Uuid::new_v4);
+                start_turn(
+                    config,
+                    pool,
+                    instance,
+                    ctl,
+                    &actor.policy_digest,
+                    reservation,
+                    generation,
+                    session,
+                )
+                .await?;
+            } else {
+                report(
+                    pool,
+                    config,
+                    instance,
+                    "uncertain",
+                    "An earlier reservation needs inspection",
+                    None,
+                )
+                .await?;
+            }
         }
         PreviewStatus::Disabled => {
             report(
@@ -577,4 +612,41 @@ async fn step(
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_turn(
+    config: &ServiceConfig,
+    pool: &PgPool,
+    instance: Uuid,
+    ctl: &Control,
+    policy: &aq_central_authority::Digest,
+    reservation: Uuid,
+    generation: u64,
+    session: Uuid,
+) -> Result<()> {
+    let turn = dispatch::prepare_turn(pool, ctl.actor, reservation, generation, session, now())
+        .await
+        .map_err(api_error)?;
+    let candidate = plan::assemble(config, ctl, policy, generation, session, turn)?;
+    plan::install(config, &candidate)?;
+    let (_, host) = installed(config)?.context("installed supervisor turn missing")?;
+    let state = host
+        .start(
+            candidate.central.clone(),
+            candidate.host.clone(),
+            protected_read(&candidate.startup_file, 1048576)?,
+            candidate.central.max_permit_ms,
+        )
+        .await?;
+    host.enable_replies(ctl.actor, now()).await?;
+    report(
+        pool,
+        config,
+        instance,
+        "working",
+        "Working on the conversation",
+        Some(&state),
+    )
+    .await
 }

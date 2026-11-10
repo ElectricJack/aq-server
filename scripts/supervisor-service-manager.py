@@ -84,9 +84,11 @@ def main():
                 volume = name + '-state'
                 run(['docker', 'volume', 'create', '--label', 'io.agent-q.supervisor.scope=' + scope, volume])
                 run(['docker', 'create', '--name', name, '--label', 'io.agent-q.supervisor.scope=' + scope,
-                     '--network', cfg['network'], '--cpus', '0.5', '--memory', '2g', '--memory-swap', '2g',
+                     '--network', cfg['network'], '--read-only', '--tmpfs', '/tmp:rw,mode=1777',
+                     '--tmpfs', '/native-homes:rw,mode=0711', '--cpus', '0.5', '--memory', '2g', '--memory-swap', '2g',
                      '--pids-limit', '512', '--ulimit', 'core=0', '--security-opt', 'no-new-privileges',
                      '--mount', 'type=volume,src=' + volume + ',dst=/state',
+                     '--mount', 'type=volume,src=' + name + '-workspace,dst=/workspace',
                      '--log-opt', 'max-size=2m', '--log-opt', 'max-file=2',
                      image, 'serve', '/state/service.json'])
                 run(['docker', 'cp', '-', name + ':/state'], archive({'service.json': json.dumps(service).encode(), 'subscription.json': auth}))

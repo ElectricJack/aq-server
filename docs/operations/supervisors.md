@@ -27,7 +27,7 @@ send completion and blocker messages to their supervisor conversation.
 `scripts/supervisor-service-manager.py PRIVATE_CONFIG` is a trusted operator
 service with Docker access. It creates only scope-labelled
 `aq-ms1-supervisor-*` containers from a digest-pinned host image. Each has a
-private PID namespace, 0.5 CPU, 2 GiB memory, 512 processes, a distinct durable
+read-only root filesystem, private writable workspace/home/tmp, private PID namespace, 0.5 CPU, 2 GiB memory, 512 processes, a distinct durable
 state volume, and no Docker socket. The manager never removes, replaces or
 blindly restarts retained containers. Upgrades and uncertain generations need
 operator inspection. Stopping the manager leaves controllers alive; dashboard
