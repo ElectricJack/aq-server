@@ -75,7 +75,7 @@ def intelligence_section():
         raise ValueError("AQ_DEV_INTELLIGENCE_FILE must be a small regular TOML file with only [intelligence] tables") from None
     # MS1: optionally also the matching [profiled_execution] tables and the
     # private result-media store the dashboard's Results view requires.
-    if "intelligence" not in tables or not set(tables) <= {"intelligence", "intelligence_preferences_file", "profiled_execution", "result_media"}:
+    if "intelligence" not in tables or not set(tables) <= {"intelligence", "intelligence_preferences_file", "profiled_execution", "result_media", "provider_quota"}:
         raise ValueError("AQ_DEV_INTELLIGENCE_FILE must contain only [intelligence] (and [profiled_execution], [result_media]) tables")
     prefix = ""
     if "intelligence_preferences_file" in tables:
@@ -177,7 +177,7 @@ file = "/run/aq-dev/terminal_protection_key"
         # template origin is updated here too, in both copies.
         previous = target.read_text()
         if not (os.environ.get("AQ_DEV_REPLACE_OPERATOR_SECTION") == "1"
-                and with_origin(previous, origin).startswith(generated)):
+                and re.sub(r'(?m)^intelligence_preferences_file\s*=.*(?:\n|$)', '', with_origin(previous, origin)).startswith(generated)):
             raise ValueError("development vault differs from generated configuration; preserve it and use a new AQ_DEV_STATE_DIR")
         # The settlement config is config.toml plus [playbooks]: carry it over.
         playbooks = vault / "playbooks.toml"

@@ -1,4 +1,6 @@
 //! Router-owned quota collection. Credentials and upstream errors never leave this module.
+pub mod inventory;
+mod snapshot;
 use aq_dashboard_contract::{
     Completeness, Observation, ProviderScope, ProviderUsage, Quality, QuotaState, QuotaWindow,
     Timestamp,
@@ -39,8 +41,14 @@ const MAX_BYTES: usize = 65_536;
 pub struct CodexSource {
     pub provider_id: String,
     pub account_ref: String,
+    #[serde(default)]
     pub chatgpt_account_id: String,
+    #[serde(default)]
     pub auth_file: PathBuf,
+    #[serde(default)]
+    pub snapshot_file: Option<PathBuf>,
+    #[serde(default)]
+    pub account_label: Option<String>,
 }
 impl std::fmt::Debug for CodexSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -53,6 +61,18 @@ impl std::fmt::Debug for CodexSource {
 }
 impl CodexSource {
     pub fn validate(&self) -> bool {
+        if self
+            .account_label
+            .as_ref()
+            .is_some_and(|label| !valid_text(label, 128))
+        {
+            return false;
+        }
+        if let Some(path) = &self.snapshot_file {
+            return matches!(self.provider_id.as_str(), "openai" | "anthropic")
+                && valid_text(&self.account_ref, 512)
+                && path.is_absolute();
+        }
         self.provider_id == "openai"
             && valid_text(&self.account_ref, 512)
             && valid_text(&self.chatgpt_account_id, 256)
@@ -270,6 +290,11 @@ impl Collector {
         }
     }
     async fn request(&self, source: CodexSource, now: u64) -> Option<Vec<QuotaWindow>> {
+        if source.snapshot_file.is_some() {
+            return tokio::task::spawn_blocking(move || snapshot::read(&source, now))
+                .await
+                .ok()?;
+        }
         let file_source = source.clone();
         let token = tokio::time::timeout(
             Duration::from_millis(500),
@@ -310,6 +335,10 @@ impl Collector {
         source: Option<CodexSource>,
         now: u64,
     ) -> (ProviderUsage, bool) {
+        let label = source
+            .as_ref()
+            .and_then(|s| s.account_label.clone())
+            .unwrap_or_else(|| account.account_reference.clone());
         let mut partial = false;
         let cell = self.cells.lock().ok().and_then(|mut cells| {
             if cells.len() >= 32
@@ -367,10 +396,12 @@ impl Collector {
                 .into_iter()
                 .collect()
         });
-        if windows
-            .iter()
-            .any(|w| !matches!(w.state, QuotaState::Known))
-        {
+        if windows.iter().any(|w| {
+            !matches!(w.state, QuotaState::Known)
+                || DateTime::parse_from_rfc3339(&w.observation.fresh_until.0)
+                    .ok()
+                    .is_none_or(|at| at.timestamp_millis() < now as i64)
+        }) {
             partial = true;
         }
         let preferred_window_id = windows
@@ -381,7 +412,7 @@ impl Collector {
         (
             ProviderUsage {
                 provider_id: account.provider,
-                account_label: account.account_reference.clone(),
+                account_label: label,
                 account_ref: account.account_reference,
                 scope: ProviderScope::ProviderAccount,
                 windows,
@@ -393,10 +424,27 @@ impl Collector {
     }
     pub async fn collect(
         &self,
-        accounts: Vec<Account>,
+        mut accounts: Vec<Account>,
         sources: &[CodexSource],
         now: u64,
     ) -> (Vec<ProviderUsage>, bool) {
+        for source in sources
+            .iter()
+            .filter(|s| s.snapshot_file.is_some() && s.validate())
+            .take(32)
+        {
+            if !accounts.iter().any(|a| {
+                a.provider == source.provider_id && a.account_reference == source.account_ref
+            }) {
+                accounts.push(Account {
+                    provider: source.provider_id.clone(),
+                    account_reference: source.account_ref.clone(),
+                    enabled: true,
+                    provisionable: false,
+                    credential_profiles: 0,
+                });
+            }
+        }
         let mut pending = tokio::task::JoinSet::new();
         for (index, account) in accounts.into_iter().enumerate() {
             let matches = sources
@@ -492,6 +540,8 @@ mod tests {
             account_ref: "shared".into(),
             chatgpt_account_id: "synthetic-account-id".into(),
             auth_file: path.clone(),
+            snapshot_file: None,
+            account_label: None,
         };
         let mock = Mock {
             mode: Arc::new(AtomicUsize::new(0)),

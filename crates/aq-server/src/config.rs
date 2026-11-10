@@ -246,12 +246,13 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
     for source in &c.provider_quota {
         if !source.validate()
             || !quota_accounts.insert((&source.provider_id, &source.account_ref))
-            || !c.intelligence.as_ref().is_some_and(|inventory| {
-                inventory.credentials.iter().any(|account| {
-                    account.provider == source.provider_id
-                        && account.account_reference == source.account_ref
-                })
-            })
+            || (source.snapshot_file.is_none()
+                && !c.intelligence.as_ref().is_some_and(|inventory| {
+                    inventory.credentials.iter().any(|account| {
+                        account.provider == source.provider_id
+                            && account.account_reference == source.account_ref
+                    })
+                }))
         {
             return invalid(
                 "provider_quota",
