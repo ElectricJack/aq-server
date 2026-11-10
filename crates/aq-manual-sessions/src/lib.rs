@@ -1,5 +1,6 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
+mod stream;
 mod terminal;
 mod worker;
 use axum::{
@@ -56,6 +57,7 @@ pub struct Service {
     /// Only explicitly configured project source policies may be launched.
     pub sources: Arc<BTreeMap<Uuid, Value>>,
     runtime: Runtime,
+    origin: Option<(String, bool)>,
 }
 impl Service {
     pub fn new(
@@ -71,13 +73,22 @@ impl Service {
             node,
             sources: Arc::new(sources),
             runtime,
+            origin: None,
         }
     }
+    pub fn browser_origin(mut self, origin: String, development: bool) -> Self {
+        self.origin = Some((origin, development));
+        self
+    }
     pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
-        api::routes().with_state(self.clone())
+        api::routes()
+            .merge(stream::human_routes())
+            .with_state(self.clone())
     }
     pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
-        worker::routes().with_state(self.clone())
+        worker::routes()
+            .merge(stream::worker_routes())
+            .with_state(self.clone())
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -109,4 +120,21 @@ fn valid_id(id: Uuid) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Manual launch sources come only from enabled installed project policies.
+pub fn configured_sources<T: Serialize>(config: Option<&T>) -> BTreeMap<Uuid, Value> {
+    config
+        .and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| v["projects"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p["enabled"] == true)
+        .filter_map(|p| {
+            Some((
+                serde_json::from_value(p["project_id"].clone()).ok()?,
+                p.get("source")?.clone(),
+            ))
+        })
+        .collect()
 }

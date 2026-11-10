@@ -144,6 +144,8 @@ async fn poll(
             continue;
         }
         if let Some(screen) = runtime.get_mut(&job.id) {
+            // A streaming viewer sends directly to its fenced PTY connection.
+            // Legacy requests still use the ordered command/receipt path.
             let current = screen
                 .controller
                 .filter(|(_, _, until)| *until > at)

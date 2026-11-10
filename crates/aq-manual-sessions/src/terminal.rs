@@ -13,6 +13,8 @@ pub(super) struct Screen {
     pub input_sequence: u64,
     pub(super) controller: Option<(Uuid, Uuid, i64)>,
     pub commands: BTreeMap<Uuid, Command>,
+    pub relay: Option<super::stream::Relay>,
+    pub viewer: Option<super::stream::Viewer>,
 }
 pub(super) fn screen(runtime: &mut BTreeMap<Uuid, Screen>, id: Uuid) -> Result<&mut Screen> {
     if !runtime.contains_key(&id) && runtime.len() >= 512 {
@@ -78,7 +80,7 @@ pub(super) fn routes() -> Router<Service> {
             get(receipt),
         )
 }
-fn live(v: &Session) -> bool {
+pub(super) fn live(v: &Session) -> bool {
     v.status == "running"
         && v.desired_running
         && v.worker_seen_at_ms.is_some_and(|at| at > now() - 15000)

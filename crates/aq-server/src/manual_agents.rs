@@ -1,4 +1,3 @@
-//! Auth bridge for the separately owned manual-session lifecycle.
 use crate::{AppState, authz::RequireOwner, worker_api::authenticate_context};
 use aq_manual_sessions::{Auth, Error, Service};
 use axum::{
@@ -6,7 +5,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode},
     response::IntoResponse,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 fn refused(error: crate::error::AppError) -> Error {
     Error(
         error.into_response().status(),
@@ -42,24 +41,16 @@ pub(super) fn service(state: &AppState) -> Service {
             Ok(auth.id())
         })
     });
-    let sources: BTreeMap<_, _> = state
-        .config
-        .profiled_execution
-        .as_ref()
-        .into_iter()
-        .flat_map(|c| c.projects.iter())
-        .filter(|p| p.enabled)
-        .filter_map(|p| {
-            serde_json::to_value(&p.source)
-                .ok()
-                .map(|v| (p.project_id, v))
-        })
-        .collect();
+    let sources = aq_manual_sessions::configured_sources(state.config.profiled_execution.as_ref());
     Service::new(
         state.store.pool.clone(),
         owner,
         node,
         sources,
         state.store.manual_runtime.clone(),
+    )
+    .browser_origin(
+        state.config.server.public_origin.clone(),
+        matches!(state.config.auth, crate::config::AuthConfig::Dev { .. }),
     )
 }

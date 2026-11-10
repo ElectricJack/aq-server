@@ -56,3 +56,22 @@ state: an older server that supports only format 106 cannot read that database.
 Keep a compatible server when disabling the feature; do not restore a database
 over newer owner work. The owner's separate local worker and Supabase are not
 part of the deployment.
+
+## Interactive transport (2026-11-10 performance correction)
+
+Normal dashboard input/output now uses bounded raw WebSockets, through the owner
+server and the original enrolled node, to a real disposable tmux PTY. Unlike the
+initial capture-pane/HTTP receipt adapter, this preserves cursor, alternate-screen
+and bracketed-paste state and does not serialize keystrokes behind worker polling.
+The existing HTTP command/receipt routes remain compatibility endpoints.
+
+`aq-worker terminal-relay --service-config <installed profile>` runs the independent
+transport companion. It reads only installed enrollment and owned manual-session
+state, opens one persistent Podman exec PTY for a viewer, and propagates actual
+terminal dimensions. Closing/restarting the companion disposes attach clients;
+it never stops or relaunches agent processes. The owner/node/project and original
+controller generation are rechecked, connection identities fence late frames,
+and bounded queues disconnect slow peers. Raw input is ephemeral and never
+replayed on reconnect. Owner browser Origin is checked before WebSocket upgrade;
+node credentials stay on the host and out of URLs/PTYs. There is no durable
+transcript or durable per-key delivery claim for this SSH-style byte stream.

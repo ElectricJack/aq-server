@@ -81,6 +81,15 @@ pub(crate) fn agent_revoke_path(path: &str) -> bool {
         .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 pub fn classify(path: &str) -> Class {
+    if path == "/v1/worker/manual-agents" {
+        return Class::Control;
+    }
+    if path.starts_with("/api/manual-agents/") && path.contains("/terminal")
+        || path.starts_with("/v1/worker/manual-agents/")
+    {
+        return Class::TerminalInteractive;
+    }
+
     if path == "/api/v1/commands" || path.starts_with("/api/v1/commands/") {
         return Class::AgentCommand;
     }
