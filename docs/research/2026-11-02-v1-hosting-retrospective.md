@@ -153,6 +153,10 @@ Each finding gives what happened, how it was handled, and what v2 should do diff
 
 | W92 | **A mock error envelope can hide a broken real refusal flow.** Profile deletion correctly returned a native `{error,message}` conflict, while UI tests supplied the dashboard's richer envelope. The generic client discarded the native explanation, leaving only “The save could not be confirmed.” **v2:** exercise a real owner refusal in browser qualification and use its actual wire shape in the regression. Preserve bounded server text, keep the draft and dependency intact, and never turn a refused mutation into a generic success or an unsafe retry. **New.** |
 
+| W93 | **An owner removing a profile wants the work to keep flowing.** A dependency guard was technically consistent, but the owner explicitly required deleting assigned intelligence profiles without moving assignments by hand. **v2:** resolve dependent agent/project bindings transactionally back to the existing automatic router, retain immutable history and running-session settings, and hide implementation-only fallback records from the operator's editable spreadsheet. Preserve real version/authorization conflict checks; do not turn a removed dependency into an orphan or an invented runtime qualification. **New.** |
+
+| W94 | **A live-looking percentage and a queued launch are not proof of current usage or a running agent.** Provider model discovery did not expose subscription quota, an inference token did not expose Claude plan metadata, and a committed Graph task did not mean its selected worker had started. **v2:** fetch quota through supported account clients without inference, retain the source observation time on failure, and keep missing login facts explicit. Retain selected-worker intent before readiness, reconcile uncertain submissions under one identity, and expose terminal navigation only after actual session projection. Test the real Graph/journal boundary and label fixture terminal proof separately from live generation. **New.** |
+
 ## Proposed new v2 work
 
 These items had no owner in the plan (marked **new** above). Each is a candidate task:
