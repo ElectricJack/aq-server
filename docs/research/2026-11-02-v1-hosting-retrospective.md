@@ -149,6 +149,10 @@ Each finding gives what happened, how it was handled, and what v2 should do diff
 
 | W90 | **A technically complete editor can still miss the operator’s workflow.** The first v2 intelligence editor exposed profile details through a card/form. The owner needed repeated per-provider model and effort edits, spreadsheet rows, Add row, and separate Settings tabs. Reworking the interface immediately made that intended workflow concrete. **v2:** establish the everyday edit sequence and visible controls before building a general configuration form; backend completion alone does not establish MVP usability. **New.** |
 
+| W91 | **Saved preferences, discovered models and launch readiness are different facts.** Importing v1 defaults initially ran into v2's launch-qualified-only dropdown, even though the owner simply needed to preserve and edit choices across providers. **v2:** store provider preferences without manufacturing runtime qualifications; discover model-specific controls through supported interfaces, label public/unknown/stale sources, preserve native service/budget options, and retain saved choices when discovery changes. Launch authorization still checks actual credentials, workers and qualified tuples. **New.** |
+
+| W92 | **A mock error envelope can hide a broken real refusal flow.** Profile deletion correctly returned a native `{error,message}` conflict, while UI tests supplied the dashboard's richer envelope. The generic client discarded the native explanation, leaving only “The save could not be confirmed.” **v2:** exercise a real owner refusal in browser qualification and use its actual wire shape in the regression. Preserve bounded server text, keep the draft and dependency intact, and never turn a refused mutation into a generic success or an unsafe retry. **New.** |
+
 ## Proposed new v2 work
 
 These items had no owner in the plan (marked **new** above). Each is a candidate task:
