@@ -77,10 +77,6 @@ def main():
                         print('Retained supervisor is stopped: ' + scope, flush=True)
                     continue
                 service = dict(cfg['service'], conversation_id=scope)
-                auth = private(Path(cfg['subscription_file']))
-                parsed = json.loads(auth)
-                if parsed.get('auth_mode') != 'chatgpt' or parsed.get('OPENAI_API_KEY'):
-                    raise ValueError('subscription authentication required')
                 volume = name + '-state'
                 run(['docker', 'volume', 'create', '--label', 'io.agent-q.supervisor.scope=' + scope, volume])
                 run(['docker', 'create', '--name', name, '--label', 'io.agent-q.supervisor.scope=' + scope,
@@ -91,7 +87,17 @@ def main():
                      '--mount', 'type=volume,src=' + name + '-workspace,dst=/workspace',
                      '--log-opt', 'max-size=2m', '--log-opt', 'max-file=2',
                      image, 'serve', '/state/service.json'])
-                run(['docker', 'cp', '-', name + ':/state'], archive({'service.json': json.dumps(service).encode(), 'subscription.json': auth}))
+                files={'service.json':json.dumps(service).encode()}
+                # Preserve a private, refreshed subscription cache in a retained
+                # volume. This read is discarded without printing token bytes.
+                cached=subprocess.run(['docker','cp',name+':/state/subscription.json','-'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE).returncode==0
+                if not cached:
+                    auth=private(Path(cfg['subscription_file']))
+                    parsed=json.loads(auth)
+                    if parsed.get('auth_mode')!='chatgpt' or parsed.get('OPENAI_API_KEY'):
+                        raise ValueError('subscription authentication required')
+                    files['subscription.json']=auth
+                run(['docker', 'cp', '-', name + ':/state'], archive(files))
                 if cfg.get('egress_network'):
                     run(['docker', 'network', 'connect', cfg['egress_network'], name])
                 run(['docker', 'start', name])

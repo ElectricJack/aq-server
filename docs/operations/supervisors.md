@@ -43,7 +43,7 @@ stdin before startup. Host authentication is never rewritten; validated
 refreshes stay in the private container cache. Native processes use UID 10001;
 lifecycle, admission and database material remain root-only.
 
-The image and executable digests are in the immutable turn plan. This local
+The image and executable digests are in the immutable turn plan. Install the complete pinned Codex package: codex, adjacent codex-code-mode-host, codex-path/rg and codex-resources/bwrap. Verify all four against the matching aq-worker native-runtime pins. The CLI alone can answer text but cannot execute tools. This local
 subscription adapter does not claim a new native mapper/resource qualification
 or hostile-network containment. The development stack network is trusted.
 
