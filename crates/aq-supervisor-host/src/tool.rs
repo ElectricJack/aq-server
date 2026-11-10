@@ -86,11 +86,11 @@ pub async fn run(args: &[String]) -> Result<()> {
         writeln!(out, "{id}")?;
     }
     let output = if name == "commands" && args.len() == 2 {
-        find_command(&value, &args[1]).context("command is not available")?
+        describe(find_command(&value, &args[1]).context("command is not available")?)?
     } else {
-        &value
+        value
     };
-    serde_json::to_writer(std::io::stdout(), output)?;
+    serde_json::to_writer(std::io::stdout(), &output)?;
     println!();
     ensure!(status.is_success(), "AQ refused the supervisor command");
     Ok(())
@@ -103,5 +103,71 @@ fn find_command<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
         Value::Array(items) => items.iter().find_map(|v| find_command(v, name)),
         Value::Object(fields) => fields.values().find_map(|v| find_command(v, name)),
         _ => None,
+    }
+}
+
+/// Discovery lists names, not input schemas. Supply the actual typed payload
+/// and outer command envelope so native callers never have to guess fields.
+fn describe(command: &Value) -> Result<Value> {
+    let name = command["name"].as_str().context("command name")?;
+    let protocol: Value =
+        serde_json::from_str(include_str!("../../../protocol/commands/v1/schema.json"))?;
+    let actions: Value = serde_json::from_str(include_str!(
+        "../../../protocol/dashboard-actions/v1/schema.json"
+    ))?;
+    let mut request = protocol["$defs"]["CommandRequest"].clone();
+    let catalog = aq_server::commands::document();
+    let entry = find_command(&catalog, name).context("installed command schema")?;
+    let mut params = entry["principals"]["supervisor"]["params_schema"].clone();
+    let action = actions["$defs"]["ActionRequest"]["oneOf"]
+        .as_array()
+        .and_then(|variants| {
+            variants
+                .iter()
+                .find(|v| v["properties"]["kind"]["const"] == name)
+        });
+    if let Some(action) = action {
+        params = action["properties"]["payload"].clone();
+        request["properties"]["subject"] = actions["$defs"]["EntityRef"].clone();
+        request["properties"]["expected_versions"] =
+            actions["$defs"]["ActionRequest"]["properties"]["expected_versions"].clone();
+        request["required"] =
+            serde_json::json!(["operation_id", "subject", "expected_versions", "params"]);
+    }
+    request["properties"]["params"] = params;
+    Ok(
+        serde_json::json!({"command":command,"request_schema":request,"instructions":"Submit this CommandRequest JSON on stdin. params is the exact action payload (including operation_id when required), not an arbitrary option map. For mutations use the SAME fresh UUID for outer operation_id and params.operation_id. subject is {type,id,revision}; expected_versions is keyed by project or task, not project_revision. For task.create use subject.type=project, subject.id=the actual project UUID, subject.revision=current project revision, expected_versions.project=that revision, params.expected_project_revision=that revision. Do not add fields absent from the closed params schema. On uncertain transport reuse the exact body/UUID and inspect operation.show; never create a replacement."}),
+    )
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn mutation_help_supplies_the_payload_and_a_valid_command_envelope() {
+        let help = describe(&serde_json::json!({"name":"task.create","kind":"mutation"})).unwrap();
+        assert!(
+            help["request_schema"]["properties"]["params"]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "operation_id")
+        );
+        let action: Value = serde_json::from_str(include_str!(
+            "../../../protocol/dashboard-actions/v1/fixtures/request-task-create.json"
+        ))
+        .unwrap();
+        let command:aq_command_registry::CommandRequest=serde_json::from_value(serde_json::json!({"operation_id":action["operation_id"],"subject":action["subject"],"expected_versions":action["expected_versions"],"params":action["payload"]})).unwrap();
+        let registry = aq_server::commands::registry();
+        let spec = registry.get("task.create").unwrap();
+        let forward = aq_command_registry::forward(
+            spec,
+            spec.route(aq_command_registry::Principal::Supervisor)
+                .unwrap(),
+            &command,
+            None,
+            uuid::Uuid::new_v4(),
+        )
+        .unwrap();
+        assert_eq!(forward.body, Some(action));
     }
 }
