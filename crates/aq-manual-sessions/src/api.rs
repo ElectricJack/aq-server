@@ -117,7 +117,7 @@ async fn list(
             projects.push(json!({"id":id,"name":b["name"],"repository_id":b["repository_id"]}));
         }
     }
-    let profiles = intelligence::choices(&s).await?;
+    let profiles = intelligence::choices(&s.pool, &s.choices).await?;
     Ok(Json(
         json!({"launch_profiles":profiles,"sessions":rows,"workers":reports,"slots":slots,"projects":projects,"server_time_ms":now()}),
     ))

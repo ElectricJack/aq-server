@@ -127,7 +127,23 @@ impl ActionKind for Single {
 fn registry(state: &AppState, p: SupervisorPrincipal) -> ApiResult<Registry> {
     let mut r = Registry::default();
     r.register(GraphAction::<GraphCreate>::for_supervisor(state, p.clone()))?;
-    r.register(Single(GraphAction::<SingleGraph>::for_supervisor(state, p)))?;
+    r.register(Single(GraphAction::<SingleGraph>::for_supervisor(
+        state,
+        p.clone(),
+    )))?;
+    use super::super::graph_actions::{
+        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize,
+    };
+    r.register(GraphAction::<TaskEdit>::for_supervisor(state, p.clone()))?;
+    r.register(GraphAction::<TaskReprioritize>::for_supervisor(
+        state,
+        p.clone(),
+    ))?;
+    r.register(GraphAction::<DependencyAdd>::for_supervisor(
+        state,
+        p.clone(),
+    ))?;
+    r.register(GraphAction::<DependencyRemove>::for_supervisor(state, p))?;
     Ok(r)
 }
 pub(crate) fn routes() -> Router<AppState> {

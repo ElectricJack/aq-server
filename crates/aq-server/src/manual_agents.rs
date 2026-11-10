@@ -41,15 +41,27 @@ pub(super) fn service(state: &AppState) -> Service {
         sources,
         state.store.manual_runtime.clone(),
     )
-    .intelligence_choices(aq_profile_settings::model_choices(
-        config
-            .intelligence
-            .iter()
-            .flat_map(|r| &r.config.qualified_harnesses),
-        config.intelligence_preferences_file.as_deref(),
-    ))
+    .intelligence_choices(crate::profile_catalog::settings::choices(state))
     .browser_origin(
         config.server.public_origin.clone(),
         matches!(config.auth, crate::config::AuthConfig::Dev { .. }),
+    )
+}
+
+pub(super) fn supervisor_controls(state: &AppState) -> axum::Router<AppState> {
+    aq_supervisor_control::Service::new(
+        state.store.pool.clone(),
+        service(state).owner,
+        crate::profile_catalog::settings::choices(state),
+    )
+    .routes()
+}
+
+pub(super) fn supervisor_reads(state: &AppState) -> axum::Router<AppState> {
+    let clock = state.clock.clone();
+    aq_supervisor_control::read::routes(
+        crate::agent_access::human::routes(state),
+        state.store.pool.clone(),
+        Arc::new(move || clock().timestamp_millis() as u64),
     )
 }

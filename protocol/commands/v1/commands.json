@@ -76,6 +76,41 @@
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}/comments"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/comments"
+          }
         }
       },
       "summary": "A task's comment thread, newest first",
@@ -782,6 +817,35 @@
             "method": "GET",
             "path": "/api/human/projects/{project}/knowledge"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/knowledge"
+          }
         }
       },
       "summary": "Knowledge records in a project",
@@ -1010,6 +1074,41 @@
           "route": {
             "method": "GET",
             "path": "/api/human/projects/{project}/knowledge/{node}"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:30d90c0e4ad141de20aead70dd0caa66cc6dba18b21696bbe677efbf7fa74dd1",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "node_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "node_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/knowledge/{node}"
           }
         }
       },
@@ -1741,6 +1840,27 @@
           "route": {
             "method": "GET",
             "path": "/api/v1/projects"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/projects"
           }
         }
       },
@@ -3146,6 +3266,17 @@
             "method": "POST",
             "path": "/api/v1/actions"
           }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
         }
       },
       "summary": "Dashboard action (protocol/dashboard-actions/v1)",
@@ -3174,6 +3305,17 @@
             "method": "POST",
             "path": "/api/v1/actions"
           }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:ed5733a89bb4d8b2ad31a36901dab9eab2d0777152555e4280e6e9ee8f99712d",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.remove"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
         }
       },
       "summary": "Dashboard action (protocol/dashboard-actions/v1)",
@@ -3192,6 +3334,17 @@
       "owner_only": false,
       "principals": {
         "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:e4e95ad0d28a4845223602e3f7de88204164301863204f44eec4486ddc2c22aa",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.edit"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        },
+        "supervisor": {
           "body": "action_request",
           "params_digest": "sha256:e4e95ad0d28a4845223602e3f7de88204164301863204f44eec4486ddc2c22aa",
           "params_schema": {
@@ -3293,6 +3446,41 @@
           "route": {
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}/graph"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/graph"
           }
         }
       },
@@ -3397,6 +3585,41 @@
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}/history"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/history"
+          }
         }
       },
       "summary": "A task's history",
@@ -3442,6 +3665,35 @@
           "route": {
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks"
           }
         }
       },
@@ -3499,6 +3751,17 @@
       "owner_only": false,
       "principals": {
         "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:0b1beee3c148e878c5f704186891bc393d8315725778a5a36043f6ce82dbd001",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.reprioritize"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        },
+        "supervisor": {
           "body": "action_request",
           "params_digest": "sha256:0b1beee3c148e878c5f704186891bc393d8315725778a5a36043f6ce82dbd001",
           "params_schema": {
@@ -3617,6 +3880,41 @@
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}"
+          }
         }
       },
       "summary": "One task",
@@ -3669,6 +3967,41 @@
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}/summary"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/summary"
+          }
         }
       },
       "summary": "A task's work summary",
@@ -3720,6 +4053,41 @@
           "route": {
             "method": "GET",
             "path": "/api/human/projects/{project}/tasks/{node}/work"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_schema": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Path params as named; every other param is passed as a query string value.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/work"
           }
         }
       },

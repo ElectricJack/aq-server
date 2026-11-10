@@ -41,6 +41,12 @@ async fn main() {
 }
 async fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "tool") {
+        return aq_supervisor_host::tool::run(&args[2..]).await;
+    }
+    if args.len() == 3 && args[1] == "serve" {
+        return aq_supervisor_host::service::run(std::path::Path::new(&args[2])).await;
+    }
     if args.len() == 4 && args[1] == "native" {
         return aq_supervisor_host::adapter::native(std::path::Path::new(&args[2]), &args[3]).await;
     }

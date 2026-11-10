@@ -17,6 +17,18 @@ pub struct CurrentUser(pub User);
 pub struct RequireOwner(pub User);
 
 async fn resolve(parts: &Parts, state: &AppState) -> Result<User, AppError> {
+    if let Some(owner) = parts
+        .extensions
+        .get::<aq_supervisor_control::read::ReadOwner>()
+    {
+        return Ok(User {
+            id: owner.id,
+            email: owner.email.clone(),
+            role: Role::Owner,
+            issuer: owner.issuer.clone(),
+            subject: owner.subject.clone(),
+        });
+    }
     let id = state.identity.verify(&parts.headers).await?;
     if let Some(user) = state
         .store

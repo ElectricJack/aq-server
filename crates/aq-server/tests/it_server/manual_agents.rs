@@ -72,6 +72,53 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     f.state.config = Arc::new(config);
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
+    let (status, fleet) = call(&admin, "/api/supervisors", None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{fleet}");
+    let scopes = fleet["supervisors"].as_array().unwrap();
+    let project_scope = scopes
+        .iter()
+        .find(|s| s["project_id"] == project.to_string())
+        .unwrap();
+    let conversation = project_scope["id"].as_str().unwrap();
+    assert_ne!(
+        conversation,
+        scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+    );
+    let uri = format!("/api/supervisors/{conversation}/control");
+    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","profile_version":1,"candidate_id":"codex"}});
+    assert_eq!(
+        call(&admin, &uri, Some(control.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, receipt) = call(&admin, &uri, Some(control.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(
+        call(&admin, &uri, Some(control.clone()), None, true)
+            .await
+            .1,
+        receipt
+    );
+    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
+    assert_eq!(
+        call(&admin, &uri, Some(stale), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let discover = format!("/api/human/conversations/projects/{project}");
+    let (status, discovery) = call(&admin, &discover, None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{discovery}");
+    assert_eq!(discovery["conversation"]["id"], conversation);
+    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"enabled":false});
+    assert_eq!(
+        call(&admin, &uri, Some(stop), None, true).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&admin, &discover, None, None, false).await.1["conversation"],
+        discovery["conversation"]
+    );
+
     let poll = json!({"max_slots":3,"repositories":[repo],"reports":[]});
     assert_eq!(
         call(

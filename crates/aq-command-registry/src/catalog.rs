@@ -142,7 +142,7 @@ pub fn catalog() -> Vec<CommandSpec> {
         "Create several related tasks and their edges in one operation",
     );
     graph_create.supervisor = Some(Route::action());
-    vec![
+    let mut commands = vec![
         whoami,
         operation,
         task_create,
@@ -819,5 +819,32 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Provider accounts",
             "/api/human/provider-accounts",
         ),
-    ]
+    ];
+    for command in &mut commands {
+        let path = match command.name {
+            "task.list" => "/v1/supervisor/read/api/human/projects/{project}/tasks",
+            "task.show" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}",
+            "task.graph.show" => {
+                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/graph"
+            }
+            "task.work" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/work",
+            "task.history" => {
+                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/history"
+            }
+            "task.summary" => {
+                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/summary"
+            }
+            "comment.list" => {
+                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/comments"
+            }
+            "project.list" => "/v1/supervisor/projects",
+            "knowledge.list" => "/v1/supervisor/read/api/human/projects/{project}/knowledge",
+            "knowledge.show" => "/v1/supervisor/read/api/human/projects/{project}/knowledge/{node}",
+            _ => continue,
+        };
+        if let Some(owner) = command.owner {
+            command.supervisor = Some(Route { path, ..owner });
+        }
+    }
+    commands
 }

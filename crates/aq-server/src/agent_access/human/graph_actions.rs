@@ -473,10 +473,11 @@ impl<P> GraphAction<P> {
     }
     async fn project(&self, state: &AppState, user: &User, project: Uuid) -> Result<ProjectRecord> {
         if self.machine() {
-            let supervisor = self
-                .supervisor
-                .as_ref()
-                .is_none_or(|p| user.id == p.session_id && p.scopes.iter().any(|s| s == "enqueue"));
+            let supervisor = self.supervisor.as_ref().is_none_or(|p| {
+                user.id == p.session_id
+                    && p.scopes.iter().any(|s| s == "enqueue")
+                    && p.project_id.is_none_or(|id| id == project)
+            });
             if !supervisor
                 || self
                     .agent

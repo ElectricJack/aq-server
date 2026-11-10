@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 mod inspection;
-mod settings;
+pub(crate) mod settings;
 
 const MAX_ARTIFACT_BYTES: usize = 2 * aq_profiles::MAX_CATALOG_BYTES;
 const MAX_CATALOGS: i64 = 128;

@@ -702,6 +702,7 @@ dependencies = [
  "aq-session-host",
  "aq-session-protocol",
  "aq-stall-ladder",
+ "aq-supervisor-control",
  "aq-swarm",
  "aq-task-comments",
  "aq-task-thread",
@@ -816,6 +817,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-supervisor-control"
+version = "0.1.0"
+dependencies = [
+ "aq-central-authority",
+ "aq-manual-sessions",
+ "aq-profile-settings",
+ "async-trait",
+ "axum",
+ "chrono",
+ "hex",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "sqlx-postgres",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "aq-supervisor-host"
 version = "0.1.0"
 dependencies = [
@@ -823,10 +845,12 @@ dependencies = [
  "aq-agent-api",
  "aq-central-authority",
  "aq-codex-mapper",
+ "aq-command-registry",
  "aq-responses-transport",
  "aq-server",
  "aq-session-host",
  "aq-session-protocol",
+ "aq-supervisor-control",
  "async-trait",
  "axum",
  "chrono",

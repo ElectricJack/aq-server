@@ -4,7 +4,7 @@ use super::{Result, corrupt, function_body};
 use sqlx::{Postgres, Transaction};
 
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
-    let valid: bool = sqlx::query_scalar(r#"SELECT
+    let query = r#"SELECT
       (SELECT count(*)=1 AND bool_and(singleton AND revision=1 AND conversation_id<>'00000000-0000-0000-0000-000000000000'::uuid) FROM global_supervisor_conversation)
       AND NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE (m.mailbox_key=central_global_mailbox_key() OR m.recipient->>'kind'='global_supervisor') AND NOT central_global_mail_source_valid(m.message_id))
       AND NOT EXISTS(SELECT 1 FROM mailbox_operations o WHERE o.response->>'contract'='human-supervisor-conversation-1' AND o.response->>'state'='queued' AND NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE m.message_id::text=o.response->>'message_id' AND central_global_mail_source_valid(m.message_id)))
@@ -19,7 +19,16 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -
         OR NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE m.message_id=b.message_id))
       AND NOT EXISTS(SELECT 1 FROM central_supervisor_operations o WHERE NOT EXISTS(SELECT 1 FROM central_supervisor_actors a WHERE a.actor_id=o.actor_id)
         OR NOT EXISTS(SELECT 1 FROM users u WHERE u.id=o.initiating_user_id))
-    "#).fetch_one(&mut **tx).await?;
+    "#;
+    let query = if version >= 109 {
+        query.replace(
+            "FROM global_supervisor_conversation g WHERE g.conversation_id=a.conversation_id",
+            "FROM supervisor_conversation_ids g WHERE g.conversation_id=a.conversation_id",
+        )
+    } else {
+        query.to_owned()
+    };
+    let valid: bool = sqlx::query_scalar(&query).fetch_one(&mut **tx).await?;
     if !valid {
         return Err(corrupt());
     }

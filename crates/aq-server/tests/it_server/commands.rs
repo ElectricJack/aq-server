@@ -108,7 +108,12 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     .into_iter()
     .collect();
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut stack = vec![
+        root.join("src"),
+        root.join("../aq-manual-sessions/src"),
+        root.join("../aq-supervisor-control/src"),
+    ];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();

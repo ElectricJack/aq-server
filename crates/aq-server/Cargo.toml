@@ -9,6 +9,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+aq-supervisor-control = { path = "../aq-supervisor-control" }
 aq-human-http = { path = "../aq-human-http" }
 aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-profile-settings = { path = "../aq-profile-settings" }

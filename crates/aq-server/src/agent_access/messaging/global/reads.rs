@@ -1,25 +1,29 @@
 use super::*;
-#[derive(Serialize)]
-struct Limits {
-    body_bytes: u32,
-    context_refs: u8,
-    attachments: u8,
-    history_page: u8,
-}
-#[derive(Serialize)]
-pub(super) struct Discovery {
-    contract: &'static str,
-    conversation: Conversation,
-    runtime: Runtime,
-    limits: Limits,
-}
+use aq_supervisor_control::wire::{Discovery, Limits};
 pub(super) async fn discovery(
     Extension(service): Extension<Arc<Service>>,
     RequireOwner(user): RequireOwner,
 ) -> Result<Json<Discovery>> {
+    discover(service, user, None).await
+}
+pub(super) async fn project_discovery(
+    Extension(service): Extension<Arc<Service>>,
+    RequireOwner(user): RequireOwner,
+    Path(project): Path<Uuid>,
+) -> Result<Json<Discovery>> {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+    )
+    .bind(project)
+    .fetch_optional(&service.pool)
+    .await
+    .map_err(db)?;
+    discover(service, user, Some(id.ok_or_else(missing)?)).await
+}
+async fn discover(service: Arc<Service>, user: User, id: Option<Uuid>) -> Result<Json<Discovery>> {
     let mut tx = service.tx().await?;
     owner(&mut tx, &user).await?;
-    let conversation = definition(&mut tx, None, false).await?;
+    let conversation = definition(&mut tx, id, false).await?;
     tx.commit().await.map_err(db)?;
     Ok(Json(Discovery {
         contract: CONTRACT,

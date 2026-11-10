@@ -6,7 +6,7 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -
     functions(tx, version).await?;
     columns(tx).await?;
     triggers(tx, version).await?;
-    keys(tx).await?;
+    keys(tx, version).await?;
     indexes(tx).await?;
     checks(tx, version).await
 }
@@ -241,7 +241,7 @@ async fn triggers(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()
     Ok(())
 }
 
-async fn keys(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+async fn keys(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
     // Compare full key shape, including the backing unique index's validity,
     // rather than trusting a name or merely the referenced relation.
     let actual: Vec<String> = sqlx::query_scalar(r#"SELECT c.conrelid::regclass::text||':'||c.contype::text||':'||array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.n ORDER BY k.o),',')||':'||CASE WHEN c.confrelid=0 THEN '' ELSE c.confrelid::regclass::text END||':'||COALESCE(array_to_string(ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n,o) JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.n ORDER BY k.o),','),'')||':'||c.condeferrable::text||':'||c.condeferred::text
@@ -273,6 +273,14 @@ async fn keys(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     ];
     let mut actual = actual;
     actual.sort();
+    if version >= 109 {
+        for key in &mut expected {
+            *key = key.replace(
+                ":global_supervisor_conversation:",
+                ":supervisor_conversation_ids:",
+            );
+        }
+    }
     expected.sort();
     if actual != expected {
         return Err(corrupt());

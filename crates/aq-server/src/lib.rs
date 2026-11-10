@@ -304,6 +304,7 @@ pub fn build_admin_router_with_optional_owners(
         )
         .merge(agent_access::human::routes(&state))
         .merge(agent_access::supervisor_conversation::routes(&state))
+        .merge(manual_agents::supervisor_controls(&state))
         .merge(profiled_execution::human_results::routes())
         .merge(profiled_execution::disposition::routes(state.clone()))
         .merge(results_feedback::routes())
@@ -408,6 +409,7 @@ fn build_worker_router_inner(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
+        .merge(manual_agents::supervisor_reads(&state))
         .merge(source_retention::machine_routes(state.clone()))
         .merge(lifecycle_artifacts::routes(state.clone()))
         .merge(execution_permits::routes(state.clone()))

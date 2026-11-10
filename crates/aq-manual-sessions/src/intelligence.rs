@@ -2,15 +2,18 @@
 use super::*;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Selection {
+pub struct Selection {
     pub profile_id: String,
     pub profile_version: u32,
     pub candidate_id: String,
 }
-pub(super) async fn choices(s: &Service) -> Result<Vec<Value>> {
-    let bytes: Option<Vec<u8>> = sqlx::query_scalar("SELECT a.artifact FROM profile_catalog_registry r JOIN profile_catalog_artifacts a ON a.digest=r.active_digest WHERE r.singleton")
-        .fetch_optional(&s.pool).await?;
-    let Some(bytes) = bytes else {
+pub async fn choices(
+    pool: &PgPool,
+    choices: &[aq_profile_settings::ModelChoice],
+) -> Result<Vec<Value>> {
+    let bytes: Option<(String,Vec<u8>)> = sqlx::query_as("SELECT a.digest,a.artifact FROM profile_catalog_registry r JOIN profile_catalog_artifacts a ON a.digest=r.active_digest WHERE r.singleton")
+        .fetch_optional(pool).await?;
+    let Some((catalog_digest, bytes)) = bytes else {
         return Ok(Vec::new());
     };
     let artifact: Value =
@@ -36,7 +39,7 @@ pub(super) async fn choices(s: &Service) -> Result<Vec<Value>> {
             {
                 continue;
             }
-            let Some(m) = s.choices.iter().find(|m| {
+            let Some(m) = choices.iter().find(|m| {
                 m.provider == c["provider"]
                     && m.model == c["model"]
                     && m.reasoning_configuration_reference == c["reasoning_configuration_reference"]
@@ -54,7 +57,7 @@ pub(super) async fn choices(s: &Service) -> Result<Vec<Value>> {
             if !supported.contains(&m.reasoning.as_str()) {
                 continue;
             }
-            out.push(json!({"profile_id":profile["id"],"profile_version":profile["version"],"candidate_id":c["id"],"name":profile["name"].as_str().unwrap_or(profile["id"].as_str().unwrap_or("Profile")),"provider":m.provider,"model":m.model,"reasoning":m.reasoning,"reasoning_configuration_reference":m.reasoning_configuration_reference,"options":m.options,"harness":harness}));
+            out.push(json!({"catalog_digest":catalog_digest,"profile_id":profile["id"],"profile_version":profile["version"],"candidate_id":c["id"],"name":profile["name"].as_str().unwrap_or(profile["id"].as_str().unwrap_or("Profile")),"provider":m.provider,"model":m.model,"reasoning":m.reasoning,"reasoning_configuration_reference":m.reasoning_configuration_reference,"options":m.options,"harness":harness}));
         }
     }
     Ok(out)
@@ -66,7 +69,7 @@ pub(super) async fn resolve(s: &Service, selected: &Selection) -> Result<Value> 
     {
         return Err(bad("Invalid intelligence profile choice"));
     }
-    choices(s)
+    choices(&s.pool, &s.choices)
         .await?
         .into_iter()
         .find(|c| {

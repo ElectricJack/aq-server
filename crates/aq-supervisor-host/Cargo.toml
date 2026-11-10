@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+reqwest.workspace = true
+aq-supervisor-control = { path = "../aq-supervisor-control" }
+aq-command-registry = { path = "../aq-command-registry" }
 aq-central-authority = { path = "../aq-central-authority" }
 aq-server = { path = "../aq-server" }
 aq-session-host.workspace = true

@@ -67,7 +67,9 @@
               "pattern": "^[1-9][0-9]{0,18}$"
             },
             "label": {
-              "const": "Global supervisor"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
             }
           },
           "required": [
@@ -131,7 +133,9 @@
               "pattern": "^[1-9][0-9]{0,18}$"
             },
             "label": {
-              "const": "Global supervisor"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
             }
           },
           "required": [
@@ -213,7 +217,9 @@
               "pattern": "^[1-9][0-9]{0,18}$"
             },
             "label": {
-              "const": "Global supervisor"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
             }
           },
           "required": [
@@ -927,7 +933,7 @@
       "description": "Entry of the optional attachments array (at most 4, at most 65536 serialized bytes, unique nonnil draft/operation IDs) on POST /v1/supervisor/conversation/replies. The server derives every other History field."
     },
     "Runtime": {
-      "description": "X4: unavailable until an active central session serves this conversation; then bound to that session. Receipts keep the admission-time unavailable runtime.",
+      "description": "Active central session, or a fresh enabled controller waiting between turns. Admission receipts retain their unavailable snapshot.",
       "oneOf": [
         {
           "type": "object",
@@ -980,6 +986,26 @@
             },
             "reason": {
               "const": "central_session_active"
+            }
+          },
+          "required": [
+            "state",
+            "binding",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "idle"
+            },
+            "binding": {
+              "type": "null"
+            },
+            "reason": {
+              "const": "central_service_ready"
             }
           },
           "required": [

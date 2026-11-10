@@ -272,7 +272,11 @@ async fn send(
         return Ok(r);
     }
     if let Some(conversation) = supervisor {
-        admit_supervisor(tx, conversation, request.body.len()).await?;
+        let project = sender["binding"]["project_id"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+            .ok_or(Error("not_found"))?;
+        admit_supervisor(tx, conversation, project, request.body.len()).await?;
     } else {
         validate_session(tx, &request.recipient).await?;
         let (workspace, project, task) = request.recipient.scope()?;
@@ -299,25 +303,22 @@ async fn send(
     receipt(tx, &actor, request.operation_id, &payload, &response).await?;
     Ok(response)
 }
-/// Lock the singleton conversation, require the current one, and reserve its
-/// retained capacity exactly as an owner admission does.
+/// Reserve retained capacity under the sending project's supervisor scope.
 async fn admit_supervisor(
     tx: &mut Transaction<'_, Postgres>,
     conversation: Uuid,
+    project: Uuid,
     body: usize,
 ) -> Result<()> {
-    let current: Option<(Uuid, i64)> = sqlx::query_as(
-        "SELECT conversation_id,revision FROM global_supervisor_conversation WHERE singleton FOR UPDATE",
-    )
-    .fetch_optional(&mut **tx)
-    .await?;
-    if current != Some((conversation, 1)) {
-        return Err(Error("not_found"));
-    }
     let reserved = i64::try_from(body + 4096).map_err(|_| Error("invalid_request"))?;
-    let row: Option<Uuid> = sqlx::query_scalar("UPDATE global_supervisor_conversation SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton AND retained_operations<$2 AND retained_bytes<=$3-$1 RETURNING conversation_id")
-        .bind(reserved).bind(global::MAX_OPERATIONS).bind(global::MAX_BYTES).fetch_optional(&mut **tx).await?;
-    row.map(|_| ()).ok_or(Error("overloaded"))
+    match aq_supervisor_control::admit_mail(tx, conversation, project, reserved)
+        .await
+        .map_err(|_| Error("not_found"))?
+    {
+        Some(true) => Ok(()),
+        Some(false) => Err(Error("overloaded")),
+        None => Err(Error("not_found")),
+    }
 }
 // The caller must first authorize its exact recipient domain. This primitive
 // owns the one mailbox order/body boundary; it has no public request surface.

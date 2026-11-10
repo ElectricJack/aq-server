@@ -62,38 +62,18 @@ fn stamp(state: &AppState) -> Result<u64> {
         .filter(|n| *n > 0)
         .ok_or_else(unavailable)
 }
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct Conversation {
-    id: Uuid,
-    revision: String,
-    label: String,
-}
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct Runtime {
-    state: String,
-    binding: Option<Value>,
-    reason: String,
-}
+use aq_supervisor_control::wire::{Conversation, Runtime};
 fn runtime() -> Runtime {
-    Runtime {
-        state: "unavailable".into(),
-        binding: None,
-        reason: "central_runtime_not_connected".into(),
-    }
+    Runtime::unavailable()
 }
 /// X4: owner reads report the active central session bound to this
 /// conversation. Admission receipts keep the admission-time [`runtime`].
 async fn live_runtime(pool: &PgPool, conversation: Uuid) -> Runtime {
-    match dispatch::binding(pool, Some(conversation)).await {
-        Some(b) => Runtime {
-            state: "available".into(),
-            binding: Some(json!(b)),
-            reason: "central_session_active".into(),
-        },
-        None => runtime(),
-    }
+    let binding = dispatch::binding(pool, Some(conversation))
+        .await
+        .map(|b| json!(b));
+    let ready = binding.is_none() && aq_supervisor_control::connected(pool, conversation).await;
+    Runtime::live(binding, ready)
 }
 pub(crate) struct Service {
     pool: PgPool,
@@ -127,6 +107,10 @@ pub fn routes(state: &AppState) -> Router<AppState> {
     let service = Arc::new(Service::new(state));
     Router::new()
         .route("/api/human/conversations/global", get(reads::discovery))
+        .route(
+            "/api/human/conversations/projects/{project}",
+            get(reads::project_discovery),
+        )
         .route(
             "/api/human/conversations/{conversation}/messages",
             get(reads::history).post(writes::enqueue),
@@ -199,29 +183,12 @@ async fn definition(
     id: Option<Uuid>,
     write: bool,
 ) -> Result<Conversation> {
-    let sql = if write {
-        "SELECT conversation_id,revision FROM global_supervisor_conversation WHERE singleton FOR UPDATE"
-    } else {
-        "SELECT conversation_id,revision FROM global_supervisor_conversation WHERE singleton FOR SHARE"
-    };
-    let row = sqlx::query(sql)
-        .fetch_optional(&mut **tx)
+    aq_supervisor_control::definition(tx, id, write)
         .await
-        .map_err(db)?
-        .ok_or_else(unavailable)?;
-    let actual: Uuid = row.get("conversation_id");
-    let revision: i64 = row.get("revision");
-    if actual.is_nil() || revision != 1 {
-        return Err(unavailable());
-    }
-    if id.is_some_and(|i| i != actual) {
-        return Err(missing());
-    }
-    Ok(Conversation {
-        id: actual,
-        revision: revision.to_string(),
-        label: "Global supervisor".into(),
-    })
+        .map_err(|error| match error {
+            sqlx::Error::RowNotFound if id.is_some() => missing(),
+            _ => unavailable(),
+        })
 }
 fn recipient(conversation: Uuid) -> Value {
     json!({"kind":"global_supervisor","conversation_id":conversation})

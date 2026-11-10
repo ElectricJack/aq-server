@@ -1,6 +1,6 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
-mod intelligence;
+pub mod intelligence;
 mod stream;
 mod terminal;
 mod worker;

@@ -16,7 +16,7 @@ pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
         aq_profile_settings::Error::Internal => AppError::Internal,
     }
 }
-fn choices(state: &AppState) -> Vec<ModelChoice> {
+pub(crate) fn choices(state: &AppState) -> Vec<ModelChoice> {
     let config = &state.config;
     let harnesses = config
         .intelligence
