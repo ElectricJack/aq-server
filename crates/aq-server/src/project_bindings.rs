@@ -114,7 +114,22 @@ async fn list(
     } else {
         None
     };
-    Ok(Json(json!({"items":items,"next_cursor":next})))
+    let execution: std::collections::BTreeMap<_, _> = items
+        .iter()
+        .filter_map(|r| {
+            state
+                .config
+                .profiled_execution
+                .as_ref()?
+                .projects
+                .iter()
+                .find(|p| p.project_id == r.binding.project_id)
+                .map(|p| (r.binding.project_id, p.enabled))
+        })
+        .collect();
+    Ok(Json(
+        json!({"items":items,"next_cursor":next,"execution":execution}),
+    ))
 }
 pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<String>)> {
     let row =
@@ -145,53 +160,16 @@ async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
     Ok(c)
 }
 fn profiles(binding: &ProjectBinding, catalog: &ValidatedCatalog) -> Result<()> {
-    let a = &catalog.artifact().catalog;
-    for key in &binding.allowed_agent_profiles {
-        let agent = a
-            .agents
-            .iter()
-            .find(|a| aq_profiles::key(&a.id, a.version) == *key)
-            .ok_or_else(|| bad("unknown allowed agent profile"))?;
-        if !binding
-            .allowed_intelligence_profiles
-            .contains(&agent.intelligence)
-            || !binding
-                .allowed_execution_profiles
-                .contains(&agent.execution)
-        {
-            return Err(bad("agent defaults outside project profile allowlists"));
-        }
-    }
-    for key in &binding.allowed_intelligence_profiles {
-        if !a
-            .intelligence
-            .iter()
-            .any(|i| aq_profiles::key(&i.id, i.version) == *key)
-        {
-            return Err(bad("unknown allowed intelligence profile"));
-        }
-    }
-    for key in &binding.allowed_execution_profiles {
-        if !a
-            .execution
-            .iter()
-            .any(|e| aq_profiles::key(&e.id, e.version) == *key)
-        {
-            return Err(bad("unknown allowed execution profile"));
-        }
-    }
-    for environment in &binding.allowed_environments {
-        if !a.execution.iter().any(|e| {
-            binding
-                .allowed_execution_profiles
-                .contains(&aq_profiles::key(&e.id, e.version))
-                && e.environments.contains(environment)
-        }) {
-            return Err(bad("environment outside allowed execution profiles"));
-        }
-    }
-    Ok(())
+    aq_profiles::validate_project_profiles(
+        catalog,
+        &binding.allowed_agent_profiles,
+        &binding.allowed_intelligence_profiles,
+        &binding.allowed_execution_profiles,
+        &binding.allowed_environments,
+    )
+    .map_err(bad)
 }
+
 async fn existing_receipt(
     state: &AppState,
     actor: Uuid,

@@ -155,6 +155,39 @@ async fn revisioned_binding_replay_history_and_retained_snapshot_survive_updates
     )
     .await;
     assert_eq!(stale.1["eligible"], false);
+    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":2});
+    let stop_path = format!("{}/disable", path());
+    let stopped = call(&env.app, &stop_path, Some(stop.clone()), "owner@localhost").await;
+    assert_eq!(stopped.0, StatusCode::OK, "{}", stopped.1);
+    assert_eq!(stopped.1["record"]["binding"]["enabled"], false);
+    assert_eq!(
+        call(&env.app, &stop_path, Some(stop), "owner@localhost")
+            .await
+            .1,
+        stopped.1
+    );
+    let mut binding = stopped.1["record"]["binding"].clone();
+    binding["enabled"] = json!(true);
+    let start = json!({"operation_id":Uuid::new_v4(),"expected_revision":3,"binding":binding});
+    let started = call(&env.app, &path(), Some(start.clone()), "owner@localhost").await;
+    assert_eq!(started.0, StatusCode::OK, "{}", started.1);
+    assert_eq!(
+        started.1["record"]["binding"], binding,
+        "Start preserves all other project settings"
+    );
+    assert_eq!(started.1["record"]["revision"], 4);
+    assert_eq!(
+        call(&env.app, &path(), Some(start), "owner@localhost")
+            .await
+            .1,
+        started.1
+    );
+    let listed = call(&env.app, "/api/projects", None, "owner@localhost").await;
+    assert_eq!(
+        listed.1["execution"],
+        json!({}),
+        "Missing worker policy is explicit rather than inferred from enabled binding"
+    );
 }
 #[tokio::test]
 async fn absent_stale_forbidden_and_offline_components_refuse_and_disable_stays_available() {

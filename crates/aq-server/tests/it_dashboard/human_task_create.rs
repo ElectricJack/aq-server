@@ -924,6 +924,46 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
         .0,
         409
     );
+    let picker = format!("/api/human/workers/{}/launch-projects", f.node.node_id);
+    let list = send(&launch_app, &picker, None, "owner@localhost").await;
+    assert_eq!(list.1["projects"].as_array().unwrap().len(), 1);
+    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1}).to_string();
+    let stopped = send(
+        &launch_app,
+        &format!("/api/projects/{project}/disable"),
+        Some(&stop),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(stopped.0, 200, "{}", stopped.1);
+    assert_eq!(
+        send(&launch_app, &picker, None, "owner@localhost").await.1["projects"],
+        json!([])
+    );
+    let new_launch = request(Uuid::new_v4(), "2").replace("\"draft\"", "\"active\"");
+    assert_eq!(
+        send(
+            &launch_app,
+            &launch_path,
+            Some(&new_launch),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        409
+    );
+    assert_eq!(
+        send(
+            &launch_app,
+            &launch_path,
+            Some(&launch_body),
+            "owner@localhost"
+        )
+        .await
+        .1,
+        launched,
+        "Original launch receipts remain replayable after Stop"
+    );
     server.abort();
     child.kill().await.unwrap();
     child.wait().await.unwrap();

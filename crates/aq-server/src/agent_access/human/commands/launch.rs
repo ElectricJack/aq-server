@@ -32,6 +32,13 @@ pub(in crate::agent_access::human) async fn projects(
         .map(|c| c.enabled_projects())
         .unwrap_or_default()
     {
+        if !crate::project_bindings::current(&state, id)
+            .await?
+            .binding
+            .enabled
+        {
+            continue;
+        }
         let a = access(&state, &r, actor.clone(), id).await?;
         projects.push(json!({"id":id,"revision":a.record.revision.to_string()}));
     }
@@ -52,6 +59,15 @@ pub(in crate::agent_access::human) async fn create(
     // Recovery stays available if the node later goes offline; no new intent is admitted.
     if journal::load(&r, request.operation_id).await?.is_none() {
         worker(&state, node).await?;
+        if !crate::project_bindings::current(&state, project)
+            .await?
+            .binding
+            .enabled
+        {
+            return Err(AppError::Conflict(
+                "This project is stopped. Start it in Settings → Projects first.".into(),
+            ));
+        }
         if !state
             .config
             .profiled_execution
