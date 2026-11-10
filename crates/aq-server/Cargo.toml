@@ -9,6 +9,8 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+aq-human-http = { path = "../aq-human-http" }
+aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-profile-settings = { path = "../aq-profile-settings" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"

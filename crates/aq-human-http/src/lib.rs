@@ -1,5 +1,6 @@
 //! Bounded same-origin human API client. No redirects, proxies, automatic
 //! retries, node credentials, cookie jar, secret Debug output or mutation retry.
+pub mod readiness;
 use reqwest::{
     Url,
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -675,4 +676,43 @@ mod tests {
         .unwrap();
         assert!(token(&fifo).is_err());
     }
+}
+
+/// Same-origin mutation rule shared by AQ's owner routes.
+pub fn csrf_rejection(
+    method: &reqwest::Method,
+    headers: &reqwest::header::HeaderMap,
+    expected: &str,
+    development: bool,
+) -> Option<&'static str> {
+    if matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD) {
+        return None;
+    }
+    if headers
+        .get("x-aq-request")
+        .is_none_or(|v| v.as_bytes() != b"1")
+    {
+        return Some("missing X-AQ-Request: 1 header");
+    }
+    if headers
+        .get("origin")
+        .is_some_and(|origin| !origin_allowed(expected, origin.as_bytes(), development))
+    {
+        return Some("request origin is not allowed");
+    }
+    None
+}
+
+/// Exact origin, with the existing development-only loopback alias.
+pub fn origin_allowed(expected: &str, origin: &[u8], development: bool) -> bool {
+    let alias = |from: &str, to: &str| {
+        let (scheme, rest) = expected.split_once("://")?;
+        let port = rest.strip_prefix(from)?;
+        (port.is_empty() || port.starts_with(':')).then(|| format!("{scheme}://{to}{port}"))
+    };
+    origin == expected.as_bytes()
+        || (development
+            && alias("127.0.0.1", "localhost")
+                .or_else(|| alias("localhost", "127.0.0.1"))
+                .is_some_and(|alias| origin == alias.as_bytes()))
 }

@@ -273,6 +273,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "uuid",
  "zeroize",
 ]
 
@@ -337,6 +338,20 @@ dependencies = [
  "sqlx-postgres",
  "thiserror",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aq-manual-sessions"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "tokio",
  "uuid",
 ]
 
@@ -656,10 +671,12 @@ dependencies = [
  "aq-environment-templates",
  "aq-history-caps",
  "aq-human-cursor",
+ "aq-human-http",
  "aq-human-work",
  "aq-intelligence-config",
  "aq-lifecycle-api",
  "aq-machine-control",
+ "aq-manual-sessions",
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
