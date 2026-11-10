@@ -614,9 +614,7 @@ async fn offers(
                 .await?
                 .into_parts()
         } else {
-            // A first attempt freezes the configured source at offer time; a
-            // handoff successor freezes the saved commit as a fresh export (a new
-            // operation, never the predecessor's export).
+            // Freeze the configured source, or a fresh export of a handoff's saved commit.
             let fresh = async {
                 let observed = match &handoff {
                     Some(base) => {
@@ -678,8 +676,7 @@ async fn offers(
             }
         };
         let source_operation = token.request().operation_id;
-        // External export can consume the original graph/selection freshness. Read
-        // actual owners again; a task CAS/content change refuses this original task.
+        // Refresh Graph/selection after export; reject a changed original task.
         let ready = on_heap(|| {
             graph.scheduling_ready_current(
                 record.binding.graph_workspace_id,
@@ -728,6 +725,7 @@ async fn offers(
         {
             return Err(refused());
         }
+        tracing::info!(task_id = %task.task_id, "offer assembly: build");
         let built = on_heap(|| {
             build::assemble(build::Assembly {
                 state,
@@ -744,8 +742,7 @@ async fn offers(
             })
         })
         .await?;
-        // The node's authenticated registration must qualify the exact
-        // confinement mode this manifest requires (MS1 review should-fix 1).
+        tracing::info!(task_id = %task.task_id, "offer assembly: built");
         if !built
             .native
             .offered
@@ -766,9 +763,11 @@ async fn offers(
             return Err(refused());
         }
         let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
+        tracing::info!(task_id = %task.task_id, "offer assembly: retained source inspected");
         let offer =
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
                 .await?;
+        tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         let Some(offer) = offer else { return Ok(page) };
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);
