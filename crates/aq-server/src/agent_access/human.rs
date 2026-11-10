@@ -92,6 +92,14 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/human/projects/{project}/tasks",
             get(tasks).post(commands::create),
         )
+        .route(
+            "/api/human/projects/{project}/workers/{node}/launch",
+            axum::routing::post(commands::launch::create),
+        )
+        .route(
+            "/api/human/workers/{node}/launch-projects",
+            get(commands::launch::projects),
+        )
         .route("/api/human/operations/{operation}", get(commands::lookup))
         .route(
             "/api/human/operations/{operation}/recover",

@@ -812,6 +812,118 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
         count,
         "historical discovery must never redispatch"
     );
+    // A selected-worker launch is a normal retained Graph task, pinned before readiness.
+    let cfg = Arc::make_mut(&mut f.state.config);
+    cfg.profiled_execution = Some(Arc::new(
+        aq_server::profiled_execution::config::ProfiledConfig {
+            revision: 1,
+            qualified_runtimes: vec![],
+            context_qualifications: vec![],
+            definition_bodies: vec![],
+            projects: vec![aq_server::profiled_execution::config::ProjectPolicy {
+                project_id: project,
+                enabled: true,
+                priority: 0,
+                source: aq_admission::SourceSelection::NamedRef {
+                    reference: aq_admission::Label::new("refs/heads/main").unwrap(),
+                },
+                retention_handle: Uuid::new_v4(),
+                placement: None,
+                agent_grants: None,
+            }],
+        },
+    ));
+    sqlx::query("UPDATE nodes SET last_seen_at=$1 WHERE id=$2")
+        .bind((f.state.clock)())
+        .bind(f.node.node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let launch_app = aq_server::build_admin_router(f.state.clone());
+    let launch_path = format!(
+        "/api/human/projects/{project}/workers/{}/launch",
+        f.node.node_id
+    );
+    let launch_id = Uuid::new_v4();
+    let launch_body = request(launch_id, "1").replace("\"draft\"", "\"active\"");
+    let (code, launched) = send(
+        &launch_app,
+        &launch_path,
+        Some(&launch_body),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(code, 200, "{launched}");
+    let payload: Vec<u8> = sqlx::query_scalar(
+        "SELECT payload_bytes FROM human_graph_operations WHERE operation_id=$1",
+    )
+    .bind(launch_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let payload: Value = serde_json::from_slice(&payload).unwrap();
+    let metadata = &payload["operations"][0]["metadata"];
+    assert_eq!(metadata["aq:requested_node_id"], json!(f.node.node_id));
+    assert!(
+        aq_machine_control::launch::eligible(&pool, launch_id, f.node.node_id, metadata)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !aq_machine_control::launch::eligible(&pool, launch_id, Uuid::new_v4(), metadata)
+            .await
+            .unwrap()
+    );
+    let calls_before = calls.load(Ordering::SeqCst);
+    assert_eq!(
+        send(
+            &launch_app,
+            &launch_path,
+            Some(&launch_body),
+            "owner@localhost"
+        )
+        .await
+        .1,
+        launched
+    );
+    let other_path = format!(
+        "/api/human/projects/{project}/workers/{}/launch",
+        Uuid::new_v4()
+    );
+    assert_eq!(
+        send(
+            &launch_app,
+            &other_path,
+            Some(&launch_body),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        409
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), calls_before);
+    assert_eq!(
+        send(
+            &launch_app,
+            &launch_path,
+            Some(&request(Uuid::new_v4(), "1")),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        400
+    );
+    assert_eq!(
+        send(
+            &launch_app,
+            &other_path,
+            Some(&request(Uuid::new_v4(), "1").replace("\"draft\"", "\"active\"")),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        409
+    );
     server.abort();
     child.kill().await.unwrap();
     child.wait().await.unwrap();

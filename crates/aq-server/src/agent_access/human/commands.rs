@@ -2,6 +2,7 @@
 pub(crate) mod action;
 mod dispatch;
 mod journal;
+pub(super) mod launch;
 use super::*;
 use axum::{body::Bytes, http::StatusCode};
 use sha2::Digest as _;
@@ -314,13 +315,26 @@ async fn create_domain(
     project: Uuid,
     bytes: Bytes,
 ) -> Result<Status> {
+    create_on_node(state, r, actor, project, bytes, None).await
+}
+async fn create_on_node(
+    state: &AppState,
+    r: &ReadRuntime,
+    actor: &User,
+    project: Uuid,
+    bytes: Bytes,
+    target: Option<Uuid>,
+) -> Result<Status> {
     let request = Create::parse(&bytes)?;
     if project.is_nil() {
         return Err(invalid());
     }
     if let Some(old) = journal::load(r, request.operation_id).await? {
         journal::owns(&old, actor)?;
-        if old.project != project || old.request != bytes.as_ref() {
+        if old.project != project
+            || old.request != bytes.as_ref()
+            || launch::target(&old.payload) != target
+        {
             return Err(conflict());
         }
         return journal::status(state, r, actor, &old).await;
@@ -334,6 +348,9 @@ async fn create_domain(
         authorize_parent(state, r, actor, project, parent).await?;
     }
     let mut payload = json!({"idempotency_key":format!("aq-human-task-create:{}",request.operation_id),"reason":format!("AQ human task create {}",request.operation_id),"operations":[{"op":"create_node","id":request.operation_id,"kind":"task","title":request.title,"body":request.body,"acceptance_criteria":request.acceptance_criteria,"labels":request.labels,"task_state":request.task_state,"metadata":{"aq:human_actor_id":actor.id,"aq:human_operation_id":request.operation_id,"aq:project_id":project}}]});
+    if let Some(node) = target {
+        payload["operations"][0]["metadata"]["aq:requested_node_id"] = json!(node);
+    }
     super::enqueue::metadata(
         &mut payload["operations"][0]["metadata"],
         request.priority,

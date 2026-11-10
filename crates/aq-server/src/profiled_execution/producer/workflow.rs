@@ -483,6 +483,20 @@ async fn offers(
             })
             .await
             .map_err(|_| refused())?;
+            let mut ready = ready;
+            for candidate in &mut ready.items {
+                if !aq_machine_control::launch::eligible(
+                    &state.store.pool,
+                    candidate.revision.task_id,
+                    auth.id(),
+                    &candidate.node["metadata"],
+                )
+                .await
+                .map_err(db)?
+                {
+                    skipped.insert(candidate.revision.task_id);
+                }
+            }
             let (revision, project) = (record.revision, policy.project_id);
             if let Some((task, assessment)) = on_heap(|| {
                 first_eligible_task(&ready, &skipped, |task| async move {

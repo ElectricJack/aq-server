@@ -156,7 +156,10 @@ pub(super) async fn admit(
     {
         let old = Operation::decode(row)?;
         owns(&old, actor)?;
-        if old.project != record.binding.project_id || old.request != bytes {
+        if old.project != record.binding.project_id
+            || old.request != bytes
+            || old.payload != payload
+        {
             return Err(conflict());
         }
     } else {
