@@ -45,6 +45,8 @@ pub(super) struct Command {
 #[serde(deny_unknown_fields)]
 struct Connect {
     client_id: Uuid,
+    #[serde(default)]
+    expected_generation: Option<u64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +96,23 @@ async fn connect(
     }
     let mut runtime = s.runtime.0.lock().await;
     let screen = screen(&mut runtime, id)?;
+    if let Some(expected) = c.expected_generation {
+        if screen.generation != expected
+            || !screen
+                .controller
+                .is_some_and(|(client, a, _)| client == c.client_id && a == actor)
+        {
+            return Err(conflict("Terminal control changed; reconnect"));
+        }
+    }
+    if screen.commands.values().any(|cmd| {
+        cmd.disposition == "unknown"
+            || (cmd.disposition == "dispatched" && now() - cmd.updated > 5000)
+    }) {
+        return Err(conflict(
+            "Input delivery remains uncertain; wait for the worker acknowledgement",
+        ));
+    }
     if !screen
         .controller
         .is_some_and(|(client, a, until)| client == c.client_id && a == actor && until > now())

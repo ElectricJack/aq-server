@@ -161,6 +161,47 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{control}");
+    let renewed = call(
+        &admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(renewed.0, StatusCode::OK);
+    assert_eq!(renewed.1["generation"], control["generation"]);
+    let other_client = Uuid::new_v4();
+    let takeover = call(
+        &admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":other_client})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(takeover.0, StatusCode::OK);
+    let stale = call(
+        &admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client,"expected_generation":control["generation"]})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(
+        stale.0,
+        StatusCode::CONFLICT,
+        "renewal cannot steal control back"
+    );
+    let (_, control) = call(
+        &admin,
+        &format!("{terminal}/connect"),
+        Some(json!({"client_id":client})),
+        None,
+        true,
+    )
+    .await;
     let input = Uuid::new_v4();
     let body = json!({"operation_id":input,"client_id":client,"generation":control["generation"],"bytes":[65]});
     assert_eq!(
