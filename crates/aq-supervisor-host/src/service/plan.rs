@@ -274,7 +274,11 @@ mod tests {
             "../../../aq-central-authority/artifacts/examples.json"
         ))
         .unwrap();
-        let prior: CentralPlan = serde_json::from_value(examples["plan"].clone()).unwrap();
+        let aq_central_authority::Document::Plan(prior) =
+            aq_central_authority::decode(&serde_json::to_vec(&examples["plan"]).unwrap()).unwrap()
+        else {
+            panic!("plan fixture")
+        };
         let config = ServiceConfig {
             database_url: "postgres://localhost/test".into(),
             conversation_id: prior.subject.conversation_id(),
