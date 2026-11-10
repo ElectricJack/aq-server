@@ -334,8 +334,7 @@ pub async fn poll(
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
     }
-    // Source export may outlast a control request. Retain one bounded assembler
-    // per node across polls; published offers are redelivered by their owner.
+    // Retain one assembler per node across polls; redeliver its published offer.
     static ASSEMBLERS: OnceLock<aq_machine_control::offer_assembly::Gate> = OnceLock::new();
     let Some(permit) = ASSEMBLERS
         .get_or_init(|| aq_machine_control::offer_assembly::Gate::new(4))

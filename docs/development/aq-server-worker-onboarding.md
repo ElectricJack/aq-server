@@ -49,3 +49,12 @@ queued tasks and history. Restore the saved ms1 instance service/native config,
 renderer and operator configuration as a coordinated set, and select the prior
 isolated images. A database restore is not required and would overwrite newer
 owner work. Do not roll back the owner's separate local worker or global pools.
+
+Source API1 advertises an optional 1 MiB range capability. Legacy clients
+continue using 256 KiB; new clients fall back when the header is absent. The
+server keeps every existing per-read authorization and retention fence. Six
+source-route regressions cover advertised bounds, exact data, refused oversized
+ranges, changed credentials, symlinks and expired authority. The ms1 preparation
+window is configured to the protocol-supported 120000 ms while the requested
+until-ready setup lifecycle is implemented; that window is not the intended
+user-facing setup timeout.

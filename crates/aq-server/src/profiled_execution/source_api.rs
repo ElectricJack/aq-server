@@ -275,6 +275,9 @@ async fn status(
         .insert(VERSION_HEADER, HeaderValue::from_static("1"));
     response
         .headers_mut()
+        .insert("aq-source-max-range", HeaderValue::from_static("1048576"));
+    response
+        .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
@@ -306,7 +309,7 @@ async fn chunk(
     let Path((attempt, member)) =
         path.map_err(|_| AppError::BadRequest("invalid source path".into()))?;
     let Query(range) = range.map_err(|_| AppError::BadRequest("invalid source range".into()))?;
-    if !(1..=262144).contains(&range.limit) {
+    if !(1..=1048576).contains(&range.limit) {
         return Err(AppError::BadRequest("source range limit".into()).into());
     }
     let member = match member.as_str() {
