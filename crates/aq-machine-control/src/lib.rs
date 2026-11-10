@@ -11,6 +11,7 @@ pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_mach
 pub mod holds;
 pub mod launch;
 pub mod lost;
+pub mod offer_assembly;
 
 /// First `state_format_version` with these tables.
 pub const FORMAT: u32 = 101;
