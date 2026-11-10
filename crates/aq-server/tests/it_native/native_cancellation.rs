@@ -11,6 +11,36 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn slow_offer_keeps_export_but_waits_for_new_inventory_instead_of_publishing_near_expiry() {
+    use std::sync::atomic::Ordering;
+    let c = native_offer::setup().await;
+    // The synthetic Git export advances the daemon clock after selection.
+    c.mode.store(9, Ordering::SeqCst);
+    let (status, page) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{page}");
+    assert!(page["body"]["offers"].as_array().unwrap().is_empty());
+    let verified: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM profiled_source_exports WHERE state='verified'")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verified, 1,
+        "the completed export is kept for a fresh inventory"
+    );
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE node_id=$1")
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        attempts, 0,
+        "waiting for fresh inventory must not spend an attempt"
+    );
+}
+
+#[tokio::test]
 async fn ordinary_slow_offer_survives_poll_return_and_blocks_duplicate_assembly() {
     use std::{sync::atomic::Ordering, time::Duration};
     let mut c = native_offer::setup().await;

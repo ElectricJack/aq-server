@@ -675,6 +675,9 @@ async fn offers(
             }
         };
         let source_operation = token.request().operation_id;
+        if !aq_machine_control::offer_assembly::deliverable(&snapshot, now(state)?) {
+            return Ok(page);
+        }
         // Refresh Graph/selection after export; reject a changed original task.
         let ready = on_heap(|| {
             graph.scheduling_ready_current(
@@ -724,7 +727,6 @@ async fn offers(
         {
             return Err(refused());
         }
-        tracing::info!(task_id = %task.task_id, "offer assembly: build");
         let built = on_heap(|| {
             build::assemble(build::Assembly {
                 state,
@@ -741,7 +743,6 @@ async fn offers(
             })
         })
         .await?;
-        tracing::info!(task_id = %task.task_id, "offer assembly: built");
         if !built
             .native
             .offered
@@ -762,7 +763,6 @@ async fn offers(
             return Err(refused());
         }
         let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
-        tracing::info!(task_id = %task.task_id, "offer assembly: retained source inspected");
         let offer =
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
                 .await?;

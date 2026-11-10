@@ -58,3 +58,10 @@ ranges, changed credentials, symlinks and expired authority. The ms1 preparation
 window is configured to the protocol-supported 120000 ms while the requested
 until-ready setup lifecycle is implemented; that window is not the intended
 user-facing setup timeout.
+
+A cold export no longer consumes attempts by publishing just before its
+inventory expires. After retaining the export, assembly returns an empty poll
+unless at least half the report's original validity remains (capped at 15 s).
+The same cached export is reused on a later fresh report. This does not extend
+or restamp any observation. The regression advances the synthetic Git export's
+clock, verifies the export remains stored, and verifies no attempt was created.
