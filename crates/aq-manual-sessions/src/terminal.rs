@@ -107,7 +107,7 @@ async fn connect(
     }
     if screen.commands.values().any(|cmd| {
         cmd.disposition == "unknown"
-            || (cmd.disposition == "dispatched" && now() - cmd.updated > 5000)
+            || (cmd.disposition == "dispatched" && now() - cmd.updated > 30000)
     }) {
         return Err(conflict(
             "Input delivery remains uncertain; wait for the worker acknowledgement",
@@ -232,7 +232,7 @@ async fn receipt(
         .get_mut(&id)
         .and_then(|v| v.commands.get_mut(&op))
         .ok_or_else(missing)?;
-    if command.disposition == "dispatched" && now() - command.updated > 5000 {
+    if command.disposition == "dispatched" && now() - command.updated > 30000 {
         command.disposition = "unknown".into();
     }
     Ok(Json(json!({"disposition":command.disposition})))
