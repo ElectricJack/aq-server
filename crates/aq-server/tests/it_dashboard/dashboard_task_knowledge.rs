@@ -132,8 +132,11 @@ impl Drop for Fixture {
     }
 }
 async fn setup() -> Fixture {
-    let mut f = common::profiled::fixture().await;
+    let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
+    setup_runtime(f).await
+}
+async fn setup_runtime(mut f: common::profiled::Fixture) -> Fixture {
     let graph = Graph::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -779,6 +782,37 @@ async fn supervisor_token(x: &Fixture) -> String {
     };
     let actor = plan.subject.actor_id();
     let pool = x.f.db.pool().await;
+    // Managed credentials resolve scope through the reservation actor registry.
+    // This synthetic session fixture must configure that actor just as the
+    // production supervisor controller does before issuing its credential.
+    use aq_server::agent_access::supervisor_conversation::reservations::{
+        Configure, LocalPolicy, PolicyKind, ReservationOwner,
+    };
+    let user = x.f.state.store.find_user(x.f.actor).await.unwrap().unwrap();
+    let conversation: Uuid =
+        sqlx::query_scalar("SELECT conversation_id FROM global_supervisor_conversation")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    ReservationOwner::new(&x.f.state)
+        .configure_actor(
+            &user,
+            &serde_json::to_vec(&Configure {
+                operation_id: Uuid::new_v4(),
+                actor_id: actor,
+                expected_actor_revision: 0,
+                policy: LocalPolicy {
+                    schema_version: 1,
+                    kind: PolicyKind::GlobalSupervisorReservation,
+                    actor_id: actor,
+                    conversation_id: conversation,
+                    enabled: true,
+                },
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
     let sessions = SessionOwner::new(pool.clone(), Verifier);
     let clock = Clock {
         machine_boot_id: Uuid::from_u128(9),
@@ -1408,4 +1442,110 @@ async fn task_history_attributes_dashboard_writes_to_the_acting_owner() {
         items[1]["change"]["fields"],
         json!([{"field":"priority","from":null,"to":"7"}])
     );
+}
+
+#[tokio::test]
+async fn owner_cancels_tasks_without_reason_or_attempt_and_deletes_without_gate() {
+    let x = setup().await;
+    for (state, kind) in [
+        ("draft", "task.cancel"),
+        ("active", "task.cancel"),
+        ("completed", "task.delete"),
+        ("canceled", "task.delete"),
+    ] {
+        let id = Uuid::new_v4();
+        let mut before = node(id, x.workspace(), "task", 3);
+        before["task_state"] = json!(state);
+        if kind == "task.delete" {
+            before["retired"] = json!(true);
+            before["retirement_reason"] = json!("Owner retired task");
+        }
+        x.put(before.clone());
+        let mut after = before;
+        after["version"] = json!(4);
+        if kind == "task.delete" {
+            after["deleted"] = json!(true);
+        } else {
+            after["task_state"] = json!("canceled");
+        }
+        x.reply(200, change_set(vec![after]));
+        let op = Uuid::new_v4();
+        let request = action(
+            kind,
+            "task",
+            id,
+            "3",
+            json!({"operation_id":op,"project_id":x.project(),"expected_version":"3"}),
+        );
+        let (status, body) = x.act(&request).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{state} {kind} {body}; native posts: {:?}",
+            x.posts()
+        );
+        assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+        let native = x.posts().last().unwrap()["operations"][0].clone();
+        assert_eq!(
+            native["op"],
+            if kind == "task.delete" {
+                "delete_node"
+            } else {
+                "update_node"
+            }
+        );
+        if kind == "task.cancel" {
+            assert_eq!(native["patch"]["task_state"], "canceled");
+        }
+        let (status, replay) = x.act(&request).await;
+        assert_eq!(status, StatusCode::OK, "{replay}");
+        assert_eq!(replay["data"], body["data"]);
+    }
+}
+
+#[tokio::test]
+async fn canceled_task_cleanup_retries_after_restart_and_releases_only_after_actual_stop() {
+    use aq_server::profiled_execution::{started, stopped};
+    use common::native_started;
+    let (f, start) = native_started::setup(true).await;
+    let auth = native_started::context(&f).await;
+    started::record(&f.state, &auth, &start).await.unwrap();
+    let x = setup_runtime(f).await;
+    let task = x.f.selection.lineage.task_id;
+    let before = node(task, x.workspace(), "task", 3);
+    x.put(before.clone());
+    let mut after = before;
+    after["version"] = json!(4);
+    after["task_state"] = json!("canceled");
+    x.reply(200, change_set(vec![after]));
+    let op = Uuid::new_v4();
+    let request = action(
+        "task.cancel",
+        "task",
+        task,
+        "3",
+        json!({"operation_id":op,"project_id":x.project(),"expected_version":"3"}),
+    );
+    let (status, receipt) = x.act(&request).await;
+    assert_eq!(status, 200, "{receipt}");
+    assert_eq!(receipt["data"]["disposition"], "confirmed");
+    let mut sweep = aq_server::agent_access::human::task_termination::Sweep::default();
+    sweep.tick(&x.f.state).await.unwrap();
+    let pool = x.f.db.pool().await;
+    let (held,cancels):(bool,i64) = sqlx::query_as("SELECT holds_task,(SELECT count(*) FROM profiled_cancellations WHERE attempt_id=$1) FROM execution_attempts WHERE attempt_id=$1").bind(start.binding.attempt_id).fetch_one(&pool).await.unwrap();
+    assert!(held, "a cancel request is not a stop proof");
+    assert_eq!(
+        cancels, 1,
+        "background cleanup must request the native stop"
+    );
+    let mut stop = native_started::stop_request(&start);
+    stop.evidence.reason = aq_admission::transport::StopReason::Cancellation;
+    stopped::record(&x.f.state, &auth, &stop).await.unwrap();
+    // A new cursor models a server restart; durable owner intent is sufficient.
+    let mut restarted = aq_server::agent_access::human::task_termination::Sweep::default();
+    restarted.tick(&x.f.state).await.unwrap();
+    let (held,dispositions):(bool,i64) = sqlx::query_as("SELECT holds_task,(SELECT count(*) FROM profiled_stopped_dispositions WHERE attempt_id=$1) FROM execution_attempts WHERE attempt_id=$1").bind(start.binding.attempt_id).fetch_one(&pool).await.unwrap();
+    assert!(!held, "verified stopped cancellation must not stay held");
+    assert_eq!(dispositions, 1);
+    restarted.tick(&x.f.state).await.unwrap();
 }

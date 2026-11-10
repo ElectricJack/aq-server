@@ -9,7 +9,6 @@
   "expected_versions": {
     "task": "4"
   },
-  "reason": "Superseded by a narrower task",
   "payload": {
     "operation_id": "00000000-0000-4000-8000-000000000202",
     "project_id": "00000000-0000-4000-8000-000000000010",

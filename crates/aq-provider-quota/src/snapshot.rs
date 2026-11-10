@@ -54,6 +54,9 @@ pub(super) fn read(source: &CodexSource, now: u64) -> Option<Vec<QuotaWindow>> {
         let mut w = window(id.into(), label.into(), value, observed)?;
         w.observation.source = match source.provider_id.as_str() {
             "openai" => "codex_app_server_rate_limits",
+            "anthropic" if account["source"] == "claude_cli_usage_cache" => {
+                "claude_cli_usage_cache"
+            }
             "anthropic" => "claude_sdk_usage",
             _ => return None,
         }

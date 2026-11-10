@@ -179,12 +179,18 @@ subject revision and the single `expected_versions` entry (`task` or
   -1,000,000..1,000,000, higher first) and preserves other metadata keys.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
   `task.dependency.remove` removes `edge_id` at `edge_version`.
-- `task.cancel` requires a `reason` and records a B3 native cancellation for the
-  attempt holding the task; with no holding attempt it is `rejected`.
+- `task.cancel` records Graph task lifecycle `canceled`, including draft tasks
+  without attempts. `reason` is optional. A central cleanup cursor requests B3
+  cancellation for any holding attempt, retries after restart, and records the
+  existing stopped disposition only after verified stop proof.
+- `task.delete` tombstones the selected task and atomically removes its incident
+  relationships/pointers. Dependencies, hierarchy, lifecycle and workflow gates
+  do not prevent deletion. Other tasks and retained history survive. Native
+  attempt cleanup follows the same automatic path as cancellation.
 - `task.retry` asks B4 to assess the task; only an admissible replacement
   records the predecessor's replacement release (receipt `replacement_release`),
   after which the scheduler starts the replacement attempt. An unsettled or
-  exhausted predecessor is `rejected`. Neither kind writes Graph task lifecycle.
+  exhausted predecessor is `rejected`. Retry does not change Graph task lifecycle.
 - `knowledge.author` creates an unverified note (default content type `note`)
   whose Graph node ID equals the operation ID.
 - `knowledge.correct` patches title, body, labels or content type.

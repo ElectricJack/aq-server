@@ -55,6 +55,7 @@ const CAPABILITIES: &[&str] = &[
     "tasks.reprioritize",
     "tasks.dependencies.add",
     "tasks.dependencies.remove",
+    "tasks.delete",
     "tasks.cancel",
     "tasks.retry",
     "knowledge.read",

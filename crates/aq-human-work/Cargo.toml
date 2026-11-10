@@ -6,5 +6,7 @@ publish = false
 description = "Work-view projections for AQ's owner Graph reads: readiness, hold reasons, state counts and history change summaries"
 
 [dependencies]
+serde.workspace = true
+schemars = "1"
 serde_json.workspace = true
 uuid.workspace = true

@@ -56,7 +56,11 @@ def claude(cwd, sdk, executable):
     value = json.loads(result.stdout)
     if value.get("rate_limits_available") is not True or not isinstance(value.get("rate_limits"), dict):
         raise ValueError("subscription usage unavailable")
-    limits, windows = value["rate_limits"], []
+    return claude_windows(value["rate_limits"])
+
+
+def claude_windows(limits):
+    windows = []
     for key, label in [("five_hour", "5 hours"), ("seven_day", "Weekly"), ("seven_day_opus", "Weekly Opus"), ("seven_day_sonnet", "Weekly Sonnet"), ("seven_day_oauth_apps", "Weekly OAuth apps")]:
         row = limits.get(key)
         if isinstance(row, dict) and row.get("utilization") is not None:
@@ -64,7 +68,26 @@ def claude(cwd, sdk, executable):
     return windows
 
 
-def refresh(output, cwd, sdk, executable, claude_account, codex_account):
+def cached_claude(path, expected_account):
+    """Read CLI-produced quota only, bound to an explicit operator account ID.
+
+    Preserve the provider observation time: reading an old cache is never a
+    fresh quota request. No credentials, session costs or token sums are read.
+    """
+    if path is None or not expected_account or path.is_symlink():
+        return None
+    meta = path.stat()
+    if not path.is_file() or meta.st_mode & 0o022 or meta.st_size > 4_194_304:
+        return None
+    value = json.loads(path.read_text()).get("cachedUsageUtilization", {})
+    observed = value.get("fetchedAtMs")
+    if value.get("accountUuid") != expected_account or isinstance(observed, bool) or not isinstance(observed, int) or not 0 < observed <= int(time.time()*1000)+5000:
+        return None
+    windows = claude_windows(value.get("utilization", {}))
+    return (observed, windows) if windows else None
+
+
+def refresh(output, cwd, sdk, executable, claude_account, codex_account, claude_cache=None, claude_account_id=None):
     try:
         old = json.loads(output.read_text())
         retained = {(a["provider"], a["account_ref"]): a for a in old["accounts"]}
@@ -83,6 +106,13 @@ def refresh(output, cwd, sdk, executable, claude_account, codex_account):
                 statuses[provider] = "refreshed"
             except Exception:
                 previous = retained.get((provider, account))
+                if provider == "anthropic":
+                    try:
+                        cached = cached_claude(claude_cache, claude_account_id)
+                        if cached and (previous is None or cached[0] > previous["observed_at_ms"]):
+                            previous = dict(provider=provider, account_ref=account, observed_at_ms=cached[0], windows=cached[1], source="claude_cli_usage_cache")
+                    except (OSError, ValueError, KeyError, TypeError):
+                        pass
                 if previous:
                     accounts.append(previous)
                 statuses[provider] = "retained stale reading" if previous else "unavailable"
@@ -98,8 +128,10 @@ def main():
     parser.add_argument("--claude", default="claude")
     parser.add_argument("--claude-account", default="owner-claude-subscription")
     parser.add_argument("--codex-account", default="Codex ChatGPT")
+    parser.add_argument("--claude-cache", type=Path, help="Optional Claude CLI quota cache; observation timestamps are retained")
+    parser.add_argument("--claude-account-id", help="Explicit account identity required for the optional quota cache")
     args = parser.parse_args()
-    print(json.dumps(refresh(args.output, args.cwd, args.claude_sdk, args.claude, args.claude_account, args.codex_account)))
+    print(json.dumps(refresh(args.output, args.cwd, args.claude_sdk, args.claude, args.claude_account, args.codex_account, args.claude_cache, args.claude_account_id)))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,21 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(result["openai"], "retained stale reading")
             self.assertNotIn("private error", path.read_text())
 
+    def test_cli_quota_cache_keeps_timestamp_and_rejects_another_account(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "claude.json"
+            cache.write_text(json.dumps({"cachedUsageUtilization": {"accountUuid": "owner", "fetchedAtMs": 1700000000000, "utilization": {"seven_day": {"utilization": 94, "resets_at": "2026-11-11T22:00:00Z"}}}}))
+            with patch.object(usage.time, "time", return_value=1800000000):
+                self.assertEqual(usage.cached_claude(cache, "owner")[0], 1700000000000)
+                self.assertEqual(usage.cached_claude(cache, "owner")[1][0]["used_percent"], 94)
+                self.assertIsNone(usage.cached_claude(cache, "other"))
+                self.assertIsNone(usage.cached_claude(cache, None))
+            output = Path(directory) / "usage.json"
+            with patch.object(usage, "claude", side_effect=ValueError()), patch.object(usage, "codex", return_value=[usage.window("primary", "Weekly", 52, None)]):
+                status = usage.refresh(output, "/tmp", "sdk", "claude", "owner-claude", "codex", cache, "owner")
+                self.assertEqual(status["anthropic"], "retained stale reading")
+                self.assertEqual(json.loads(output.read_text())["accounts"][0]["observed_at_ms"], 1700000000000)
+
     def test_invalid_percent_and_reset_are_rejected(self):
         for percent in [-1, 101, float("nan"), float("inf"), True, None]:
             with self.assertRaises(ValueError):
