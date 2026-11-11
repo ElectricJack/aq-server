@@ -356,6 +356,20 @@ async fn installed_supervisor_capacity_is_atomic_and_replay_survives_limit_drop(
         .prepare(case.central.clone(), clock.clone())
         .await
         .unwrap();
+    let version: i32 =
+        sqlx::query_scalar("SELECT admission_version FROM swarm_supervisor_admissions")
+            .fetch_one(&case.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        version, 2,
+        "installed host certifies independent capacity admission"
+    );
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"openai","limit":0}]}))
+        .execute(&case.pool)
+        .await
+        .unwrap();
     let mut conn = case.pool.acquire().await.unwrap();
     let cell = aq_swarm_settings::admission::Cell {
         provider: "openai".into(),
