@@ -30,7 +30,7 @@ struct Request {
     operation_id: Uuid,
     providers: Vec<String>,
 }
-async fn live(conn: &mut sqlx::PgConnection, node: Uuid) -> Result<()> {
+pub(super) async fn live(conn: &mut sqlx::PgConnection, node: Uuid) -> Result<()> {
     let current: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1 AND revoked_at IS NULL)")
             .bind(node)

@@ -1128,3 +1128,151 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn remote_worker_checks_are_scoped_idempotent_and_return_results() {
+    let f = common::profiled::fixture().await;
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let node = f.node.node_id;
+    let path = format!("/api/worker-diagnostics/{node}");
+    let id = Uuid::new_v4();
+    let request = json!({"operation_id":id});
+    assert_eq!(
+        call(&admin, &path, Some(request.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&admin, &path, Some(request.clone()), None, true)
+            .await
+            .1["operation_id"],
+        id.to_string()
+    );
+    assert_eq!(
+        call(&admin, &path, Some(request), None, true).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &admin,
+            &path,
+            Some(json!({"operation_id":Uuid::new_v4()})),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/diagnostics",
+            Some(json!({})),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, job) = call(
+        &worker,
+        "/v1/worker/diagnostics",
+        Some(json!({})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["operation_id"], id.to_string());
+    assert_eq!(job["kind"], "sandbox_startup_v1");
+    let malformed = json!({"operation_id":id,"report":{"ok":true,"details":[]}});
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/diagnostics",
+            Some(malformed),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let report = json!({"ok":false,"phase":"container_start","error":"Synthetic engine diagnostic","details":{"CgroupVersion":"2"}});
+    let receipt = json!({"operation_id":id,"report":report});
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/diagnostics",
+            Some(receipt.clone()),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/diagnostics",
+            Some(receipt),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let public = call(&admin, "/api/worker-diagnostics", None, None, false)
+        .await
+        .1;
+    assert_eq!(public["jobs"][0]["result"], report);
+    assert_eq!(public["jobs"][0]["status"], "completed");
+    assert_eq!(public["receivers"][0]["node_id"], node.to_string());
+    let replay =
+        json!({"operation_id":id,"kind":"receiver_update_v1","installer_sha256":"a".repeat(64)});
+    assert_eq!(
+        call(&admin, &path, Some(replay), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let unsupported = json!({"operation_id":Uuid::new_v4(),"kind":"shell","command":"forbidden"});
+    assert_ne!(
+        call(&admin, &path, Some(unsupported), None, true).await.0,
+        StatusCode::OK
+    );
+    let update = Uuid::new_v4();
+    assert_eq!(call(&admin,&path,Some(json!({"operation_id":update,"kind":"receiver_update_v1","installer_sha256":"b".repeat(64)})),None,true).await.0,StatusCode::OK);
+    let next = call(
+        &worker,
+        "/v1/worker/diagnostics",
+        Some(json!({})),
+        Some(&f.credential),
+        false,
+    )
+    .await
+    .1;
+    assert_eq!(next["installer_sha256"], "b".repeat(64));
+    let pool = f.db.pool().await;
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/diagnostics",
+            Some(json!({})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+}

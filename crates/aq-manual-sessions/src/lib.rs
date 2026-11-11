@@ -1,5 +1,6 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
+mod diagnostics;
 pub mod intelligence;
 pub mod logins;
 mod management;
@@ -110,6 +111,7 @@ impl Service {
         api::routes()
             .merge(management::routes())
             .merge(logins::human_routes())
+            .merge(diagnostics::human_routes())
             .merge(stream::human_routes())
             .with_state(self.clone())
     }
@@ -117,6 +119,7 @@ impl Service {
         worker::routes()
             .merge(stream::worker_routes())
             .merge(logins::worker_routes())
+            .merge(diagnostics::worker_routes())
             .with_state(self.clone())
     }
 }
