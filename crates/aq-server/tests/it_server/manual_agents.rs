@@ -1276,3 +1276,233 @@ async fn remote_worker_checks_are_scoped_idempotent_and_return_results() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn retained_transcript_real_sql_router_contract() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,$5,'stopped','Ended',1,2,2)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(json!({"provider":"anthropic","model":"fixture"})).execute(&pool).await.unwrap();
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
+    let read = format!("/api/manual-agents/{id}/transcript");
+    let (status, initial) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(initial["session"]["archive"]["state"], "not_recorded");
+    assert_ne!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":1,"text":"x"})),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_ne!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":1,"text":"x","extra":true})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_ne!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":1,"text":"\u{0}"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let chunk = json!({"sequence":1,"text":"é hel"});
+    let (status, ack) = call(
+        &worker,
+        &upload,
+        Some(chunk.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(
+        ack,
+        json!({"accepted_through":1,"next_sequence":2,"archive_state":"finalizing"})
+    );
+    assert_eq!(
+        call(&worker, &upload, Some(chunk), Some(&f.credential), false)
+            .await
+            .1,
+        ack
+    );
+    let (status, gap) = call(
+        &worker,
+        &upload,
+        Some(json!({"sequence":3,"text":"bad"})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(gap["next_sequence"], 2);
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":1,"text":"changed"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":2,"text":"lo world"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let final_body = json!({"final_sequence":2,"coverage":"partial","reason":"fixture"});
+    let (status, final_ack) = call(
+        &worker,
+        &upload,
+        Some(final_body.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(final_ack["archive_state"], "complete");
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(final_body),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .1,
+        final_ack
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"final_sequence":2,"coverage":"complete","reason":null})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":1,"text":"é hel"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .1,
+        ack,
+        "a late identical retry keeps its original acknowledgement"
+    );
+    let (_, page) = call(&admin, &format!("{read}?limit=1"), None, None, false).await;
+    assert_eq!(page["chunks"], json!([{"sequence":1,"text":"é hel"}]));
+    assert_eq!(page["has_more"], true);
+    let (_, matches) = call(&admin, &format!("{read}/search?q=HELLO"), None, None, false).await;
+    assert_eq!(matches["matches"][0]["offset"], 3);
+    assert_eq!(matches["matches"][0]["length"], 5);
+    assert_eq!(matches["matches"][0]["sequence"], 1);
+    let (_, history) = call(
+        &admin,
+        "/api/manual-agents/history?status=ended&limit=1",
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(history["sessions"][0]["id"], id.to_string());
+    assert_eq!(history["sessions"][0]["archive"]["coverage"], "partial");
+    // Schema guards survive direct SQL and archive paging extends beyond the fleet cap.
+    assert!(
+        sqlx::query(
+            "INSERT INTO manual_transcript_chunks(session_id,sequence,text,ack_state) VALUES($1,0,'invalid','recording')"
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .is_err()
+    );
+    assert!(
+        sqlx::query("UPDATE manual_transcript_archives SET bytes=67108865 WHERE session_id=$1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    let ids: Vec<Uuid> = (0..260).map(|_| Uuid::new_v4()).collect();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) SELECT x,$2,$3,$4,'{}','stopped','Ended',1,1,1 FROM unnest($1::uuid[]) x").bind(&ids).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = None;
+    loop {
+        let path = match cursor {
+            Some(ref c) => format!("/api/manual-agents/history?limit=100&cursor={c}"),
+            None => "/api/manual-agents/history?limit=100".to_string(),
+        };
+        let (status, page) = call(&admin, &path, None, None, false).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for item in page["sessions"].as_array().unwrap() {
+            assert!(seen.insert(item["id"].as_str().unwrap().to_owned()));
+        }
+        cursor = page["next_cursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 261);
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(f.node.node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_ne!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":3,"text":"no"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&admin, &read, None, None, false).await.0,
+        StatusCode::OK
+    );
+}
