@@ -1,3 +1,4 @@
+mod logins;
 use crate::{AppState, authz::RequireOwner, worker_api::authenticate_context};
 use aq_manual_sessions::{Auth, Error, Service};
 use axum::{
@@ -41,6 +42,7 @@ pub(super) fn service(state: &AppState) -> Service {
         sources,
         state.store.manual_runtime.clone(),
     )
+    .login_materials(logins::delivery(state.clone()))
     .intelligence_choices(crate::profile_catalog::settings::choices(state))
     .browser_origin(
         config.server.public_origin.clone(),

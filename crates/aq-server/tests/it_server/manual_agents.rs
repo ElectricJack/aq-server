@@ -911,3 +911,202 @@ async fn stream_frame(
         }
     }
 }
+
+#[tokio::test]
+async fn logins_are_owner_requested_private_current_and_revocable() {
+    use aq_server::intelligence::config::{
+        CredentialConfig, IntelligenceConfig, MaterialDeliveryMode,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = common::profiled::fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("login");
+    std::fs::write(&path, b"synthetic-private-login\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let choice = &f.selection.choice;
+    let credential = aq_selection::AuthorizedCredential {
+        profile: choice.credential_profile.clone(),
+        provider: "anthropic".into(),
+        account_reference: choice.account_reference.clone(),
+        endpoint_reference: choice.endpoint_reference.clone(),
+        revision: f.selection.credential_revision,
+        enabled: true,
+        provisionable: false,
+        material_owner: None,
+        allowed_backends: aq_selection::default_allowed_backends(),
+    };
+    let cfg = IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
+        revision: 1,
+        credentials: vec![CredentialConfig {
+            kind: aq_selection::CredentialKind::SubscriptionLogin,
+            allowed_backends: aq_selection::default_allowed_backends(),
+            credential,
+            allowed_node_ids: vec![f.node.node_id],
+            allow_enrolled_nodes: false,
+            secret_file: Some(path.clone()),
+            delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
+        }],
+        qualified_harnesses: vec![],
+    };
+    let mut config = (*f.state.config).clone();
+    config.intelligence = Some(Arc::new(cfg.load().unwrap()));
+    f.state.config = Arc::new(config);
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    assert_eq!(
+        call(
+            &admin,
+            "/api/intelligence/register",
+            Some(json!({})),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let node = f.node.node_id;
+    let uri = format!("/api/worker-logins/{node}");
+    let op = Uuid::new_v4();
+    let request = json!({"operation_id":op,"providers":["anthropic"]});
+    assert_eq!(
+        call(&admin, &uri, Some(request.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&admin, &uri, Some(request.clone()), None, true)
+            .await
+            .1["generation"],
+        op.to_string()
+    );
+    assert_eq!(
+        call(&worker, "/v1/worker/logins", Some(json!({})), None, false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, private) = call(
+        &worker,
+        "/v1/worker/logins",
+        Some(json!({})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{private}");
+    assert_eq!(private["logins"][0]["material"], "synthetic-private-login");
+    let public = call(&admin, "/api/worker-logins", None, None, false)
+        .await
+        .1;
+    assert!(!public.to_string().contains("synthetic-private"));
+    assert!(!public.to_string().contains("material"));
+    // Placement and credential kind remain authoritative even for an owner-requested push.
+    for denial in 0..3 {
+        let mut blocked = (*f.state.config).clone();
+        let mut registry = blocked.intelligence.as_ref().unwrap().config.clone();
+        match denial {
+            0 => registry.credentials[0].allowed_node_ids.clear(),
+            1 => registry.credentials[0].kind = aq_selection::CredentialKind::ApiKey,
+            _ => registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::Boat],
+        }
+        blocked.intelligence = Some(Arc::new(registry.load().unwrap()));
+        let mut state = f.state.clone();
+        state.config = Arc::new(blocked);
+        let denied = build_worker_router(state);
+        let req = json!({"operation_id":Uuid::new_v4(),"providers":["anthropic"]});
+        call(&admin, &uri, Some(req), None, true).await;
+        assert_eq!(
+            call(
+                &denied,
+                "/v1/worker/logins",
+                Some(json!({})),
+                Some(&f.credential),
+                false
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let newer = Uuid::new_v4();
+    let next = json!({"operation_id":newer,"providers":["anthropic"]});
+    assert_eq!(
+        call(&admin, &uri, Some(next), None, true).await.0,
+        StatusCode::OK
+    );
+    call(&admin, &uri, Some(request), None, true).await;
+    let (_, stale) = call(
+        &worker,
+        "/v1/worker/logins",
+        Some(json!({"generation":op,"applied":true})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert!(stale["logins"].as_array().unwrap().is_empty());
+    let (_, current) = call(
+        &worker,
+        "/v1/worker/logins",
+        Some(json!({})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(current["generation"], newer.to_string());
+    call(
+        &worker,
+        "/v1/worker/logins",
+        Some(json!({"generation":newer,"applied":true})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert!(
+        call(
+            &worker,
+            "/v1/worker/logins",
+            Some(json!({})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .1["logins"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let pool = f.db.pool().await;
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/logins",
+            Some(json!({})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &worker,
+            "/api/worker-logins",
+            None,
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}

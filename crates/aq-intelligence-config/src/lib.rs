@@ -464,3 +464,5 @@ mod tests {
         assert!(!restricted.admits(other, true));
     }
 }
+
+pub mod material;

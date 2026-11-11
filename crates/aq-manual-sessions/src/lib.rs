@@ -1,6 +1,7 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
 pub mod intelligence;
+pub mod logins;
 mod management;
 mod stream;
 mod terminal;
@@ -72,6 +73,7 @@ pub struct Service {
     runtime: Runtime,
     origin: Option<(String, bool)>,
     choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
+    login_materials: Option<logins::Materials>,
 }
 impl Service {
     pub fn new(
@@ -89,7 +91,12 @@ impl Service {
             runtime,
             origin: None,
             choices: Arc::new(Vec::new()),
+            login_materials: None,
         }
+    }
+    pub fn login_materials(mut self, material: logins::Materials) -> Self {
+        self.login_materials = Some(material);
+        self
     }
     pub fn intelligence_choices(mut self, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
         self.choices = Arc::new(choices);
@@ -102,12 +109,14 @@ impl Service {
     pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         api::routes()
             .merge(management::routes())
+            .merge(logins::human_routes())
             .merge(stream::human_routes())
             .with_state(self.clone())
     }
     pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         worker::routes()
             .merge(stream::worker_routes())
+            .merge(logins::worker_routes())
             .with_state(self.clone())
     }
 }

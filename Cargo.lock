@@ -291,6 +291,7 @@ dependencies = [
 name = "aq-intelligence-config"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aq-accounting",
  "aq-selection",
  "hex",
@@ -298,6 +299,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "thiserror",
  "tracing",
  "uuid",
  "zeroize",

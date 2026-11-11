@@ -31,25 +31,7 @@ pub fn read_source(source: &Path) -> anyhow::Result<Zeroizing<Vec<u8>>> {
 /// Whether a configured credential is a Claude subscription login (the
 /// `claude setup-token` value), the only shape whose CR/LF is trimmed. API
 /// keys and other providers are delivered byte-exact (MS1 review nit).
-pub fn is_claude_setup_token(c: &super::config::CredentialConfig) -> bool {
-    c.kind == aq_selection::CredentialKind::SubscriptionLogin
-        && c.credential.provider.as_str() == "anthropic"
-}
-
-/// A Claude login is the long-lived `claude setup-token` value, delivered
-/// env-only. `claude setup-token > file` leaves a trailing newline that the
-/// runner's install (ASCII-graphic only) would refuse later, so trailing CR/LF
-/// is trimmed here and any other shape is refused before storage (C5b/MS1).
-pub fn normalize_claude_token(bytes: Zeroizing<Vec<u8>>) -> anyhow::Result<Zeroizing<Vec<u8>>> {
-    let mut end = bytes.len();
-    while end > 0 && matches!(bytes[end - 1], b'\n' | b'\r') {
-        end -= 1;
-    }
-    if end == 0 || !bytes[..end].iter().all(u8::is_ascii_graphic) {
-        bail!("a Claude login must be one line of printable ASCII (the setup-token value)");
-    }
-    Ok(Zeroizing::new(bytes[..end].to_vec()))
-}
+pub use aq_intelligence_config::material::{is_claude_setup_token, normalize_claude_token};
 
 /// Stores `source` as the newest version of the configured subscription login
 /// `credential` (`id@version`) at `revision`; returns that version.
