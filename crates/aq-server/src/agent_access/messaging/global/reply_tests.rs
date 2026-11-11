@@ -154,7 +154,7 @@ async fn supervisor_credential_scopes_are_required_for_each_operation() {
             hex::encode(sha2::Sha256::digest(allowed.as_bytes()))
         );
         sqlx::query("INSERT INTO central_supervisor_credentials(token_digest,actor_id,generation,session_id,scopes,issued_at_ms,expires_at_ms) VALUES($1,$2,1,$3,$4,1000,61000)")
-            .bind(token_digest(&limited)).bind(f.actor()).bind(dispatch::session_id(f.snapshot.run.plan()).unwrap())
+            .bind(hex::encode(sha2::Sha256::digest(limited.as_bytes()))).bind(f.actor()).bind(dispatch::session_id(f.snapshot.run.plan()).unwrap())
             .bind(vec![allowed.to_string()]).execute(&f.pool).await.unwrap();
         for required in SCOPES {
             let result = authenticate(&f.pool, &limited, required, 2000).await;
