@@ -15,11 +15,15 @@ pub struct Setting {
 }
 
 pub async fn available(conn: &mut PgConnection) -> Result<bool, Error> {
+    at_least(conn, 110).await
+}
+
+async fn at_least(conn: &mut PgConnection, minimum: u32) -> Result<bool, Error> {
     let version: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
             .fetch_one(conn)
             .await?;
-    Ok(version.parse::<u32>().unwrap_or(0) >= 110)
+    Ok(version.parse::<u32>().unwrap_or(0) >= minimum)
 }
 
 pub async fn lock(conn: &mut PgConnection) -> Result<(), Error> {
@@ -60,6 +64,7 @@ pub struct Capacity {
     pub node_used: u32,
     pub machine_used: u32,
     pub removed: bool,
+    pub login_pending: bool,
 }
 
 impl Capacity {
@@ -70,6 +75,7 @@ impl Capacity {
     }
     pub fn full(&self) -> bool {
         self.removed
+            || self.login_pending
             || self.node_max.is_some_and(|v| self.node_used >= v)
             || self.machine_max.is_some_and(|v| self.machine_used >= v)
     }
@@ -82,6 +88,7 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
         node_used: 0,
         machine_used: 0,
         removed: false,
+        login_pending: false,
     };
     if !available(conn).await? {
         return Ok(result);
@@ -95,7 +102,7 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
          FROM worker_machine_members n \
          LEFT JOIN worker_settings s ON s.kind='node' AND s.id=n.node_id::text \
          LEFT JOIN worker_settings m ON m.kind='machine' AND m.id=n.machine_id WHERE n.node_id=$1"
-    ).bind(node).fetch_optional(conn).await?;
+    ).bind(node).fetch_optional(&mut *conn).await?;
     if let Some(row) = row {
         result.node_max = row.try_get::<Option<i32>, _>("node_max")?.map(|v| v as u32);
         result.machine_max = row
@@ -105,12 +112,27 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
         result.machine_used = row.try_get::<i64, _>("machine_used")?.max(0) as u32;
         result.removed = row.try_get("removed")?;
     }
+    if at_least(conn, 111).await? {
+        // A live receiver reserves the machine while replacing provider configuration.
+        // This uses the same admission lock as offers/manual claims, closing the gap
+        // between its idle check and restarting the user service. A dead receiver's
+        // hold expires; no login bytes are stored here.
+        result.login_pending=sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM worker_login_deliveries d JOIN worker_machine_members w ON w.node_id=d.node_id \
+             JOIN worker_machine_members target ON target.machine_id=w.machine_id \
+             WHERE target.node_id=$1 AND w.revoked_at IS NULL AND NOT EXISTS(SELECT 1 FROM worker_settings s WHERE s.kind='node' AND s.id=w.node_id::text AND s.removed) AND d.status='pending' AND d.receiver_seen_at_ms > \
+             (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-300000)"
+        ).bind(node).fetch_one(conn).await?;
+    }
     Ok(result)
 }
 
 /// Only new work uses this gate. Existing work can finish after a limit is lowered.
 pub async fn hold(conn: &mut PgConnection, node: Uuid) -> Result<Option<&'static str>, Error> {
     let capacity = capacity(conn, node).await?;
+    if capacity.login_pending {
+        return Ok(Some("installing server subscription logins"));
+    }
     Ok(capacity
         .full()
         .then_some("worker or machine agent maximum reached"))

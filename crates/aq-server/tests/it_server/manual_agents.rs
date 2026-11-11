@@ -999,6 +999,16 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
     .await;
     assert_eq!(status, StatusCode::OK, "{private}");
     assert_eq!(private["logins"][0]["material"], "synthetic-private-login");
+    let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        aq_machine_control::management::hold(&mut conn, node)
+            .await
+            .unwrap(),
+        Some("installing server subscription logins")
+    );
+    drop(conn);
+
     let public = call(&admin, "/api/worker-logins", None, None, false)
         .await
         .1;
@@ -1080,6 +1090,14 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
             .is_empty()
     );
     let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    assert!(
+        aq_machine_control::management::hold(&mut conn, node)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(conn);
     sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
         .bind(node)
         .execute(&pool)

@@ -9,7 +9,9 @@ Owner routes are `GET /api/worker-logins` (status only) and
 `POST /api/worker-logins/{node}` with an operation identity and a bounded provider
 list. The worker-only listener exposes `POST /v1/worker/logins`. Its authenticated
 receiver polls and acknowledges one generation. A request remains pending while
-the worker is disconnected or its machine has active agents. Failed installation
+the worker is disconnected or its machine has active agents. A live pending delivery
+briefly reserves the machine against new admissions so a restart cannot race
+with a new agent. That reservation expires if the receiver stops reporting. Failed installation
 is visible and can be retried with another push. An uncertain browser request
 reuses its original operation identity and cannot replace a later request.
 
