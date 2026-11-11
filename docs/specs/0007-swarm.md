@@ -1,7 +1,7 @@
 # 0007: The swarm (always-on workers, cloud VMs and swarm controls)
 
 **Status:** Approved by the owner on 2026-11-07 (brainstorming session; builder-check answers folded in). Cloudflare §7.5 follows the recommendation (manual tokens).
-**Controls correction, 2026-11-11 (owner):** provider concurrency allocation sliders and burn estimates belong in the collapsible Swarm header; the existing Intelligence settings row gains one Max agents column for the selected provider. This supersedes the earlier Settings › Swarm and Normal/Reduced controls.
+**Controls correction, 2026-11-11 (owner):** provider concurrency allocation sliders and burn estimates belong in a compact Swarm header row; the existing Intelligence settings row gains one Max agents column for the selected provider. This supersedes the earlier Settings › Swarm and Normal/Reduced controls.
 **Repositories:** aq-server, aq-worker, aq-dashboard.
 **Mockup:** `aq-dashboard/docs/design/swarm-tree-v4.html` (revised controls prototype, labelled sample data). `swarm-tree-v3.html` and `14-swarm-tree-v3.png` retain the earlier tree reference. React Flow plus dagre remain the tree libraries.
 
@@ -49,7 +49,7 @@ These would count as failure even if everything technically works:
 
 Agents › Swarm becomes the Agents landing page **(owner)**:
 
-1. **Compact, collapsible status header** at the top (§5.3). Provider allocation controls live in the expanded header.
+1. **Compact provider allocation row** at the top (§5.3), with two sliders and burn estimates always visible.
 2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
 
 ### 5.2 The tree
@@ -75,13 +75,13 @@ Pan and zoom are supported. Left-to-right layout is optional **(my call)**.
 
 ### 5.3 Status header and quick control
 
-The collapsible Swarm header contains provider concurrency allocation sliders and burn estimates. The global top bar already shows usage; do not repeat usage-window displays in the Swarm header. Show running and waiting context and the saved provider cap, with pending and failed writes visible. The collapsed header retains its compact summary and accessible disclosure. On phones controls may wrap without horizontal page scrolling.
+The Swarm header shows the two configured provider allocation sliders side by side in a single compact row, with burn estimates beneath each slider. Slider changes save automatically after adjustment, with serialized writes and explicit pending/failure feedback. Do not add Unlimited checkboxes, Apply buttons, or an expand/collapse control. The far-right slider position means No limit; zero pauses new starts. The global top bar already shows usage, so do not repeat usage-window displays here. Keep both sliders usable on phones without horizontal page scrolling.
 
 Each provider cap is independent of optional profile/provider overrides. An unset limit (`null`) is unlimited; zero pauses new starts. Lowering a cap does not stop existing agents. Routing remains unchanged and work waits when its required capacity is unavailable.
 
 Estimate account quota points per hour from fresh browser sample history. Project burn at the provider cap only when active-agent calibration supports it; otherwise show gathering or unavailable. These estimates are not monetary cost and account usage outside AQ can affect them.
 
-Start collapsed, remember the viewer's preference on that device, and keep the header bounded to its own content. Expanding or collapsing does not reset tree pan, zoom or selection. Use a keyboard-operable button with `aria-expanded` and `aria-controls`; hidden details leave the tab order.
+Changing allocation preserves tree pan, zoom, and selection. Conflicting or uncertain saves preserve the user's intended values and require explicit recovery rather than silently overwriting concurrent changes.
 
 ### 5.4 Properties pane
 
@@ -119,7 +119,7 @@ Clicking any tree object shows its details **(owner)**:
 
 ## 6. Settings
 
-Add one **Max agents** column to the existing Intelligence settings row for the selected provider. Each optional profile/provider override limits concurrent agents for that pair across projects and machines. A blank/unset override is unlimited; zero pauses new starts. Show running and waiting context, including when running exceeds a newly lowered limit. Unsupported pairs remain unavailable. There is no separate Swarm settings tab or Normal/Reduced mode UI.
+Add one **Max agents** column to the existing Intelligence settings row for the selected provider. Each optional profile/provider override limits concurrent agents for that pair across projects and machines. A blank/unset override is unlimited; zero pauses new starts. Show running and waiting context, including when running exceeds a newly lowered limit. Unsupported pairs remain unavailable. Use the row’s existing Save button for profile and Max agents changes; there is no separate Apply control, Swarm settings tab, or Normal/Reduced mode UI. If the profile saves but its subsequent limit save fails, retain the limit draft and report that partial outcome clearly.
 
 Other settings remain:
 
@@ -233,7 +233,7 @@ Each phase has its own implementation plan in `docs/superpowers/plans/`. Phases 
 | --- | --- | --- |
 | 1. Workers as services | A multi-slot `aq-worker run` that actually takes docker-local work, a Linux/WSL2 systemd service, enrollment by install script and single-use code, start/stop/drain from the server, a fresh attempt from saved work after a restart, automatic re-measurement | — |
 | 2. Swarm page (read-only) | Server swarm read model (machines, nodes, agents, live CPU/RAM including the WSL2 Windows probe, holding reasons), the dashboard tree page (React Flow and dagre), the properties pane and the agent terminal | — |
-| 3. Controls and placement | provider cap sliders and burn estimates in the collapsible Swarm header; Max agents in existing Intelligence settings; VM maximums, per-machine limits and thresholds; replacement of per-project pool sizes; requirement-driven routing with slot admission (§7.1); waiting reasons; measured usage and supported burn estimates | 1, 2 |
+| 3. Controls and placement | provider cap sliders and burn estimates in the compact Swarm header; Max agents in existing Intelligence settings; VM maximums, per-machine limits and thresholds; replacement of per-project pool sizes; requirement-driven routing with slot admission (§7.1); waiting reasons; measured usage and supported burn estimates | 1, 2 |
 | 4. Cloud VMs | The server starts one boat VM per attempt, the boat agent launch, the in-VM channel proxy, the Codex restriction, the cloud Access token | 1, 3 |
 | 5. macOS | launchd service, multi-arch templates and `aqv2`, a proven Docker Desktop channel transport | 1 |
 
