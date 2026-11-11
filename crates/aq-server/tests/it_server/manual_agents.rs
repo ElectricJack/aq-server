@@ -11,6 +11,147 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+#[tokio::test]
+async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let node = f.node.node_id;
+    let sibling = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')")
+        .bind(f.selection.lineage.project_id).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE nodes SET machine_key='managed-pc',slot=1 WHERE id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,'second','test-sibling','0.5.1',1,now(),'managed-pc',2)")
+        .bind(sibling).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms) VALUES($1,1,'[]',$2)")
+        .bind(node).bind(chrono::Utc::now().timestamp_millis()).execute(&pool).await.unwrap();
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let node_path = format!("/api/worker-management/node/{node}");
+    let node_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"label":"Build worker","max_agents":3});
+    assert_eq!(
+        call(&admin, &node_path, Some(node_change.clone()), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, receipt) = call(&admin, &node_path, Some(node_change.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt["revision"], 1);
+    assert_eq!(
+        call(&admin, &node_path, Some(node_change), None, true)
+            .await
+            .1,
+        receipt
+    );
+    let name: String = sqlx::query_scalar("SELECT name FROM nodes WHERE id=$1")
+        .bind(node)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(name, "Build worker");
+    let stale =
+        json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"label":"stale","max_agents":1});
+    assert_eq!(
+        call(&admin, &node_path, Some(stale), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let fleet = call(&admin, "/api/manual-agents", None, None, false)
+        .await
+        .1;
+    assert_eq!(fleet["workers"][0]["max_slots"], 3);
+    assert_eq!(
+        call(&worker, "/api/worker-management", None, None, false)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let machine_path = "/api/worker-management/machine/managed-pc";
+    let machine_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"label":"Office PC","max_agents":2});
+    let (status, receipt) = call(&admin, machine_path, Some(machine_change), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, tree) = call(&admin, "/api/v1/swarm", None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+    let machine = tree["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "managed-pc")
+        .unwrap();
+    assert_eq!(machine["label"], "Office PC");
+    for n in [node, sibling] {
+        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','running','Running',1,1)")
+            .bind(Uuid::new_v4()).bind(f.actor).bind(n).bind(f.selection.lineage.project_id).execute(&pool).await.unwrap();
+    }
+    let mut conn = pool.acquire().await.unwrap();
+    let limits = aq_machine_control::management::capacity(&mut conn, node)
+        .await
+        .unwrap();
+    assert_eq!(limits.node_used, 1);
+    assert_eq!(limits.machine_used, 2);
+    assert!(limits.full());
+    assert!(
+        aq_machine_control::offer_hold(&mut conn, node)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(conn);
+    let zero = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Office PC","max_agents":0});
+    assert_eq!(
+        call(&admin, machine_path, Some(zero), None, true).await.0,
+        StatusCode::OK
+    );
+    let live: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM manual_agent_sessions WHERE desired_running")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(live, 2, "Lowering a limit must keep the running agents");
+    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Build worker","max_agents":3,"remove":true});
+    let (status, receipt) = call(&admin, &node_path, Some(remove.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert!(receipt["removed"].as_bool().unwrap());
+    assert_eq!(
+        call(&admin, &node_path, Some(remove), None, true).await.1,
+        receipt
+    );
+    let revoked: bool = sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1")
+        .bind(node)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !revoked,
+        "The machine controller must keep serving sibling workers"
+    );
+    let running: bool =
+        sqlx::query_scalar("SELECT desired_running FROM manual_agent_sessions WHERE node_id=$1")
+            .bind(sibling)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(running);
+    let fleet = call(&admin, "/api/manual-agents", None, None, false)
+        .await
+        .1;
+    assert!(fleet["workers"].as_array().unwrap().is_empty());
+    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"label":"Office PC","max_agents":0,"remove":true});
+    let (status, receipt) = call(&admin, machine_path, Some(remove), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nodes WHERE machine_key='managed-pc' AND revoked_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 0);
+}
 async fn call(
     app: &Router,
     path: &str,

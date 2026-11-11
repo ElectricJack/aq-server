@@ -335,6 +335,7 @@ dependencies = [
  "aq-selection",
  "aq-task-comments",
  "chrono",
+ "serde",
  "serde_json",
  "sqlx",
  "sqlx-postgres",
@@ -348,6 +349,7 @@ name = "aq-manual-sessions"
 version = "0.1.0"
 dependencies = [
  "aq-human-http",
+ "aq-machine-control",
  "aq-profile-settings",
  "axum",
  "chrono",

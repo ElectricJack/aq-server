@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 [dependencies]
+aq-machine-control = { path = "../aq-machine-control" }
 axum = { workspace = true, features = ["ws"] }
 futures-util = "0.3"
 aq-profile-settings = { path = "../aq-profile-settings" }

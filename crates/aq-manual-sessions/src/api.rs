@@ -105,6 +105,21 @@ async fn list(
     (s.owner)(headers).await?;
     let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(m)-'actor_id'-'stopped_at_ms' FROM manual_agent_sessions m WHERE ($1::uuid IS NULL OR project_id=$1) AND (stopped_at_ms IS NULL OR stopped_at_ms>$2) ORDER BY created_at_ms DESC,id LIMIT 256").bind(q.project_id).bind(now()-86400000).fetch_all(&s.pool).await?;
     let reports:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(r) FROM manual_worker_reports r JOIN nodes n ON n.id=r.node_id WHERE n.revoked_at IS NULL").fetch_all(&s.pool).await?;
+    let mut workers = Vec::new();
+    let mut conn = s.pool.acquire().await?;
+    for mut report in reports {
+        let node = serde_json::from_value(report["node_id"].clone())
+            .map_err(|_| bad("Invalid worker report"))?;
+        let limits = aq_machine_control::management::capacity(&mut conn, node)
+            .await
+            .map_err(management::storage)?;
+        if !limits.removed {
+            report["max_slots"] =
+                json!(limits.maximum(report["max_slots"].as_u64().unwrap_or(1) as u32));
+            workers.push(report);
+        }
+    }
+    drop(conn);
     let slots: Vec<Value> = sqlx::query_scalar(
         "SELECT to_jsonb(p) FROM manual_project_slots p WHERE $1::uuid IS NULL OR project_id=$1",
     )
@@ -119,7 +134,7 @@ async fn list(
     }
     let profiles = intelligence::choices(&s.pool, &s.choices).await?;
     Ok(Json(
-        json!({"launch_profiles":profiles,"sessions":rows,"workers":reports,"slots":slots,"projects":projects,"server_time_ms":now()}),
+        json!({"launch_profiles":profiles,"sessions":rows,"workers":workers,"slots":slots,"projects":projects,"server_time_ms":now()}),
     ))
 }
 #[derive(Deserialize)]
@@ -162,6 +177,9 @@ async fn start(
     }
     let spec = spec(&s, project, node, op.intelligence_profile.as_ref()).await?;
     let mut tx = s.pool.begin().await?;
+    aq_machine_control::management::lock(&mut tx)
+        .await
+        .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(107107)")
         .execute(&mut *tx)
         .await?;
@@ -180,6 +198,13 @@ async fn start(
         return Err(conflict(
             "This worker has not reported interactive support for the project",
         ));
+    }
+    if aq_machine_control::management::capacity(&mut tx, node)
+        .await
+        .map_err(management::storage)?
+        .removed
+    {
+        return Err(conflict("This worker has been removed"));
     }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")
         .bind(node.to_string())
@@ -236,6 +261,9 @@ async fn slots(
     binding(&s, project).await?;
     let request = json!({"node":node,"project":project,"body":v});
     let mut tx = s.pool.begin().await?;
+    aq_machine_control::management::lock(&mut tx)
+        .await
+        .map_err(management::storage)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")
         .bind(node.to_string())
         .execute(&mut *tx)
@@ -253,7 +281,10 @@ async fn slots(
         return Ok(Json(row.get("receipt")));
     }
     let max:Option<i32>=sqlx::query_scalar("SELECT max_slots FROM manual_worker_reports r JOIN nodes n ON n.id=r.node_id WHERE r.node_id=$1 AND n.revoked_at IS NULL AND r.observed_at_ms>$2").bind(node).bind(now()-15000).fetch_optional(&mut *tx).await?;
-    if max.is_none_or(|max| v.slots > max as u32) {
+    let limits = aq_machine_control::management::capacity(&mut tx, node)
+        .await
+        .map_err(management::storage)?;
+    if limits.removed || max.is_none_or(|max| v.slots > limits.maximum(max as u32)) {
         return Err(conflict("The worker cannot provide that many slots"));
     }
     let current:Option<(i32,i64)>=sqlx::query_as("SELECT slots,revision FROM manual_project_slots WHERE node_id=$1 AND project_id=$2 FOR UPDATE").bind(node).bind(project).fetch_optional(&mut *tx).await?;

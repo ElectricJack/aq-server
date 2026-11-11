@@ -6,6 +6,7 @@ publish = false
 description = "Service machines (spec 0007 phase 1): machine keys, slot nodes, desired state, handoffs, revocation, owner availability"
 
 [dependencies]
+serde.workspace = true
 aq-row-retention = { path = "../aq-row-retention", version = "=0.1.0" }
 aq-task-comments = { path = "../aq-task-comments", version = "=0.1.0" }
 serde_json.workspace = true

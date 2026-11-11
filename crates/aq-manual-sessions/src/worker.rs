@@ -62,6 +62,9 @@ async fn poll(
     }
     let at = now();
     let mut tx = s.pool.begin().await?;
+    aq_machine_control::management::lock(&mut tx)
+        .await
+        .map_err(management::storage)?;
     // A single node lock orders start/slot mutations and poll claims.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,107))")
         .bind(node.to_string())
@@ -76,7 +79,10 @@ async fn poll(
         return Err(Error(StatusCode::UNAUTHORIZED, "Worker enrollment changed"));
     }
     let desired:Option<String>=sqlx::query_scalar("SELECT c.desired FROM machine_controls c JOIN nodes n ON n.machine_key=c.machine_key WHERE n.id=$1").bind(node).fetch_optional(&mut *tx).await?;
-    if desired.as_deref() == Some("stopped") {
+    let limits = aq_machine_control::management::capacity(&mut tx, node)
+        .await
+        .map_err(management::storage)?;
+    if desired.as_deref() == Some("stopped") || limits.removed {
         sqlx::query("UPDATE manual_agent_sessions SET desired_running=false WHERE node_id=$1 AND stopped_at_ms IS NULL").bind(node).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms,providers) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,repositories=EXCLUDED.repositories,observed_at_ms=EXCLUDED.observed_at_ms,providers=EXCLUDED.providers").bind(node).bind(v.max_slots as i32).bind(json!(v.repositories)).bind(at).bind(json!(v.providers)).execute(&mut *tx).await?;
@@ -115,9 +121,13 @@ async fn poll(
                 .iter()
                 .find(|(id, _)| *id == x.project_id)
                 .map_or(1, |(_, v)| *v as u32);
+            let limits = aq_machine_control::management::capacity(&mut tx, node)
+                .await
+                .map_err(management::storage)?;
             if desired.as_deref().is_some_and(|v| v != "running")
                 || v.busy
-                || total >= v.max_slots
+                || limits.full()
+                || total >= limits.maximum(v.max_slots)
                 || used.get(&x.project_id).copied().unwrap_or(0) >= limit
             {
                 continue;

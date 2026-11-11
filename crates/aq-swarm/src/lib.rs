@@ -4,6 +4,7 @@ pub mod assemble;
 pub mod capacity;
 pub mod class;
 pub mod machine;
+pub mod management;
 pub mod service;
 
 use aq_dashboard_contract::{Accuracy, Timestamp, Total};
