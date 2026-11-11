@@ -172,7 +172,7 @@ async fn admit_swarm(
         .map_or("__unclassified", |s| s.intelligence_class.as_str());
     // The generation FK is deferred until SessionOwner inserts its exact plan
     // in this transaction. A failed prepare rolls back this reservation too.
-    sqlx::query("INSERT INTO swarm_supervisor_admissions(actor_id,generation,provider,intelligence_class) VALUES($1,$2,$3,$4)")
+    sqlx::query("INSERT INTO swarm_supervisor_admissions(actor_id,generation,provider,intelligence_class,admission_version) VALUES($1,$2,$3,$4,2)")
         .bind(plan.subject.actor_id()).bind(plan.generation as i64).bind(provider).bind(class).execute(&mut **tx).await?;
     Ok(())
 }

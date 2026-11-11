@@ -1,6 +1,6 @@
 //! Owner controls use the same authentication and CSRF boundary as Intelligence Settings.
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_swarm_settings::{ModeRequest, SaveRequest, Snapshot};
+use aq_swarm_settings::{LimitsRequest, ModeRequest, SaveRequest, Snapshot};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
@@ -20,6 +20,7 @@ fn error(error: aq_swarm_settings::Error) -> AppError {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/settings/swarm", get(read).post(save))
+        .route("/api/settings/swarm/limits", axum::routing::post(limits))
         .route("/api/settings/swarm/mode", axum::routing::post(mode))
         .route("/api/settings/swarm/operations/{id}", get(operation))
         .layer(DefaultBodyLimit::max(128 * 1024))
@@ -33,26 +34,23 @@ async fn read(
         .map(Json)
         .map_err(error)
 }
-async fn save(
-    State(state): State<AppState>,
-    RequireOwner(actor): RequireOwner,
-    Json(request): Json<SaveRequest>,
-) -> Result<Json<Snapshot>, AppError> {
-    aq_swarm_settings::save(&state.store.pool, actor.id, request)
-        .await
-        .map(Json)
-        .map_err(error)
+macro_rules! mutation {
+    ($handler:ident, $request:ty, $operation:ident) => {
+        async fn $handler(
+            State(state): State<AppState>,
+            RequireOwner(actor): RequireOwner,
+            Json(request): Json<$request>,
+        ) -> Result<Json<Snapshot>, AppError> {
+            aq_swarm_settings::$operation(&state.store.pool, actor.id, request)
+                .await
+                .map(Json)
+                .map_err(error)
+        }
+    };
 }
-async fn mode(
-    State(state): State<AppState>,
-    RequireOwner(actor): RequireOwner,
-    Json(request): Json<ModeRequest>,
-) -> Result<Json<Snapshot>, AppError> {
-    aq_swarm_settings::set_mode(&state.store.pool, actor.id, request)
-        .await
-        .map(Json)
-        .map_err(error)
-}
+mutation!(save, SaveRequest, save);
+mutation!(mode, ModeRequest, set_mode);
+mutation!(limits, LimitsRequest, set_limits);
 async fn operation(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,

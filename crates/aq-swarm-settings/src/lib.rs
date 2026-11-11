@@ -2,7 +2,7 @@
 pub mod admission;
 mod store;
 use serde::{Deserialize, Serialize};
-pub use store::{catalog, lock, operation, read, save, set_mode};
+pub use store::{catalog, lock, operation, read, save, set_limits, set_mode};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -34,7 +34,38 @@ pub struct CellLimit {
     pub limit: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderLimit {
+    pub provider: String,
+    pub limit: Option<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndividualCellLimit {
+    pub provider: String,
+    pub intelligence_class: String,
+    pub limit: Option<u32>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Limits {
+    #[serde(default)]
+    pub provider_limits: Vec<ProviderLimit>,
+    #[serde(default)]
+    pub cell_limits: Vec<IndividualCellLimit>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LimitsRequest {
+    pub operation_id: uuid::Uuid,
+    pub expected_revision: String,
+    pub expected_catalog_revision: String,
+    pub provider: Option<ProviderLimit>,
+    pub cell: Option<IndividualCellLimit>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(flatten, default)]
+    pub limits: Limits,
     pub revision: String,
     pub active_mode: Mode,
     pub normal: Option<Vec<CellLimit>>,
@@ -92,6 +123,14 @@ pub struct Unclassified {
     pub waiting: u64,
 }
 pub fn effective_limit(settings: &Settings, provider: &str, class: &str) -> Option<u32> {
+    if let Some(cell) = settings
+        .limits
+        .cell_limits
+        .iter()
+        .find(|c| c.provider == provider && c.intelligence_class == class)
+    {
+        return cell.limit;
+    }
     let matrix = match settings.active_mode {
         Mode::Normal => &settings.normal,
         Mode::Reduced => &settings.reduced,

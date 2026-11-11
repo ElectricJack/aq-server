@@ -2520,3 +2520,60 @@ async fn swarm_manual_poll_explains_zero_limit_and_rejects_report_admission_bypa
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["sessions"][0]["status"], "preparing");
 }
+
+#[tokio::test]
+async fn swarm_provider_ceiling_counts_other_classes_and_unclassified_reservations() {
+    use aq_swarm_settings::admission::{self, CEILING, Cell};
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')")
+        .bind(project).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"openai","limit":2}],"cell_limits":[{"provider":"openai","intelligence_class":"complex","limit":5}]}))
+        .execute(&pool).await.unwrap();
+    let mut ids = Vec::new();
+    for spec in [
+        json!({"provider":"openai","intelligence_class":"simple"}),
+        json!({"provider":"openai"}),
+    ] {
+        let id = Uuid::new_v4();
+        ids.push(id);
+        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'preparing','Preparing',1,1)")
+            .bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(spec).execute(&pool).await.unwrap();
+    }
+    let cell = Cell {
+        provider: "openai".into(),
+        intelligence_class: "complex".into(),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    // Remove the unclassified reservation; other-class usage still counts,
+    // while one remaining slot admits this class below its own ceiling.
+    sqlx::query("UPDATE manual_agent_sessions SET stopped_at_ms=2,status='failed' WHERE id=$1")
+        .bind(ids[1])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(admission::check(&mut tx, Some(&cell)).await.unwrap(), None);
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"openai","limit":0}]}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(live, 1, "lowering ceilings preserves existing reservations");
+    tx.rollback().await.unwrap();
+}

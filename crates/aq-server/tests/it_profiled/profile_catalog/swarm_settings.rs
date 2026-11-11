@@ -191,6 +191,15 @@ async fn swarm_concurrent_saves_have_one_winner_and_viewers_are_denied() {
 async fn swarm_failed_receipt_rolls_back_matrix_and_mode() {
     let (_db, app, pool, initial) = installed().await;
     sqlx::raw_sql("CREATE FUNCTION fail_swarm_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'receipt unavailable'; END $$; CREATE TRIGGER fail_swarm_receipt BEFORE INSERT ON swarm_setting_operations FOR EACH ROW EXECUTE FUNCTION fail_swarm_receipt();").execute(&pool).await.unwrap();
+    let mut limits = limits_request(&initial);
+    limits["provider"] = json!({"provider":initial["cells"][0]["provider"],"limit":1});
+    assert_eq!(
+        call(&app, "/api/settings/swarm/limits", Some(limits), true)
+            .await
+            .0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(call(&app, SWARM, None, false).await.1, initial);
     let request = save_request(&initial);
     let (status, body) = call(&app, SWARM, Some(request.clone()), true).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
@@ -304,4 +313,159 @@ async fn swarm_catalog_omits_placeholders_and_keeps_automatic_routing_identity()
     let (status, saved) = call(&app, SWARM, Some(request), true).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["reduced"], Value::Null);
+}
+
+fn limits_request(snapshot: &Value) -> Value {
+    json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
+        "expected_catalog_revision":snapshot["catalog_revision"]})
+}
+
+#[tokio::test]
+async fn individual_limits_preserve_unlimited_cells_and_legacy_profiles() {
+    let (_db, app, pool, initial) = installed().await;
+    let cell = &initial["cells"][0];
+    let mut request = limits_request(&initial);
+    request["provider"] = json!({"provider":cell["provider"],"limit":3});
+    request["cell"] = json!({"provider":cell["provider"],"intelligence_class":cell["intelligence_class"],"limit":0});
+    let path = "/api/settings/swarm/limits";
+    let (status, saved) = call(&app, path, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert!(saved["normal"].is_null());
+    assert_eq!(saved["provider_limits"][0]["limit"], 3);
+    assert_eq!(saved["cells"][0]["effective_limit"], 0);
+    assert_eq!(call(&app, path, Some(request.clone()), true).await.1, saved);
+    let selected = aq_swarm_settings::admission::Cell {
+        provider: cell["provider"].as_str().unwrap().into(),
+        intelligence_class: cell["intelligence_class"].as_str().unwrap().into(),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        aq_swarm_settings::admission::check(&mut tx, Some(&selected))
+            .await
+            .unwrap(),
+        Some(aq_swarm_settings::admission::CEILING)
+    );
+    let unrelated = aq_swarm_settings::admission::Cell {
+        intelligence_class: "another-class".into(),
+        ..selected.clone()
+    };
+    assert_eq!(
+        aq_swarm_settings::admission::check(&mut tx, Some(&unrelated))
+            .await
+            .unwrap(),
+        None
+    );
+    tx.rollback().await.unwrap();
+    let mut clear = limits_request(&saved);
+    clear["cell"] = json!({"provider":cell["provider"],"intelligence_class":cell["intelligence_class"],"limit":null});
+    let (status, cleared) = call(&app, path, Some(clear), true).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert!(cleared["cells"][0]["effective_limit"].is_null());
+    assert_eq!(cleared["provider_limits"], saved["provider_limits"]);
+    let (status, legacy) = call(&app, SWARM, Some(save_request(&cleared)), true).await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert!(
+        legacy["cells"][0]["effective_limit"].is_null(),
+        "explicit unlimited overrides preserved legacy matrix"
+    );
+    assert_eq!(legacy["normal"], matrix(&initial, 2));
+    assert_eq!(
+        call(&app, path, Some(limits_request(&legacy)), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(&app, path, Some(request), false).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn individual_limits_are_atomic_and_revision_checked() {
+    let (_db, app, pool, initial) = installed().await;
+    let path = "/api/settings/swarm/limits";
+    let mut request = limits_request(&initial);
+    request["provider"] = json!({"provider":initial["cells"][0]["provider"],"limit":0});
+    let mut invalid = request.clone();
+    invalid["cell"] = json!({"provider":"unsupported","intelligence_class":"unknown","limit":1});
+    assert_eq!(
+        call(&app, path, Some(invalid), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(call(&app, SWARM, None, false).await.1, initial);
+    let mut stale = request.clone();
+    stale["expected_catalog_revision"] = json!("stale");
+    assert_eq!(
+        call(&app, path, Some(stale), true).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut other = request.clone();
+    other["operation_id"] = json!(Uuid::new_v4());
+    let (a, b) = tokio::join!(
+        call(&app, path, Some(request), true),
+        call(&app, path, Some(other), true)
+    );
+    assert!(
+        (a.0 == StatusCode::OK && b.0 == StatusCode::CONFLICT)
+            || (b.0 == StatusCode::OK && a.0 == StatusCode::CONFLICT),
+        "{a:?} {b:?}"
+    );
+    let selected = aq_swarm_settings::admission::Cell {
+        provider: initial["cells"][0]["provider"].as_str().unwrap().into(),
+        intelligence_class: "unconfigured-class".into(),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        aq_swarm_settings::admission::check(&mut tx, Some(&selected))
+            .await
+            .unwrap(),
+        Some(aq_swarm_settings::admission::CEILING)
+    );
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn independent_limits_require_current_supervisor_admission_marker() {
+    let (_db, _app, pool, _initial) = installed().await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"anthropic","limit":1}]}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Exercise the production generation trigger with an old host's marker.
+    // Its generation FK is deferred, exactly as in a host prepare transaction.
+    sqlx::raw_sql("CREATE TEMP TABLE guard_probe(actor_id UUID,generation BIGINT); CREATE TRIGGER probe BEFORE INSERT ON guard_probe FOR EACH ROW EXECUTE FUNCTION guard_supervisor_swarm_admission();")
+        .execute(&mut *tx).await.unwrap();
+    let actor = Uuid::new_v4();
+    sqlx::query("INSERT INTO swarm_supervisor_admissions(actor_id,generation,provider,intelligence_class) VALUES($1,1,'anthropic','engineering')")
+        .bind(actor).execute(&mut *tx).await.unwrap();
+    sqlx::query("SAVEPOINT old_host")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let old = sqlx::query("INSERT INTO guard_probe VALUES($1,1)")
+        .bind(actor)
+        .execute(&mut *tx)
+        .await;
+    assert!(
+        old.is_err(),
+        "v115 host's marker cannot bypass independent ceilings"
+    );
+    sqlx::query("ROLLBACK TO SAVEPOINT old_host")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE swarm_supervisor_admissions SET admission_version=2 WHERE actor_id=$1")
+        .bind(actor)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO guard_probe VALUES($1,1)")
+        .bind(actor)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
 }

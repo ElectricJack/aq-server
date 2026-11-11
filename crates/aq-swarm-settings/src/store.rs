@@ -8,9 +8,9 @@ pub async fn lock(conn: &mut PgConnection) -> Result<Settings> {
 }
 async fn settings(conn: &mut PgConnection, locked: bool) -> Result<Settings> {
     let sql = if locked {
-        "SELECT revision,active_mode,normal,reduced FROM swarm_settings WHERE singleton FOR UPDATE"
+        "SELECT revision,active_mode,normal,reduced,limits FROM swarm_settings WHERE singleton FOR UPDATE"
     } else {
-        "SELECT revision,active_mode,normal,reduced FROM swarm_settings WHERE singleton"
+        "SELECT revision,active_mode,normal,reduced,limits FROM swarm_settings WHERE singleton"
     };
     let row = sqlx::query(sql).fetch_one(conn).await?;
     let decode = |name| -> Result<Option<Vec<CellLimit>>> {
@@ -20,6 +20,7 @@ async fn settings(conn: &mut PgConnection, locked: bool) -> Result<Settings> {
             .map_err(|_| Error::Internal)
     };
     Ok(Settings {
+        limits: serde_json::from_value(row.get("limits")).map_err(|_| Error::Internal)?,
         revision: row.get::<i64, _>("revision").to_string(),
         active_mode: match row.get::<String, _>("active_mode").as_str() {
             "normal" => Mode::Normal,
@@ -192,6 +193,74 @@ pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Res
     tx.commit().await?;
     Ok(snapshot)
 }
+/// Patch only the selected provider or class, preserving every unrelated limit.
+pub async fn set_limits(
+    pool: &PgPool,
+    actor: uuid::Uuid,
+    request: LimitsRequest,
+) -> Result<Snapshot> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT singleton FROM profile_catalog_registry WHERE singleton FOR SHARE")
+        .execute(&mut *tx)
+        .await?;
+    let mut settings = lock(&mut tx).await?;
+    let payload = serde_json::json!({"kind":"limits","request":request});
+    if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
+        return Ok(receipt);
+    }
+    let catalog = catalog(&mut tx).await?;
+    if settings.revision != request.expected_revision
+        || catalog.revision != request.expected_catalog_revision
+    {
+        return Err(conflict(
+            "Swarm settings or routing catalog changed; reload before saving",
+        ));
+    }
+    if request.provider.is_none() && request.cell.is_none() {
+        return Err(invalid("Select a provider or intelligence class limit"));
+    }
+    if let Some(provider) = request.provider {
+        if !catalog
+            .cells
+            .iter()
+            .any(|c| c.provider == provider.provider)
+        {
+            return Err(invalid("Select a supported provider"));
+        }
+        settings
+            .limits
+            .provider_limits
+            .retain(|p| p.provider != provider.provider);
+        settings.limits.provider_limits.push(provider);
+        settings
+            .limits
+            .provider_limits
+            .sort_by(|a, b| a.provider.cmp(&b.provider));
+    }
+    if let Some(cell) = request.cell {
+        if !catalog
+            .cells
+            .iter()
+            .any(|c| c.provider == cell.provider && c.intelligence_class == cell.intelligence_class)
+        {
+            return Err(invalid(
+                "Select a supported provider and intelligence class",
+            ));
+        }
+        settings.limits.cell_limits.retain(|c| {
+            c.provider != cell.provider || c.intelligence_class != cell.intelligence_class
+        });
+        settings.limits.cell_limits.push(cell);
+        settings.limits.cell_limits.sort_by(|a, b| {
+            (&a.provider, &a.intelligence_class).cmp(&(&b.provider, &b.intelligence_class))
+        });
+    }
+    persist(&mut tx, &mut settings).await?;
+    let snapshot = snapshot(&mut tx, settings, catalog).await?;
+    record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
+    tx.commit().await?;
+    Ok(snapshot)
+}
 pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) -> Result<Snapshot> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT singleton FROM profile_catalog_registry WHERE singleton FOR SHARE")
@@ -239,8 +308,8 @@ async fn persist(conn: &mut PgConnection, settings: &mut Settings) -> Result<()>
         .map(serde_json::to_value)
         .transpose()
         .map_err(|_| Error::Internal)?;
-    let revision: i64 = sqlx::query_scalar("UPDATE swarm_settings SET revision=revision+1,active_mode=$1,normal=$2,reduced=$3 WHERE singleton RETURNING revision")
-        .bind(mode).bind(normal).bind(reduced).fetch_one(conn).await?;
+    let revision: i64 = sqlx::query_scalar("UPDATE swarm_settings SET revision=revision+1,active_mode=$1,normal=$2,reduced=$3,limits=$4 WHERE singleton RETURNING revision")
+        .bind(mode).bind(normal).bind(reduced).bind(serde_json::to_value(&settings.limits).map_err(|_| Error::Internal)?).fetch_one(conn).await?;
     settings.revision = revision.to_string();
     Ok(())
 }

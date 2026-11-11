@@ -214,30 +214,66 @@ pub async fn check(
         crate::Error::Database(e) => e,
         _ => sqlx::Error::Protocol("invalid swarm settings".into()),
     })?;
-    if settings.normal.is_none() {
+    let configured = settings.normal.is_some()
+        || settings
+            .limits
+            .provider_limits
+            .iter()
+            .any(|p| p.limit.is_some())
+        || settings
+            .limits
+            .cell_limits
+            .iter()
+            .any(|c| c.limit.is_some());
+    if !configured {
         return Ok(None);
     }
-    // A row version makes a stale SERIALIZABLE publisher retry after a manual
-    // READ COMMITTED claimant wins the lock; SELECT FOR UPDATE alone does not.
+    // Publish a row version so SERIALIZABLE claimants retry after another wins.
     sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
         .execute(&mut *conn)
         .await?;
     let Some(cell) = cell else {
         return Ok(Some(UNCLASSIFIED));
     };
-    let Some(limit) = crate::effective_limit(&settings, &cell.provider, &cell.intelligence_class)
-    else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let active = occupancy(conn).await?;
-    if active.iter().any(|(c, w)| {
-        !w && (c.provider == cell.provider || c.provider == "unknown")
-            && c.intelligence_class == "__unclassified"
-    }) {
+    let provider_limit = settings
+        .limits
+        .provider_limits
+        .iter()
+        .find(|p| p.provider == cell.provider)
+        .and_then(|p| p.limit);
+    let limit = crate::effective_limit(&settings, &cell.provider, &cell.intelligence_class);
+    let explicit_cell =
+        settings.limits.cell_limits.iter().any(|c| {
+            c.provider == cell.provider && c.intelligence_class == cell.intelligence_class
+        });
+    // Legacy complete matrices still refuse catalog drift. Sparse independent
+    // controls leave every other class unlimited.
+    if limit.is_none() && settings.normal.is_some() && !explicit_cell {
         return Ok(Some(UNCLASSIFIED));
     }
-    let n = active.iter().filter(|(c, w)| !w && c == cell).count();
-    Ok((n >= limit as usize).then_some(CEILING))
+    let active = occupancy(conn).await?;
+    if let Some(limit) = provider_limit {
+        let n = active
+            .iter()
+            .filter(|(c, w)| !w && (c.provider == cell.provider || c.provider == "unknown"))
+            .count();
+        if n >= limit as usize {
+            return Ok(Some(CEILING));
+        }
+    }
+    if let Some(limit) = limit {
+        if active.iter().any(|(c, w)| {
+            !w && (c.provider == cell.provider || c.provider == "unknown")
+                && c.intelligence_class == "__unclassified"
+        }) {
+            return Ok(Some(UNCLASSIFIED));
+        }
+        let n = active.iter().filter(|(c, w)| !w && c == cell).count();
+        if n >= limit as usize {
+            return Ok(Some(CEILING));
+        }
+    }
+    Ok(None)
 }
 /// Selection-only observation: routing has already chosen its requirement
 /// class. Capacity refuses that choice and never asks the router to downgrade.
