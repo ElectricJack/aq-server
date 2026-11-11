@@ -1506,3 +1506,299 @@ async fn retained_transcript_real_sql_router_contract() {
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let other_node = Uuid::new_v4();
+    let other_credential = aq_server::tokens::new_node_credential();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'archive-other',$2,'0.1.0',1,now())")
+        .bind(other_node).bind(aq_server::tokens::verifier(&other_credential)).execute(&pool).await.unwrap();
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    // Prove the second credential authenticates as a different enrolled worker.
+    let (status, response) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(json!({"max_slots":1,"repositories":[]})),
+        Some(&other_credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let id = Uuid::new_v4();
+    let empty_id = Uuid::new_v4();
+    let full_id = Uuid::new_v4();
+    for session_id in [id, empty_id, full_id] {
+        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,'{}','stopped','Ended',1,2,2)")
+            .bind(session_id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    }
+    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
+    let read = format!("/api/manual-agents/{id}/transcript");
+    for payload in [
+        json!({"sequence":1,"text":"intrusion"}),
+        json!({"final_sequence":0,"coverage":"complete","reason":null}),
+    ] {
+        assert_eq!(
+            call(
+                &worker,
+                &upload,
+                Some(payload),
+                Some(&other_credential),
+                false
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM manual_transcript_archives WHERE session_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    for (sequence, text) in [(1, "İ"), (2, "I HEL"), (3, "LO")] {
+        let (status, response) = call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":sequence,"text":text})),
+            Some(&f.credential),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"final_sequence":3,"coverage":"complete","reason":null})),
+            Some(&other_credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, hits) = call(
+        &admin,
+        &format!("{read}/search?q=i&limit=1"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hits}");
+    assert_eq!(hits["matches"][0]["offset"], 0);
+    assert_eq!(hits["matches"][0]["length"], 2);
+    assert_eq!(hits["matches"][0]["sequence"], 1);
+    assert_eq!(hits["next_after"], 0);
+    assert_eq!(hits["has_more"], true);
+    let (_, second) = call(
+        &admin,
+        &format!("{read}/search?q=i&limit=1&after=0"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(second["matches"][0]["offset"], 2);
+    assert_eq!(second["matches"][0]["length"], 1);
+    assert_eq!(second["matches"][0]["sequence"], 2);
+    let (_, cross) = call(&admin, &format!("{read}/search?q=hello"), None, None, false).await;
+    assert_eq!(cross["matches"][0]["offset"], 4);
+    assert_eq!(cross["matches"][0]["length"], 5);
+    assert_eq!(cross["matches"][0]["sequence"], 2);
+    // More requests than search slots still complete while unrelated reads remain usable.
+    let search_path = format!("{read}/search?q=hello");
+    let (a, b, c, d, ordinary) = tokio::join!(
+        call(&admin, &search_path, None, None, false),
+        call(&admin, &search_path, None, None, false),
+        call(&admin, &search_path, None, None, false),
+        call(&admin, &search_path, None, None, false),
+        call(&admin, &read, None, None, false),
+    );
+    for (status, response) in [a, b, c, d] {
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response["matches"][0]["offset"], 4);
+    }
+    assert_eq!(ordinary.0, StatusCode::OK);
+    assert_eq!(
+        call(&admin, &format!("{read}?through=4"), None, None, false)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &admin,
+            &format!("{read}/search?q=hello&through=4"),
+            None,
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &admin,
+            &format!("/api/manual-agents/history?provider={}", "x".repeat(201)),
+            None,
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &admin,
+            &format!("/api/manual-agents/history?model={}", "x".repeat(201)),
+            None,
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let empty_upload = format!("/v1/worker/manual-agents/{empty_id}/transcript");
+    let empty_read = format!("/api/manual-agents/{empty_id}/transcript");
+    assert_eq!(
+        call(
+            &worker,
+            &empty_upload,
+            Some(json!({"sequence":1,"text":""})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &empty_upload,
+            Some(json!({"final_sequence":0,"coverage":"complete","reason":null})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, empty) = call(&admin, &empty_read, None, None, false).await;
+    assert_eq!(empty["session"]["archive"]["state"], "complete");
+    assert_eq!(empty["session"]["archive"]["bytes"], 0);
+    assert_eq!(empty["chunks"], json!([]));
+    assert_eq!(empty["through_sequence"], 0);
+    let (_, no_hits) = call(
+        &admin,
+        &format!("{empty_read}/search?q=x"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(no_hits["matches"], json!([]));
+    assert_eq!(no_hits["next_after"], Value::Null);
+    let full_upload = format!("/v1/worker/manual-agents/{full_id}/transcript");
+    assert_eq!(
+        call(
+            &worker,
+            &full_upload,
+            Some(json!({"sequence":1,"text":"x".repeat(32769)})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &full_upload,
+            Some(json!({"sequence":1,"text":"x".repeat(32768)})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    // Set the accounting field at the cap to test enforcement without allocating 64 MiB.
+    sqlx::query("UPDATE manual_transcript_archives SET bytes=67108864 WHERE session_id=$1")
+        .bind(full_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &worker,
+            &full_upload,
+            Some(json!({"sequence":2,"text":"x"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &full_upload,
+            Some(json!({"final_sequence":1,"coverage":"partial","reason":"size limit"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    sqlx::query("INSERT INTO worker_settings(kind,id,removed,revision) VALUES('node',$1,true,1)")
+        .bind(f.node.node_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(&admin, &read, None, None, false).await.0,
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(f.node.node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, retained) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(retained["chunks"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        call(&admin, &format!("{read}/search?q=hello"), None, None, false)
+            .await
+            .1["matches"][0]["offset"],
+        4
+    );
+    assert_ne!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"sequence":4,"text":"no"})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}

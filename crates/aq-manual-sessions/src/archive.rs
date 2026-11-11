@@ -5,6 +5,19 @@ use axum::{
     routing::{get, post},
 };
 use sqlx::Row;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+
+// Hold the permit across both SQL loading and CPU work, including after a
+// caller disconnects or times out. This bounds resident archive copies.
+static SEARCH_SLOTS: Semaphore = Semaphore::const_new(2);
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
+fn search_unavailable() -> Error {
+    Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Transcript search is temporarily unavailable",
+    )
+}
 
 pub(super) fn human_routes() -> Router<Service> {
     Router::new()
@@ -72,7 +85,10 @@ async fn history(
     if q.status
         .as_deref()
         .is_some_and(|v| !["active", "ended"].contains(&v))
-        || q.q.as_ref().is_some_and(|v| v.chars().count() > 200)
+        || [&q.q, &q.provider, &q.model]
+            .into_iter()
+            .flatten()
+            .any(|v| v.chars().count() > 200)
     {
         return Err(bad("Invalid history filter"));
     }
@@ -124,7 +140,10 @@ async fn transcript(
     }
     let sess = history_session(&s, id).await?;
     let high = sess["archive"]["last_sequence"].as_i64().unwrap_or(0);
-    let through = q.through.unwrap_or(high).min(high);
+    if q.through.is_some_and(|through| through > high) {
+        return Err(bad("Snapshot sequence is unavailable"));
+    }
+    let through = q.through.unwrap_or(high);
     let rows: Vec<(i64,String)>=sqlx::query_as("SELECT sequence,text FROM manual_transcript_chunks WHERE session_id=$1 AND sequence>$2 AND sequence<=$3 ORDER BY sequence LIMIT $4").bind(id).bind(after).bind(through).bind(n+1).fetch_all(&s.pool).await?;
     let mut chunks = Vec::new();
     let mut bytes = 0;
@@ -162,13 +181,41 @@ async fn search(
     }
     let sess = history_session(&s, id).await?;
     let high = sess["archive"]["last_sequence"].as_i64().unwrap_or(0);
-    let through = q.through.unwrap_or(high).min(high);
+    if q.through.is_some_and(|through| through > high) {
+        return Err(bad("Snapshot sequence is unavailable"));
+    }
+    let through = q.through.unwrap_or(high);
+    let permit = tokio::time::timeout(SEARCH_TIMEOUT, SEARCH_SLOTS.acquire())
+        .await
+        .map_err(|_| search_unavailable())?
+        .map_err(|_| search_unavailable())?;
     let mut tx = s.pool.begin().await?;
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
         .await?;
     let rows:Vec<(i64,String)>=sqlx::query_as("SELECT sequence,text FROM manual_transcript_chunks WHERE session_id=$1 AND sequence<=$2 ORDER BY sequence").bind(id).bind(through).fetch_all(&mut *tx).await?;
     tx.commit().await?;
+    let deadline = Instant::now() + SEARCH_TIMEOUT;
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        find_matches(rows, q.q, q.after, n, deadline)
+    });
+    let (found, more, next) = tokio::time::timeout(SEARCH_TIMEOUT, task)
+        .await
+        .map_err(|_| search_unavailable())?
+        .map_err(|_| search_unavailable())??;
+    Ok(Json(
+        json!({"matches":found,"next_after":next,"has_more":more,"through_sequence":through,"server_time_ms":now()}),
+    ))
+}
+
+fn find_matches(
+    rows: Vec<(i64, String)>,
+    query: String,
+    after: Option<usize>,
+    n: usize,
+    deadline: Instant,
+) -> Result<(Vec<Value>, bool, Option<u64>)> {
     let mut text = String::new();
     let mut starts = Vec::new();
     for (seq, chunk) in rows {
@@ -178,13 +225,16 @@ async fn search(
     // Fold once, then map only candidate matches back to original byte ranges.
     // This keeps memory proportional to the archive rather than one mapping per byte.
     let folded: String = text.chars().flat_map(char::to_lowercase).collect();
-    let needle: String = q.q.chars().flat_map(char::to_lowercase).collect();
+    let needle: String = query.chars().flat_map(char::to_lowercase).collect();
     let mut found = Vec::new();
     let mut cursor = 0;
     let mut chars = text.char_indices().peekable();
     let mut folded_pos = 0;
     let mut last_offset = None;
     while cursor < folded.len() {
+        if Instant::now() >= deadline {
+            return Err(search_unavailable());
+        }
         let Some(rel) = folded[cursor..].find(&needle) else {
             break;
         };
@@ -209,7 +259,7 @@ async fn search(
             scan_pos += ch.to_lowercase().map(char::len_utf8).sum::<usize>();
             finish = pos + ch.len_utf8();
         }
-        if q.after.is_none_or(|a| offset > a) && last_offset != Some(offset) {
+        if after.is_none_or(|a| offset > a) && last_offset != Some(offset) {
             let seq = starts
                 .iter()
                 .rev()
@@ -234,9 +284,7 @@ async fn search(
     let more = found.len() > n;
     found.truncate(n);
     let next = found.last().and_then(|v| v["offset"].as_u64());
-    Ok(Json(
-        json!({"matches":found,"next_after":next,"has_more":more,"through_sequence":through,"server_time_ms":now()}),
-    ))
+    Ok((found, more, next))
 }
 #[derive(Deserialize)]
 #[serde(untagged)]
