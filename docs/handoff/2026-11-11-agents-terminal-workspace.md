@@ -112,3 +112,47 @@ Live browser evidence remains local at
 `/home/jkern/dev/aq-platform/qa/2026-11-11/agents-workspace-rollout/`.
 Schema 113 is newer than the previous server binary supports; rollback of the
 binary alone is unsafe. Preserve subsequent writes and fix forward.
+
+
+## Worker host terminal follow-up deployed
+
+Spec 0010 is delivered. In Swarm select a worker node and choose **Open terminal**.
+It opens that machine's Linux/WSL shell as the worker service user. Leaving the
+view detaches; **End shell** ends only that shell. It uses an outbound enrolled
+connection and requires no SSH listener. Host output is not an agent archive.
+
+Final live source pins: server `dc7750f3` (schema 114), dashboard `46f5eba8`,
+companion/hosted installer worker `08698003`. The desktop main worker remains
+`a61d2ad8`. The laptop receiver was remotely updated with checksum-pinned
+installer `203c51d2542777e65dae6f3fe5fb3ac4fade73e10f5e74196f2c77e9117aad66`;
+it verified bundle `6c6d3e7c2413bda4cea4e0f7f963f801fc2c7a4bd51e4babc79c7fcf58783de4`
+and started an independent companion without replacing the main worker.
+
+Live desktop and laptop shells both passed real input, leaving the page,
+reattaching to the same shell with its environment intact, and ending the shell.
+Screenshots at 1440px, 390px and 320px were inspected. No browser errors occurred.
+The exact official served manifest and all 64 assets match the dashboard source.
+A first live check found that swapping a bind-mounted directory had left Docker
+serving its old inode. Recreating only the server mounted the intended directory;
+final verification compares the entire served manifest to the built manifest.
+
+Server `manual_agents::`: 8 passed, 2 opt-in fixtures ignored (the earlier worker
+capture qualification remains recorded above). The shared stream test exercises
+host and manual routes with real WebSockets, origin checks, stale-controller
+input fencing and node revocation. Worker real host tmux input/detach/resize/end
+and environment allowlist tests: 2 passed. Installer tests: 49 passed, 1 skipped,
+including extraction bounds, symlinks and duplicate entries. Dashboard: 8 focused
+unit tests and 6 browser tests passed; typecheck, lint and build passed. Rust
+formatting, build budgets and scoped Clippy with warnings denied passed.
+
+All original worker/agent services retained their PIDs. The two active owner
+agents (`c6ffe3e0` desktop, `792b3d07` laptop) remain running. All disposable host
+shells were ended. The laptop's main worker is still its previous runtime: a
+restart would stop its active manual agent. The host-terminal capability is live
+there now; the remaining main-runtime upgrade requires that worker to become idle.
+
+Private deployment receipt: `host-terminal/deployed-final.json` under the rollback
+directory above. Live evidence:
+`/home/jkern/dev/aq-platform/qa/2026-11-11/worker-host-terminal/result.json` and
+screenshots in the same directory. Schema 114 requires its compatible server;
+never restore a snapshot over later owner writes merely to roll a binary back.

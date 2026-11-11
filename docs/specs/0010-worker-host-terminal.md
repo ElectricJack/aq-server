@@ -34,3 +34,5 @@ Qualification covers owner/node/origin boundaries, stale controllers, independen
 manual-agent operation, real PTY input/resize, detach/reconnect/end, exited shells,
 receiver bundle validation and desktop/phone browser evidence. Rollout must
 preserve existing user agents and keep the AQ1 and legacy worker services intact.
+
+Delivered November 11: see [rollout and qualification](../handoff/2026-11-11-agents-terminal-workspace.md#worker-host-terminal-follow-up-deployed).
