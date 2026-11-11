@@ -50,11 +50,11 @@ These would count as failure even if everything technically works:
 Agents › Swarm becomes the Agents landing page **(owner)**:
 
 1. **Compact provider allocation row** at the top (§5.3), with two sliders and burn estimates always visible.
-2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
+2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). A draggable vertical divider adjusts the desktop split; remember the viewer’s preferred width and keep both panes usable. Keyboard arrows, Home, and End also adjust the split. Resizing preserves selection, pan/zoom, and the connected terminal. Phones retain the stacked tree/pane layout. It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
 
 ### 5.2 The tree
 
-It is drawn with `@xyflow/react` 12 and laid out by `@dagrejs/dagre`, as in v1 **(owner)**. It is top-down, with the AQ server at the root **(owner)**:
+It is drawn with `@xyflow/react` 12. The top-down layout measures complete subtrees and aligns sibling headers at the top; the optional left-to-right path retains `@dagrejs/dagre`. The AQ server is at the root **(owner)**:
 
 - **AQ server**, with machines below it.
   - **Machine** (local or cloud, visibly distinct). A cloud VM appears as a short-lived machine with exactly one agent, because each cloud VM runs one agent attempt (§7.5) **(owner)**. Each machine card shows:
@@ -63,6 +63,8 @@ It is drawn with `@xyflow/react` 12 and laid out by `@dagrejs/dagre`, as in v1 *
     - its agent maximum.
     - **Worker node.** Shows the backend (docker-local, boat) and slots used/total.
       - **Agent.** A pill coloured by intelligence class and ringed by provider.
+
+**Owner layout correction, 2026-11-11:** agent and free-slot cards use two-column vertical stacks beneath each worker. Waiting agents use the same bounded stacking rule. Entire subtree widths and heights are reserved so hundreds of agents grow vertically and neither short worker branches nor the waiting queue displace neighboring headers. Existing free-slot aggregation remains, and every rendered card retains its selection identity.
 
 **States are always visible, never hidden:**
 - **Free slot:** a dashed pill **(my call)**.
