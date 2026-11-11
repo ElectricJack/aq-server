@@ -27,7 +27,7 @@ pub mod profiled_execution;
 pub mod project_bindings;
 pub mod protected_storage;
 pub mod provider_accounts;
-pub mod read_gate;
+pub use aq_human_http::read_gate;
 pub mod readiness;
 pub mod repository_onboarding;
 pub mod result_media;
@@ -38,6 +38,7 @@ pub mod session_access;
 pub mod source_retention;
 pub mod stall;
 pub mod store;
+mod swarm_settings;
 pub mod templates;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
@@ -314,6 +315,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(terminal::api::human_routes(state.clone()))
         .merge(manual_agents::service(&state).human_routes())
         .merge(profile_catalog::admin_routes())
+        .merge(swarm_settings::routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())
         .merge(intelligence::admin_routes())

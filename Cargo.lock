@@ -218,9 +218,11 @@ dependencies = [
 name = "aq-dashboard-contract"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aq-admission 0.1.12",
  "aq-lifecycle-api",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
  "uuid",
@@ -353,6 +355,7 @@ dependencies = [
  "aq-human-http",
  "aq-machine-control",
  "aq-profile-settings",
+ "aq-swarm-settings",
  "axum",
  "chrono",
  "futures-util",
@@ -710,6 +713,7 @@ dependencies = [
  "aq-stall-ladder",
  "aq-supervisor-control",
  "aq-swarm",
+ "aq-swarm-settings",
  "aq-task-comments",
  "aq-task-thread",
  "aq-terminal-relay",
@@ -857,6 +861,7 @@ dependencies = [
  "aq-session-host",
  "aq-session-protocol",
  "aq-supervisor-control",
+ "aq-swarm-settings",
  "async-trait",
  "axum",
  "chrono",
@@ -889,6 +894,19 @@ dependencies = [
  "serde_json",
  "sqlx",
  "sqlx-postgres",
+ "uuid",
+]
+
+[[package]]
+name = "aq-swarm-settings"
+version = "0.1.0"
+dependencies = [
+ "aq-profiles",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
  "uuid",
 ]
 

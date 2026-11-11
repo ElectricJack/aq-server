@@ -85,6 +85,8 @@ fn activation(catalog: &ValidatedCatalog, revision: u64) -> Value {
 const ACTIVATE: &str = "/api/profiles/catalogs/activate";
 const STATE: &str = "/api/profiles/catalogs";
 
+mod swarm_settings;
+
 #[tokio::test]
 async fn missing_registry_is_an_explicit_conflict() {
     let (_db, app, pool) = setup().await;

@@ -150,7 +150,9 @@ A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
 reserved for placement and are not produced yet. Each `agents` entry is a running
-session of the node; its `intelligence_class` is derived from the model name
+session of the node; its optional `routing_profile` identifies the authoritative
+pinned intelligence profile (`id` and `display_name`). Historical attempts without
+that identity omit it. Its `intelligence_class` is a legacy palette hint derived from the model name
 (`haiku`, `mini`, `spark` or `flash` fast, `sonnet` standard, `opus` deep) and is
 absent otherwise. `waiting.reasons` says why new work cannot start now:
 `no_machine_online` when no machine is online, holding or stopped,

@@ -303,8 +303,33 @@ async fn resolve_with_principal(
         now_ms: time,
         placement,
     };
-    let outcome =
+    let mut outcome =
         select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
+    // Route from task requirements first. Capacity can wait on this exact class,
+    // and never influences the router's model or class selection.
+    if let Some(resolved) = &outcome.resolved {
+        let mut capacity = state.store.pool.begin().await.map_err(db)?;
+        let choice = serde_json::to_value(&resolved.choice).map_err(|_| AppError::Internal)?;
+        let artifact = serde_json::to_value(catalog.artifact()).map_err(|_| AppError::Internal)?;
+        let cell = aq_swarm_settings::admission::classify(
+            &artifact,
+            Some(&input.project.intelligence_profile),
+            &choice,
+        );
+        let reason = aq_swarm_settings::admission::observe(
+            &mut capacity,
+            input.project.lineage.task_id,
+            cell.as_ref(),
+            time as i64,
+        )
+        .await
+        .map_err(db)?;
+        capacity.commit().await.map_err(db)?;
+        if let Some(reason) = reason {
+            outcome.resolved = None;
+            outcome.reason_codes = vec![reason.into()];
+        }
+    }
     let decision = Decision {
         decision_id: Uuid::new_v4(),
         project: request.project,
@@ -518,6 +543,27 @@ async fn fence_retained_decision(
         now(state)?,
     )
     .await?;
+    if owned_attempt.is_none() {
+        let choice = serde_json::to_value(&decision.outcome.resolved.as_ref().unwrap().choice)
+            .map_err(|_| AppError::Internal)?;
+        let cell = aq_swarm_settings::admission::resolve(
+            tx,
+            Some(decision.inputs.project.catalog_digest.as_str()),
+            Some(&decision.inputs.project.intelligence_profile),
+            &choice,
+        )
+        .await
+        .map_err(db)?;
+        if let Some(reason) = aq_swarm_settings::admission::check(tx, cell.as_ref())
+            .await
+            .map_err(db)?
+        {
+            return Err(conflict(reason));
+        }
+        aq_swarm_settings::admission::clear_waiting(tx, decision.inputs.project.lineage.task_id)
+            .await
+            .map_err(db)?;
+    }
     principal::fence(state, tx, decision).await?;
     check_time(state, decision)
 }

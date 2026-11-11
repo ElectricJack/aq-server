@@ -513,3 +513,28 @@ async fn swarm_shows_the_offer_rate_hold_on_the_node() {
         "{node}"
     );
 }
+
+#[test]
+fn swarm_routing_profile_is_an_additive_pinned_schema_field() {
+    let generated = aq_dashboard_contract::schema_bytes();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../protocol/dashboard-read/v1/schema.json");
+    if std::env::var_os("AQ_DASHBOARD_WRITE_FIXTURES").is_some() {
+        std::fs::write(&path, &generated).unwrap();
+    }
+    assert_eq!(std::fs::read(path).unwrap(), generated);
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/dashboard-read/v1/fixtures/swarm.json"
+    ))
+    .unwrap();
+    let legacy: aq_dashboard_contract::Swarm =
+        serde_json::from_value(fixture["data"].clone()).unwrap();
+    assert!(
+        legacy
+            .machines
+            .iter()
+            .flat_map(|m| &m.nodes)
+            .flat_map(|n| &n.agents)
+            .all(|a| a.routing_profile.is_none())
+    );
+}

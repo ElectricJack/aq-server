@@ -362,6 +362,7 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
                 model: s.profile.model.clone(),
                 harness: s.profile.harness.clone(),
                 intelligence_class: s.profile.model.as_deref().map(intelligence_class),
+                routing_profile: None,
                 terminal: s.terminal.clone(),
                 started_at: s.lifecycle.as_ref().and_then(|l| l.started_at.clone()),
             })

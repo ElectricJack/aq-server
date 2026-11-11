@@ -1,5 +1,6 @@
 //! Bounded same-origin human API client. No redirects, proxies, automatic
 //! retries, node credentials, cookie jar, secret Debug output or mutation retry.
+pub mod read_gate;
 pub mod readiness;
 use reqwest::{
     Url,

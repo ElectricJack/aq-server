@@ -686,3 +686,93 @@ async fn switch_of_a_demoted_owner_makes_no_offer() {
     let (status, body) = poll(&c).await;
     assert!(poll_offers_or_none(status, &body), "{status} {body}");
 }
+
+#[tokio::test]
+async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_admitted() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let class = c
+        .env
+        .frozen
+        .intelligence_profile
+        .rsplit_once('@')
+        .unwrap()
+        .0;
+    let provider = c.env.input.credentials[0].provider.clone();
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(serde_json::json!([{"provider":provider,"intelligence_class":class,"limit":0}]))
+        .execute(pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(
+            status, 200,
+            "capacity is an ordinary retryable poll: {body}"
+        );
+        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+        else {
+            panic!("{body}")
+        };
+        assert!(page.offers.is_empty());
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_attempts")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0,
+        "a ceiling must not consume a task claim or retry attempt"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_stopped_dispositions")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0,
+        "waiting cannot retire or terminally dispose the task"
+    );
+    let wait: (String, String, String) = sqlx::query_as(
+        "SELECT provider,intelligence_class,reason FROM swarm_waiting WHERE task_id=$1",
+    )
+    .bind(c.env.lineage.task_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        wait,
+        (
+            provider.clone(),
+            class.into(),
+            aq_swarm_settings::admission::CEILING.into()
+        )
+    );
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(serde_json::json!([{"provider":provider,"intelligence_class":class,"limit":1}]))
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(
+        page.offers.len(),
+        1,
+        "raising the matching cell admits the original queued task"
+    );
+    assert_eq!(
+        page.offers[0].offered.offer.manifest.bindings.task_id,
+        c.env.lineage.task_id
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM swarm_waiting WHERE task_id=$1")
+            .bind(c.env.lineage.task_id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
+}

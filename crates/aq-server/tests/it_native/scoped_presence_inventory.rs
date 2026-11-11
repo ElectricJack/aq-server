@@ -339,8 +339,31 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
     let (status, _, body) = post_inventory(&c, &c.request).await;
     assert_eq!(status, 200, "{body}");
     c.c.request.inventory_sequence = c.request.sequence;
-    let (status, body) = common::native_offer::poll(&c.c).await;
-    assert_eq!(status, 200, "{body}");
+    // Poll may return an empty page after 750 ms while its assembly continues
+    // in the background. Wait for the actual offer before testing row locks.
+    let mut last_body = Value::Null;
+    let offered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let (status, body) = common::native_offer::poll(&c.c).await;
+            assert_eq!(status, 200, "{body}");
+            last_body = body;
+            let aq_admission::control::ControlReply::Poll(page) =
+                aq_admission::control::decode_reply(&serde_json::to_vec(&last_body).unwrap())
+                    .unwrap()
+            else {
+                panic!("{last_body}")
+            };
+            if !page.offers.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        offered.is_ok(),
+        "initial poll did not publish the fixture attempt: {last_body}"
+    );
     let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
     let node = c.request.identity.node_id;
     let attempt: Uuid = sqlx::query_scalar(

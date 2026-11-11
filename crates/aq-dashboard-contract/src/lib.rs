@@ -829,3 +829,5 @@ impl Default for OperationRetention {
         }
     }
 }
+
+pub mod release_manifest;

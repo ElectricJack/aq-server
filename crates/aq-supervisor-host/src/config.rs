@@ -32,6 +32,9 @@ pub struct Config {
     pub resource_admission: ArtifactRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscription: Option<Subscription>,
+    /// Exact owner-selected catalog profile, retained with this generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm_profile: Option<serde_json::Value>,
 }
 pub fn protected_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     ensure!(
@@ -92,7 +95,7 @@ pub struct InstalledAuthority {
 impl crate::PlanAuthority for InstalledAuthority {
     async fn authorize(
         &self,
-        _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         c: &CentralPlan,
         h: &HostPlan,
     ) -> Result<()> {
@@ -103,8 +106,92 @@ impl crate::PlanAuthority for InstalledAuthority {
                 && current.host.digest()? == h.digest()?,
             "installed admission changed"
         );
+        admit_swarm(tx, &current).await?;
         Ok(())
     }
+}
+
+async fn cell(
+    conn: &mut sqlx::PgConnection,
+    digest: &str,
+    profile: Option<&serde_json::Value>,
+) -> Result<Option<aq_swarm_settings::admission::Cell>> {
+    let Some(profile) = profile else {
+        return Ok(None);
+    };
+    let reference = profile["profile_id"]
+        .as_str()
+        .zip(profile["profile_version"].as_u64())
+        .map(|(id, version)| format!("{id}@{version}"));
+    Ok(
+        aq_swarm_settings::admission::resolve(conn, Some(digest), reference.as_deref(), profile)
+            .await?,
+    )
+}
+
+/// Only a new generation consumes capacity. All later lifecycle operations,
+/// including stop and permit renewal, retain its original admission.
+async fn admit_swarm(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    config: &Config,
+) -> Result<()> {
+    use aq_swarm_settings::admission;
+    if !admission::available(tx).await? {
+        return Ok(());
+    }
+    let plan = &config.central;
+    let existing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_session_generations WHERE actor_id=$1 AND generation=$2)")
+        .bind(plan.subject.actor_id()).bind(plan.generation as i64).fetch_one(&mut **tx).await?;
+    if existing {
+        return Ok(());
+    }
+    let selected = cell(
+        tx,
+        plan.profiles.catalog.digest.as_str(),
+        config.swarm_profile.as_ref(),
+    )
+    .await?;
+    if let Some(selected) = &selected {
+        ensure!(
+            selected.provider == config.model.provider.as_str()
+                && config
+                    .swarm_profile
+                    .as_ref()
+                    .is_some_and(|p| p["model"] == config.model.model.as_str()),
+            "supervisor profile differs from installed model"
+        );
+    }
+    if let Some(reason) = admission::check(tx, selected.as_ref()).await? {
+        anyhow::bail!("{reason}");
+    }
+    let provider = selected
+        .as_ref()
+        .map_or(config.model.provider.as_str(), |s| s.provider.as_str());
+    let class = selected
+        .as_ref()
+        .map_or("__unclassified", |s| s.intelligence_class.as_str());
+    // The generation FK is deferred until SessionOwner inserts its exact plan
+    // in this transaction. A failed prepare rolls back this reservation too.
+    sqlx::query("INSERT INTO swarm_supervisor_admissions(actor_id,generation,provider,intelligence_class) VALUES($1,$2,$3,$4)")
+        .bind(plan.subject.actor_id()).bind(plan.generation as i64).bind(provider).bind(class).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// A UI reason before expensive preparation; the final owning transaction
+/// repeats the check because another machine may claim capacity meanwhile.
+pub(crate) async fn swarm_wait(
+    pool: &sqlx::PgPool,
+    digest: &str,
+    profile: Option<&serde_json::Value>,
+) -> Result<Option<&'static str>> {
+    let mut tx = pool.begin().await?;
+    if !aq_swarm_settings::admission::available(&mut tx).await? {
+        return Ok(None);
+    }
+    let selected = cell(&mut tx, digest, profile).await?;
+    let reason = aq_swarm_settings::admission::check(&mut tx, selected.as_ref()).await?;
+    tx.rollback().await?;
+    Ok(reason)
 }
 
 #[derive(Clone, Serialize, Deserialize)]

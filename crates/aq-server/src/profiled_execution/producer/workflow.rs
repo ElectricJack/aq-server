@@ -223,7 +223,7 @@ fn skips_spent(skipped: &std::collections::BTreeSet<Uuid>) -> bool {
     skipped.len() >= MAX_SKIPPED
 }
 /// Spec 0007 Q1 backstop: selection refused a successor. That is no offer this
-/// poll, never a refused poll; a first attempt keeps the refusal.
+/// poll; first-attempt capacity waits also skip, while other refusals are retained.
 /// A refused replacement joins `skipped`: the poll goes on without it, its hold or skip
 /// recorded (R6, #116 I1).
 async fn refused_successor(
@@ -232,6 +232,10 @@ async fn refused_successor(
     successor: Option<holds::Successor>,
     skipped: &mut std::collections::BTreeSet<Uuid>,
 ) -> bool {
+    if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) {
+        skipped.insert(decision.inputs.project.lineage.task_id);
+        return true;
+    }
     let (None, Some(s)) = (&decision.outcome.resolved, successor) else {
         return false;
     };
