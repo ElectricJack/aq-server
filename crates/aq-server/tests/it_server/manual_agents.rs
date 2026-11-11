@@ -1508,6 +1508,203 @@ async fn retained_transcript_real_sql_router_contract() {
 }
 
 #[tokio::test]
+async fn retained_transcript_large_archive_survives_router_reconstruction() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,'{}','stopped','Ended',1,2,2)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
+    let read = format!("/api/manual-agents/{id}/transcript");
+    let worker = build_worker_router(f.state.clone());
+    let mut expected = String::new();
+    let mut first = None;
+    for sequence in 1..=12 {
+        let text = format!(
+            "chunk {sequence}: {}\n",
+            "retained line with searchable text\n".repeat(300)
+        );
+        expected.push_str(&text);
+        let body = json!({"sequence": sequence, "text": text});
+        let (status, ack) = call(
+            &worker,
+            &upload,
+            Some(body.clone()),
+            Some(&f.credential),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{ack}");
+        assert_eq!(ack["accepted_through"], sequence);
+        if sequence == 1 {
+            first = Some((body, ack));
+        }
+    }
+    assert!(expected.len() > 64 * 1024);
+    assert!(expected.lines().count() > 500);
+    let final_body = json!({"final_sequence":12,"coverage":"complete","reason":null});
+    let (status, final_ack) = call(
+        &worker,
+        &upload,
+        Some(final_body.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{final_ack}");
+    drop(worker);
+
+    // Fresh routers have no in-memory archive state; all receipts and reads use SQL.
+    let worker = build_worker_router(f.state.clone());
+    let admin = build_admin_router(f.state.clone());
+    let (body, ack) = first.unwrap();
+    assert_eq!(
+        call(&worker, &upload, Some(body), Some(&f.credential), false).await,
+        (StatusCode::OK, ack)
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(final_body),
+            Some(&f.credential),
+            false
+        )
+        .await,
+        (StatusCode::OK, final_ack)
+    );
+    let mut after = 0;
+    let mut recovered = String::new();
+    loop {
+        let (status, page) = call(
+            &admin,
+            &format!("{read}?limit=2&after={after}"),
+            None,
+            None,
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["session"]["archive"]["state"], "complete");
+        assert_eq!(page["session"]["archive"]["bytes"], expected.len());
+        for chunk in page["chunks"].as_array().unwrap() {
+            recovered.push_str(chunk["text"].as_str().unwrap());
+        }
+        let next = page["next_after"].as_i64().unwrap();
+        assert!(next > after);
+        after = next;
+        if !page["has_more"].as_bool().unwrap() {
+            break;
+        }
+    }
+    assert_eq!(after, 12);
+    assert_eq!(recovered, expected);
+    let (status, matches) = call(
+        &admin,
+        &format!("{read}/search?q=chunk%2012"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{matches}");
+    assert_eq!(matches["matches"][0]["sequence"], 12);
+}
+
+/// Opt-in cross-check against the production worker recorder in a sibling checkout.
+/// Set AQ_RECORDING_WORKER_DIR and DATABASE_URL; requires the worker's Docker fixture image.
+#[tokio::test]
+#[ignore = "requires a worker checkout and Docker fixture image"]
+async fn retained_transcript_real_worker_docker_capture() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let worker_dir = std::env::var_os("AQ_RECORDING_WORKER_DIR").expect("worker checkout path");
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','running','Running',1,1)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let worker_app = build_worker_router(f.state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, worker_app).await.unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("fixture.json");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&config)
+        .unwrap();
+    serde_json::to_writer(file, &json!({"origin":origin,"credential":f.credential,"session_id":id,"node_id":f.node.node_id})).unwrap();
+    let status = tokio::process::Command::new("timeout")
+        .args([
+            "900",
+            "cargo",
+            "test",
+            "-p",
+            "aq-worker",
+            "--locked",
+            "--all-features",
+            "--bin",
+            "aq-worker",
+            "manual::recording::tests::real_archive_docker_fixture",
+            "--",
+            "--ignored",
+            "--exact",
+        ])
+        .current_dir(worker_dir)
+        .env("AQ_RECORDING_FIXTURE", &config)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("DATABASE_URL")
+        .kill_on_drop(true)
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success(), "worker fixture failed: {status}");
+    server.abort();
+    let admin = build_admin_router(f.state.clone());
+    let read = format!("/api/manual-agents/{id}/transcript");
+    let mut after = 0;
+    let mut text = String::new();
+    loop {
+        let (status, page) =
+            call(&admin, &format!("{read}?after={after}"), None, None, false).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["session"]["archive"]["state"], "complete");
+        assert_eq!(page["session"]["archive"]["coverage"], "complete");
+        for chunk in page["chunks"].as_array().unwrap() {
+            text.push_str(chunk["text"].as_str().unwrap());
+        }
+        let next = page["next_after"].as_i64().unwrap();
+        assert!(next > after);
+        after = next;
+        if !page["has_more"].as_bool().unwrap() {
+            break;
+        }
+    }
+    assert!(text.len() > 64 * 1024);
+    assert!(text.lines().count() > 500);
+    assert!(text.contains("FIXTURE-BEGIN"));
+    assert!(text.contains("fixture-line-0700-"));
+    assert!(text.contains("FIXTURE-END"));
+    let (status, found) = call(
+        &admin,
+        &format!("{read}/search?q=fixture-line-0700"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
     let f = common::profiled::fixture().await;
     let pool = f.db.pool().await;
