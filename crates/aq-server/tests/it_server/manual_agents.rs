@@ -610,6 +610,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         (
             f.state.config.server.public_origin.trim_end_matches('/'),
             &pool,
+            false,
         ),
         id,
         client,
@@ -738,13 +739,23 @@ async fn live_stream_preserves_bytes_and_fences_input(
     admin: &Router,
     worker: &Router,
     credential: &str,
-    environment: (&str, &sqlx::PgPool),
+    environment: (&str, &sqlx::PgPool, bool),
     id: Uuid,
     client: Uuid,
     generation: u64,
 ) {
     use futures_util::{SinkExt, StreamExt};
-    let (origin, pool) = environment;
+    let (origin, pool, host) = environment;
+    let human_prefix = if host {
+        "/api/worker-terminals/shells"
+    } else {
+        "/api/manual-agents"
+    };
+    let worker_prefix = if host {
+        "/v1/worker/host-terminals"
+    } else {
+        "/v1/worker/manual-agents"
+    };
     use tokio_tungstenite::{
         connect_async,
         tungstenite::{Message, client::IntoClientRequest},
@@ -757,7 +768,7 @@ async fn live_stream_preserves_bytes_and_fences_input(
     let worker_app = worker.clone();
     let at = tokio::spawn(async move { axum::serve(al, admin_app).await.unwrap() });
     let wt = tokio::spawn(async move { axum::serve(wl, worker_app).await.unwrap() });
-    let worker_url = format!("ws://127.0.0.1:{wp}/v1/worker/manual-agents/{id}/terminal-stream");
+    let worker_url = format!("ws://127.0.0.1:{wp}{worker_prefix}/{id}/terminal-stream");
     assert!(
         connect_async(&worker_url).await.is_err(),
         "worker stream requires enrolled authentication"
@@ -768,7 +779,7 @@ async fn live_stream_preserves_bytes_and_fences_input(
     request.headers_mut().insert("authorization", bearer);
     let (mut node, _) = connect_async(request).await.unwrap();
     let url = format!(
-        "ws://127.0.0.1:{ap}/api/manual-agents/{id}/terminal/live?client_id={client}&generation={generation}&columns=101&rows=37"
+        "ws://127.0.0.1:{ap}{human_prefix}/{id}/terminal/live?client_id={client}&generation={generation}&columns=101&rows=37"
     );
     let mut bad = url.clone().into_client_request().unwrap();
     bad.headers_mut().insert(
@@ -842,7 +853,7 @@ async fn live_stream_preserves_bytes_and_fences_input(
     let other = Uuid::new_v4();
     let takeover = call(
         admin,
-        &format!("/api/manual-agents/{id}/terminal/connect"),
+        &format!("{human_prefix}/{id}/terminal/connect"),
         Some(json!({"client_id":other})),
         None,
         true,
@@ -863,11 +874,15 @@ async fn live_stream_preserves_bytes_and_fences_input(
         "detach",
         "stale input is fenced, closing only its attach"
     );
-    let node_id: Uuid = sqlx::query_scalar("SELECT node_id FROM manual_agent_sessions WHERE id=$1")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let node_id: Uuid = sqlx::query_scalar(if host {
+        "SELECT node_id FROM worker_host_shells WHERE id=$1"
+    } else {
+        "SELECT node_id FROM manual_agent_sessions WHERE id=$1"
+    })
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
         .bind(node_id)
         .execute(pool)
@@ -2074,5 +2089,152 @@ async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
         .await
         .0,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn worker_host_shell_is_scoped_separate_persistent_and_fenced() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let node = f.node.node_id;
+    let id = Uuid::new_v4();
+    let path = format!("/api/worker-terminals/{node}");
+    assert_eq!(
+        call(&admin, &path, Some(json!({"operation_id":id})), None, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&admin, &path, Some(json!({"operation_id":id})), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/host-terminals",
+            Some(json!({})),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/host-terminals",
+            Some(json!({})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, opened) = call(&admin, &path, Some(json!({"operation_id":id})), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["shell"]["id"], id.to_string());
+    assert_eq!(
+        call(
+            &admin,
+            &path,
+            Some(json!({"operation_id":Uuid::new_v4()})),
+            None,
+            true
+        )
+        .await
+        .1["shell"]["id"],
+        id.to_string()
+    );
+    assert_eq!(
+        call(&admin, &path, None, None, false).await.1["shell"]["id"],
+        id.to_string()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM manual_agent_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let receipt = json!({"id":id,"status":"running"});
+    assert_eq!(
+        call(
+            &worker,
+            "/v1/worker/host-terminals",
+            Some(receipt),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let client = Uuid::new_v4();
+    let terminal = format!("/api/worker-terminals/shells/{id}/terminal/connect");
+    let (_, control) = call(
+        &admin,
+        &terminal,
+        Some(json!({"client_id":client})),
+        None,
+        true,
+    )
+    .await;
+    live_stream_preserves_bytes_and_fences_input(
+        &admin,
+        &worker,
+        &f.credential,
+        (
+            f.state.config.server.public_origin.trim_end_matches('/'),
+            &pool,
+            true,
+        ),
+        id,
+        client,
+        control["generation"].as_u64().unwrap(),
+    )
+    .await;
+    let stopped = call(
+        &admin,
+        &format!("/api/worker-terminals/shells/{id}/stop"),
+        Some(json!({"operation_id":Uuid::new_v4()})),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(stopped.0, StatusCode::OK);
+    assert_eq!(stopped.1["shell"]["desired_running"], false);
+    assert_eq!(
+        call(
+            &admin,
+            &terminal,
+            Some(json!({"client_id":client})),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    call(
+        &worker,
+        "/v1/worker/host-terminals",
+        Some(json!({"id":id,"status":"ended"})),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    let new = Uuid::new_v4();
+    assert_eq!(
+        call(&admin, &path, Some(json!({"operation_id":new})), None, true)
+            .await
+            .1["shell"]["id"],
+        new.to_string()
     );
 }

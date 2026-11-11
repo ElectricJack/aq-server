@@ -2,6 +2,7 @@
 mod api;
 mod archive;
 mod diagnostics;
+mod host;
 pub mod intelligence;
 pub mod logins;
 mod management;
@@ -20,7 +21,10 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 #[derive(Clone, Default)]
-pub struct Runtime(Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>);
+pub struct Runtime(
+    Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
+    Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
+);
 pub type Auth =
     Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -73,6 +77,7 @@ pub struct Service {
     /// Only explicitly configured project source policies may be launched.
     pub sources: Arc<BTreeMap<Uuid, Value>>,
     runtime: Runtime,
+    host_mode: bool,
     origin: Option<(String, bool)>,
     choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
     login_materials: Option<logins::Materials>,
@@ -91,6 +96,7 @@ impl Service {
             node,
             sources: Arc::new(sources),
             runtime,
+            host_mode: false,
             origin: None,
             choices: Arc::new(Vec::new()),
             login_materials: None,
@@ -108,6 +114,12 @@ impl Service {
         self.origin = Some((origin, development));
         self
     }
+    fn host_service(&self) -> Self {
+        let mut service = self.clone();
+        service.runtime.0 = self.runtime.1.clone();
+        service.host_mode = true;
+        service
+    }
     pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         api::routes()
             .merge(archive::human_routes())
@@ -116,6 +128,7 @@ impl Service {
             .merge(diagnostics::human_routes())
             .merge(stream::human_routes())
             .with_state(self.clone())
+            .merge(host::human_routes().with_state(self.host_service()))
     }
     pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         worker::routes()
@@ -124,6 +137,7 @@ impl Service {
             .merge(logins::worker_routes())
             .merge(diagnostics::worker_routes())
             .with_state(self.clone())
+            .merge(host::worker_routes().with_state(self.host_service()))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -172,4 +186,13 @@ pub fn configured_sources<T: Serialize>(config: Option<&T>) -> BTreeMap<Uuid, Va
             ))
         })
         .collect()
+}
+
+async fn terminal_subject(s: &Service, id: Uuid) -> Result<(Uuid, bool)> {
+    if s.host_mode {
+        host::subject(s, id).await
+    } else {
+        let v = session(s, id).await?;
+        Ok((v.node_id, terminal::live(&v)))
+    }
 }

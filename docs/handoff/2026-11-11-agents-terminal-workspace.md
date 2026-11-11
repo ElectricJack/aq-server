@@ -76,10 +76,39 @@ results, screenshots and the served bundle manifest (clean source `43552ac`).
 Remaining delivery boundaries: durable capture covers newly launched manual
 Claude/Codex agents; old sessions cannot acquire missing earlier output. Native
 queue sessions retain their existing inspection/terminal surfaces, with no new
-native recorder or native Stop claim. Full server-process/database restart and
-real phone IME are not separately qualified; router reconstruction and upload
-listener restart are narrower proofs. No provider inference was needed in the
+native recorder or native Stop claim. Real phone IME and a full database restart are not separately qualified.
+Actual live server-container recreation retained the finalized transcript. No provider inference was needed in the
 disposable qualification.
 
-No live services, owner sessions, Supabase, installer/runtime pins or main branches
-were changed. Production rollout remains a separate reviewed delivery step.
+## Owner rollout, November 11
+
+The owner authorized rollout. Server source `7ce7ed7e`, schema 113 and dashboard
+`ab4c6bc4` were activated on aq-ms1. The desktop worker is `a61d2ad8`; the hosted
+installer was refreshed with that runtime. A real rollout exposed a created-
+container startup race, fixed and qualified in worker commits `63127540` and
+`a61d2ad8` before the final runtime activation.
+
+Actual browser/worker checks passed on desktop and 390px/320px widths: isolated
+input, stopping the disposable session, retained search and complete download.
+A second disposable session captured output with no browser attached. Its bytes
+and metadata survived actual server-container recreation. Forced-stop archives
+correctly report partial coverage. No provider inference was submitted.
+
+A reboot-stopped source registry was restarted with its existing volume and a
+restart policy. The preexisting Git recovery fence was cleared using its supported
+audited recovery command after stopping and inspecting the service; no refs were
+changed. Server, database and Git are healthy; graph and Git readiness are ready.
+
+The owner's two active desktop/laptop agents were preserved. The laptop remains
+on its previous main worker runtime: its controls receiver cannot replace that
+runtime, and SSH was not configured. The owner subsequently requested a worker
+host terminal; spec 0010 records that follow-up. AQ1, the legacy local worker,
+Supabase and main branches were untouched.
+
+Private rollback snapshots and exact live receipts are under
+`~/.local/share/aq-ms1/agents-workspace-rollout-20261111T154620Z/`.
+The database snapshot contains private credentials and must not be published.
+Live browser evidence remains local at
+`/home/jkern/dev/aq-platform/qa/2026-11-11/agents-workspace-rollout/`.
+Schema 113 is newer than the previous server binary supports; rollback of the
+binary alone is unsafe. Preserve subsequent writes and fix forward.

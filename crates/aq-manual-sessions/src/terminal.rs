@@ -45,7 +45,7 @@ pub(super) struct Command {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Connect {
+pub(super) struct Connect {
     client_id: Uuid,
     #[serde(default)]
     expected_generation: Option<u64>,
@@ -85,7 +85,7 @@ pub(super) fn live(v: &Session) -> bool {
         && v.desired_running
         && v.worker_seen_at_ms.is_some_and(|at| at > now() - 15000)
 }
-async fn connect(
+pub(super) async fn connect(
     State(s): State<Service>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
@@ -93,7 +93,7 @@ async fn connect(
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
     valid_id(c.client_id)?;
-    if !live(&session(&s, id).await?) {
+    if !terminal_subject(&s, id).await?.1 {
         return Err(conflict("The agent is not ready to connect"));
     }
     let mut runtime = s.runtime.0.lock().await;

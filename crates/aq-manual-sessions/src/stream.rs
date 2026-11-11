@@ -24,7 +24,7 @@ pub(super) struct Viewer {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Attach {
+pub(super) struct Attach {
     client_id: Uuid,
     generation: u64,
     columns: u16,
@@ -48,15 +48,15 @@ pub(super) fn human_routes() -> Router<Service> {
 pub(super) fn worker_routes() -> Router<Service> {
     Router::new().route("/v1/worker/manual-agents/{id}/terminal-stream", get(worker))
 }
-async fn worker(
+pub(super) async fn worker(
     State(s): State<Service>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
     let node = (s.node)(headers.clone()).await?;
-    let v = session(&s, id).await?;
-    if v.node_id != node || !terminal::live(&v) {
+    let (subject_node, live) = terminal_subject(&s, id).await?;
+    if subject_node != node || !live {
         return Err(conflict("The enrolled worker does not own a live session"));
     }
     let mut rt = s.runtime.0.lock().await;
@@ -79,7 +79,7 @@ async fn worker(
         .max_frame_size(131072)
         .on_upgrade(move |socket| worker_socket(s, headers, id, node, relay.id, rx, socket)))
 }
-async fn browser(
+pub(super) async fn browser(
     State(s): State<Service>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
@@ -98,7 +98,7 @@ async fn browser(
     }
     let actor = (s.owner)(headers.clone()).await?;
     valid_id(a.client_id)?;
-    if !dimensions(a.columns, a.rows) || !terminal::live(&session(&s, id).await?) {
+    if !dimensions(a.columns, a.rows) || !terminal_subject(&s, id).await?.1 {
         return Err(conflict("The terminal is not ready"));
     }
     let mut rt = s.runtime.0.lock().await;
@@ -145,6 +145,9 @@ fn controls(screen: &terminal::Screen, actor: Uuid, a: &Attach) -> bool {
         })
 }
 async fn permitted(s: &Service, id: Uuid) -> bool {
+    if s.host_mode {
+        return terminal_subject(s, id).await.is_ok_and(|(_, live)| live);
+    }
     session(s,id).await.is_ok_and(|v|terminal::live(&v)) && sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM manual_agent_sessions m JOIN project_execution_bindings p ON p.project_id=m.project_id WHERE m.id=$1 AND p.binding->>'enabled'='true')").bind(id).fetch_one(&s.pool).await.unwrap_or(false)
 }
 async fn worker_socket(
