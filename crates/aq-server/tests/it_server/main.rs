@@ -16,5 +16,6 @@ mod enrollment;
 mod execution;
 mod health;
 mod identity;
+mod manual_agents;
 mod readiness;
 mod updates;

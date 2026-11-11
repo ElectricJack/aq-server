@@ -17,6 +17,7 @@ pub mod intelligence;
 pub mod lifecycle_artifacts;
 pub mod machine_actions;
 pub mod machine_api;
+mod manual_agents;
 pub mod node_storage;
 pub mod notifications;
 pub mod observations;
@@ -303,6 +304,7 @@ pub fn build_admin_router_with_optional_owners(
         )
         .merge(agent_access::human::routes(&state))
         .merge(agent_access::supervisor_conversation::routes(&state))
+        .merge(manual_agents::supervisor_controls(&state))
         .merge(profiled_execution::human_results::routes())
         .merge(profiled_execution::disposition::routes(state.clone()))
         .merge(results_feedback::routes())
@@ -310,6 +312,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(notifications::api::routes(state.clone()))
         .merge(observations::api::admin_routes(state.clone()))
         .merge(terminal::api::human_routes(state.clone()))
+        .merge(manual_agents::service(&state).human_routes())
         .merge(profile_catalog::admin_routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())
@@ -406,11 +409,13 @@ fn build_worker_router_inner(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
+        .merge(manual_agents::supervisor_reads(&state))
         .merge(source_retention::machine_routes(state.clone()))
         .merge(lifecycle_artifacts::routes(state.clone()))
         .merge(execution_permits::routes(state.clone()))
         .merge(execution::api::worker_routes(state.clone()))
         .merge(terminal::api::worker_routes(state.clone()))
+        .merge(manual_agents::service(&state).worker_routes())
         .route("/healthz", get(healthz))
         .route("/readyz", get(readiness::readyz))
         .route("/dependency-readyz", get(readiness::dependency_readyz))

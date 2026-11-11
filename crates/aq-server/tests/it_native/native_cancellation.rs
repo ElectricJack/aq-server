@@ -11,6 +11,81 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn slow_offer_keeps_export_but_waits_for_new_inventory_instead_of_publishing_near_expiry() {
+    use std::sync::atomic::Ordering;
+    let c = native_offer::setup().await;
+    // The synthetic Git export advances the daemon clock after selection.
+    c.mode.store(9, Ordering::SeqCst);
+    let (status, page) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{page}");
+    assert!(page["body"]["offers"].as_array().unwrap().is_empty());
+    let verified: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM profiled_source_exports WHERE state='verified'")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verified, 1,
+        "the completed export is kept for a fresh inventory"
+    );
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE node_id=$1")
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        attempts, 0,
+        "waiting for fresh inventory must not spend an attempt"
+    );
+}
+
+#[tokio::test]
+async fn ordinary_slow_offer_survives_poll_return_and_blocks_duplicate_assembly() {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let mut c = native_offer::setup().await;
+    c.mode.store(6, Ordering::SeqCst);
+    let (status, page) = tokio::time::timeout(Duration::from_secs(2), native_offer::poll(&c))
+        .await
+        .expect("ordinary poll must return while source observation is paused");
+    assert_eq!(status, 200, "{page}");
+    assert!(page["body"]["offers"].as_array().unwrap().is_empty());
+    c.observation_entered.acquire().await.unwrap().forget();
+    c.request.operation_id = Uuid::new_v4();
+    let (status, pending) = tokio::time::timeout(Duration::from_secs(1), native_offer::poll(&c))
+        .await
+        .expect("another poll must not start another assembly for this node");
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending["body"]["offers"].as_array().unwrap().is_empty());
+    assert_eq!(c.observation_entered.available_permits(), 0);
+    c.mode.store(0, Ordering::SeqCst);
+    c.observation_resume.add_permits(1);
+    let attempt: Uuid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(id) = sqlx::query_scalar(
+                "SELECT attempt_id FROM execution_attempts WHERE node_id=$1 AND holds_task",
+            )
+            .bind(c.request.identity.node_id)
+            .fetch_optional(&c.env.env.pool)
+            .await
+            .unwrap()
+            {
+                break id;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("detached assembler must publish the retained offer");
+    let (status, replayed) = native_offer::poll(&c).await;
+    assert_eq!(status, 200, "{replayed}");
+    assert_eq!(
+        replayed["body"]["offers"][0]["offered"]["offer"]["binding"]["attempt_id"],
+        json!(attempt)
+    );
+}
+
+#[tokio::test]
 async fn native_cancel_slow_offer_continues_after_prompt_directive() {
     use std::sync::atomic::Ordering;
     use std::time::Duration;

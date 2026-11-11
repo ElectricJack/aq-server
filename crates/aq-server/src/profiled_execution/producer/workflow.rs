@@ -27,7 +27,6 @@ use aq_machine_control::holds;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
 use std::sync::OnceLock;
-use tokio::sync::Semaphore;
 use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
@@ -330,51 +329,46 @@ pub async fn poll(
         cancellations,
         next_after: None,
     };
-    // Deliver cancellation promptly, while letting slow healthy offer assembly
-    // finish for later redelivery. Dropping the JoinHandle after the wait only
-    // detaches the task; the assembler permit bounds its full lifetime.
-    if !page.cancellations.is_empty() {
-        page.validate_for(request).map_err(|_| refused())?;
-        if request.available.slots == 0 {
-            return Ok(page);
-        }
-        let mut assembly = tokio::spawn({
-            let state = state.clone();
-            let auth = auth.clone();
-            let request = request.clone();
-            let page = page.clone();
-            async move { Box::pin(offers(&state, &auth, &request, page)).await }
-        });
-        return match tokio::time::timeout(std::time::Duration::from_millis(750), &mut assembly)
-            .await
-        {
-            Ok(Ok(Ok(scheduled))) => Ok(scheduled),
-            _ => Ok(page),
-        };
-    }
-    // A zero-capacity poll is a cancellation query (MS1 B3): it asks for no
-    // offer, so it never depends on a fresh inventory snapshot. Answering it
-    // here keeps "no pending cancellation" distinct from a refused poll for a
-    // node whose inventory has aged past its TTL during a long attempt.
+    // Zero-capacity polls deliver cancellation without depending on inventory.
     if request.available.slots == 0 {
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
     }
-    // Offer assembly has a large future. Keep this shared scheduling boundary
-    // on the heap instead of embedding it in every control/fixture caller.
-    on_heap(|| offers(state, auth, request, page)).await
+    // Retain one assembler per node across polls; redeliver its published offer.
+    static ASSEMBLERS: OnceLock<aq_machine_control::offer_assembly::Gate> = OnceLock::new();
+    let Some(permit) = ASSEMBLERS
+        .get_or_init(|| aq_machine_control::offer_assembly::Gate::new(4))
+        .enter(auth.id())
+    else {
+        return Ok(page);
+    };
+    let mut assembly = tokio::spawn({
+        let state = state.clone();
+        let auth = auth.clone();
+        let request = request.clone();
+        let page = page.clone();
+        async move {
+            let _permit = permit;
+            let result = Box::pin(offers(&state, &auth, &request, page)).await;
+            if let Err(error) = &result {
+                tracing::warn!(node_id = %auth.id(), ?error, "background offer assembly refused");
+            }
+            result
+        }
+    });
+    match tokio::time::timeout(std::time::Duration::from_millis(750), &mut assembly).await {
+        Ok(Ok(result)) if page.cancellations.is_empty() => result,
+        Ok(Ok(Ok(scheduled))) => Ok(scheduled),
+        _ => Ok(page),
+    }
 }
+
 async fn offers(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
     mut page: NativePollPage,
 ) -> Result<NativePollPage, AppError> {
-    static ASSEMBLERS: OnceLock<Semaphore> = OnceLock::new();
-    let _permit = ASSEMBLERS
-        .get_or_init(|| Semaphore::new(4))
-        .try_acquire()
-        .map_err(|_| refused())?;
     let (runtime, snapshot, modes) = on_heap(|| runtime(state, auth, request)).await?;
     if request.available.slots == 0 {
         return Ok(page);
@@ -483,6 +477,20 @@ async fn offers(
             })
             .await
             .map_err(|_| refused())?;
+            let mut ready = ready;
+            for candidate in &mut ready.items {
+                if !aq_machine_control::launch::eligible(
+                    &state.store.pool,
+                    candidate.revision.task_id,
+                    auth.id(),
+                    &candidate.node["metadata"],
+                )
+                .await
+                .map_err(db)?
+                {
+                    skipped.insert(candidate.revision.task_id);
+                }
+            }
             let (revision, project) = (record.revision, policy.project_id);
             if let Some((task, assessment)) = on_heap(|| {
                 first_eligible_task(&ready, &skipped, |task| async move {
@@ -605,9 +613,7 @@ async fn offers(
                 .await?
                 .into_parts()
         } else {
-            // A first attempt freezes the configured source at offer time; a
-            // handoff successor freezes the saved commit as a fresh export (a new
-            // operation, never the predecessor's export).
+            // Freeze the configured source, or a fresh export of a handoff's saved commit.
             let fresh = async {
                 let observed = match &handoff {
                     Some(base) => {
@@ -669,8 +675,10 @@ async fn offers(
             }
         };
         let source_operation = token.request().operation_id;
-        // External export can consume the original graph/selection freshness. Read
-        // actual owners again; a task CAS/content change refuses this original task.
+        if !aq_machine_control::offer_assembly::deliverable(&snapshot, now(state)?) {
+            return Ok(page);
+        }
+        // Refresh Graph/selection after export; reject a changed original task.
         let ready = on_heap(|| {
             graph.scheduling_ready_current(
                 record.binding.graph_workspace_id,
@@ -735,8 +743,6 @@ async fn offers(
             })
         })
         .await?;
-        // The node's authenticated registration must qualify the exact
-        // confinement mode this manifest requires (MS1 review should-fix 1).
         if !built
             .native
             .offered
@@ -760,6 +766,7 @@ async fn offers(
         let offer =
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
                 .await?;
+        tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         let Some(offer) = offer else { return Ok(page) };
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);

@@ -1,0 +1,198 @@
+//! Owner-started persistent sessions. Queue tasks and their authority are separate.
+mod api;
+mod archive;
+mod diagnostics;
+mod host;
+pub mod intelligence;
+pub mod logins;
+mod management;
+mod stream;
+mod terminal;
+mod worker;
+use axum::{
+    Json,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use tokio::sync::Mutex;
+use uuid::Uuid;
+#[derive(Clone, Default)]
+pub struct Runtime(
+    Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
+    Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
+);
+pub type Auth =
+    Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
+pub type Result<T> = std::result::Result<T, Error>;
+pub struct Error(pub StatusCode, pub &'static str);
+impl Error {
+    pub fn enrolled_worker_required() -> Self {
+        Self(
+            StatusCode::FORBIDDEN,
+            "Manual sessions require an enrolled worker credential",
+        )
+    }
+    pub fn from_response(response: Response) -> Self {
+        Self(response.status(), "Manual session access refused")
+    }
+}
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        (
+            self.0,
+            Json(json!({"error":"manual_session_refused","message":self.1})),
+        )
+            .into_response()
+    }
+}
+impl From<sqlx::Error> for Error {
+    fn from(_: sqlx::Error) -> Self {
+        Self(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Session storage is temporarily unavailable",
+        )
+    }
+}
+fn bad(s: &'static str) -> Error {
+    Error(StatusCode::BAD_REQUEST, s)
+}
+fn conflict(s: &'static str) -> Error {
+    Error(StatusCode::CONFLICT, s)
+}
+fn missing() -> Error {
+    Error(StatusCode::NOT_FOUND, "Session or worker not found")
+}
+fn now() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+#[derive(Clone)]
+pub struct Service {
+    pub pool: PgPool,
+    pub owner: Auth,
+    pub node: Auth,
+    /// Only explicitly configured project source policies may be launched.
+    pub sources: Arc<BTreeMap<Uuid, Value>>,
+    runtime: Runtime,
+    host_mode: bool,
+    origin: Option<(String, bool)>,
+    choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
+    login_materials: Option<logins::Materials>,
+}
+impl Service {
+    pub fn new(
+        pool: PgPool,
+        owner: Auth,
+        node: Auth,
+        sources: BTreeMap<Uuid, Value>,
+        runtime: Runtime,
+    ) -> Self {
+        Self {
+            pool,
+            owner,
+            node,
+            sources: Arc::new(sources),
+            runtime,
+            host_mode: false,
+            origin: None,
+            choices: Arc::new(Vec::new()),
+            login_materials: None,
+        }
+    }
+    pub fn login_materials(mut self, material: logins::Materials) -> Self {
+        self.login_materials = Some(material);
+        self
+    }
+    pub fn intelligence_choices(mut self, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
+        self.choices = Arc::new(choices);
+        self
+    }
+    pub fn browser_origin(mut self, origin: String, development: bool) -> Self {
+        self.origin = Some((origin, development));
+        self
+    }
+    fn host_service(&self) -> Self {
+        let mut service = self.clone();
+        service.runtime.0 = self.runtime.1.clone();
+        service.host_mode = true;
+        service
+    }
+    pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
+        api::routes()
+            .merge(archive::human_routes())
+            .merge(management::routes())
+            .merge(logins::human_routes())
+            .merge(diagnostics::human_routes())
+            .merge(stream::human_routes())
+            .with_state(self.clone())
+            .merge(host::human_routes().with_state(self.host_service()))
+    }
+    pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
+        worker::routes()
+            .merge(archive::worker_routes())
+            .merge(stream::worker_routes())
+            .merge(logins::worker_routes())
+            .merge(diagnostics::worker_routes())
+            .with_state(self.clone())
+            .merge(host::worker_routes().with_state(self.host_service()))
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Session {
+    pub id: Uuid,
+    pub node_id: Uuid,
+    pub project_id: Uuid,
+    pub spec: Value,
+    pub status: String,
+    pub stage: String,
+    pub desired_running: bool,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub worker_seen_at_ms: Option<i64>,
+}
+async fn session(s: &Service, id: Uuid) -> Result<Session> {
+    let v:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(m) - 'actor_id' - 'stopped_at_ms' FROM manual_agent_sessions m WHERE id=$1").bind(id).fetch_optional(&s.pool).await?;
+    serde_json::from_value(v.ok_or_else(missing)?).map_err(|_| bad("Invalid retained session"))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Operation {
+    operation_id: Uuid,
+}
+fn valid_id(id: Uuid) -> Result<()> {
+    if id.is_nil() {
+        Err(bad("Operation identity is required"))
+    } else {
+        Ok(())
+    }
+}
+
+/// Manual launch sources come only from enabled installed project policies.
+pub fn configured_sources<T: Serialize>(config: Option<&T>) -> BTreeMap<Uuid, Value> {
+    config
+        .and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| v["projects"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p["enabled"] == true)
+        .filter_map(|p| {
+            Some((
+                serde_json::from_value(p["project_id"].clone()).ok()?,
+                p.get("source")?.clone(),
+            ))
+        })
+        .collect()
+}
+
+async fn terminal_subject(s: &Service, id: Uuid) -> Result<(Uuid, bool)> {
+    if s.host_mode {
+        host::subject(s, id).await
+    } else {
+        let v = session(s, id).await?;
+        Ok((v.node_id, terminal::live(&v)))
+    }
+}

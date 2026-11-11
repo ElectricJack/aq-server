@@ -1,0 +1,18 @@
+[package]
+name = "aq-manual-sessions"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+[dependencies]
+aq-machine-control = { path = "../aq-machine-control" }
+axum = { workspace = true, features = ["ws"] }
+futures-util = "0.3"
+aq-profile-settings = { path = "../aq-profile-settings" }
+aq-human-http = { path = "../aq-human-http" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+tokio.workspace = true
+uuid.workspace = true

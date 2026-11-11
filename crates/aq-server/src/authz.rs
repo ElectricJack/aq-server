@@ -17,6 +17,18 @@ pub struct CurrentUser(pub User);
 pub struct RequireOwner(pub User);
 
 async fn resolve(parts: &Parts, state: &AppState) -> Result<User, AppError> {
+    if let Some(owner) = parts
+        .extensions
+        .get::<aq_supervisor_control::read::ReadOwner>()
+    {
+        return Ok(User {
+            id: owner.id,
+            email: owner.email.clone(),
+            role: Role::Owner,
+            issuer: owner.issuer.clone(),
+            subject: owner.subject.clone(),
+        });
+    }
     let id = state.identity.verify(&parts.headers).await?;
     if let Some(user) = state
         .store
@@ -98,43 +110,16 @@ fn csrf_check(
     method: &Method,
     headers: &axum::http::HeaderMap,
 ) -> Result<(), AppError> {
-    if matches!(*method, Method::GET | Method::HEAD) {
-        return Ok(());
-    }
-    let header_ok = headers
-        .get("x-aq-request")
-        .is_some_and(|v| v.as_bytes() == b"1");
-    if !header_ok {
-        return Err(AppError::CsrfRejected(
-            "missing X-AQ-Request: 1 header".into(),
-        ));
-    }
-    if let Some(origin) = headers.get("origin") {
-        let expected = state.config.server.public_origin.trim_end_matches('/');
-        let development = matches!(state.config.auth, crate::config::AuthConfig::Dev { .. });
-        if !origin_allowed(expected, origin.as_bytes(), development) {
-            return Err(AppError::CsrfRejected(
-                "request origin is not allowed".into(),
-            ));
-        }
-    }
-    Ok(())
+    aq_human_http::csrf_rejection(
+        method,
+        headers,
+        state.config.server.public_origin.trim_end_matches('/'),
+        matches!(state.config.auth, crate::config::AuthConfig::Dev { .. }),
+    )
+    .map_or(Ok(()), |reason| Err(AppError::CsrfRejected(reason.into())))
 }
 
-/// The exact configured origin. Development auth alone also accepts its other
-/// loopback spelling (127.0.0.1 and localhost, same scheme and port; QA N-05).
-pub fn origin_allowed(expected: &str, origin: &[u8], development: bool) -> bool {
-    let alias = |from: &str, to: &str| {
-        let (scheme, rest) = expected.split_once("://")?;
-        let port = rest.strip_prefix(from)?;
-        (port.is_empty() || port.starts_with(':')).then(|| format!("{scheme}://{to}{port}"))
-    };
-    origin == expected.as_bytes()
-        || (development
-            && alias("127.0.0.1", "localhost")
-                .or_else(|| alias("localhost", "127.0.0.1"))
-                .is_some_and(|alias| origin == alias.as_bytes()))
-}
+pub use aq_human_http::origin_allowed;
 
 /// Middleware applying [`csrf_check`]; layer it with `from_fn_with_state`.
 ///

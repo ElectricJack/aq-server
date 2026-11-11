@@ -14,7 +14,7 @@ use crate::{
 use aq_central_authority::{Digest, MailBatch, MailRef};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{future::Future, time::Duration};
 pub use types::*;
 use uuid::Uuid;
@@ -137,6 +137,16 @@ pub struct ReservationOwner {
     service: Service,
 }
 impl ReservationOwner {
+    /// Trusted central controller; each operation still checks the live complete Owner.
+    pub fn with_pool(pool: PgPool) -> Self {
+        Self {
+            service: Service {
+                pool,
+                gate: tokio::sync::Semaphore::new(2),
+            },
+        }
+    }
+
     pub fn new(state: &AppState) -> Self {
         Self {
             service: Service::new(state),
@@ -219,7 +229,15 @@ async fn bound_actor(
     write: bool,
 ) -> Result<Actor> {
     authorize(tx, user).await?;
-    let c = definition(tx, None, false).await?;
+    let conversation: Uuid = sqlx::query_scalar(
+        "SELECT conversation_id FROM central_supervisor_actors WHERE actor_id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?
+    .ok_or_else(missing)?;
+    let c = definition(tx, Some(conversation), false).await?;
     let a = actor(tx, id, write).await?.ok_or_else(missing)?;
     if a.conversation != c.id {
         return Err(unavailable());

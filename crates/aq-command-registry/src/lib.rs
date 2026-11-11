@@ -263,6 +263,17 @@ impl Registry {
                 }),
             }
         }
+        for command in &mut commands {
+            if matches!(
+                command.name,
+                "task.edit"
+                    | "task.reprioritize"
+                    | "task.dependency.add"
+                    | "task.dependency.remove"
+            ) {
+                command.supervisor = Some(Route::action());
+            }
+        }
         commands.sort_by(|a, b| a.name.cmp(b.name));
         for pair in commands.windows(2) {
             if pair[0].name == pair[1].name {

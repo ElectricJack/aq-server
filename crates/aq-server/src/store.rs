@@ -421,6 +421,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) manual_runtime: aq_manual_sessions::Runtime,
     // Explicit constructor provenance, never inferred from missing SQL objects.
     #[cfg(feature = "test-support")]
     pub(crate) fixture_profile: Option<u32>,
@@ -645,6 +646,7 @@ impl Store {
             Some("aq-terminal-data"),
         );
         Ok(Store {
+            manual_runtime: Default::default(),
             #[cfg(feature = "test-support")]
             fixture_profile: None,
             terminal_pool,

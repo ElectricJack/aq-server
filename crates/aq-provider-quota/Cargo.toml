@@ -6,6 +6,7 @@ publish = false
 description = "Router-owned provider quota collection and the configured-account inventory type"
 
 [dependencies]
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
 base64.workspace = true
 chrono.workspace = true

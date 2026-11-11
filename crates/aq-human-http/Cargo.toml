@@ -8,6 +8,8 @@ publish = false
 loopback-development = []
 
 [dependencies]
+tokio.workspace = true
+uuid.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,5 +18,4 @@ nix.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
-tokio.workspace = true
 tempfile.workspace = true

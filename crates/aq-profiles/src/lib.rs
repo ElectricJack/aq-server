@@ -6,6 +6,8 @@ mod compile;
 mod composition_core;
 mod graph_policy;
 pub use graph_policy::*;
+mod project;
+pub use project::validate_project_profiles;
 mod registry;
 mod selection_policy;
 use aq_session_protocol::Digest;

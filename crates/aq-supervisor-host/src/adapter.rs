@@ -159,6 +159,10 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
     )
     .await?;
     std::os::unix::fs::chown(&reply_credential, Some(10001), Some(10001))?;
+    if c.subscription.is_some() {
+        return crate::subscription::native(&c, &directory, &home, &reply_credential, &startup)
+            .await;
+    }
     let key = Arc::new(crate::credentials::SecretFile::open(c.secret_file.clone())?);
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();

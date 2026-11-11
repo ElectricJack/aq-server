@@ -78,6 +78,12 @@ pub struct ModelCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Intelligence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_routing: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub id: String,
     pub version: u32,
     pub candidates: Vec<ModelCandidate>,
@@ -405,6 +411,16 @@ pub fn validate(
         insert("agent", &a.id, a.version, serde_json::to_value(a).unwrap())?;
     }
     for i in &catalog.intelligence {
+        if let Some(name) = &i.name {
+            text(name)?;
+            ensure(name.len() <= 128, "profile name bound")?;
+        }
+        if let Some(description) = &i.description {
+            ensure(
+                description.len() <= 2000 && !description.contains('\0'),
+                "profile description bound",
+            )?;
+        }
         if let Some(policy) = &i.selection_policy {
             policy.validate()?;
         }

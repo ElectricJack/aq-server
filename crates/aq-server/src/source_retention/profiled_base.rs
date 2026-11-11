@@ -548,9 +548,7 @@ pub enum Member {
     Manifest,
     Bundle,
 }
-/// Fixed bounded I/O only. The native route owns credential, attempt and current
-/// retention checks before and after this call. Workers verify the assembled
-/// artifact digest before hydration; reading a chunk does not admit execution.
+/// Bounded I/O; route fences authority/retention and workers verify the whole artifact digest.
 pub async fn read_chunk(
     state: &AppState,
     token: &ReservedExport,
@@ -560,7 +558,7 @@ pub async fn read_chunk(
     limit: u32,
 ) -> Result<Vec<u8>> {
     fact.validate_for(token)?;
-    if limit == 0 || limit > 262_144 {
+    if limit == 0 || limit > 1_048_576 {
         return Err(refused());
     }
     let rt = runtime(state)?;
@@ -585,7 +583,7 @@ fn read_chunk_file(
     limit: u32,
 ) -> Result<Vec<u8>> {
     use std::io::{Seek, SeekFrom};
-    if limit == 0 || limit > 262_144 {
+    if limit == 0 || limit > 1_048_576 {
         return Err(refused());
     }
     let root = open_root(root)?;
@@ -816,11 +814,11 @@ mod tests {
             read_chunk_file(&f.root, &v, Member::Bundle, expected.len() as u64 + 1, 7).is_err()
         );
         assert!(read_chunk_file(&f.root, &v, Member::Bundle, u64::MAX, 7).is_err());
-        for limit in [0, 262145, u32::MAX] {
+        for limit in [0, 1048577, u32::MAX] {
             assert!(read_chunk_file(&f.root, &v, Member::Bundle, 0, limit).is_err());
         }
         assert_eq!(
-            read_chunk_file(&f.root, &v, Member::Manifest, 0, 262144).unwrap(),
+            read_chunk_file(&f.root, &v, Member::Manifest, 0, 1048576).unwrap(),
             v.manifest_bytes()
         );
         fs::write(f.artifact.join("manifest.json"), b"{}").unwrap();

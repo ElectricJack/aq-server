@@ -17,7 +17,7 @@ def load(name):
     return json.loads((root / 'fixtures' / (name + '.json')).read_text())
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-TYPED = ('task.graph.create', 'task.edit', 'task.cancel', 'task.retry', 'task.reprioritize', 'task.dependency.add',
+TYPED = ('task.graph.create', 'task.edit', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.dependency.add',
          'task.dependency.remove', 'knowledge.author', 'knowledge.correct', 'knowledge.verify',
          'knowledge.retire', 'knowledge.restore')
 def validate_task(task):
@@ -124,7 +124,7 @@ def validate_request(value):
         assert UUID(payload['project_id']).int
         if kind == 'knowledge.author':
             assert subject['id'] == payload['project_id'] and payload['title'].strip() and payload['body'].strip()
-        if kind in ('task.cancel', 'knowledge.verify'):
+        if kind == 'knowledge.verify':
             assert value['reason'].strip()
         if kind == 'task.reprioritize':
             assert -1_000_000 <= payload['priority'] <= 1_000_000

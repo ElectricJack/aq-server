@@ -179,11 +179,19 @@ async fn global_supervisor(pool: &sqlx::PgPool) -> Supervisor {
     let bound = crate::agent_access::supervisor_conversation::dispatch::binding(pool, Some(id))
         .await
         .is_some();
+    let ready = aq_supervisor_control::connected(pool, id).await;
     Supervisor {
-        status: if bound { "available" } else { "unavailable" }.into(),
+        status: if bound || ready {
+            "available"
+        } else {
+            "unavailable"
+        }
+        .into(),
         conversation_id: Some(id),
         reason: if bound {
             "central_session_active"
+        } else if ready {
+            "central_service_ready"
         } else {
             "central_runtime_not_connected"
         }
@@ -296,6 +304,11 @@ pub(super) async fn bootstrap(
             "tasks.dependencies.remove",
             graph_mutation,
             "Dependency changes require an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.delete",
+            graph_mutation,
+            "Task deletion requires an owner account and configured Graph mutation identity",
         ),
         capability(
             "tasks.cancel",

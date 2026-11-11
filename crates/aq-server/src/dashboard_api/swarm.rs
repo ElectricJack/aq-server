@@ -48,7 +48,6 @@ pub(super) async fn swarm(
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
     let controls = aq_swarm::service::controls(&mut tx, &ids).await?;
     let owner_availability = aq_swarm::service::owner_availability(&mut tx).await?;
-    // Spec 0008: history caps and the offer rate hold online nodes, visibly.
     let online: Vec<Uuid> = (cap.data.nodes.iter())
         .filter(|n| n.health == WorkerHealth::Online)
         .map(|n| n.node.id)
@@ -61,7 +60,6 @@ pub(super) async fn swarm(
     let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state)).await;
     let task_holds = task_holds.map_err(|_| Error::Unavailable)?;
     let mut held = Vec::new();
-    // M1: a snapshot read, no row locks; still bounded to the most recent candidates.
     let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
     for (attempt, id, node) in candidates {
         let v = authority::read_attempt(state, &mut tx, node, attempt, Policy::IdentityOnly)
@@ -100,6 +98,7 @@ pub(super) async fn swarm(
         history,
         task_holds,
     })?;
+    let data = aq_swarm::management::apply(&state.store.pool, data).await?;
     fence(state, runtime, user, &a).await?;
     envelope(state, scope, data, reason.as_deref())
 }

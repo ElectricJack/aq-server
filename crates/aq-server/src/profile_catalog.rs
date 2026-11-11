@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 mod inspection;
+pub(crate) mod settings;
 
 const MAX_ARTIFACT_BYTES: usize = 2 * aq_profiles::MAX_CATALOG_BYTES;
 const MAX_CATALOGS: i64 = 128;
@@ -33,6 +34,7 @@ struct Activate {
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
         .merge(inspection::routes())
+        .merge(settings::routes())
         .route("/api/profiles/catalogs", get(inspect))
         .route("/api/profiles/catalogs/{digest}", get(artifact))
         .route("/api/profiles/catalogs/activate", post(activate))
@@ -47,54 +49,26 @@ fn conflict(reason: &str) -> AppError {
     AppError::Conflict(reason.into())
 }
 fn profile(error: aq_profiles::Error) -> AppError {
-    match error {
-        aq_profiles::Error::RevisionConflict => conflict("catalog revision changed"),
-        aq_profiles::Error::IdentityConflict(_) => conflict("immutable profile identity changed"),
-        _ => invalid(),
-    }
-}
-fn digest_valid(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    settings::error(aq_profile_settings::profile_error(error))
 }
 async fn inspect(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
 ) -> Result<Json<Value>> {
-    let row =
-        sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_optional(&state.store.pool)
-            .await
-            .map_err(db)?
-            .ok_or_else(|| conflict("profile catalog registry has not been installed"))?;
-    Ok(Json(
-        json!({"revision":row.get::<i64,_>("revision"),"active_digest":row.get::<Option<String>,_>("active_digest")}),
-    ))
+    aq_profile_settings::registry(&state.store.pool)
+        .await
+        .map(Json)
+        .map_err(settings::error)
 }
 async fn artifact(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
     Path(digest): Path<String>,
 ) -> Result<Json<Value>> {
-    if !digest_valid(&digest) {
-        return Err(invalid());
-    }
-    let bytes: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&digest)
-            .fetch_optional(&state.store.pool)
-            .await
-            .map_err(db)?;
-    let bytes = bytes.ok_or_else(|| AppError::NotFound("catalog artifact not found".into()))?;
-    let catalog = tokio::task::spawn_blocking(move || ValidatedCatalog::from_artifact(&bytes))
+    aq_profile_settings::store_artifact(&state.store.pool, &digest)
         .await
-        .map_err(|_| AppError::Internal)?
-        .map_err(|_| AppError::Internal)?;
-    if catalog.digest() != digest {
-        return Err(AppError::Internal);
-    }
-    Ok(Json(json!({"digest":digest,"artifact":catalog.artifact()})))
+        .map(Json)
+        .map_err(settings::error)
 }
 async fn activate(
     State(state): State<AppState>,

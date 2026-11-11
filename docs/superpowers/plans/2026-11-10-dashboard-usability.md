@@ -1,0 +1,12 @@
+# Dashboard density, Claude quota and owner task lifecycle
+
+Requested by the owner November 10, 2026. This implements the requested MVP controls in the isolated ms1 stack. It does not restart v1 or the owner's local worker.
+
+- **Owner:** All destination headings use the compact Agents rhythm. Put the supervisor launcher in that same action row, retain distinct page workspaces and accessible phone controls.
+- **Owner:** Task deletion asks only “Are you sure?” It has no workflow gate or dependency refusal. Delete the selected task and unlink its relationships atomically; keep other tasks and retained history.
+- **Owner:** Cancellation needs no entered reason and must progress automatically. Mark the Graph task canceled immediately; a bounded central cursor repeats native cancellation and uses the existing stopped disposition owner after verified stop. Retained source and unresolved effects remain retained.
+- **Implementation choice:** Reuse the existing fixed Graph mutation intent/receipt journal for cancel and delete. On response loss, operation lookup replays only the original Graph bytes/key. The task cleanup cursor verifies actual Graph canceled/deleted state before requesting any native stop, then retries across restarts. Authenticated owner access and expected versions remain ordinary request consistency, not workflow gates.
+- **Implementation choice:** Graph task deletion owns atomic incident-link removal, including structural links and successor pointers. This avoids a bounded browser neighborhood accidentally becoming a deletion limit. Knowledge deletion keeps its existing rules.
+- **Claude finding:** Existing installed SDK usage requests return `rate_limits_available=false`; the active setup token receives HTTP 403 for account usage and v1's `/usage` returns zero-turn session accounting without quota. A normal account login is needed for fresh quota. The collector can use an explicitly account-bound CLI quota cache as a fallback, retaining its original observation timestamp/source. It never substitutes token totals or renews stale timestamps.
+
+Validation: existing dashboard/native integration binaries, existing Graph storage invariant binary, dashboard action and route tests, desktop/390/320 screenshots against references 01/02/03/04/06/07/08/09/10/11/12/13, and real owner API browser acceptance with draft QA tasks only. No extra inference is needed.

@@ -106,10 +106,15 @@ pub(super) async fn selection(
         return Err(conflict());
     }
     let mailbox = key(a.conversation).map_err(|_| unavailable())?;
-    let sql_key: Option<String> = sqlx::query_scalar("SELECT central_global_mailbox_key()")
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(db)?;
+    let sql_key: Option<String> =
+        sqlx::query_scalar("SELECT encode(sha256(convert_to($1,'UTF8')),'hex')")
+            .bind(format!(
+                r#"{{"conversation_id":"{}","kind":"global_supervisor"}}"#,
+                a.conversation
+            ))
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
     if sql_key.as_deref() != Some(&mailbox) {
         return Err(unavailable());
     }

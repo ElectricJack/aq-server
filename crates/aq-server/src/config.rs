@@ -40,6 +40,8 @@ pub struct Config {
     /// C3b environment template allowlist (C4); absent means no sandbox pins.
     #[serde(default, deserialize_with = "crate::templates::deserialize")]
     pub templates: Option<std::sync::Arc<crate::templates::Allowlist>>,
+    #[serde(default)]
+    pub intelligence_preferences_file: Option<PathBuf>,
     pub format_version: u32,
     pub environment: Environment,
     pub server: ServerConfig,
@@ -244,12 +246,13 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
     for source in &c.provider_quota {
         if !source.validate()
             || !quota_accounts.insert((&source.provider_id, &source.account_ref))
-            || !c.intelligence.as_ref().is_some_and(|inventory| {
-                inventory.credentials.iter().any(|account| {
-                    account.provider == source.provider_id
-                        && account.account_reference == source.account_ref
-                })
-            })
+            || (source.snapshot_file.is_none()
+                && !c.intelligence.as_ref().is_some_and(|inventory| {
+                    inventory.credentials.iter().any(|account| {
+                        account.provider == source.provider_id
+                            && account.account_reference == source.account_ref
+                    })
+                }))
         {
             return invalid(
                 "provider_quota",
@@ -335,6 +338,7 @@ mod tests {
 
     fn cfg(env: Environment, dev: bool) -> Config {
         Config {
+            intelligence_preferences_file: None,
             delegated_permits: None,
             playbooks: None,
             reviews: None,

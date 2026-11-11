@@ -301,3 +301,21 @@ def test_public_origin_follows_the_published_admin_url_in_both_vault_copies(tmp_
     assert settlement["server"]["public_origin"] == "http://127.0.0.1:28080"
     assert settlement["playbooks"] == {"enabled": True}
     assert command(tmp_path, "prepare", extra=published).returncode == 0
+
+
+def test_quota_sources_replace_operator_tables_without_changing_generated_keys(tmp_path):
+    import tomllib
+    section = tmp_path / "operator.toml"
+    section.write_text('intelligence_preferences_file = "/var/lib/aq/models.json"\n[intelligence]\nrevision = 1\n')
+    extra = dict(AQ_DEV_INTELLIGENCE_FILE=str(section))
+    first = command(tmp_path, "prepare", extra=extra)
+    assert first.returncode == 0, first.stderr
+    vault = Path(json.loads(first.stdout)["AQ_VAULT_DIR"]) / "config.toml"
+    original = tomllib.loads(vault.read_text())
+    with section.open("a") as output:
+        output.write('\n[[provider_quota]]\nprovider_id = "openai"\naccount_ref = "Codex"\nsnapshot_file = "/var/lib/aq/usage.json"\n')
+    updated = command(tmp_path, "prepare", extra=dict(extra, AQ_DEV_REPLACE_OPERATOR_SECTION="1"))
+    assert updated.returncode == 0, updated.stderr
+    actual = tomllib.loads(vault.read_text())
+    assert actual.pop("provider_quota")[0]["snapshot_file"] == "/var/lib/aq/usage.json"
+    assert actual == original

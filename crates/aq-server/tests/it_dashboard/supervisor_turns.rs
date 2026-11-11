@@ -1433,3 +1433,114 @@ async fn staged_attachments_expire_and_are_bounded_per_conversation() {
     let (status, body) = upload(&f, Uuid::new_v4(), "17.txt", "text/plain", b"x").await;
     assert!(!status.is_success(), "staged quota: {status} {body}");
 }
+
+#[tokio::test]
+async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revokes_tools() {
+    let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Scoped test\",\"enabled\":true}',1,'{}')").bind(project).execute(&f.pool).await.unwrap();
+    f.conversation = sqlx::query_scalar(
+        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+    )
+    .bind(project)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    f.actor =
+        sqlx::query_scalar("SELECT actor_id FROM supervisor_controls WHERE conversation_id=$1")
+            .bind(f.conversation)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "UPDATE supervisor_controls SET enabled=true,profile='{}',approved_by=$2 WHERE actor_id=$1",
+    )
+    .bind(f.actor)
+    .bind(f.user.id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    f.owner()
+        .configure_actor(
+            &f.user,
+            &serde_json::to_vec(&Configure {
+                operation_id: Uuid::new_v4(),
+                actor_id: f.actor,
+                expected_actor_revision: 0,
+                policy: LocalPolicy {
+                    schema_version: 1,
+                    kind: PolicyKind::GlobalSupervisorReservation,
+                    actor_id: f.actor,
+                    conversation_id: f.conversation,
+                    enabled: true,
+                },
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    f.send().await;
+    let r = f.reserve().await.reservation.unwrap();
+    let p = f.plan(r.id, 1).await;
+    f.start(&p).await;
+    let token = reply::issue_credential(&f.pool, f.actor, 60000, 999000)
+        .await
+        .unwrap();
+    let machine = aq_server::build_worker_router(f.state.clone());
+    let read = |path: String| {
+        let app = machine.clone();
+        let token = token.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    let (status, projects) = read("/v1/supervisor/projects".into()).await;
+    assert_eq!(status, StatusCode::OK, "{projects}");
+    assert_eq!(projects["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(projects["projects"][0]["id"], project.to_string());
+    let cross = format!(
+        "/v1/supervisor/read/api/human/projects/{}/tasks",
+        Uuid::new_v4()
+    );
+    assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    f.answer(&p).await;
+    f.assert_consumed(r.id).await;
+    f.send().await;
+    let next = f.reserve().await.reservation.unwrap();
+    let p2 = f.plan(next.id, 2).await;
+    let input: Vec<u8> = sqlx::query_scalar(
+        "SELECT input_bytes FROM central_supervisor_dispatches WHERE dispatch_id=$1",
+    )
+    .bind(p2.dispatch_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let input = String::from_utf8(input).unwrap();
+    assert!(input.contains("Prior conversation context"));
+    assert!(input.contains("supervisor answer"));
+    sqlx::query("UPDATE supervisor_controls SET enabled=false WHERE actor_id=$1")
+        .bind(f.actor)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        read("/v1/supervisor/projects".into()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.human("GET", &f.history_path(), None).await.0,
+        StatusCode::OK
+    );
+}

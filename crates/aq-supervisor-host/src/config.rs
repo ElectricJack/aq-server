@@ -30,6 +30,8 @@ pub struct Config {
     pub startup_file: PathBuf,
     /// Caller admission is not hard resource enforcement qualification.
     pub resource_admission: ArtifactRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<Subscription>,
 }
 pub fn protected_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     ensure!(
@@ -103,4 +105,14 @@ impl crate::PlanAuthority for InstalledAuthority {
         );
         Ok(())
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Subscription {
+    pub server_origin: String,
+    pub instructions: String,
+    pub control_revision: u64,
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, serde_json::Value>,
 }

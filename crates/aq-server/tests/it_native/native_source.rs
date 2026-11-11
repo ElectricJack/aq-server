@@ -218,6 +218,7 @@ async fn current_auth_source_status_and_exact_chunks_are_bounded_without_grant_o
     let response = get(&p, "", &p.f.credential, Some("1")).await;
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(response.headers()["aq-source-max-range"], "1048576");
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let manifest: aq_worker_protocol::TransferManifest = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(manifest.artifact_id, p.request.operation_id);
@@ -247,6 +248,22 @@ async fn current_auth_source_status_and_exact_chunks_are_bounded_without_grant_o
             .as_ref(),
         p.fact.manifest_bytes()
     );
+    let larger = get(
+        &p,
+        "/bundle?offset=0&limit=1048576",
+        &p.f.credential,
+        Some("1"),
+    )
+    .await;
+    assert_eq!(larger.status(), 200);
+    let refused = get(
+        &p,
+        "/bundle?offset=0&limit=1048577",
+        &p.f.credential,
+        Some("1"),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_execution_receipts")
             .fetch_one(&pool)

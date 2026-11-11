@@ -6,127 +6,41 @@ use crate::agent_access::human::{enqueue::GraphCreate, graph_actions::GraphPaylo
 use aq_central_authority::{Digest, DispatchAssociation, ReplyAssociation};
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 
-pub const SCOPES: [&str; 5] = [
-    "graph.read",
-    "graph.write",
-    "enqueue",
-    "messaging",
-    "decisions",
-];
+pub use aq_supervisor_control::authority::{SCOPES, SupervisorPrincipal};
 pub const REPLY_CONTRACT: &str = "supervisor-conversation-reply-1";
-const TOKEN_PREFIX: &str = "aqsv1_";
-const MAX_TTL_MS: u64 = 24 * 60 * 60 * 1000;
-
-/// The only identity a supervisor credential grants. No worker, task or attempt.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SupervisorPrincipal {
-    pub actor_id: Uuid,
-    pub generation: u64,
-    pub session_id: Uuid,
-    pub scopes: Vec<String>,
-}
-
 pub(super) fn rejected() -> AppError {
     AppError::Unauthenticated("supervisor credential rejected".into())
 }
-fn inactive() -> AppError {
-    AppError::Conflict("supervisor session is not active".into())
+fn authority_error(error: aq_manual_sessions::Error) -> AppError {
+    let aq_manual_sessions::Error(status, message) = error;
+    match status {
+        axum::http::StatusCode::UNAUTHORIZED => AppError::Unauthenticated(message.into()),
+        axum::http::StatusCode::FORBIDDEN => AppError::Forbidden(message.into()),
+        axum::http::StatusCode::BAD_REQUEST => AppError::BadRequest(message.into()),
+        axum::http::StatusCode::CONFLICT => AppError::Conflict(message.into()),
+        _ => unavailable(),
+    }
 }
-fn token_digest(token: &str) -> String {
-    hex::encode(sha2::Sha256::digest(token.as_bytes()))
-}
-fn well_formed(token: &str) -> bool {
-    token.strip_prefix(TOKEN_PREFIX).is_some_and(|h| {
-        h.len() == 64
-            && h.bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
-}
-fn millis(n: u64) -> Result<i64> {
-    i64::try_from(n)
-        .ok()
-        .filter(|n| *n > 0)
-        .ok_or_else(unavailable)
-}
-
-/// The actor's head generation and session while that generation is active.
-async fn current(
-    pool: &PgPool,
-    tx: &mut Transaction<'_, Postgres>,
-    actor: Uuid,
-) -> Result<Option<(u64, Uuid)>> {
-    let snapshot = dispatch::sessions(pool)
-        .inspect_in_transaction(tx, actor)
-        .await
-        .map_err(|_| unavailable())?;
-    Ok(snapshot.filter(dispatch::active).and_then(|s| {
-        let plan = s.run.plan();
-        dispatch::session_id(plan).map(|id| (plan.generation, id))
-    }))
-}
-
-/// Issues the one live credential for the actor's active head generation.
-/// Prior live credentials are revoked; only the digest is stored.
 pub async fn issue_credential(
     pool: &PgPool,
     actor: Uuid,
     ttl_ms: u64,
     at_ms: u64,
 ) -> Result<String> {
-    if ttl_ms == 0 || ttl_ms > MAX_TTL_MS {
-        return Err(invalid());
-    }
-    let at = millis(at_ms)?;
-    let expires = millis(at_ms.checked_add(ttl_ms).ok_or_else(invalid)?)?;
-    let mut tx = pool.begin().await.map_err(db)?;
-    let (generation, session_id) = current(pool, &mut tx, actor).await?.ok_or_else(inactive)?;
-    let g = i64::try_from(generation).map_err(|_| inactive())?;
-    let token = {
-        use rand::RngCore;
-        let mut b = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut b);
-        format!("{TOKEN_PREFIX}{}", hex::encode(b))
-    };
-    sqlx::query("UPDATE central_supervisor_credentials SET revoked_at_ms=$2 WHERE actor_id=$1 AND revoked_at_ms IS NULL")
-        .bind(actor)
-        .bind(at)
-        .execute(&mut *tx)
+    aq_supervisor_control::authority::issue_credential(pool, actor, ttl_ms, at_ms)
         .await
-        .map_err(db)?;
-    sqlx::query("INSERT INTO central_supervisor_credentials(token_digest,actor_id,generation,session_id,scopes,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)")
-        .bind(token_digest(&token))
-        .bind(actor)
-        .bind(g)
-        .bind(session_id)
-        .bind(SCOPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        .bind(at)
-        .bind(expires)
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    Ok(token)
+        .map_err(authority_error)
 }
-
-/// Use-time check: present, unrevoked, unexpired, scoped, and still the
-/// actor's active head generation. Anything else is 401 (403 for scope).
 pub async fn authenticate(
     pool: &PgPool,
     bearer: &str,
     scope: &str,
     at_ms: u64,
 ) -> Result<SupervisorPrincipal> {
-    let mut tx = pool.begin().await.map_err(db)?;
-    let principal = authenticate_in_transaction(pool, &mut tx, bearer, scope, at_ms).await?;
-    tx.commit().await.map_err(db)?;
-    Ok(principal)
+    aq_supervisor_control::authority::authenticate(pool, bearer, scope, at_ms)
+        .await
+        .map_err(authority_error)
 }
-
-/// Authenticate inside the transaction that performs the protected operation.
-/// Required scopes: graph.read for graph reads, graph.write for graph mutations,
-/// enqueue for work creation, messaging for replies/mail, decisions for decisions.
-/// Locks the actor before the credential, matching issuance and lifecycle writes.
-/// Keep this transaction open through the protected read or write.
 pub async fn authenticate_in_transaction(
     pool: &PgPool,
     tx: &mut Transaction<'_, Postgres>,
@@ -134,45 +48,9 @@ pub async fn authenticate_in_transaction(
     scope: &str,
     at_ms: u64,
 ) -> Result<SupervisorPrincipal> {
-    if !well_formed(bearer) {
-        return Err(rejected());
-    }
-    let actor: Uuid = sqlx::query_scalar(
-        "SELECT actor_id FROM central_supervisor_credentials WHERE token_digest=$1",
-    )
-    .bind(token_digest(bearer))
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(rejected)?;
-    let active = current(pool, tx, actor).await?.ok_or_else(rejected)?;
-    let at = millis(at_ms)?;
-    let row = sqlx::query("SELECT actor_id,generation,session_id,scopes,expires_at_ms,revoked_at_ms FROM central_supervisor_credentials WHERE token_digest=$1 FOR SHARE")
-        .bind(token_digest(bearer))
-        .fetch_optional(&mut **tx)
+    aq_supervisor_control::authority::authenticate_in_transaction(pool, tx, bearer, scope, at_ms)
         .await
-        .map_err(db)?
-        .ok_or_else(rejected)?;
-    if row.get::<Option<i64>, _>("revoked_at_ms").is_some()
-        || row.get::<i64, _>("expires_at_ms") <= at
-    {
-        return Err(rejected());
-    }
-    let principal = SupervisorPrincipal {
-        actor_id: row.get("actor_id"),
-        generation: u64::try_from(row.get::<i64, _>("generation")).map_err(|_| rejected())?,
-        session_id: row.get("session_id"),
-        scopes: row.get("scopes"),
-    };
-    if active != (principal.generation, principal.session_id) {
-        return Err(rejected());
-    }
-    if !principal.scopes.iter().any(|s| s == scope) {
-        return Err(AppError::Forbidden(
-            "supervisor credential lacks scope".into(),
-        ));
-    }
-    Ok(principal)
+        .map_err(authority_error)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -321,7 +199,14 @@ async fn write(
     if &current != p {
         return Err(rejected());
     }
-    let conversation = definition(&mut tx, None, true).await?;
+    let id: Uuid = sqlx::query_scalar(
+        "SELECT conversation_id FROM central_supervisor_actors WHERE actor_id=$1",
+    )
+    .bind(p.actor_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    let conversation = definition(&mut tx, Some(id), true).await?;
     let sender = author(p);
     let sender_key = sender_key(&sender).map_err(|_| unavailable())?;
     let payload = digest(&json!({"kind":"global_supervisor_reply","conversation_id":conversation.id,"request":&request,"sender":&sender}))
@@ -362,14 +247,16 @@ async fn write(
         .len();
     let reserved =
         i64::try_from(request.body.len() + attachment_bytes + 4096).map_err(|_| invalid())?;
-    let budget = sqlx::query("UPDATE global_supervisor_conversation SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton AND retained_operations<$2 AND retained_bytes<=$3-$1 RETURNING conversation_id")
-        .bind(reserved)
-        .bind(MAX_OPERATIONS)
-        .bind(MAX_BYTES)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db)?;
-    if budget.is_none() {
+    if !aq_supervisor_control::charge(
+        &mut tx,
+        conversation.id,
+        reserved,
+        MAX_OPERATIONS,
+        MAX_BYTES,
+    )
+    .await
+    .map_err(db)?
+    {
         return Err(AppError::Maintenance(
             "supervisor mailbox retention capacity exhausted".into(),
         ));

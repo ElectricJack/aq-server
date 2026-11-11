@@ -176,6 +176,25 @@
     {"path": "/v2/worker/reconcile", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v2/worker/register", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v2/worker/renew", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
-    {"path": "/v2/worker/result", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."}
+    {"path": "/v2/worker/result", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
+    {"path": "/api/supervisors", "class": "owner_admin", "note": "Current-owner supervisor controls and scoped conversation discovery."},
+    {"path": "/api/supervisors/{id}/control", "class": "owner_admin", "note": "Current-owner supervisor controls and scoped conversation discovery."},
+    {"path": "/api/supervisors/{id}/operations/{operation}", "class": "owner_admin", "note": "Current-owner supervisor controls and scoped conversation discovery."},
+    {"path": "/api/human/conversations/projects/{project}", "class": "owner_admin", "note": "Current-owner supervisor controls and scoped conversation discovery."},
+    {"path": "/api/human/projects/{project}/workers/{node}/launch", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/human/workers/{node}/launch-projects", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/workers/{node}/projects/{project}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/workers/{node}/projects/{project}/slots", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/stop", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/terminal", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/terminal/connect", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/terminal/input", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/terminal/live", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/manual-agents/{id}/terminal/receipts/{operation}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/settings/intelligence", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/settings/intelligence/operations/{id}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/v1/worker/manual-agents", "class": "node", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/v1/worker/manual-agents/{id}/terminal-stream", "class": "node", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."}
   ]
 }

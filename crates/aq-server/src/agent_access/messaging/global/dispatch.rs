@@ -194,7 +194,11 @@ pub async fn prepare_turn(
         }
         members.push((m.clone(), body));
     }
-    let input = render_input(view.conversation_id, &members);
+    let mut input =
+        aq_supervisor_control::history(&mut tx, view.conversation_id, members[0].0.cursor as i64)
+            .await
+            .map_err(db)?;
+    input.extend(render_input(view.conversation_id, &members));
     if input.len() > MAX_INPUT {
         return Err(refused());
     }

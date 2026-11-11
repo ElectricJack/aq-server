@@ -102,7 +102,7 @@ Owners upload a file first, then reference it from a Create.
 
 ## Supervisor History attachments (additive, for G8)
 
-Published schema digest: `sha256:2056d6fe1cdff14eca53784a93981c8a943fcdbc3033c7dee8cb80d79220ef3b`
+Published schema digest: `sha256:0ad1658448757bdbca81ee6edb87de9a0269e38d256883a8c1b2033ae97ea9b9`
 (also in `schema.sha256`; `supervisor_turns` fails if the two diverge). Pin it.
 
 A supervisor `SupervisorItem` may carry `attachments` (0–4 items, schema
@@ -133,3 +133,5 @@ session; anything else is 409 and nothing is recorded. Replies without
 attachments keep their previous replay digest. History cursoring and page byte
 accounting are unchanged and include attachments.
 `history-attachments.example.json` is a complete page.
+
+Project conversations use the same contract with a scope-specific immutable id and bounded label. A fresh enabled controller may report runtime `idle` / `central_service_ready` between physical turns; admission receipts keep their original unavailable snapshot.

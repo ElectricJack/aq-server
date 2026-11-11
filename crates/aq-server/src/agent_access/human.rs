@@ -7,6 +7,7 @@ pub(crate) mod enqueue;
 pub(crate) mod graph_actions;
 mod overview;
 pub(crate) mod task_execution;
+pub mod task_termination;
 mod work;
 use super::{Runtime, contract};
 use crate::{
@@ -91,6 +92,14 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route(
             "/api/human/projects/{project}/tasks",
             get(tasks).post(commands::create),
+        )
+        .route(
+            "/api/human/projects/{project}/workers/{node}/launch",
+            axum::routing::post(commands::launch::create),
+        )
+        .route(
+            "/api/human/workers/{node}/launch-projects",
+            get(commands::launch::projects),
         )
         .route("/api/human/operations/{operation}", get(commands::lookup))
         .route(
@@ -243,42 +252,13 @@ pub(crate) async fn task_brief(
         return Err(unavailable());
     }
     let root = node(&raw["node"], w, "task")?;
-    let blocked_tasks = blocked_by(&raw, w, task)?;
+    let blocked_tasks = aq_human_work::blocked_by(&raw, w, task).ok_or_else(unavailable)?;
     fence_records(r, &a.actor, std::slice::from_ref(&a.record)).await?;
     Ok(TaskBrief {
         title: root["title"].as_str().map(str::to_owned),
         blocked_tasks,
         truncated: raw["truncated"].as_bool().ok_or_else(unavailable)?,
     })
-}
-/// Distinct live task targets of live `blocks` edges leaving `task`.
-fn blocked_by(raw: &Value, w: Uuid, task: Uuid) -> Result<u32> {
-    let mut live = std::collections::BTreeSet::new();
-    for n in raw["nodes"].as_array().ok_or_else(unavailable)? {
-        if n["workspace_id"] != json!(w) {
-            return Err(unavailable());
-        }
-        if n["kind"] == "task" && n["deleted"] == false {
-            live.insert(n["id"].as_str().ok_or_else(unavailable)?.to_owned());
-        }
-    }
-    let source = task.to_string();
-    let mut targets = std::collections::BTreeSet::new();
-    for e in raw["edges"].as_array().ok_or_else(unavailable)? {
-        if e["workspace_id"] != json!(w) {
-            return Err(unavailable());
-        }
-        let target = e["target"].as_str().ok_or_else(unavailable)?;
-        if e["edge_type"] == "blocks"
-            && e["deleted"] == false
-            && e["source"] == source.as_str()
-            && target != source
-            && live.contains(target)
-        {
-            targets.insert(target.to_owned());
-        }
-    }
-    u32::try_from(targets.len()).map_err(|_| unavailable())
 }
 async fn access(state: &AppState, r: &ReadRuntime, actor: User, project: Uuid) -> Result<Access> {
     if project.is_nil() {
@@ -844,29 +824,4 @@ async fn graph(
             "expansion":expansion}),
     )
     .await
-}
-#[cfg(test)]
-mod brief_tests {
-    use super::*;
-    #[test]
-    fn downstream_counts_distinct_live_blocked_tasks_only() {
-        let w = Uuid::new_v4();
-        let t = Uuid::new_v4();
-        let (a, b, gone, doc) = (
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-        );
-        let n = |id: Uuid, kind: &str, deleted: bool| json!({"id":id,"workspace_id":w,"kind":kind,"deleted":deleted});
-        let e = |s: Uuid, t: Uuid, ty: &str| json!({"workspace_id":w,"source":s,"target":t,"edge_type":ty,"deleted":false});
-        let raw = json!({
-            "nodes":[n(a,"task",false),n(b,"task",false),n(gone,"task",true),n(doc,"knowledge",false)],
-            "edges":[e(t,a,"blocks"),e(t,a,"blocks"),e(b,t,"blocks"),e(t,gone,"blocks"),e(t,doc,"blocks"),e(t,b,"relates_to")]
-        });
-        assert_eq!(blocked_by(&raw, w, t).unwrap(), 1);
-        let mut foreign = raw.clone();
-        foreign["edges"][0]["workspace_id"] = json!(Uuid::new_v4());
-        assert!(blocked_by(&foreign, w, t).is_err());
-    }
 }

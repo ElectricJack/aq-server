@@ -1,0 +1,21 @@
+{
+  "description": "Fixture only: values are synthetic and contain no terminal secrets.",
+  "upload": {"sequence": 1, "text": "hello\n"},
+  "upload_response": {"accepted_through": 1, "next_sequence": 2, "archive_state": "recording"},
+  "finalize": {"final_sequence": 1, "coverage": "complete", "reason": null},
+  "finalize_response": {"accepted_through": 1, "next_sequence": 2, "archive_state": "complete"},
+  "transcript": {
+    "session": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "node_id": "00000000-0000-4000-8000-000000000002",
+      "project_id": "00000000-0000-4000-8000-000000000003",
+      "spec": {"provider": "anthropic", "model": "fixture"},
+      "status": "stopped", "stage": "Ended", "desired_running": false,
+      "created_at_ms": 1000, "updated_at_ms": 2000, "worker_seen_at_ms": 2000,
+      "archive": {"state": "complete", "coverage": "complete", "reason": null, "first_sequence": 1, "last_sequence": 1, "bytes": 6, "updated_at_ms": 2000}
+    },
+    "chunks": [{"sequence": 1, "text": "hello\n"}], "next_after": 1,
+    "has_more": false, "through_sequence": 1, "server_time_ms": 2000
+  },
+  "search": {"matches": [{"offset": 0, "length": 5, "sequence": 1, "excerpt": "hello\n"}], "next_after": 0, "has_more": false, "through_sequence": 1, "server_time_ms": 2000}
+}

@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
 pub mod holds;
+pub mod launch;
 pub mod lost;
+pub mod management;
+pub mod offer_assembly;
 
 /// First `state_format_version` with these tables.
 pub const FORMAT: u32 = 101;
@@ -649,6 +652,9 @@ pub async fn offer_hold(
     if !has_format(conn).await? {
         return Ok(None);
     }
+    if let Some(reason) = management::hold(conn, node).await? {
+        return Ok(Some(reason));
+    }
     if !accepts_new_work(conn, node).await? {
         return Ok(Some("machine is not running (draining or stopped)"));
     }
@@ -886,6 +892,7 @@ pub async fn owner_attested(
 /// availability change committed after the transaction began, and a lock
 /// timeout means one is still open: `Ok(false)`, which publishes no offer.
 pub async fn lock_publishing_node(tx: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
+    management::lock(tx).await?;
     let locked = sqlx::query("SELECT 1 FROM nodes WHERE id=$1 FOR UPDATE")
         .bind(node)
         .execute(&mut *tx)

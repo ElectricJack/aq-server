@@ -7,6 +7,9 @@ pub mod config;
 mod conversation;
 pub mod credentials;
 mod journal;
+pub mod service;
+pub mod subscription;
+pub mod tool;
 mod verifier;
 use anyhow::{Context, Result, bail, ensure};
 use aq_central_authority::{

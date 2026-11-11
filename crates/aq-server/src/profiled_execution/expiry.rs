@@ -140,6 +140,7 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
     let mut sweep = Sweep::default();
     let mut rework = ReworkSweep::default();
     let mut closures = ClosureSweep::default();
+    let mut terminations = crate::agent_access::human::task_termination::Sweep::default();
     let mut tick_count: u32 = 0;
     let mut ticks = tokio::time::interval(Duration::from_secs(1));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -151,6 +152,9 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             _ = ticks.tick() => {}
         }
         tick_count = tick_count.wrapping_add(1);
+        if tick_count.is_multiple_of(3) {
+            let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
+        }
         if tick_count.is_multiple_of(REWORK_SWEEP_EVERY) {
             tokio::select! {
                 biased;

@@ -9,6 +9,10 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+aq-supervisor-control = { path = "../aq-supervisor-control" }
+aq-human-http = { path = "../aq-human-http" }
+aq-manual-sessions = { path = "../aq-manual-sessions" }
+aq-profile-settings = { path = "../aq-profile-settings" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"
 http-body = "=1.1.0"
@@ -90,6 +94,8 @@ test-support = ["aq-notifications/test-support"]
 recovery-test-support = ["test-support"]
 
 [dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
 aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }

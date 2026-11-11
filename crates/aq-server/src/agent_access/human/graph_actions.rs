@@ -79,6 +79,53 @@ fn put(patch: &mut serde_json::Map<String, Value>, key: &str, value: Option<impl
     }
 }
 
+// Owner task lifecycle never waits for a policy gate or a dependent task.
+use aq_human_work::TaskDelete;
+impl GraphPayload for TaskDelete {
+    const KIND: &'static str = "task.delete";
+    const GRANT: &'static str = "task.delete";
+    const ENTITY: &'static str = "task";
+    fn operation_id(&self) -> Uuid {
+        self.operation_id
+    }
+    fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+    fn expected(&self) -> &str {
+        &self.expected_version
+    }
+    fn valid(&self) -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        Ok(vec![
+            json!({"op":"delete_node","id":c.subject,"expected_version":c.version}),
+        ])
+    }
+}
+impl GraphPayload for aq_human_work::Execution {
+    const KIND: &'static str = "task.cancel";
+    const GRANT: &'static str = "task.cancel";
+    const ENTITY: &'static str = "task";
+    fn operation_id(&self) -> Uuid {
+        self.operation_id
+    }
+    fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+    fn expected(&self) -> &str {
+        &self.expected_version
+    }
+    fn valid(&self) -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        Ok(vec![
+            json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"canceled"}}),
+        ])
+    }
+}
+
 #[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ContentType {
@@ -473,10 +520,11 @@ impl<P> GraphAction<P> {
     }
     async fn project(&self, state: &AppState, user: &User, project: Uuid) -> Result<ProjectRecord> {
         if self.machine() {
-            let supervisor = self
-                .supervisor
-                .as_ref()
-                .is_none_or(|p| user.id == p.session_id && p.scopes.iter().any(|s| s == "enqueue"));
+            let supervisor = self.supervisor.as_ref().is_none_or(|p| {
+                user.id == p.session_id
+                    && p.scopes.iter().any(|s| s == "enqueue")
+                    && p.project_id.is_none_or(|id| id == project)
+            });
             if !supervisor
                 || self
                     .agent
@@ -510,6 +558,10 @@ impl<P> GraphAction<P> {
 pub(crate) fn register(state: &AppState, r: &mut Registry) {
     r.register(GraphAction::<super::enqueue::GraphCreate>::new(state))
         .expect("graph create adapter");
+    r.register(GraphAction::<TaskDelete>::new(state))
+        .expect("task delete adapter");
+    r.register(GraphAction::<aq_human_work::Execution>::new(state))
+        .expect("task cancel adapter");
     r.register(GraphAction::<TaskEdit>::new(state))
         .expect("task edit adapter");
     r.register(GraphAction::<TaskReprioritize>::new(state))
@@ -532,6 +584,10 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
 pub(crate) fn schemas(r: &mut Registry) {
     r.register_schema::<GraphAction<super::enqueue::GraphCreate>>()
         .expect("graph create schema");
+    r.register_schema::<GraphAction<TaskDelete>>()
+        .expect("task delete schema");
+    r.register_schema::<GraphAction<aq_human_work::Execution>>()
+        .expect("task cancel schema");
     r.register_schema::<GraphAction<TaskEdit>>()
         .expect("task edit schema");
     r.register_schema::<GraphAction<TaskReprioritize>>()
@@ -573,7 +629,7 @@ pub(super) async fn admit(
         return Err(ApiError::invalid());
     }
     existing::owner(state, user).await?;
-    if entity == "project" {
+    if entity == "project" || request.kind == "task.delete" {
         access(state, runtime, user.clone(), project)
             .await
             .map_err(ApiError::from)?;

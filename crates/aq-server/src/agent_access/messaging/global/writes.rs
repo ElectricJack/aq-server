@@ -133,7 +133,8 @@ impl Receipt {
         if r.contract != CONTRACT
             || r.conversation.id != conversation
             || r.conversation.revision != "1"
-            || r.conversation.label != "Global supervisor"
+            || r.conversation.label.is_empty()
+            || r.conversation.label.len() > 256
             || r.actor_id != user
             || r.operation_id != op
             || r.operation_id == r.message_id
@@ -262,9 +263,10 @@ async fn enqueue_domain(
         .ok()
         .and_then(|n| n.checked_add(attached.unwrap_or(0)))
         .ok_or_else(invalid)?;
-    let row=sqlx::query("UPDATE global_supervisor_conversation SET retained_operations=retained_operations+1,retained_bytes=retained_bytes+$1 WHERE singleton AND retained_operations<$2 AND retained_bytes<=$3-$1 RETURNING conversation_id")
-  .bind(reserved).bind(MAX_OPERATIONS).bind(MAX_BYTES).fetch_optional(&mut *tx).await.map_err(db)?;
-    if row.is_none() {
+    if !aq_supervisor_control::charge(&mut tx, id, reserved, MAX_OPERATIONS, MAX_BYTES)
+        .await
+        .map_err(db)?
+    {
         return Err(AppError::Maintenance(
             "supervisor mailbox retention capacity exhausted".into(),
         ));
