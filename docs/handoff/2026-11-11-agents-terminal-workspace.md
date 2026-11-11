@@ -52,7 +52,8 @@ Validation completed:
   a fresh admin router retrieved/searched beginning, middle and final output.
   Real-server corrupt-state recovery retained two accepted chunks and finalized
   partial with the expected reason. The separate 128MiB raw cap did not stop the
-  disposable agent. Rust formatting/build budgets and scoped server Clippy pass.
+  disposable agent. Rust formatting/build budgets and scoped server, worker-binary
+  and node-service Clippy pass with warnings denied.
 
 Repeat the combined server tests in `it_server` with a private `DATABASE_URL`,
 `AQ_RECORDING_WORKER_DIR` pointing to the worker worktree, and Docker fixture image
