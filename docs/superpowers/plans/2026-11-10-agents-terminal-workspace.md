@@ -28,4 +28,25 @@ Desktop/phone rendered screenshots and actual transport qualification are separa
 from component/API tests. All agents must preserve the owner's running laptop
 session and protected services. No time estimates are assigned.
 
-Update this record with delivered commits and qualification outcomes as work lands.
+## November 11 recovery and integration
+
+The interrupted root session is `01a1c24f-8051-71e0-8755-30fe44fc2cb9`
+(November 9 title: Review agent-queue rewrite next). Its worktrees and commits
+survived the Windows restart. Integration continued from a new session.
+
+| Task | Delivered implementation | Qualification |
+| --- | --- | --- |
+| T1 | `feat/session-transcript-archive` through `a17106c5` | Full manual-agent SQL/router/WebSocket module: 7 passed; 2 opt-in worker integration tests passed separately; scoped Clippy, formatting and budget checks passed |
+| T2 | `feat/manual-session-recording` through `29415877` | 10 recorder tests; actual production Docker capture and exact raw cap; real-server upload, finalization and corrupt-state partial recovery passed |
+| T3/T4 | `feat/agents-terminal-workspace` through `43552ac`, including T4 through `b5beff1` | Integrated reader and panes; full unit baseline plus 51 final focused tests; typecheck/lint/build; 5 compiled-preview browser tests and all served asset hashes passed |
+| T5 | Root integration and reviewed fixture evidence | Desktop/tablet/phone/320 px screenshots reviewed; no deployment or main merge |
+
+The final dashboard supersedes `feat/agents-history-reader`; do not merge that
+separate T4 branch again. New fixes cover stale saved panes, ended output,
+protected-read metadata, asynchronous search races, response identity/scope,
+phone expanded switching and clipped touch controls. Worker state loss now uses
+the existing authenticated conflict cursor to finalize acknowledged output as
+partial without discarding local pending chunks or inventing complete coverage.
+
+See [the recovery handoff](../../handoff/2026-11-11-agents-terminal-workspace.md)
+for exact paths, repeatable checks, remaining limitations and rollout boundaries.
