@@ -1705,6 +1705,83 @@ async fn retained_transcript_real_worker_docker_capture() {
 }
 
 #[tokio::test]
+#[ignore = "requires a worker checkout"]
+async fn retained_transcript_real_worker_corrupt_recovery() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let worker_dir = std::env::var_os("AQ_RECORDING_WORKER_DIR").expect("worker checkout path");
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','running','Running',1,1)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let app = build_worker_router(f.state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("fixture.json");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&config)
+        .unwrap();
+    serde_json::to_writer(file, &json!({"origin":origin,"credential":f.credential,"session_id":id,"node_id":f.node.node_id})).unwrap();
+    let status = tokio::process::Command::new("timeout")
+        .args([
+            "900",
+            "cargo",
+            "test",
+            "-p",
+            "aq-worker",
+            "--locked",
+            "--all-features",
+            "--bin",
+            "aq-worker",
+            "manual::recording::tests::real_archive_corrupt_recovery_fixture",
+            "--",
+            "--ignored",
+            "--exact",
+        ])
+        .current_dir(worker_dir)
+        .env("AQ_RECORDING_FIXTURE", &config)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("DATABASE_URL")
+        .kill_on_drop(true)
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success(), "worker fixture failed: {status}");
+    server.abort();
+    let admin = build_admin_router(f.state.clone());
+    let (status, page) = call(
+        &admin,
+        &format!("/api/manual-agents/{id}/transcript"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["session"]["archive"]["state"], "complete");
+    assert_eq!(page["session"]["archive"]["coverage"], "partial");
+    assert_eq!(
+        page["session"]["archive"]["reason"],
+        "Recording state was lost; retained output may be incomplete"
+    );
+    assert_eq!(
+        page["chunks"],
+        json!([
+            {"sequence":1,"text":"fixture retained 1\n"},
+            {"sequence":2,"text":"fixture retained 2\n"}
+        ])
+    );
+    assert_eq!(page["has_more"], false);
+}
+
+#[tokio::test]
 async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
     let f = common::profiled::fixture().await;
     let pool = f.db.pool().await;
