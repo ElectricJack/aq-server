@@ -102,7 +102,7 @@ Facts from the code that the build starts from:
 
 Both produce the same record: what was asked, which profile, model and provider answered, by which of the two ways, how long it took, what it cost in usage where known, and the answer or the error.
 
-The existing playbook `judgment.request` command is served by this service, with purpose "playbook call". The direct provider binding #64 proposed is not added.
+The existing playbook `judgment.request` command is served by this service, with purpose "playbook call". The one exception is the server-built routing playbook, whose judgment step carries the purpose "routing classification" (spec 0011 §7). The direct provider binding #64 proposed is not added.
 
 ## 7. Seeing it
 
