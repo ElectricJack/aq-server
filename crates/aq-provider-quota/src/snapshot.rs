@@ -69,7 +69,6 @@ pub(super) fn read(source: &CodexSource, now: u64) -> Option<Collected> {
         observed,
         now,
         &source.provider_id,
-        account,
     )?);
     Some(Collected {
         windows,
@@ -82,7 +81,6 @@ fn reset_credits(
     fallback_observed: u64,
     now: u64,
     provider: &str,
-    account: &Value,
 ) -> Option<ResetCredits> {
     struct ParsedReset {
         state: ResetCreditState,
@@ -122,10 +120,16 @@ fn reset_credits(
                         let remaining_count = count(grant.get("remaining_count")?)?;
                         let expires_at = match grant.get("expires_at")? {
                             Value::Null => None,
-                            Value::String(s)
-                                if s.len() <= 64 && DateTime::parse_from_rfc3339(s).is_ok() =>
-                            {
-                                Some(Timestamp(s.clone()))
+                            Value::String(s) if s.len() <= 64 => {
+                                let date = DateTime::parse_from_rfc3339(s).ok()?;
+                                let normalized = date
+                                    .with_timezone(&Utc)
+                                    .to_rfc3339_opts(SecondsFormat::Millis, true);
+                                // Timestamp's wire schema requires a four-digit UTC year.
+                                if normalized.len() != 24 {
+                                    return None;
+                                }
+                                Some(Timestamp(normalized))
                             }
                             _ => return None,
                         };
@@ -168,12 +172,14 @@ fn reset_credits(
             observed,
         })
     }
+    let parsed = value.and_then(|v| parse(v, now));
+    let has_reset_observation = parsed.is_some();
     let ParsedReset {
         state,
         available_count,
         grants,
         observed,
-    } = value.and_then(|v| parse(v, now)).unwrap_or(ParsedReset {
+    } = parsed.unwrap_or(ParsedReset {
         state: ResetCreditState::Unknown,
         available_count: None,
         grants: None,
@@ -181,10 +187,12 @@ fn reset_credits(
     });
     let known = matches!(state, ResetCreditState::Known);
     let mut observation = observation(observed, known)?;
-    observation.source = match provider {
-        "openai" => "codex_app_server_rate_limits",
-        "anthropic" if account["source"] == "claude_cli_usage_cache" => "claude_cli_usage_cache",
-        "anthropic" => "claude_sdk_usage",
+    observation.source = match (provider, has_reset_observation) {
+        ("openai", true) => "codex_app_server_rate_limits",
+        // CLI cache supplies quota windows only; any retained reset block was
+        // observed independently through the SDK.
+        ("anthropic", true) => "claude_sdk_usage",
+        ("openai" | "anthropic", false) => "provider_quota_unknown",
         _ => return None,
     }
     .into();
@@ -204,11 +212,10 @@ mod tests {
     #[test]
     fn reset_metadata_keeps_counts_and_independent_observation() {
         let now = 1_800_000_000_000;
-        let account = json!({});
         let value = json!({"state":"known", "available_count":2, "grants":[{
             "label":"Weekly", "remaining_count":1, "expires_at":"2026-12-01T00:00:00.000Z",
             "usable_now":false, "clears":["seven_day"]}], "observed_at_ms":now-300_000});
-        let reset = reset_credits(Some(&value), now, now, "openai", &account).unwrap();
+        let reset = reset_credits(Some(&value), now, now, "openai").unwrap();
         assert!(matches!(reset.state, ResetCreditState::Known));
         assert_eq!(reset.available_count, Some(2));
         assert_eq!(reset.grants.unwrap()[0].usable_now, Some(false));
@@ -216,22 +223,66 @@ mod tests {
             reset.observation.observed_at.0,
             time(now - 300_000).unwrap().0
         );
+        let mut offset = value.clone();
+        offset["grants"][0]["expires_at"] = json!("2026-12-01T05:30:00+05:30");
+        let normalized = reset_credits(Some(&offset), now, now, "openai").unwrap();
+        assert_eq!(
+            normalized.grants.unwrap()[0].expires_at.as_ref().unwrap().0,
+            "2026-12-01T00:00:00.000Z"
+        );
         let mut bad_grant = value.clone();
         bad_grant["grants"][0]["expires_at"] = json!("invalid");
-        let reset = reset_credits(Some(&bad_grant), now, now, "openai", &account).unwrap();
+        let reset = reset_credits(Some(&bad_grant), now, now, "openai").unwrap();
         assert_eq!(reset.available_count, Some(2));
         assert!(reset.grants.is_none());
         let mut bad_count = value;
         bad_count["available_count"] = json!(-1);
-        let reset = reset_credits(Some(&bad_count), now, now, "openai", &account).unwrap();
+        let reset = reset_credits(Some(&bad_count), now, now, "openai").unwrap();
         assert!(matches!(reset.state, ResetCreditState::Unknown));
         assert!(reset.available_count.is_none());
-        let missing = reset_credits(None, now, now, "openai", &account).unwrap();
+        let missing = reset_credits(None, now, now, "openai").unwrap();
         assert!(matches!(missing.state, ResetCreditState::Unknown));
         let zero = json!({"state":"known", "available_count":0,"grants":[],"observed_at_ms":now});
-        let zero = reset_credits(Some(&zero), now, now, "openai", &account).unwrap();
+        let zero = reset_credits(Some(&zero), now, now, "openai").unwrap();
         assert_eq!(zero.available_count, Some(0));
         assert_eq!(zero.grants.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn cached_claude_windows_keep_reset_sdk_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.json");
+        let now = 1_800_000_000_000;
+        let source: CodexSource = serde_json::from_value(
+            json!({"provider_id":"anthropic","account_ref":"a","snapshot_file":path}),
+        )
+        .unwrap();
+        let mut data = json!({"schema_version":1,"accounts":[{"provider":"anthropic","account_ref":"a","source":"claude_cli_usage_cache","observed_at_ms":now,"windows":[{"id":"weekly","label":"Weekly","used_percent":10}],"reset_credits":{"state":"unknown","available_count":null,"grants":null,"observed_at_ms":now-300_000}}]});
+        std::fs::write(&path, data.to_string()).unwrap();
+        let result = Collector::new()
+            .collect(vec![], std::slice::from_ref(&source), now)
+            .await
+            .0;
+        assert_eq!(
+            result[0].windows[0].observation.source,
+            "claude_cli_usage_cache"
+        );
+        let reset = result[0].reset_credits.as_ref().unwrap();
+        assert_eq!(reset.observation.source, "claude_sdk_usage");
+        assert_eq!(
+            reset.observation.observed_at.0,
+            time(now - 300_000).unwrap().0
+        );
+        data["accounts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("reset_credits");
+        std::fs::write(&path, data.to_string()).unwrap();
+        let result = Collector::new().collect(vec![], &[source], now).await.0;
+        assert_eq!(
+            result[0].reset_credits.as_ref().unwrap().observation.source,
+            "provider_quota_unknown"
+        );
     }
 
     #[tokio::test]
