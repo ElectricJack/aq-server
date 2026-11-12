@@ -1,5 +1,7 @@
 # Provider reset details implementation
 
+Current deployment: [restored alongside Providers settings](provider-reset-restored-2026-11-12.md).
+
 Implemented from [the plan](../superpowers/plans/2026-11-11-provider-reset-details.md)
 in isolated server/dashboard worktrees based on the deployed swarm-controls
 lineage. Three GPT-6.1 Terra sub-agents implemented collection, server contracts,
