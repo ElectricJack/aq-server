@@ -49,6 +49,13 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result["available_count"], 3)
         self.assertEqual([grant["label"] for grant in result["grants"]], ["Available reset"])
 
+    def test_labels_match_server_utf8_bounds_and_control_validation(self):
+        labels = ["週" * 40, "週" * 41, "bad\x7f", "bad\u0085", "bad\ud800", "Good reset"]
+        result = usage.codex_resets({"rateLimitResetCredits": {"availableCount": 8,
+            "credits": [{"title": label, "status": "available"} for label in labels]}})
+        self.assertEqual(result["available_count"], 8)
+        self.assertEqual([row["label"] for row in result["grants"]], [labels[0], labels[-1]])
+
     def test_successful_omission_clears_count_and_failure_retains_it(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "usage.json"
