@@ -9,3 +9,9 @@ Membership masks disabled providers in fresh selection inputs, independently of 
 The dashboard shares one Settings Save and leave/reload warning across Providers and Intelligence. Provider edits remain staged while switching tabs. Interrupted saves retain their operation identity and support receipt lookup and exact retry. Provider connection creation and credential editing are outside this increment.
 
 Validation: focused integration tests cover membership removal/restoration/empty state, owner/CSRF guards, stale revisions, replay, fresh selection masking, frozen reservations, concurrent saves and rollback on receipt failure. Existing profile/catalog and admission regression checks are run alongside these tests. Live preview deployment verifies assets and leaves membership, profiles and limits untouched.
+
+## Verified deployment
+
+Source `0e1514aa2d41b24f9429c0cc836d9b2b2e0a277c` is deployed with additive state format 118 at the local preview, together with dashboard source `e5ea3297d1630394b5c94513e74db7a254f39cf4`. All 65 dashboard manifest assets verified. Provider membership remains NULL at revision 0, preserving existing startup availability; no provider save was made during live QA. Profiles, hierarchy/policy source and capacity settings were unchanged. Worker process IDs were preserved. Supervisor controllers were replaced between physical turns and both reported idle and healthy afterward.
+
+Qualification passed 35 catalog/provider/admission tests, 7 material/current-registry regression tests, clippy on the changed libraries with warnings denied, and the lowered build budget. Dashboard qualification passed 62 focused component/contract checks and 28 browser checks. Live read-only desktop/phone checks and the leave dialog have no page overflow or WCAG A/AA violations. Evidence lives under `/home/jkern/dev/aq-platform/qa/2026-11-12/providers-settings/`.
