@@ -1,7 +1,9 @@
 //! Owner profile editing: versioned artifacts and project references move atomically.
+pub mod http;
 pub mod inspection;
 mod routing;
 mod store;
+pub mod structure;
 use aq_profiles::{ActivationState, Intelligence, ModelCandidate, ValidatedCatalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -1,12 +1,11 @@
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_profile_settings::{ModelChoice, SaveRequest};
+use aq_profile_settings::{ModelChoice, http};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{OriginalUri, Path, State},
     routing::get,
 };
 use serde_json::Value;
-use uuid::Uuid;
 pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
     match error {
         aq_profile_settings::Error::Invalid(m) => AppError::BadRequest(m),
@@ -18,23 +17,21 @@ pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
 }
 pub(crate) fn choices(state: &AppState) -> Vec<ModelChoice> {
     let config = &state.config;
-    let harnesses = config
-        .intelligence
-        .iter()
-        .flat_map(|r| &r.config.qualified_harnesses);
-    aq_profile_settings::model_choices(harnesses, config.intelligence_preferences_file.as_deref())
+    let harnesses = config.intelligence.iter();
+    aq_profile_settings::model_choices(
+        harnesses.flat_map(|r| &r.config.qualified_harnesses),
+        config.intelligence_preferences_file.as_deref(),
+    )
 }
 pub(super) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/settings/intelligence", get(read).post(save))
-        .route("/api/settings/intelligence/operations/{id}", get(operation))
-        .layer(DefaultBodyLimit::max(128 * 1024))
+    http::routes(get(read).post(save), get(operation))
 }
 async fn read(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
+    OriginalUri(uri): OriginalUri,
 ) -> Result<Json<Value>, AppError> {
-    aq_profile_settings::read(&state.store.pool, &choices(&state))
+    http::read(&state.store.pool, &choices(&state), uri.path())
         .await
         .map(Json)
         .map_err(error)
@@ -42,14 +39,16 @@ async fn read(
 async fn save(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,
-    Json(request): Json<SaveRequest>,
+    OriginalUri(uri): OriginalUri,
+    Json(request): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    aq_profile_settings::save(
+    http::save(
         &state.store.pool,
         actor.id,
         request,
         &choices(&state),
         (state.clock)().timestamp_millis(),
+        uri.path(),
     )
     .await
     .map(Json)
@@ -58,9 +57,10 @@ async fn save(
 async fn operation(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,
-    Path(id): Path<Uuid>,
+    OriginalUri(uri): OriginalUri,
+    Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    aq_profile_settings::operation(&state.store.pool, actor.id, id)
+    http::operation(&state.store.pool, actor.id, id, uri.path())
         .await
         .map(Json)
         .map_err(error)
