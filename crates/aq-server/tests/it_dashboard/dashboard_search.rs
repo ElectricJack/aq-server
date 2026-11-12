@@ -253,7 +253,10 @@ async fn search_graph_groups_are_pinned_sanitized_scoped_and_replay_bound() {
             .any(|s| s["source"] == "task"
                 && s["coverage"]["reason"] == "owner_unavailable_or_not_visible")
     );
-    sqlx::query("DELETE FROM project_execution_bindings WHERE project_id=$1")
+    // A binding row cannot be deleted: its supervisor conversation identity is
+    // retained (migration 0109). Change the pinned binding without a revision
+    // bump; the cursor's project fence compares the binding itself.
+    sqlx::query("UPDATE project_execution_bindings SET binding=binding||'{\"name\":\"renamed\"}'::jsonb WHERE project_id=$1")
         .bind(project)
         .execute(&pool)
         .await
