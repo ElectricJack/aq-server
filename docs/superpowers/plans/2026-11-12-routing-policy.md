@@ -341,7 +341,7 @@ pub fn plan(policy: &Policy, policy_digest: &str, structure_revision: u64, optio
 
 ```rust
 #[test] fn missing_classification_asks_for_one()
-#[test] fn ordinary_feature_medium_risk_is_standard_high_on_claude_or_codex_preferring_codex()
+#[test] fn ordinary_feature_medium_risk_is_standard_high_on_claude_or_codex_with_no_preference()
 #[test] fn docs_low_risk_narrow_tested_goes_to_the_local_lane()
 #[test] fn a_provider_the_policy_never_names_is_excluded_above_low_risk()                 // e.g. a free hosted model offered under the same class
 #[test] fn migration_very_high_risk_is_raised_to_complex_low_and_relaxed_to_standard_high_when_narrow_and_tested()
@@ -352,7 +352,6 @@ pub fn plan(policy: &Policy, policy_digest: &str, structure_revision: u64, optio
 #[test] fn hint_above_max_class_is_clamped()
 #[test] fn failed_classification_routes_at_standard_high_on_claude_or_codex_and_never_a_cheap_lane()   // Review Focus 4
 #[test] fn deep_claude_is_removed_for_an_escalated_bugfix_but_kept_for_design()
-#[test] fn gemini_only_candidates_are_excluded_above_low_risk()
 #[test] fn class_without_a_profile_is_no_candidates_class_unassigned()
 #[test] fn same_inputs_give_the_same_route()
 ```

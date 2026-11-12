@@ -62,9 +62,7 @@ priority to choose anything. Priority only orders the queue.
   when the task is narrow, covered by a test, and Standard.
 - Low risk work that is narrow and covered by a test should go to a local
   model first, to save Claude and Codex usage.
-- Anything not mentioned here, Gemini for now, takes only low risk work.
-- For ordinary implementation, prefer Codex when it is available, to save
-  Claude usage.
+- Anything not mentioned here, takes only low risk work.
 - Design and planning go to Claude first, and to Codex only when Claude can't
   take them.
 - Art and visual design go to Codex, and wait for it rather than going

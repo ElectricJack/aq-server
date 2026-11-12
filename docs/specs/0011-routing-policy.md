@@ -1,6 +1,6 @@
 # 0011: Routing policy (the routing playbook, the route on a task, and placement that honors it)
 
-**Status:** Draft for the owner's review (2026-11-12). Nothing here is implemented except the Settings field in §2.
+**Status:** Approved by the owner on 2026-11-12. Nothing here is implemented except the Settings field in §2.
 **Repositories:** aq-server, aq-playbooks (host catalog), aq-dashboard.
 **Depends on:** spec [0012](0012-internal-work.md) for every model call, and aq-server #131 and aq-dashboard #105 (the Intelligence structure setting, migration 117). **(owner)** The work is stacked on those two pull requests, on branch `feat/internal-work` in each repository, without waiting for them to merge.
 
@@ -28,7 +28,7 @@ v1's lesson W6 applies: its routing runs failed silently and tasks sat READY wit
 
 **(owner, 2026-11-12)** It is written the way an engineer would describe routing to another engineer. It contains no AQ or playbook identifiers, command names, field names, policy blocks or answer schemas. Working those out is the compiler's job (§6).
 
-It is stored as `routing_markdown` in the Intelligence structure document (128 KiB limit, revisioned, owner-only save). On `aq-ms1` the plain-language version was saved on 2026-11-12 and is at structure revision 6; a copy is in [`0011-routing-policy-default.md`](0011-routing-policy-default.md). It says, in prose: what level each kind of work needs, how risk raises that level, who may take work at each risk, and what to do when routing cannot decide. **(owner, 2026-11-12)** It says nothing about free hosted models. They are therefore covered by its rule for anything it does not mention: low risk work only, and only where a profile in Settings lists them as a candidate.
+It is stored as `routing_markdown` in the Intelligence structure document (128 KiB limit, revisioned, owner-only save). On `aq-ms1` the plain-language version was saved on 2026-11-12 and is at structure revision 7 after the owner's own edits; a copy is in [`0011-routing-policy-default.md`](0011-routing-policy-default.md). It says, in prose: what level each kind of work needs, how risk raises that level, who may take work at each risk, and what to do when routing cannot decide. **(owner, 2026-11-12)** It says nothing about free hosted models. They are therefore covered by its rule for anything it does not mention: low risk work only, and only where a profile in Settings lists them as a candidate.
 
 Changes in substance from v1 **(author's call)**, for the owner to check:
 
@@ -38,9 +38,9 @@ Changes in substance from v1 **(author's call)**, for the owner to check:
 | Design, plan and design review at the deepest level | Complex, high effort | The owner's parent descriptions give spec writing and evaluation to Complex and reserve Deep for work needing advanced reasoning. |
 | No rule for reaching the deepest level | Deep only for analysis, planning or spec writing that needs advanced reasoning | Same reason. |
 | A failed bug fix escalates to the deepest level | Escalates to Complex | Same reason. |
-| Load weights, usage factors and tie order | Removed, except the preference for Codex on ordinary implementation | Placement owns load, quota and tie-breaking. |
+| Load weights, usage factors, tie order and the preference for Codex on ordinary implementation | Removed **(owner removed the Codex preference, 2026-11-12)** | Placement owns load, quota and tie-breaking. |
 | A lane for unverified local models | Removed | It pointed at a level with no assigned profile. |
-| No Gemini | Gemini takes only low risk work | Gemini has not run live in v2. |
+| Providers the policy does not name | Take only low risk work **(owner, 2026-11-12: any available provider may take it)** | The policy names Claude, Codex and local models; everything else, Gemini and the free hosted models included, falls under this one rule. |
 
 One policy is global **(author's call)**; a per-project policy is later work.
 
@@ -135,5 +135,4 @@ Phase R3 therefore starts with a measurement: 500 routing runs in one protected 
 
 ## 10. Open questions for the owner
 
-1. **Unrouted tasks.** Hold with an attention item (§4), or fall back to the router's default model after a timeout?
-2. **The policy changes in §2.** In particular design at Complex instead of Deep, and Gemini limited to low risk work.
+None. Settled on 2026-11-12: unrouted tasks wait with a visible reason and there is no fallback to the default model; design work routes to Complex; providers the policy does not name take low risk work only.
