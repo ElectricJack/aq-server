@@ -3248,6 +3248,33 @@
     {
       "cli": [
         "task",
+        "delete"
+      ],
+      "grant": "task.delete",
+      "kind": "mutation",
+      "name": "task.delete",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:b21e28bd480efb51d5734ae10a83cf15cd136fdc2095803245770883cbb5d7ca",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.delete"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "dependency",
         "add"
       ],

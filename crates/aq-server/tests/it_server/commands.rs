@@ -114,6 +114,7 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         root.join("../aq-manual-sessions/src"),
         root.join("../aq-supervisor-control/src"),
         root.join("../aq-profile-settings/src"),
+        root.join("../aq-swarm-settings/src"),
     ];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
