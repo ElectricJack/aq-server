@@ -1,6 +1,7 @@
 # 0008: Sealed-history retention (live-only caps, rate limits, deletion after the task closes)
 
 **Status:** Draft for the owner's review (2026-11-08). The retention rule in §1 is the owner's decision of 2026-11-07. Everything else is a proposal.
+**Implementation (2026-11-12):** phase A (live caps) is merged ([`../implementation/0008-PA-server.md`](../implementation/0008-PA-server.md)). Phase B waits on the owner's answer on results retention. The A1 soak has not run.
 **Repositories:** aq-server; aq-dashboard for the contract re-pin and the Settings field.
 **Unblocks:** spec 0007 phase 1 live acceptance, which stopped on a history cap (§1.1).
 

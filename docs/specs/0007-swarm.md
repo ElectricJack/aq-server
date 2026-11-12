@@ -2,6 +2,7 @@
 
 **Status:** Approved by the owner on 2026-11-07 (brainstorming session; builder-check answers folded in). Cloudflare §7.5 follows the recommendation (manual tokens).
 **Controls correction, 2026-11-11 (owner):** provider concurrency allocation sliders and burn estimates belong in a compact Swarm header row; the existing Intelligence settings row gains one Max agents column for the selected provider. This supersedes the earlier Settings › Swarm and Normal/Reduced controls.
+**Implementation (2026-11-12):** phase 1 accepted live on 2026-11-09 (aq-worker `docs/implementation/0007-P1.md`, rerun 4). Phase 2 merged. Phase 3 controls are a draft (aq-server #131, aq-dashboard #105) deployed on `aq-ms1`. Phases 4 (boat) and 5 (macOS) not started. Current state: [`../status.md`](../status.md).
 **Repositories:** aq-server, aq-worker, aq-dashboard.
 **Mockup:** `aq-dashboard/docs/design/swarm-tree-v4.html` (revised controls prototype, labelled sample data). `swarm-tree-v3.html` and `14-swarm-tree-v3.png` retain the earlier tree reference. React Flow plus dagre remain the tree libraries.
 
