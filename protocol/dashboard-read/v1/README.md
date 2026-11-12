@@ -178,3 +178,13 @@ question, `asked_at_ms` and `expires_at_ms`. `answer`, `answered_at_ms` and
 `questions.answer@1` is enabled with `dashboard.actions` and names the
 dashboard-actions-1 kind `question.answer`. Fixtures:
 `question-inbox-{open,closed}.json` and `question-detail.json`.
+
+Provider usage may include `reset_credits` per account. Its state is `known`,
+`unknown`, or `unavailable`; a known count of zero is distinct from a null
+count. `grants: null` means details were not supplied and `[]` means an empty
+detail list. Each grant carries display-only restrictions and nullable expiry,
+remaining count and usability. Reset observation timestamps and freshness are
+independent of the quota windows; old clients and snapshots may omit the field.
+The snapshot collector bounds display text and counts and rejects malformed
+metadata without discarding valid windows. Direct legacy HTTP sources omit
+reset metadata.
