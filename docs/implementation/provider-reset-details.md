@@ -91,3 +91,33 @@ build verification and contract-pin checks are recorded with the dashboard
 implementation report. The running server, timer configuration, host producer
 checkout, and dashboard bundle have not been updated. Claude live reset grants
 remain unavailable through the chosen client interface.
+
+## Separate-worktree follow-up, 2026-11-12
+
+At the user's request, the three Terra agents each received a private worktree
+for an acceptance audit and concrete fixes:
+
+| Area | Worktree under `aq-platform/wt/` | Agent commit |
+| --- | --- | --- |
+| Client producer | `usage-resets-collector-audit` | `39d7a28485be529b03f92de550b7c1c130018d9e` |
+| Server projection | `usage-resets-server-audit` | `20e45118f6848da8be807c06a9e2fa9f6948f20d` |
+| Dashboard | `usage-resets-dashboard-audit` | `62dd84cb81a1e008ed738e1b8b08605b003920a6` |
+
+Root inspected the diffs and cherry-picked the fixes into the existing server
+and dashboard feature worktrees. Producer labels now match Rust's UTF-8 byte
+and control-character bounds, so malformed labels cannot discard other valid
+grant details. Valid expiry timestamps normalize to the canonical UTC-millisecond
+wire format. Retained SDK reset observations keep their provenance when only the
+Claude quota windows come from the CLI cache; absent reset observations use an
+unknown source. Dashboard usability claims are qualified as "when observed" for
+stale grants, and malformed expiries cannot support a current-usability claim.
+
+Root independently reran 10 producer tests, 9 quota tests, 4 contract tests, and
+99 dashboard tests. Rust formatting, Clippy with warnings denied, canonical
+fixture validation, build budgets, production dashboard build, and lint passed.
+All 27 dashboard pin files were compared to exact server code commit
+`8b3365e55c2a6cbb297654bf1ffe058192c4e668`. Root captured and opened the compiled
+stale-grant disclosure at 1440, 390 and 320 pixels; it had no horizontal overflow
+or page errors and preserved close/Escape/focus behavior. Fresh evidence lives in
+the dashboard report's `audit-2026-11-12` evidence directory. This follow-up did
+not deploy any changes or change the documented Claude reset-read limitation.
