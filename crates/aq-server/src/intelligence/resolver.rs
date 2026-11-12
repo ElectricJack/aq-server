@@ -139,14 +139,12 @@ async fn resolve_with_principal(
             .map_err(db)?;
     let catalog = aq_profiles::ValidatedCatalog::from_artifact(&catalog_bytes)
         .map_err(|_| AppError::Internal)?;
-    let credentials: Vec<_> = loaded
-        .config
-        .credentials
-        .iter()
-        .zip(&loaded.credentials)
-        .filter(|(cfg, _)| cfg.allows(node_id))
-        .map(|(_, c)| c.clone())
-        .collect();
+    let mut credentials = aq_intelligence_config::node_credentials(loaded, node_id);
+    let mut membership = state.store.pool.acquire().await.map_err(db)?;
+    aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
+        .await
+        .map_err(db)?;
+    drop(membership);
     let observations: Vec<Value> = sqlx::query_scalar(
         "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
     )
@@ -602,14 +600,14 @@ async fn fence_snapshot(
     {
         return Err(conflict("installed capability snapshot changed"));
     }
-    let credentials: Vec<_> = loaded(state)?
-        .config
-        .credentials
-        .iter()
-        .zip(&loaded(state)?.credentials)
-        .filter(|(cfg, _)| cfg.allows(node_id))
-        .map(|(_, c)| c.clone())
-        .collect();
+    let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
+    aq_swarm_settings::providers::mask(
+        tx,
+        &mut credentials,
+        owned_attempt.then_some(decision.inputs.credentials.as_slice()),
+    )
+    .await
+    .map_err(db)?;
     if digest(&credentials).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.credentials).map_err(|_| AppError::Internal)?
     {

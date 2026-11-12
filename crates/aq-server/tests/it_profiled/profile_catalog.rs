@@ -85,6 +85,7 @@ fn activation(catalog: &ValidatedCatalog, revision: u64) -> Value {
 const ACTIVATE: &str = "/api/profiles/catalogs/activate";
 const STATE: &str = "/api/profiles/catalogs";
 
+mod providers;
 mod swarm_settings;
 
 #[tokio::test]

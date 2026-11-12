@@ -192,6 +192,8 @@
     {"path": "/api/manual-agents/{id}/terminal/input", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/manual-agents/{id}/terminal/live", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/manual-agents/{id}/terminal/receipts/{operation}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/settings/providers", "class": "owner_admin", "note": "Owner-only provider membership; RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/providers/operations/{id}", "class": "owner_admin", "note": "Owner-only actor-scoped provider settings save receipts."},
     {"path": "/api/settings/swarm", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/swarm/limits", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/swarm/mode", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},

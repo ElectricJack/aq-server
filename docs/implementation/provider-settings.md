@@ -1,0 +1,11 @@
+# Provider membership settings
+
+Settings › Providers adds and removes startup-configured providers from AQ's available provider pool. The dashboard does not upload credentials or create new provider connections. The server derives safe provider names, account references, and credential-presence facts from its validated startup registry. Presence is not authentication or model-readiness evidence.
+
+Migration 118 adds a separate provider membership document and actor-scoped operation receipts. NULL membership preserves existing startup behavior until the first owner save. Explicit empty membership pauses new starts. GET/POST `/api/settings/providers` and GET `/api/settings/providers/operations/{id}` require owner access; writes use the existing CSRF guard. Saves fence both membership and available-provider revisions, reject unknown additions/duplicate IDs, and preserve exact replay receipts within a bounded retention budget.
+
+Membership masks disabled providers in fresh selection inputs, independently of intelligence-class routing. Admission rechecks membership under the existing swarm/provider lock order. A saved removal cannot admit a fresh offer through a stale decision; already reserved attempts retain their frozen membership and startup credential revocation remains authoritative. Manual agents and central supervisors use the shared admission check. Running agents, credentials, profile candidates and priority, routing Markdown, and concurrency limits are retained.
+
+The dashboard shares one Settings Save and leave/reload warning across Providers and Intelligence. Provider edits remain staged while switching tabs. Interrupted saves retain their operation identity and support receipt lookup and exact retry. Provider connection creation and credential editing are outside this increment.
+
+Validation: focused integration tests cover membership removal/restoration/empty state, owner/CSRF guards, stale revisions, replay, fresh selection masking, frozen reservations, concurrent saves and rollback on receipt failure. Existing profile/catalog and admission regression checks are run alongside these tests. Live preview deployment verifies assets and leaves membership, profiles and limits untouched.

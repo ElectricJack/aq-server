@@ -8,9 +8,10 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub const CEILING: &str = "swarm_concurrency_limit_reached";
+pub const PROVIDER_REMOVED: &str = "provider_removed";
 pub const UNCLASSIFIED: &str = "swarm_intelligence_class_unavailable";
 pub fn is_wait_reason(reason: &str) -> bool {
-    matches!(reason, CEILING | UNCLASSIFIED)
+    matches!(reason, CEILING | UNCLASSIFIED | PROVIDER_REMOVED)
 }
 pub fn is_wait(reasons: &[String]) -> bool {
     reasons.iter().any(|reason| is_wait_reason(reason))
@@ -214,6 +215,13 @@ pub async fn check(
         crate::Error::Database(e) => e,
         _ => sqlx::Error::Protocol("invalid swarm settings".into()),
     })?;
+    if !crate::providers::allows(conn, cell.map_or("", |c| c.provider.as_str())).await? {
+        return Ok(Some(if cell.is_some() {
+            PROVIDER_REMOVED
+        } else {
+            UNCLASSIFIED
+        }));
+    }
     let configured = settings.normal.is_some()
         || settings
             .limits

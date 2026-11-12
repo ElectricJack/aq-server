@@ -1,5 +1,7 @@
 //! Shared, owner-managed provider/class admission ceilings.
 pub mod admission;
+pub mod http;
+pub mod providers;
 mod store;
 use serde::{Deserialize, Serialize};
 pub use store::{catalog, lock, operation, read, save, set_limits, set_mode};
@@ -167,4 +169,22 @@ fn validate(matrix: &[CellLimit], catalog: &Catalog) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Translate domain failures without coupling settings storage to a server error type.
+pub fn map_error<T>(
+    error: Error,
+    invalid: impl FnOnce(String) -> T,
+    conflict: impl FnOnce(String) -> T,
+    missing: impl FnOnce(String) -> T,
+    database: impl FnOnce(sqlx::Error) -> T,
+    internal: T,
+) -> T {
+    match error {
+        Error::Invalid(message) => invalid(message),
+        Error::Conflict(message) => conflict(message),
+        Error::NotFound(message) => missing(message),
+        Error::Database(error) => database(error),
+        Error::Internal => internal,
+    }
 }

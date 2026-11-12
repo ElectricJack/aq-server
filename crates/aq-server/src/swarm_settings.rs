@@ -1,62 +1,68 @@
-//! Owner controls use the same authentication and CSRF boundary as Intelligence Settings.
+//! Owner controls share authentication and CSRF with Intelligence Settings.
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_swarm_settings::{LimitsRequest, ModeRequest, SaveRequest, Snapshot};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
-    routing::get,
+    extract::{OriginalUri, Path, State},
+    routing::{get, post},
 };
+use serde_json::Value;
 use uuid::Uuid;
-
 fn error(error: aq_swarm_settings::Error) -> AppError {
-    match error {
-        aq_swarm_settings::Error::Invalid(m) => AppError::BadRequest(m),
-        aq_swarm_settings::Error::Conflict(m) => AppError::Conflict(m),
-        aq_swarm_settings::Error::NotFound(m) => AppError::NotFound(m),
-        aq_swarm_settings::Error::Database(e) => crate::error::db(e),
-        aq_swarm_settings::Error::Internal => AppError::Internal,
-    }
+    aq_swarm_settings::map_error(
+        error,
+        AppError::BadRequest,
+        AppError::Conflict,
+        AppError::NotFound,
+        crate::error::db,
+        AppError::Internal,
+    )
+}
+fn available(state: &AppState) -> Vec<aq_swarm_settings::providers::Provider> {
+    aq_swarm_settings::http::catalog(
+        state
+            .config
+            .intelligence
+            .as_deref()
+            .map_or(&[], |r| r.credentials.as_slice()),
+    )
 }
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/settings/swarm", get(read).post(save))
-        .route("/api/settings/swarm/limits", axum::routing::post(limits))
-        .route("/api/settings/swarm/mode", axum::routing::post(mode))
-        .route("/api/settings/swarm/operations/{id}", get(operation))
-        .layer(DefaultBodyLimit::max(128 * 1024))
+    aq_swarm_settings::http::routes(get(read), post(save), get(operation))
 }
 async fn read(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
-) -> Result<Json<Snapshot>, AppError> {
-    aq_swarm_settings::read(&state.store.pool)
+    OriginalUri(uri): OriginalUri,
+) -> Result<Json<Value>, AppError> {
+    aq_swarm_settings::http::read(&state.store.pool, &available(&state), uri.path())
         .await
         .map(Json)
         .map_err(error)
 }
-macro_rules! mutation {
-    ($handler:ident, $request:ty, $operation:ident) => {
-        async fn $handler(
-            State(state): State<AppState>,
-            RequireOwner(actor): RequireOwner,
-            Json(request): Json<$request>,
-        ) -> Result<Json<Snapshot>, AppError> {
-            aq_swarm_settings::$operation(&state.store.pool, actor.id, request)
-                .await
-                .map(Json)
-                .map_err(error)
-        }
-    };
+async fn save(
+    State(state): State<AppState>,
+    RequireOwner(actor): RequireOwner,
+    OriginalUri(uri): OriginalUri,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    aq_swarm_settings::http::save(
+        &state.store.pool,
+        actor.id,
+        body,
+        &available(&state),
+        uri.path(),
+    )
+    .await
+    .map(Json)
+    .map_err(error)
 }
-mutation!(save, SaveRequest, save);
-mutation!(mode, ModeRequest, set_mode);
-mutation!(limits, LimitsRequest, set_limits);
 async fn operation(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<Uuid>,
-) -> Result<Json<Snapshot>, AppError> {
-    aq_swarm_settings::operation(&state.store.pool, actor.id, id)
+) -> Result<Json<Value>, AppError> {
+    aq_swarm_settings::http::operation(&state.store.pool, actor.id, id, uri.path())
         .await
         .map(Json)
         .map_err(error)
