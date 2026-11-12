@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import subprocess
 import time
+import unicodedata
 
 spec = importlib.util.spec_from_file_location("catalog", Path(__file__).with_name("refresh-model-catalog.py"))
 catalog = importlib.util.module_from_spec(spec)
@@ -33,6 +34,15 @@ def reset_unknown():
     return dict(state="unknown", available_count=None, grants=None)
 
 
+def valid_label(label):
+    if not isinstance(label, str) or not label.strip():
+        return False
+    try:
+        return len(label.encode("utf-8")) <= 120 and not any(unicodedata.category(c) == "Cc" for c in label)
+    except UnicodeEncodeError:
+        return False
+
+
 def codex_resets(value):
     """Normalize documented app-server reset credits without copying opaque IDs."""
     block = value.get("rateLimitResetCredits")
@@ -51,7 +61,7 @@ def codex_resets(value):
             label = row.get("title")
             if label is None:
                 label = "Rate-limit reset"
-            if not isinstance(label, str) or not label.strip() or len(label) > 120 or any(ord(c) < 32 for c in label):
+            if not valid_label(label):
                 continue
             expiry = row.get("expiresAt")
             if expiry is not None:
