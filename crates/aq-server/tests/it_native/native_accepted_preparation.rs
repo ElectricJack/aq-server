@@ -98,7 +98,7 @@ async fn setup_with_functional_clock(
 ) -> (Case, phase::Proposal, AcceptRequest) {
     let mut c = native_offer::setup().await;
     configure(&mut c).await;
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {
@@ -482,7 +482,7 @@ async fn fill_proposals(c: &Case, node: Uuid, live: bool) {
 async fn offered() -> (Case, ProposalRequest) {
     let mut c = native_offer::setup().await;
     configure(&mut c).await;
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

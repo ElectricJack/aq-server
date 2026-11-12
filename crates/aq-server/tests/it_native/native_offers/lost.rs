@@ -121,7 +121,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
                 super::holds::hold_rows(&c, task).await.is_empty(),
                 "no hold yet"
             );
-            let (status, body) = native_offer::poll(&c).await;
+            let (status, body) = native_offer::poll_offered(&c).await;
             assert_eq!(status, 200, "{body}");
             offer = offers(&body).remove(0);
             continue;
@@ -146,7 +146,7 @@ async fn a_budget_held_lost_task_frees_the_machine_for_other_work() {
     );
     // The next poll offers the other ready task, never the held one.
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "never a 409: {body}");
     let offered = offers(&body);
     assert_eq!(offered.len(), 1, "{body}");
@@ -232,7 +232,7 @@ async fn a_quarantined_lost_hold_is_counted_as_the_task_views_show_it() {
         aq_machine_control::lost::hold_comment_id(attempt)
     );
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let offered: Vec<Uuid> = (offers(&body).iter())
         .map(|o| o.offered.offer.manifest.bindings.task_id)

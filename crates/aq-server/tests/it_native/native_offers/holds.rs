@@ -4,7 +4,9 @@
 //! swarm read (one shared definition), and the node takes other work. The hold clears when the
 //! task gets a new attempt or is closed. The actual mounted poll, publication and human work
 //! route run; the failure owner facts are synthetic (`fail_and_release`).
-use crate::common::native_offer::{self, Case, fail_and_release, pin_policy, poll, setup};
+use crate::common::native_offer::{
+    self, Case, fail_and_release, pin_policy, poll, poll_offered, setup,
+};
 use aq_admission::control::{ControlReply, decode_reply};
 use aq_machine_control::holds::{self, Decision, Successor};
 use http_body_util::BodyExt;
@@ -99,7 +101,7 @@ async fn failed_once(max_attempts: Option<u32>) -> (Case, Uuid) {
     if let Some(n) = max_attempts {
         pin_policy(&mut c, |p| p.max_attempts = n).await;
     }
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {
@@ -191,7 +193,7 @@ async fn a_task_past_its_policy_max_attempts_is_held_visibly_once_and_other_work
 
     // The node takes the other ready task; the held one is never offered.
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered_tasks(&body), [second], "{body}");
     assert_eq!(system_comments(&c, task).await.len(), 1);

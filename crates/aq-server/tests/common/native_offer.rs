@@ -517,10 +517,28 @@ pub async fn poll(c: &Case) -> (axum::http::StatusCode, Value) {
     let bytes = r.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
+/// Polls until the first offer arrives, as a worker does. A poll waits only
+/// 750 ms for offer assembly (`producer::workflow::poll`); slower assembly
+/// (a loaded CI runner) continues in the background and a later poll
+/// redelivers its published offer. Returns the last reply: a non-200 status,
+/// the first page with an offer, or the empty page after 30 s.
+pub async fn poll_offered(c: &Case) -> (axum::http::StatusCode, Value) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (status, body) = poll(c).await;
+        let offered = body["body"]["offers"]
+            .as_array()
+            .is_some_and(|o| !o.is_empty());
+        if status != 200 || offered || tokio::time::Instant::now() >= deadline {
+            return (status, body);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
 /// Actual mounted publication, not a helper-inserted execution grant or wrapper.
 pub async fn published() -> (Case, aq_admission::startup::NativeOffer) {
     let c = setup().await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

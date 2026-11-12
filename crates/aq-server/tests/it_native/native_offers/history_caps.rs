@@ -63,7 +63,7 @@ async fn offers_older_than_an_hour_do_not_count() {
     let now = (c.env.env.state.clock)().timestamp_millis();
     let id = node(&c).await;
     sealed::offers(pool, id, c.env.lineage.project_id, now - 3_700_000, 30).await;
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered(&body), 1, "{body}");
 }
@@ -96,7 +96,7 @@ async fn four_held_projects_do_not_starve_the_fifth() {
     aq_server::profiled_execution::policies::install(&c.env.env.state)
         .await
         .unwrap();
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         offered(&body),

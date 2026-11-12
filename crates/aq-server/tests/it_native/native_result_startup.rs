@@ -84,7 +84,7 @@ async fn enable(case: &mut common::native_offer::Case, include_startup: bool) {
     policies::install(&case.env.env.state).await.unwrap();
 }
 async fn published(case: &common::native_offer::Case) -> aq_admission::startup::NativeOffer {
-    let (status, body) = common::native_offer::poll(case).await;
+    let (status, body) = common::native_offer::poll_offered(case).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {
