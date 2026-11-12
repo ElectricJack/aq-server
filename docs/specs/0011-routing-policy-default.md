@@ -62,8 +62,6 @@ priority to choose anything. Priority only orders the queue.
   when the task is narrow, covered by a test, and Standard.
 - Low risk work that is narrow and covered by a test should go to a local
   model first, to save Claude and Codex usage.
-- The free hosted models take only trivial work: low risk, narrow, covered by
-  a test, and Simple.
 - Anything not mentioned here, Gemini for now, takes only low risk work.
 - For ordinary implementation, prefer Codex when it is available, to save
   Claude usage.
@@ -73,21 +71,11 @@ priority to choose anything. Priority only orders the queue.
   elsewhere.
 - Keep the Deep Claude models for design, review and deep analysis. Don't
   spend them on escalated bug fixes.
-- Repairs to a failed integration or build never go to a local or free model.
+- Repairs to a failed integration or build never go to a local model.
 
 "Narrow" means the requirements are settled and the files to change are named
 or obvious. "Covered by a test" means an existing or specified test checks
 the result. Work that needs manual or end-to-end verification is not covered.
-
-## Widening what the free models may take
-
-A free hosted model earns ordinary narrow, low risk, Standard work after ten
-clean tasks in a row: each landed and, in the two weeks after, was not
-reopened, reverted or repaired. A failed task resets the count. Two reworked
-tasks in its last ten send it back to trivial work only. Each model earns its
-own record. Widening is a change to this document that I approve, never
-something that happens by itself. Free models never take medium risk work or
-above, however good their record.
 
 ## When it goes wrong
 

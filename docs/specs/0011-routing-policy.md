@@ -28,7 +28,7 @@ v1's lesson W6 applies: its routing runs failed silently and tasks sat READY wit
 
 **(owner, 2026-11-12)** It is written the way an engineer would describe routing to another engineer. It contains no AQ or playbook identifiers, command names, field names, policy blocks or answer schemas. Working those out is the compiler's job (§6).
 
-It is stored as `routing_markdown` in the Intelligence structure document (128 KiB limit, revisioned, owner-only save). On `aq-ms1` the plain-language version was saved on 2026-11-12 at structure revision 5; a copy is in [`0011-routing-policy-default.md`](0011-routing-policy-default.md). It says, in prose: what level each kind of work needs, how risk raises that level, who may take work at each risk, how a free model earns wider work, and what to do when routing cannot decide.
+It is stored as `routing_markdown` in the Intelligence structure document (128 KiB limit, revisioned, owner-only save). On `aq-ms1` the plain-language version was saved on 2026-11-12 and is at structure revision 6; a copy is in [`0011-routing-policy-default.md`](0011-routing-policy-default.md). It says, in prose: what level each kind of work needs, how risk raises that level, who may take work at each risk, and what to do when routing cannot decide. **(owner, 2026-11-12)** It says nothing about free hosted models: they take no routed work unless the policy is changed to name them.
 
 Changes in substance from v1 **(author's call)**, for the owner to check:
 

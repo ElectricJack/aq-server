@@ -343,7 +343,7 @@ pub fn plan(policy: &Policy, policy_digest: &str, structure_revision: u64, optio
 #[test] fn missing_classification_asks_for_one()
 #[test] fn ordinary_feature_medium_risk_is_standard_high_on_claude_or_codex_preferring_codex()
 #[test] fn docs_low_risk_narrow_tested_goes_to_the_local_lane()
-#[test] fn low_risk_narrow_tested_chore_goes_to_free_hosted_only_at_a_simple_class()
+#[test] fn a_provider_the_policy_never_names_is_excluded_above_low_risk()                 // e.g. a free hosted model offered under the same class
 #[test] fn migration_very_high_risk_is_raised_to_complex_low_and_relaxed_to_standard_high_when_narrow_and_tested()
 #[test] fn design_goes_to_complex_high_preferring_claude()
 #[test] fn art_design_is_pinned_to_codex()
@@ -591,6 +591,6 @@ pub async fn install_default<C: Catalog, L: LockingLedger>(catalog: &C, ledger: 
 
 - A per-project policy (spec §2).
 - Anything that writes `aq:origin`. The planner reads it; until something sets it, the rule about repairs never fires.
-- Measuring a free model's track record (the policy's widening rule is a change the owner makes by hand).
+- Free hosted models. The owner removed them from the policy on 2026-11-12; the compiled policy has no lane for them.
 - Playbooks other than routing asking for a stronger or weaker level on a judgment.
 - Bounded storage for protected playbook namespaces and re-vendoring the engine, unless Task 9 shows they are needed.
