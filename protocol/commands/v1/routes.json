@@ -198,6 +198,8 @@
     {"path": "/api/settings/swarm/operations/{id}", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/intelligence", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/settings/intelligence/operations/{id}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
+    {"path": "/api/settings/intelligence/structure", "class": "owner_admin", "note": "Owner-only Intelligence presentation metadata and inert routing Markdown source; RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/intelligence/structure/operations/{id}", "class": "owner_admin", "note": "Owner-only actor-scoped receipt lookup for Intelligence metadata saves; RequireOwner."},
     {"path": "/v1/worker/manual-agents", "class": "node", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/v1/worker/manual-agents/{id}/terminal-stream", "class": "node", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."}
   ]
