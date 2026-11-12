@@ -1,5 +1,9 @@
 # Provider reset details implementation
 
+Deployment update, 2026-11-12: the combined reset changes are live on the owner
+preview. See [deployment verification](provider-reset-deployment-2026-11-12.md).
+The earlier local-only operational status below describes the initial review.
+
 Implemented from [the plan](../superpowers/plans/2026-11-11-provider-reset-details.md)
 in isolated server/dashboard worktrees based on the deployed swarm-controls
 lineage. Three GPT-6.1 Terra sub-agents implemented collection, server contracts,
