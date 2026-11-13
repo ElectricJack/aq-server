@@ -16,17 +16,34 @@
 
 Every claim below was checked against the code on 2026-11-13 and cites file:line. "Server" means `/home/jkern/dev/aq-platform/wt/status-sync-server`. "Engine" means `/home/jkern/dev/aq-platform/wt/status-sync-playbooks`.
 
+### Rulings (2026-11-13)
+
+**R1 — ruled: accepted as recommended.** One playbook namespace has to route the tasks of every project (§7, §6).
+- *Problem.* The playbook owner is configured for one namespace and one project (server `playbooks/config.rs:30-43`, `service.rs:22-29`). Grants must name that project (`service.rs:411-417`), and the host adapters refuse any task outside it (`host_adapters.rs:1052-1056`, `namespace_work`). Routing covers the whole installation (spec 0011 §2).
+- *Ruling.* In the configured namespace, the three new commands (`work.read`, `work.route`, `judgment.assess`) accept a task of any project whose binding is on the automatic router. Every other command keeps the namespace's project check. The config flag `installation_routing: true` gates this and is valid only with `host_v9` (Task B2).
+- *Generation move.* A Host9 profile needs a new namespace generation, because the namespace row pins the profile's registry digest (`service.rs:308`). Moving the live namespace to `host_v9` is a deploy-time step. Runbook F2 covers it, including runs in flight and how to go back. Host8 coding artifacts keep working there, because catalog 2.2.0 only adds contracts (item 7).
+
+**R2 — ruled: a source grant that does not expire.** Automatic activation needs a grant the server holds on the owner's behalf (§4.5). Activation needs a grant id and revision (`driver.rs:482-508`), and only the namespace owner may create a grant (`service.rs:411-414`).
+
+*Which case applied: expiry is server policy only, so the small server-side change applies.*
+- The engine's `Authority` is `{actor, scope, capabilities}`, with no expiry (engine runner `lib.rs:46-50`). Activation stores only that authority.
+- The engine never checks time against a grant.
+- The 24 h limit lives entirely in aq-server:
+  - `Service::grant` caps `expires <= now + 86_400_000` (`service.rs:443-446`);
+  - `grant_record_locked` refuses an expired grant (`:503-506`);
+  - `check_expiry` re-checks at activation and dispatch (`:586-597`).
+- `playbook_grants.expires_at_ms` is only `CHECK (expires_at_ms > 0)` (`migrations/0023_playbook_bridge.sql:29`). `i64::MAX` is therefore a valid value, and no migration of that table is needed.
+
+*Design.*
+- A new `Service::source_grant(id, scope)` inserts a grant row as the namespace owner with `expires_at_ms = SOURCE_GRANT_EXPIRES_AT_MS` (`i64::MAX`), so the existing expiry checks never refuse it. The owner-facing `grant` keeps its 24 h cap.
+- The server calls it when the owner, or a supervisor, saves a source: the Settings structure save for `routing`, and the register and markdown endpoints for registered sources. It reuses the source's grant if one exists and its capabilities are unchanged.
+- The existing revoke (`service.rs:465-474`) revokes the grant when a registered source is deleted. The built-in `routing` source cannot be deleted.
+- There is no renewal loop, and no re-activation outside the rollback ledger.
+- About 25 aq-server lib lines, within D1's headroom. Tables and interfaces: C1, C4, C6, D2.
+
 ### NEEDS RULING
 
-**R1. One playbook namespace has to route tasks of every project (§7, §6).** The playbook owner is configured once, for one namespace and one project (server `playbooks/config.rs:30-43`, `service.rs:22-29`). Grants must name that project (`service.rs:411-417`). The host adapters refuse any task outside it (`host_adapters.rs:1052-1056`, `namespace_work`). Routing is installation-wide (spec 0011 §2: one global policy). A Host9 profile also requires a new namespace generation, because the namespace row pins the profile's registry digest (`service.rs:308`).
-- (a) **Recommended.** In the configured namespace, the three new commands (`work.read`, `work.route`, `judgment.assess`) accept a task of any project whose binding is on the automatic router. All other commands keep the namespace's project check. A new config flag gates this: `installation_routing: true` in the playbooks section, valid only with `host_v9`. The live namespace moves to `host_v9` with a fresh generation (runbook F2). Host8 coding artifacts keep working there, because catalog 2.2.0 only adds contracts (item 7).
-- (b) A second namespace that the server creates and manages for authoring sources. It needs a second engine owner thread and driver in the aq-server lib, which is at its line ratchet.
-- (c) One namespace per project. There is one config section, so this cannot be built without a config redesign.
-
-**R2. Automatic activation needs a grant that the server holds on the owner's behalf (§4.5).** Activation needs a grant id and revision (`driver.rs:482-508`). Only the namespace owner may create a grant (`service.rs:411-414`). A grant expires within 24 h (`service.rs:443-446`), and every effect re-checks expiry at dispatch (`service.rs:586-597`).
-- (a) **Recommended.** For each source the server creates a grant as the namespace owner, using the source record's capabilities. Every 12 h it issues a new grant (24 h expiry) and re-activates the current artifact under it. That re-activation goes to the engine directly, not through the rollback ledger (`artifacts.rs:370-405`), so renewals never fill the rollback stack. Runs admitted under the previous grant have a 12 h overlap to finish. Table `playbook_source_grants` (Task C1).
-- (b) A non-expiring source grant. This changes the 24 h rule for every grant.
-- (c) The owner grants by hand. This defeats "takes effect at once".
+None open.
 
 ### Resolved by the plan
 
@@ -246,9 +263,11 @@ Task F1 runs `scripts/check-authoring-inventory.sh`. It checks that no REMOVE sy
 6. "…An outage, a lost worker or review feedback on finished work do not [count]." This is expressible only through the host's definition of `charged_failures`. The playbook cannot see failure reasons.
 7. "Always record on the task what was decided and why…" Reasons are codes with fixed text, because there is no string building. The classification is attached as data.
 
-Ambiguous, where an agent may `ask` (a risk for acceptance 1):
-- "Research is Standard, high effort, unless it is clearly harder" names no higher level.
-- "at least Complex" names no effort; the reading is the lowest assigned Complex level.
+Ambiguous, where an agent may `ask`:
+- "Research is Standard, high effort, unless it is clearly harder" (line 21) names no higher level.
+- "at least Complex" (lines 51–53) names no effort. One reading is the lowest assigned Complex level.
+
+Acceptance 1 is restated (Global Constraints): either the document is authored with no edit, or the run ends with a question that names exactly these sentences. D2 tests that such a question reaches the owner intact, and F2 step 6 checks it live. The plan never edits the document.
 
 ---
 
@@ -273,7 +292,12 @@ Ambiguous, where an agent may `ask` (a risk for acceptance 1):
   - Lookup ≤ 256 cases with `when` ≤ 1024 B; `let` ≤ 16 bindings.
   - Transcript ≤ 262 144 B per candidate, items clipped to 2048 B.
   - `out/outcome.json` ≤ 1 048 576 B.
-- **Grants (R2):** 24 h expiry, renewed every 12 h.
+- **Source grants (R2):** do not expire (`expires_at_ms = i64::MAX`). They are created when a source is saved and revoked when a registered source is deleted. Grants made through `POST /api/playbooks/grants` keep their 24 h cap.
+- **Acceptance 1, restated:** the routing document is authored with no edit, **or** the agent's question names exactly these two sentences, and no others:
+  - "Research is Standard, high effort, unless it is clearly harder." (`docs/specs/0011-routing-policy-default.md:21`)
+  - "Very high risk work is at least Complex, unless it is narrow and covered by a test, in which case Standard, high effort is enough." (`:51-53`)
+
+  The plan never edits the owner's document.
 - **Route emission:** at most once per task version per 120 000 ms. Unrouted for 600 000 ms is a W6 failure.
 - **Names** fixed here and used everywhere:
   - source id `routing`; binding (playbook id) `aq.routing`;
@@ -514,7 +538,7 @@ pub struct Outcome { kind: OutcomeKind, ... }  // out/outcome.json, below
   - `try CASE.json` prints the `CaseReport`.
   - `compare` prints the `Comparison`, or `{"previous": null}`.
   - `save` runs `check`, `seal`, `run_cases(cases/*.json)` and the capability test `required_capabilities ⊆ record.capabilities`. On success it writes `out/outcome.json = {"kind":"saved","draft":…,"cases":[…],"artifact":"sha256:…","facts_digest":"sha256:…"}`. On refusal it prints the reasons and writes nothing.
-  - `ask --line N "question"` writes `{"kind":"question","question":…,"line":N,"sentence":<line text>}`.
+  - `ask --line N [--line M …] "question"` writes `{"kind":"question","question":…,"sentences":[{"line":N,"text":<line text>},…]}`. `--line` may be given 1–16 times, and each line must exist in `source.md`. One question can name several sentences.
   - `unable --line N "reason"` writes `{"kind":"unable",…}`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -531,6 +555,7 @@ pub struct Outcome { kind: OutcomeKind, ... }  // out/outcome.json, below
 #[test] fn check_try_compare_save_on_a_workspace()
 #[test] fn save_refuses_a_failing_case_and_writes_no_outcome()
 #[test] fn ask_and_unable_write_the_outcome_with_the_sentence()
+#[test] fn one_question_can_name_two_sentences()          // --line 21 --line 51 -> sentences [{line:21,..},{line:51,..}]; a line past the end is refused
 #[test] fn commands_list_defaults_to_the_workspace_catalog()
 ```
 
@@ -640,7 +665,7 @@ After D1. It needs no engine change.
 - Tables (0122):
   - `playbook_sources(id TEXT PK, kind TEXT CHECK IN ('builtin','registered'), binding TEXT UNIQUE, scope TEXT, purpose TEXT, judgment_purpose TEXT, commands JSONB, events JSONB, capabilities JSONB, facts JSONB, markdown TEXT NULL, revision BIGINT, updated_at_ms BIGINT)`;
   - `playbook_authoring_runs(id BIGINT IDENTITY PK, source_id TEXT REFERENCES playbook_sources, source_revision BIGINT, source_digest TEXT, facts_digest TEXT, internal_task_id UUID UNIQUE NULL, status TEXT CHECK IN ('running','saved','question','unable','refused','failed','superseded'), artifact_digest TEXT, artifact JSONB, previous_digest TEXT, comparison JSONB, cases JSONB, question JSONB, unable JSONB, refusal TEXT, created_at_ms BIGINT, finished_at_ms BIGINT)`, with a unique partial index on `(source_id) WHERE status='saved' AND active`, and a column `active BOOLEAN DEFAULT FALSE`;
-  - `playbook_source_grants(source_id TEXT, grant_id UUID PK, revision BIGINT, expires_at_ms BIGINT, activated_at_ms BIGINT NULL)`.
+  - `playbook_source_grants(source_id TEXT PRIMARY KEY REFERENCES playbook_sources, grant_id UUID UNIQUE NOT NULL, revision BIGINT NOT NULL, capabilities JSONB NOT NULL, created_at_ms BIGINT NOT NULL, revoked_at_ms BIGINT NULL)`. One live grant per source (R2). There is no expiry column: the grant row carries `expires_at_ms = i64::MAX`.
 - Produces:
 
 ```rust
@@ -921,7 +946,8 @@ pub const OUTCOME_SCHEMA: &str;  // JSON Schema of out/outcome.json (kind saved|
 After C3.
 
 **Files:**
-- Create: `crates/aq-playbook-authoring/src/save.rs`, `crates/aq-playbook-authoring/src/deploy.rs` (the `Deployer` trait and grant renewal), `crates/aq-server/src/playbook_authoring.rs` (the `Deployer` and `Host` impls over `Driver`, `artifacts::{install, activate, rollback, validate}` and `Service::grant`)
+- Create: `crates/aq-playbook-authoring/src/save.rs`, `crates/aq-playbook-authoring/src/deploy.rs` (the `Deployer` trait), `crates/aq-server/src/playbook_authoring.rs` (the `Deployer` and `Host` impls over `Driver`, `artifacts::{install, activate, rollback, validate}` and `Service::source_grant`)
+- Modify: `crates/aq-server/src/playbooks/service.rs` (`pub const SOURCE_GRANT_EXPIRES_AT_MS: i64 = i64::MAX;`; `pub async fn source_grant(&self, id: Uuid, scope: GrantScope) -> Result<()>`, which inserts as the namespace owner with that expiry; `grant` and its 24 h cap are unchanged)
 - Modify: `crates/aq-playbook-authoring/src/runs.rs` (`completed`, `resume`, `serve`)
 - Test: unit tests in `save.rs`; `tests/it_playbook/playbook_authoring.rs`
 
@@ -929,15 +955,17 @@ After C3.
 - Produces:
 
 ```rust
-pub enum Ended { Saved(Saved), Question { question: String, line: u32, sentence: String },
+pub struct Sentence { pub line: u32, pub text: String }
+pub enum Ended { Saved(Saved), Question { question: String, sentences: Vec<Sentence> },
     Unable { reason: String, line: u32, sentence: String }, Refused(String) }
 pub fn check_saved(outcome: &Value, ws: &Workspace, facts_now_digest: &str, grant_capabilities: &BTreeSet<String>)
     -> Result<Saved, String>;        // seal again; Artifact::verify; artifacts::validate-equivalent registry check; caps ⊆ grant; run_cases pass; facts digest equal
 pub trait Deployer: Send + Sync {
     async fn install(&self, artifact: &Artifact) -> Result<()>;
-    async fn activate(&self, source: &str, binding: &str, digest: &str) -> Result<()>;     // ensures the R2 grant
+    async fn ensure_grant(&self, source: &str, capabilities: &BTreeSet<String>) -> Result<(Uuid, i64)>; // R2: reuse, or Service::source_grant; never expires
+    async fn revoke_grant(&self, source: &str) -> Result<()>;
+    async fn activate(&self, source: &str, binding: &str, digest: &str) -> Result<()>;     // under the source's grant
     async fn rollback(&self, source: &str, binding: &str) -> Result<String>;
-    async fn renew(&self, source: &str, binding: &str) -> Result<()>;                       // every 12 h
 }
 pub async fn completed<H: Host, D: Deployer>(host: &H, deployer: &D, internal_task: Uuid, outcome: &aq_internal_work::Outcome) -> Result<()>;
 pub async fn reinstall_active<D: Deployer>(pool: &PgPool, deployer: &D) -> Result<usize>;  // at start
@@ -956,7 +984,9 @@ pub async fn reinstall_active<D: Deployer>(pool: &PgPool, deployer: &D) -> Resul
 #[tokio::test] async fn a_save_whose_facts_changed_is_refused_and_authoring_starts_again() // Review Focus 3
 #[tokio::test] async fn a_question_or_unable_changes_nothing_and_keeps_the_sentence()      // acceptance 5
 #[tokio::test] async fn rollback_reactivates_the_previous_artifact()
-#[tokio::test] async fn grant_renewal_reactivates_without_growing_the_rollback_stack()
+#[tokio::test] async fn a_source_grant_never_expires_and_routing_runs_past_24_hours() // clock advanced 25 h: dispatch still authorized
+#[tokio::test] async fn saving_a_source_twice_reuses_its_grant_and_a_changed_capability_set_replaces_it
+#[tokio::test] async fn an_owner_grant_through_the_api_still_expires_within_24_hours()
 #[tokio::test] async fn after_restart_the_active_authored_artifact_still_receives_its_trigger_event() // Review Focus 5
 ```
 
@@ -971,7 +1001,7 @@ After C4.
 
 **Files:**
 - Create: `crates/aq-playbook-authoring/src/http.rs` (generic over `Host`, owner extractor and error, like `aq-internal-work/src/http.rs:19-40`)
-- Modify: `crates/aq-server/src/lib.rs` (nest the routes; spawn `runs::serve` and the renewal loop), `crates/aq-server/src/playbook_authoring.rs`
+- Modify: `crates/aq-server/src/lib.rs` (nest the routes; spawn `runs::serve`), `crates/aq-server/src/playbook_authoring.rs`
 - Test: `tests/it_playbook/playbook_authoring.rs`, `tests/it_dashboard/supervisor_turns/admin.rs` (a supervisor reaches them through the admin nest)
 
 **Interfaces:**
@@ -980,15 +1010,18 @@ After C4.
   - `POST /api/playbooks/sources {id, binding, purpose, markdown, commands, events}` → registers the source and starts a run.
   - `GET /api/playbooks/sources/{id}` → `SourceView`.
   - `PUT /api/playbooks/sources/{id}/markdown {markdown, expected_revision}`; refused for `builtin`.
+  - `DELETE /api/playbooks/sources/{id}` → registered sources only: revokes the source grant (`Deployer::revoke_grant`), deactivates the binding, keeps the run history.
+  - Register and markdown saves call `Deployer::ensure_grant` before the run starts (R2).
   - `POST /api/playbooks/sources/{id}/runs` → author again.
   - `POST /api/playbooks/sources/{id}/rollback`.
-- `SourceView = {id, kind, binding, active: {artifact, since_ms, comparison: {change: "none"|"wording"|"behaviour"|"abilities"}, cases: [{name, situation, result, passed}]} | null, latest: {run, status, question, unable, refusal, internal_task_id, created_at_ms, finished_at_ms} | null}`.
+- `SourceView = {id, kind, binding, active: {artifact, since_ms, comparison: {change: "none"|"wording"|"behaviour"|"abilities"}, cases: [{name, situation, result, passed}]} | null, latest: {run, status, question: {question, sentences: [{line, text}]} | null, unable, refusal, internal_task_id, created_at_ms, finished_at_ms} | null}`.
   - `result` is the case's final mutation call input, rendered as `key: value` pairs.
 
 - [ ] **Step 1: Write the failing tests**:
   - `a_registered_source_is_authored_and_its_view_shows_the_cases`;
   - `a_supervisor_can_register_and_rerun_but_not_as_a_worker`;
-  - `put_markdown_on_a_builtin_source_is_refused`.
+  - `put_markdown_on_a_builtin_source_is_refused`;
+  - `deleting_a_registered_source_revokes_its_grant_and_stops_its_runs`; `the_routing_source_cannot_be_deleted`.
 - [ ] **Step 2: Run to verify they fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the modules and `python3 scripts/build-budget.py`.
@@ -1002,7 +1035,7 @@ After B5 and C6.
 - Modify:
   - `crates/aq-server/src/routing.rs` (the built-in `routing` record; facts provider `routing_options` → `{levels, offers, harnesses, providers}` from `options()` in rank order; `set_enabled(true)` only with an active `routing` run);
   - `crates/aq-server/src/routing/http.rs` (`GET/POST /api/settings/intelligence/routing` → `{enabled, source: SourceView}`);
-  - `crates/aq-server/src/profile_catalog/settings.rs:60-70` (a structure save calls `aq_playbook_authoring::requested(host, "routing")`);
+  - `crates/aq-server/src/profile_catalog/settings.rs:60-70` (a structure save, by the owner or a supervisor, calls `Deployer::ensure_grant("routing", …)` and then `aq_playbook_authoring::requested(host, "routing")`);
   - `crates/aq-routing/src/{lib.rs,classify.rs}` (`Route.classification: Option<serde_json::Value>`, at most 8 KiB; remove `Classification`, `Risk`, `Flag`, `schema`, `REASON_MAX_CHARS`).
 - Create: `crates/aq-server/tests/it_playbook/fixtures/routing/` (the appendix as a complete workspace: draft and 12 cases, one per kind group, risk and hint path), `tests/it_playbook/playbook_routing.rs` (new module)
 
@@ -1015,6 +1048,8 @@ After B5 and C6.
 ```rust
 #[tokio::test] async fn saving_the_routing_document_starts_one_authoring_run()
 #[tokio::test] async fn a_settings_change_that_changes_the_facts_authors_again()
+#[tokio::test] async fn a_structure_save_creates_the_routing_source_grant_once()
+#[tokio::test] async fn a_question_naming_the_two_ambiguous_sentences_is_shown_with_both_and_nothing_changes() // fake agent: ask --line 21 --line 51; view latest.question.sentences == the two lines, verbatim; the document is unchanged
 #[tokio::test] async fn with_the_fixture_active_each_kind_is_routed_as_the_document_says() // acceptance 2, fake model answers
 #[tokio::test] async fn a_classifier_outage_still_routes_standard_high_on_claude_or_codex_with_risk_assumed()
 #[tokio::test] async fn the_switch_turns_on_only_with_an_active_routing_playbook()
@@ -1023,7 +1058,14 @@ After B5 and C6.
 - [ ] **Step 2: Run to verify they fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `it_playbook`, `it_access` (`routing::`), `it_profiled` (`profile_catalog::`) and `python3 scripts/build-budget.py`.
-- [ ] **Step 5: Commit** `feat(routing): the routing document is authored into the playbook that routes`
+- [ ] **Step 5: Handle the two ambiguous sentences without touching the document.**
+  - Add `routing::ACCEPTANCE_1_SENTENCES: [(u32, &str); 2]`, holding lines 21 and 51 of `docs/specs/0011-routing-policy-default.md` verbatim, as a test-support constant.
+  - Add `pub fn acceptance_1(view: &SourceView) -> Acceptance1 { Saved, AskedExactly, Failed(String) }` in `tests/it_playbook/playbook_routing.rs`:
+    - `Saved` when `active` is from the latest run and that run's status is `saved`;
+    - `AskedExactly` when `latest.status == "question"` and the set of `latest.question.sentences[*].line` equals `{21, 51}`, `{21}` or `{51}`, with each `text` equal to its line;
+    - `Failed` otherwise, with the reason.
+  - F2 step 6 uses the same rule. Test it: `acceptance_1_accepts_a_save_or_a_question_naming_only_the_ambiguous_sentences` covers four views: saved; asked 21+51; asked 21+30 (Failed); unable (Failed).
+- [ ] **Step 6: Commit** `feat(routing): the routing document is authored into the playbook that routes`
 
 ### Task D3: Routing failures follow the internal work failure path (0011 §4 W6)
 
@@ -1085,7 +1127,7 @@ After C6 and D2 (it can start on mocks once C6's shapes are merged).
 - Produces: `<PlaybookSourceStatus source={SourceView} onRollback={…} />`, a generic component with no routing words.
   - Running: "Writing the playbook…", with `<InternalRun affectedKind="playbook_source" affectedId={id} />`.
   - Saved: "In effect since …", the change ("No change", "Wording only", "Behaviour changed", "Abilities changed"), and a table of situation → result with a pass mark.
-  - Question: "The playbook needs an answer", with the question and the quoted sentence.
+  - Question: "The playbook needs an answer", with the question and each quoted sentence (`sentences[]`, in document order, with its line number).
   - Unable: "This sentence cannot be carried out", with the sentence and the reason.
   - Refused: the reason.
   - "Roll back to the previous playbook" appears when a previous artifact exists.
@@ -1159,15 +1201,24 @@ Last. Server repo, documentation only.
 - Modify: `scripts/dev-stack.py:182-268` (profile `host_v9`, a fresh namespace generation, `installation_routing: true`, internal-work agent mode with the image's `aq-playbooks`), `docs/status.md` (what is built, and that the live check is pending)
 
 - [ ] **Step 1: Write the runbook** for the operator. For each step it gives the command or dashboard action, the expected observation, and the rollback. It never touches `aq-ms1-*` containers outside the steps the owner approves.
-  1. Owner approval: R1 and R2, the migrations 0121–0123 (forward-only), and the namespace generation change.
-  2. Deploy, then check `aq-playbooks --help` in the internal-work container.
-  3. Settings: set a Claude-first profile override for `playbook_compilation`.
-  4. Save the routing document unchanged; within 30 min the view shows "In effect" and the cases table (acceptance 1). Record the engine verifier's acceptance with `aq-playbooks check` on the stored draft.
-  5. Turn routing on. Create tasks of each kind the document names, and record each task's route (acceptance 2).
-  6. Add "Ask for a second opinion on high-risk work." to the document and save. The diff says behaviour changed and the cases table gains rows (acceptance 3).
-  7. Register the review-reminder source through `POST /api/playbooks/sources`. Start it with `POST /api/playbooks/admissions` on a review task, and see the message (acceptance 4).
-  8. Add "Post the route to the team chat." and save. The view shows that sentence as unable, and the earlier playbook still routes (acceptance 5).
-  9. Record tick time before and after.
+  1. Owner approval: the migrations 0121–0123 (forward-only), and the namespace move to `host_v9` (R1).
+  2. Deploy the new binary with the config unchanged (`host_v8`): the migrations apply, and Host8 keeps running. Check `aq-playbooks --help` in the internal-work container.
+  3. **Move the namespace to `host_v9` (R1), before routing is ever on.**
+     - *Before.* Save a copy of the playbooks config file. Record `GET /api/playbooks/status` and every live run id that the engine's inspection lists for the current generation. Stop new starts with `POST /api/playbooks/stop`, which leaves existing runs to finish.
+     - *Runs in flight.* Wait until no run of the old generation is waiting on an effect, or 30 min. The new generation is a fresh engine namespace, and the server drives only the configured generation. Any old run still live after the wait is not continued; record its id, binding and step in the runbook log. They are coding pilot runs only, because routing was never active on Host8.
+     - *Switch.* Edit the playbooks config section: `profile: "host_v9"`, `namespace.generation` + 1, `installation_routing: true`, the same deployments. Restart. Check that `GET /api/playbooks/status` reports profile 9, that the deployments are re-activated, and that `POST /api/playbooks/coding/default` re-installs.
+     - *Going back.* Turn routing off. Restore the saved config file (`host_v8`, the old generation number) and restart the same binary. The old generation's engine namespace was never deleted, so it resumes with its state; the source grants of the new generation stay in its rows unused. Downgrading the binary is not supported, because 0121–0123 are forward-only.
+  4. Settings: set a Claude-first profile override for `playbook_compilation`.
+  5. Save the routing document **unchanged**. The save creates the `routing` source grant (R2). Within 30 min the authoring run ends.
+  6. **Acceptance 1**, using the rule of D2 Step 5. Passed if:
+     - the view shows "In effect" and the cases table, and `aq-playbooks check` on the stored draft reports no diagnostics; **or**
+     - the run ended with a question whose sentences are exactly line 21 ("Research is Standard, high effort, unless it is clearly harder.") and/or lines 51–53 ("Very high risk work is at least Complex…").
+     Anything else fails. The runbook never edits the document to make acceptance 1 pass. A question is recorded verbatim and left for the owner.
+  7. Turn routing on (only after a save). Create tasks of each kind the document names, and record each task's route (acceptance 2).
+  8. Add "Ask for a second opinion on high-risk work." to the document and save. The diff says behaviour changed and the cases table gains rows (acceptance 3). Then restore the owner's text exactly.
+  9. Register the review-reminder source through `POST /api/playbooks/sources`. Start it with `POST /api/playbooks/admissions` on a review task, and see the message (acceptance 4). Delete the source, and see its grant revoked.
+  10. Add "Post the route to the team chat." and save. The view shows that sentence as unable, and the earlier playbook still routes (acceptance 5). Then restore the owner's text exactly.
+  11. Record tick time before and after. More than 24 h after step 5, create a task, and see it routed: the source grant does not expire (R2).
 - [ ] **Step 2: Check the dev stack**: `python3 scripts/dev-stack.py --help` and `scripts/product-smoke.py` in fixture mode.
 - [ ] **Step 3: Commit** `docs(operations): live acceptance runbook for playbook authoring`
 
