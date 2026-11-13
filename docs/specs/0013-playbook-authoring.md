@@ -1,4 +1,4 @@
-# 0013: Playbook authoring (one compiler from a Markdown document to a running playbook)
+# 0013: Playbook authoring (an agent turns a Markdown document into a running playbook)
 
 **Status:** written 2026-11-13 from the owner's direction of that day. Design
 calls made without the owner are marked **(call)**.
@@ -22,17 +22,19 @@ could compile nothing else, and the process was not in the document.
 
 ## 2. Goals
 
-1. One authoring path: a Markdown document goes in, a playbook artifact
-   comes out, and the engine runs it. Nothing in the path knows about
-   routing.
+1. One authoring path: an agent, with documentation and tools, turns a
+   Markdown document into a playbook artifact that the engine runs. Nothing
+   in the path knows about routing.
 2. The routing document in Settings > Intelligence, as it is written today,
    compiles through that path into the playbook that routes tasks.
 3. The steps of a playbook come from its document. Changing the document
    changes the process, with no code change and no deploy.
 4. The owner sees what a compiled playbook will do before trusting it, in
    terms of outcomes, not in terms of steps or identifiers.
-5. A compile either produces a playbook that passed every check, or changes
-   nothing and says which sentence is the problem.
+5. An authoring run either saves a playbook the engine accepts, or changes
+   nothing and says why.
+6. The person writing the Markdown needs to know nothing about how
+   playbooks work.
 
 ## 3. Not goals
 
@@ -45,115 +47,131 @@ could compile nothing else, and the process was not in the document.
 
 ## 4. The path
 
+**Owner, 2026-11-13 (later the same day):** "I don't want a direct markdown
+to artifact compiler either. I want an agent, using its own intelligence,
+plus agent queue tools and documentation, to be able to assemble and save a
+playbook artifact from markdown. This way it can be extremely flexible and
+the person writing the markdown doesn't need to know specifics around how
+playbooks work."
+
+So the compiler is an agent, not a pipeline. There is no fixed
+prompt-in, schema-checked-answer-out step, and the server does not drive a
+repair loop. An agent is given the document, the documentation and tools,
+works the way an engineer would (look things up, draft, check, try it,
+fix it), and saves the playbook when it is satisfied.
+
 ```
 document (Markdown)                         Settings, or any stored source
-   │  internal work, purpose "playbook compilation"
+   │
    ▼
-proposal (structured: triggers, steps, conditions, limits, examples, questions)
-   │  server fills exact contract identities; engine's deterministic compiler
+authoring agent ── reads: the authoring guide, the language reference
+   │               tools: list and describe commands and events, read the
+   │                      facts the host offers, check a draft, run it
+   │                      against cases with a fake host, compare with the
+   │                      previous playbook, ask the owner a question, save
    ▼
-artifact  ── refused with diagnostics ──► back to the model, at most 3 times
-   │  server runs the proposal's examples against the artifact
+save ── the engine refuses a malformed playbook, as it does for any artifact
+   │
    ▼
-checked artifact + what it does for each example
-   │  install, activate on the binding, keep the previous one for rollback
-   ▼
-running playbook
+installed and active on the binding; the previous one kept for rollback
 ```
 
 ### 4.1 Source
 
 A source is a Markdown document plus a small record the server keeps: an id,
 the scope, the binding it activates on, and which catalog commands and
-events its playbook may use. The owner writes only the Markdown. The server
-writes the engine's `---aq-playbook` header from the record, so the document
-never contains identifiers (spec 0011 §2 stands).
+events its playbook may use. The owner writes only the Markdown. It never
+contains identifiers (spec 0011 §2 stands); anything the engine's format
+needs beyond the prose is the agent's job.
 
 The routing source is the existing `routing_markdown` field. Its record is
 built in. An API to register other sources exists for owners and
 supervisors, with no dashboard screen yet. **(call)**
 
-### 4.2 The authoring request
+### 4.2 The authoring agent
 
-One internal work request, purpose "playbook compilation". Its input:
+Saving a source starts one authoring run. It is internal work with the
+purpose "playbook compilation", in a new agent mode: the harness (Claude or
+Codex, on a subscription login, chosen by the internal-work profile for
+that purpose) runs as an agent with tools and a scratch directory, not as a
+single answer. **(call: internal work, so it is never queued behind project
+work and uses the same profiles, failover and failure path; the alternative
+was a supervisor session.)**
 
-- the Markdown;
-- the playbook language, as a fixed reference text that ships with the
-  engine: operations, expressions, limits, and the rules the compiler
-  enforces;
-- the commands and events this source may use, rendered from the pinned
-  catalog by name with their inputs, outcomes and outputs, and no
-  fingerprints;
-- named facts the host offers this source as fixed definitions. For routing:
-  the levels that have an assigned profile, their order, and the harnesses
-  and providers the assigned profiles list.
+The agent starts with:
 
-Its answer is the engine's proposal, checked against a JSON Schema
-published by the engine for the proposal type, plus:
+- the Markdown, and the previous version and its playbook if there was one;
+- the authoring guide (the engine's authoring skill, extended) and the
+  language reference, as files;
+- the source's record: what it is for, its binding, and what it may use.
 
-- `questions`: sentences the model could not turn into steps without
-  guessing. Any question refuses the compile.
-- `examples`: at least 5 and at most 40 concrete cases (§4.4).
+Nothing it is given is about routing. Routing knowledge reaches it only
+through the document and through what the tools return.
 
-Nothing in the instructions is about routing. Routing knowledge reaches the
-model only through the document, the catalog and the definitions.
+Its tools (the engine's CLI and the AQ CLI, already partly built):
 
-### 4.3 Deterministic compile
+| Tool | What it does |
+| --- | --- |
+| Discover | List and describe the commands and events this source may use, with inputs, outcomes and outputs |
+| Facts | Read what the host offers this source as fixed facts. For routing: the levels with an assigned profile, their order, and the harnesses and providers those profiles list |
+| Check | Validate a draft and get precise diagnostics. The tool fills in exact contract identities and digests, which an agent cannot compute by hand |
+| Try | Run a draft against a case with a fake host: this event arrives, these commands return this, what happens and which commands were called with what |
+| Compare | Diff a draft against the playbook currently active |
+| Ask | Put a question to the owner when the document cannot be turned into steps without guessing. The run ends as "needs an answer" and nothing changes |
+| Save | Submit the finished playbook with its cases |
 
-The server, not the model:
+How many drafts it writes, what it tries, and how it resolves a diagnostic
+are up to the agent. The run is bounded by time and by cost, not by a
+number of rounds **(call: 30 minutes, the internal-work deadline for this
+purpose)**.
 
-1. writes the source header;
-2. replaces each command, event and dependency name in the proposal with its
-   exact contract identity from the pinned catalog, and builds the registry
-   from what the proposal uses. A name outside the source's allowed set is an
-   error;
-3. captures the definitions by digest;
-4. calls the engine's `compile`.
+### 4.3 Save
 
-Structural errors go back to the model with the diagnostics, in the same
-internal work task, at most 3 times **(call)**. Unresolved questions do not
-go back; they go to the owner.
+Save is the one place the server checks anything, and it checks only what
+it would check for a playbook from any author:
 
-### 4.4 Examples: how the owner knows what it does
+- the engine's own verification of the artifact (structure, contracts,
+  limits), which install already runs;
+- the playbook uses only what the source's record allows and what the
+  binding's grant gives. A document cannot grant abilities by describing
+  them;
+- every case the agent submitted, re-run by the server against the saved
+  artifact, ends the way the case says. **(call)** This is not a constraint
+  on the agent's method. It keeps the table in §4.4 true.
 
-A model's own summary of what it wrote proves nothing. So the summary is
-computed.
+A refused save returns the reason to the agent, which can fix it and save
+again within its run.
 
-Each example is a starting situation in plain terms and in data: the
-trigger's event or the entry's input, what each command the playbook calls
-returns (including a judgment's answer), and the outcome the document says
-should follow. The server runs every example against the compiled artifact
-in the engine's simulator, with those returns as the fake host.
+### 4.4 Cases: how the owner knows what it does
 
-- An example whose simulated outcome differs from its stated outcome fails
-  the compile. The diagnostics go back to the model (counted in the 3).
-- An example that reaches a command the example gave no return for fails
-  the compile.
-- The owner sees the examples as a table of situation and result, taken
-  from the simulation, for example "a bug fix that failed once → Complex,
-  high effort, Claude or Codex". For routing the server adds fixed
-  situations of its own, one per kind of work the document names and one
-  per level, so the table does not depend only on cases the model chose.
-  **(call)**
+An agent's own description of what it built proves nothing, and the owner
+should not have to read steps. So the agent submits cases with the
+playbook: a situation in plain terms and in data (what arrives, what each
+command returns, including a judgment's answer) and the result the document
+calls for. The server runs them against the saved artifact and shows the
+owner a table of situation and result taken from that run, for example "a
+bug fix that failed once → Complex, high effort, Claude or Codex".
 
-The simulator moves from the engine's CLI crate into a library crate the
-server can call.
+At least 5 cases are required **(call)**. The authoring guide tells the
+agent to cover each kind of situation the document distinguishes.
+
+The simulator moves from the engine's CLI crate into a library the server
+can call, and stays available to the agent through the CLI.
 
 ### 4.5 Taking effect
 
-A compile that passes is installed and activated on the source's binding at
-once (the owner's earlier decision: it takes effect immediately). The
-previous artifact stays installed. The owner can roll back to it. Runs
-already started finish on the artifact they started with.
+A saved playbook is installed and activated on the source's binding at once
+(the owner's earlier decision: it takes effect immediately). The previous
+artifact stays installed, and the owner can roll back to it. Runs already
+started finish on the artifact they started with.
 
-A compile that fails changes nothing. The owner sees the questions, or the
-last diagnostics in plain language with the sentence they point at, and the
-previous playbook keeps running.
+A run that ends without a save changes nothing. The owner sees why in plain
+language: the agent's question, or what it could not make work and the
+sentence involved. The previous playbook keeps running. The run itself is
+visible like any internal work run, including what the agent did.
 
 The view also shows a diff against the previous artifact in the engine's
-terms: no change, wording only, behaviour changed, or abilities changed. A
-compile that needs an ability the binding's grant does not give is refused,
-not granted.
+terms: no change, wording only, behaviour changed, or abilities changed.
 
 ## 5. What the engine needs so a document can say real things
 
@@ -173,9 +191,12 @@ generic, and each is needed by the routing document.
 3. **Asking for a structured answer.** `judgment.request` returns one label.
    Add an answer schema to the request, bounded in size and depth, so a
    classification with several fields is one judgment.
-4. **A proposal schema.** Publish a JSON Schema for the proposal type,
-   generated from the engine's types and tested against them.
-5. **A language reference** written for a model: the text §4.2 sends.
+4. **Tools an agent can drive.** The engine CLI's discover, check, try and
+   compare commands accept a draft with names in place of exact identities,
+   fill the identities in, and report diagnostics an agent can act on.
+5. **An authoring guide and a language reference** written for an agent,
+   with worked examples. No complete small example exists in the repository
+   today.
 
 Ordered comparison (`lt`) and membership exist and are enough for "after
 one failure" and "at least Standard". No arithmetic is added. **(call)**
@@ -237,12 +258,12 @@ writes the route. Placement honours the route exactly as built.
 3. Changing one sentence of the document that changes the process (for
    example "ask for a second opinion on high-risk work") changes the
    compiled steps and the example table, with no code change.
-4. A second, unrelated document (a small review-reminder playbook) compiles
-   and runs through the same service with the same instructions.
-   This is the test that the compiler is generic.
+4. A second, unrelated document (a small review-reminder playbook) is
+   authored and runs through the same service with the same guide and
+   tools. This is the test that the path is generic.
 5. A document with a sentence the catalog cannot serve is refused with that
    sentence, and the previous playbook keeps running.
-6. An example that contradicts the compiled steps fails the compile.
+6. A save whose cases do not run as stated is refused.
 7. 500 routing runs on the engine with spec 0003 keep step time flat.
 
 ## 10. Left to the builder
