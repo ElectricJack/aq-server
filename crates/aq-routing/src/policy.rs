@@ -88,7 +88,8 @@ pub struct Relax {
 /// A named set of restrictions. A kind or origin lane applies `class` (when
 /// set), its allowlists, `prefer` and `hold`. A `cheap` lane is taken by
 /// narrow work whose current level is a key of `classes`, and moves it to the
-/// mapped level; an identity entry keeps the level.
+/// mapped level; an identity entry keeps the level. Only cheap lanes have
+/// `classes`. A lane named by a reservation may have nothing else.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lane {
@@ -219,8 +220,32 @@ pub fn validate(policy: &Policy, options: &Options) -> Vec<Problem> {
                 format!("lane {:?} is defined more than once", lane.id),
             );
         }
-        if lane.class.is_none() && lane.classes.is_empty() {
-            v.push(&at, format!("lane {:?} sets no level", lane.id));
+        if lane.cheap && lane.classes.is_empty() {
+            v.push(
+                &format!("{at}.classes"),
+                format!("cheaper lane {:?} names no levels it takes", lane.id),
+            );
+        }
+        if !lane.cheap && !lane.classes.is_empty() {
+            v.push(
+                &format!("{at}.classes"),
+                format!(
+                    "lane {:?} is not a cheaper lane, so its level map would never be read",
+                    lane.id
+                ),
+            );
+        }
+        let reserved_for = policy
+            .reserved
+            .iter()
+            .any(|r| r.only_lanes.contains(&lane.id));
+        let restricts = lane.class.is_some()
+            || !lane.harnesses.is_empty()
+            || !lane.providers.is_empty()
+            || !lane.prefer.is_empty()
+            || lane.hold;
+        if !lane.cheap && !restricts && !reserved_for {
+            v.push(&at, format!("lane {:?} has no effect", lane.id));
         }
         if let Some(class) = lane.class {
             v.class(&format!("{at}.class"), class);
@@ -387,9 +412,7 @@ pub fn summary(policy: &Policy) -> Vec<String> {
     for risk in Risk::ALL {
         out.push(risk_sentence(risk, policy.risk.get(&risk)));
     }
-    for lane in &policy.lanes {
-        out.push(lane_sentence(lane));
-    }
+    out.extend(policy.lanes.iter().filter_map(lane_sentence));
     for (id, origin) in &policy.origins {
         out.push(origin_sentence(id, origin));
     }
@@ -447,7 +470,8 @@ fn risk_sentence(risk: Risk, rule: Option<&RiskRule>) -> String {
     format!("{}: {}.", risk_words(risk), clauses.join("; "))
 }
 
-fn lane_sentence(lane: &Lane) -> String {
+/// `None` when the lane restricts nothing.
+fn lane_sentence(lane: &Lane) -> Option<String> {
     let mut clauses = Vec::new();
     let mut scope = String::from(if lane.cheap { "cheaper lane" } else { "" });
     if !lane.requires.is_empty() || lane.max_risk.is_some() {
@@ -511,9 +535,13 @@ fn lane_sentence(lane: &Lane) -> String {
         clauses.push(format!("waits for {them} rather than going elsewhere"));
     }
     if clauses.is_empty() {
-        clauses.push("no restrictions".into());
+        return None;
     }
-    format!("{} lane: {}.", lane_words(&lane.id), clauses.join("; "))
+    Some(format!(
+        "{} lane: {}.",
+        lane_words(&lane.id),
+        clauses.join("; ")
+    ))
 }
 
 fn origin_sentence(id: &str, origin: &OriginRule) -> String {
@@ -729,13 +757,22 @@ mod tests {
         let repair = &policy.lanes[lane_index(&policy, "repair")];
         assert!(!repair.providers.iter().any(|p| p == "ollama"));
         assert_eq!(policy.origins["repair"].narrow, Some(false));
-        for lane in &policy.lanes {
-            if lane.cheap {
-                assert!(lane.providers.iter().any(|p| p == "ollama"), "{}", lane.id);
-            } else {
-                assert!(!lane.providers.iter().any(|p| p == "ollama"), "{}", lane.id);
-            }
+        // Low risk: local models first, nobody shut out.
+        let local_first = &policy.lanes[lane_index(&policy, "local-first")];
+        assert!(local_first.cheap && local_first.harnesses.is_empty());
+        assert!(local_first.providers.is_empty());
+        assert_eq!(local_first.prefer, ["opencode"]);
+        // Medium risk: Claude, Codex or a local model, no preference.
+        let medium = &policy.lanes[lane_index(&policy, "local-medium-risk")];
+        assert_eq!(medium.max_risk, Some(Risk::Medium));
+        assert_eq!(medium.harnesses, ["claude", "codex", "opencode"]);
+        assert_eq!(medium.providers, ["anthropic", "openai", "ollama"]);
+        assert!(medium.prefer.is_empty());
+        for lane in policy.lanes.iter().filter(|l| !l.cheap) {
+            assert!(lane.classes.is_empty(), "{}", lane.id);
+            assert!(!lane.providers.iter().any(|p| p == "ollama"), "{}", lane.id);
         }
+        assert_eq!(policy.kinds["spec"].lane.as_deref(), Some("design"));
         let back: Policy = serde_json::from_value(serde_json::to_value(&policy).unwrap()).unwrap();
         assert_eq!(back, policy);
     }
@@ -745,6 +782,47 @@ mod tests {
         type Mutation = fn(&mut Policy);
         let rows: Vec<(&str, Mutation, String)> = vec![
             ("version", |p| p.version = 1, "version".into()),
+            (
+                "cheap lane with no levels",
+                |p| {
+                    let i = lane_index(p, "local-first");
+                    p.lanes[i].classes.clear();
+                },
+                format!(
+                    "lanes[{}].classes",
+                    lane_index(&fixtures::reference().0, "local-first")
+                ),
+            ),
+            (
+                "level map on a lane that is not cheap",
+                |p| {
+                    let i = lane_index(p, "art");
+                    p.lanes[i]
+                        .classes
+                        .insert(class("standard-high"), class("standard-high"));
+                },
+                format!(
+                    "lanes[{}].classes",
+                    lane_index(&fixtures::reference().0, "art")
+                ),
+            ),
+            (
+                "lane with no effect",
+                |p| {
+                    let i = lane_index(p, "art");
+                    p.lanes[i].harnesses.clear();
+                    p.lanes[i].hold = false;
+                },
+                format!("lanes[{}]", lane_index(&fixtures::reference().0, "art")),
+            ),
+            (
+                "lane no longer named by a reservation has no effect",
+                |p| p.reserved[0].only_lanes.retain(|l| l != "deep-analysis"),
+                format!(
+                    "lanes[{}]",
+                    lane_index(&fixtures::reference().0, "deep-analysis")
+                ),
+            ),
             (
                 "default kind",
                 |p| p.default_kind = "unknown".into(),
@@ -829,12 +907,12 @@ mod tests {
             (
                 "lane provider not offered",
                 |p| {
-                    let i = lane_index(p, "local-first");
+                    let i = lane_index(p, "local-medium-risk");
                     p.lanes[i].providers[0] = "groq".into();
                 },
                 format!(
                     "lanes[{}].providers[0]",
-                    lane_index(&fixtures::reference().0, "local-first")
+                    lane_index(&fixtures::reference().0, "local-medium-risk")
                 ),
             ),
             (
@@ -858,15 +936,6 @@ mod tests {
                     "lanes[{}].prefer[0]",
                     lane_index(&fixtures::reference().0, "local-first")
                 ),
-            ),
-            (
-                "lane with no level",
-                |p| {
-                    let i = lane_index(p, "art");
-                    p.lanes[i].class = None;
-                    p.lanes[i].classes.clear();
-                },
-                format!("lanes[{}]", lane_index(&fixtures::reference().0, "art")),
             ),
             (
                 "lane class unassigned",
@@ -1075,17 +1144,30 @@ mod tests {
         has(
             "Repairs to a failed integration or build: never a cheaper lane; through the Repair lane.",
         );
-        has("Claude at Deep (low or high effort) is kept for the Design or Deep analysis lanes.");
-        has("Work of any other kind, or of a kind that can't be told, is handled as Features.");
-        assert!(
-            sentences
-                .iter()
-                .any(|s| s.starts_with("Local first lane: cheaper lane for work that is narrow and covered by a test, up to low risk, at ")
-                    && s.contains("using local models")),
-            "{sentences:#?}"
+        has(
+            "Claude at Deep (low or high effort) is kept for the Design, Planning or Deep analysis lanes.",
         );
+        has(
+            "Local first lane: cheaper lane for work that is narrow and covered by a test, up to low risk, at Simple (low or high effort) or Standard (low, medium or high effort); OpenCode first.",
+        );
+        has(
+            "Local medium risk lane: cheaper lane for work that is narrow and covered by a test, up to medium risk, at Standard (low, medium or high effort); taken by Claude, Codex or OpenCode, using Anthropic, OpenAI or local models.",
+        );
+        has(
+            "Specs: Complex, high effort; up to Deep, high effort when the task asks for it; through the Design lane.",
+        );
+        has(
+            "Cheaper lanes are open to Bug fixes, Chores, Docs, Features, Refactors, Research, Syncs and Tests.",
+        );
+        // The deep analysis lane only names who may use Deep Claude; it has no sentence of its own.
+        assert!(
+            !sentences
+                .iter()
+                .any(|s| s.starts_with("Deep analysis lane"))
+        );
+        has("Work of any other kind, or of a kind that can't be told, is handled as Features.");
         let kinds = policy.kinds.len();
-        let lanes = policy.lanes.len();
+        let lanes = policy.lanes.len() - 1;
         let others = 1 + 1 + policy.origins.len() + policy.reserved.len();
         assert_eq!(sentences.len(), kinds + Risk::ALL.len() + lanes + others);
     }

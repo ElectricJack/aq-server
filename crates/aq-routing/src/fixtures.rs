@@ -60,7 +60,6 @@ fn identity(classes: &[&str]) -> Value {
 
 /// The reference policy and the options it was compiled against.
 pub fn reference() -> (Policy, Options) {
-    let all = identity(&ASSIGNED_CLASSES);
     let kind = |class: &str, max: &str, narrow: bool| json!({"class": class, "max_class": max, "narrow": narrow});
     let mut kinds = json!({
         "feature": kind("standard-high", "complex-high", true),
@@ -71,7 +70,7 @@ pub fn reference() -> (Policy, Options) {
         "chore": kind("simple-high", "standard-high", true),
         "sync": kind("simple-high", "standard-high", true),
         "research": kind("standard-high", "complex-high", true),
-        "spec": kind("complex-high", "deep-high", true),
+        "spec": kind("complex-high", "deep-high", false),
         "design": kind("complex-high", "deep-high", false),
         "plan": kind("complex-high", "deep-high", false),
         "review": kind("complex-high", "deep-high", false),
@@ -81,6 +80,7 @@ pub fn reference() -> (Policy, Options) {
     kinds["bugfix"]["escalate"] = json!({"after_failures": 1, "to_class": "complex-high"});
     for (id, lane) in [
         ("design", "design"),
+        ("spec", "design"),
         ("plan", "planning"),
         ("review", "deep-analysis"),
         ("analysis", "deep-analysis"),
@@ -111,8 +111,6 @@ pub fn reference() -> (Policy, Options) {
                 "id": "local-first", "cheap": true,
                 "classes": identity(&["simple-low", "simple-high", "standard-low", "standard-medium", "standard-high"]),
                 "requires": ["narrow", "test_verified"], "max_risk": "low",
-                "harnesses": ["opencode", "claude", "codex"],
-                "providers": ["ollama", "anthropic", "openai"],
                 "prefer": ["opencode"]
             },
             {
@@ -122,14 +120,14 @@ pub fn reference() -> (Policy, Options) {
                 "harnesses": ["claude", "codex", "opencode"],
                 "providers": ["anthropic", "openai", "ollama"]
             },
-            {"id": "design", "classes": all, "harnesses": claude_or_codex},
-            {"id": "planning", "classes": all, "harnesses": claude_or_codex},
-            {"id": "deep-analysis", "classes": all},
-            {"id": "art", "classes": all, "harnesses": ["codex"], "hold": true},
-            {"id": "repair", "classes": all, "providers": ["anthropic", "openai", "google"]}
+            {"id": "design", "harnesses": claude_or_codex},
+            {"id": "planning", "harnesses": claude_or_codex},
+            {"id": "deep-analysis"},
+            {"id": "art", "harnesses": ["codex"], "hold": true},
+            {"id": "repair", "providers": ["anthropic", "openai", "google"]}
         ],
         "reserved": [
-            {"classes": ["deep-low", "deep-high"], "harness": "claude", "only_lanes": ["design", "deep-analysis"]}
+            {"classes": ["deep-low", "deep-high"], "harness": "claude", "only_lanes": ["design", "planning", "deep-analysis"]}
         ],
         "classifier_instructions": CLASSIFIER_INSTRUCTIONS,
     });
@@ -169,4 +167,72 @@ pub fn options() -> Options {
         })
         .collect();
     Options { classes }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Parent;
+
+    /// Planner rule 12 for a task routed through `lane` at `class`: the
+    /// harnesses left after every reservation is applied.
+    fn after_reservations(
+        policy: &Policy,
+        options: &Options,
+        lane: Option<&str>,
+        class: Class,
+    ) -> Vec<String> {
+        let lane_rule = lane.map(|id| {
+            policy
+                .lanes
+                .iter()
+                .find(|l| l.id == id)
+                .expect("lane exists")
+        });
+        let mut allowed: Vec<String> = match lane_rule {
+            Some(l) if !l.harnesses.is_empty() => l.harnesses.clone(),
+            _ => options.classes[&class]
+                .iter()
+                .map(|o| o.harness.clone())
+                .collect(),
+        };
+        for reserved in &policy.reserved {
+            let keeps = lane.is_some_and(|id| reserved.only_lanes.iter().any(|l| l == id));
+            if reserved.classes.contains(&class) && !keeps {
+                allowed.retain(|h| *h != reserved.harness);
+            }
+        }
+        allowed
+    }
+
+    #[test]
+    fn every_kind_that_may_reach_deep_keeps_deep_claude() {
+        let (policy, options) = reference();
+        let deep: Vec<Class> = options
+            .classes
+            .keys()
+            .copied()
+            .filter(|c| c.parent == Parent::Deep)
+            .collect();
+        let mut checked = 0;
+        for (id, kind) in &policy.kinds {
+            if kind.max_class.parent != Parent::Deep {
+                continue;
+            }
+            for class in deep.iter().copied().filter(|c| *c <= kind.max_class) {
+                let allowed = after_reservations(&policy, &options, kind.lane.as_deref(), class);
+                assert!(
+                    allowed.iter().any(|h| h == "claude"),
+                    "{id} at {class}: {allowed:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+        // Work that cannot reach Deep never meets the reservation; one that did would lose Claude.
+        let deep_high = "deep-high".parse().unwrap();
+        assert!(
+            !after_reservations(&policy, &options, None, deep_high).contains(&"claude".to_string())
+        );
+    }
 }
