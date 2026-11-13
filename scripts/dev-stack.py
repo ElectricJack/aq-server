@@ -187,11 +187,47 @@ file = "/run/aq-dev/terminal_protection_key"
                 raise ValueError("retained settlement configuration differs; use a fresh development stack")
             playbooks.write_text(config + retained[len(previous):])
     target.write_text(config)
-    return dict(AQ_STATE_FORMAT=str(state_format(ROOT)), AQ_DEV_STATE_DIR=str(state),
+    internal = internal_config(state)
+    return dict(**internal, AQ_STATE_FORMAT=str(state_format(ROOT)), AQ_DEV_STATE_DIR=str(state),
                 AQ_VAULT_DIR=str(vault), AQ_SECRETS_DIR=str(secret),
                 AQ_UPDATER_SPOOL=str(state / "updater-spool"), AQ_DEV_UID=str(os.getuid()),
                 AQ_DEV_GID=str(os.getgid()), AQ_DEV_GRAPH_WORKSPACE=WORKSPACE,
                 AQ_SERVER_IMAGE=os.environ.get("AQ_SERVER_IMAGE", "agent-q-server:dev"))
+
+
+def internal_config(state):
+    """Opt-in internal work host config (docs/operations/internal-work.md).
+
+    Written to <state>/internal/internal.json (0600) only when
+    AQ_DEV_INTERNAL_DATABASE_URL and at least one harness are given by
+    AQ_DEV_INTERNAL_{CODEX,CLAUDE}_NATIVE and _LOGIN (absolute paths; the native
+    executable is hashed here). Returns {} and writes nothing otherwise.
+    """
+    url = os.environ.get("AQ_DEV_INTERNAL_DATABASE_URL")
+    config = dict(database_url=url, homes="/internal/homes", scratch="/internal/scratch",
+                  poll_ms=int(os.environ.get("AQ_DEV_INTERNAL_POLL_MS", "200")))
+    # Container paths of compose.workers.yaml; the host-side inputs are mounted there.
+    mounts = dict(codex=("/opt/codex/codex", "/logins/codex/"), claude=("/opt/claude/claude", "/logins/claude/"))
+    for name, (native_target, login_dir) in mounts.items():
+        native = os.environ.get(f"AQ_DEV_INTERNAL_{name.upper()}_NATIVE")
+        login = os.environ.get(f"AQ_DEV_INTERNAL_{name.upper()}_LOGIN")
+        if native and login:
+            config[name] = dict(native=native_target,
+                                native_digest=hashlib.sha256(Path(native).read_bytes()).hexdigest(),
+                                secret_file=login_dir + Path(login).name)
+    if not url or not ("codex" in config or "claude" in config):
+        return {}
+    directory = state / "internal"
+    directory.mkdir(exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    # Replaced on every prepare: the digests follow the supplied executables.
+    target = directory / "internal.json"
+    temporary = directory / ".internal.json.new"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as out:
+        json.dump(config, out, sort_keys=True)
+    os.replace(temporary, target)
+    return dict(AQ_INTERNAL_CONFIG_DIR=str(directory))
 
 
 def compose(env, *args, capture=True, input=None, timeout=None):

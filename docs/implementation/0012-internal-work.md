@@ -16,3 +16,10 @@ or adds to it, for the spec's owner.
 - The answer is the `result` string of the one JSON object on stdout; `usage.input_tokens` and `usage.output_tokens` fill the usage. `is_error` other than `false` or a non-zero exit fails the candidate: `provider_unavailable` when the `result` text names a login or usage-limit problem, `provider_error` otherwise. Stdout that is not a result object is `provider_error`, with the redacted output as the detail (at most 500 bytes).
 - The login and usage-limit wording now also matches Claude Code's ("limit reached", "hit your limit", "OAuth token", "Invalid API key"). These are taken from the CLI's known messages, not from a live failing run.
 - A host claims tasks for each harness it has configured. It still runs one task at a time, so a Codex and a Claude task on the same host run one after the other.
+
+## Packaging (`compose.workers.yaml`, `scripts/dev-stack.py`)
+
+- The `internal-work` service is in the `internal-work` Compose profile, like the Boat worker, because the static production budget in `scripts/compose-workers-smoke.py` (4 CPUs: supervisor host, cloud worker and the sandbox slice) has no room for another 0.25 CPU. Its `AQ_INTERNAL_*` variables default to a `/var/empty/...` placeholder so `docker compose config` keeps working for operators who do not use it.
+- The Codex login directory is mounted writable so a refresh can be written back; the operator makes it read-only if refreshes should not be kept. See [the operations page](../operations/internal-work.md).
+- `scripts/dev-stack.py prepare` writes `<state>/internal/internal.json` only when `AQ_DEV_INTERNAL_DATABASE_URL` and at least one harness (`AQ_DEV_INTERNAL_{CODEX,CLAUDE}_NATIVE` and `_LOGIN`) are set. `compose.dev.yaml` is unchanged: the dev stack does not load `compose.workers.yaml`.
+- The host prints no line when it claims a task (the task brief's `internal host claimed <id>` does not exist in the code). The only lines are `internal work: tick failed` and `internal work: login refresh was not copied back`. A claim is seen in `internal_tasks.runner`.

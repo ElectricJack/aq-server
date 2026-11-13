@@ -39,6 +39,69 @@ services:
     mem_limit: 1536m
     memswap_limit: 1536m
     pids_limit: 512
+  internal-work:
+    <<: *hardening
+    # Opt in with `--profile internal-work` after checking the host budget (the
+    # supervisor host, cloud worker and sandbox slice already use all 4 CPUs of
+    # the static budget in scripts/compose-workers-smoke.py). The AQ_INTERNAL_*
+    # paths below default to a /var/empty placeholder so `compose config` works
+    # without them; set all five before starting the service.
+    profiles: [internal-work]
+    # Internal work host (docs/specs/0012-internal-work.md; operations page:
+    # docs/operations/internal-work.md). The same image as the supervisor host,
+    # run as `internal <CONFIG>`: it claims queued login tasks from the database
+    # and runs the model CLI as UID/GID 10001. Nothing untrusted may run as
+    # 10001 in this container. The image holds neither CLI: both native
+    # executables are read-only mounts whose digests are in internal.json.
+    image: ${AQ_SUPERVISOR_HOST_IMAGE:?set AQ_SUPERVISOR_HOST_IMAGE to a digest-pinned supervisor host reference}
+    user: '0:0'
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
+    command: [internal, /config/internal.json]
+    volumes:
+      # Root-owned 0600 internal.json only; mounted into no other service. The
+      # login files are not under it (config load refuses a login file under
+      # homes or scratch).
+      - type: bind
+        source: ${AQ_INTERNAL_CONFIG_DIR:-/var/empty/aq-internal-config-dir-unset}
+        target: /config
+        read_only: true
+      # The two native executables, read-only; internal.json carries their digests.
+      - type: bind
+        source: ${AQ_INTERNAL_CODEX_BIN:-/var/empty/aq-internal-codex-bin-unset}
+        target: /opt/codex/codex
+        read_only: true
+      - type: bind
+        source: ${AQ_INTERNAL_CLAUDE_BIN:-/var/empty/aq-internal-claude-bin-unset}
+        target: /opt/claude/claude
+        read_only: true
+      # Codex login (auth.json), this host's own copy. The directory is mounted
+      # writable, unlike /config above, so that a refreshed login can be written
+      # back (temp file and rename). Add `read_only: true` to forbid write-back;
+      # runs that do not refresh still work, a refresh is then lost.
+      - type: bind
+        source: ${AQ_INTERNAL_CODEX_LOGIN_DIR:-/var/empty/aq-internal-codex-login-dir-unset}
+        target: /logins/codex
+      # Claude setup token (one line); read only, never written back.
+      - type: bind
+        source: ${AQ_INTERNAL_CLAUDE_LOGIN_DIR:-/var/empty/aq-internal-claude-login-dir-unset}
+        target: /logins/claude
+        read_only: true
+      # Private per-run homes and empty working directories (root-owned volumes).
+      - aq_internal_homes:/internal/homes
+      - aq_internal_scratch:/internal/scratch
+    tmpfs: [/tmp]
+    # Database and provider egress only; no Docker socket. Private PID
+    # namespace is Compose's default (never set `pid: host`).
+    networks: [database, supervisor]
+    depends_on:
+      server: {condition: service_healthy}
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    pids_limit: 512
   aq-worker-cloud:
     <<: *hardening
     # aq-worker with the docker-local backend (C2/B5b): the production `worker`
@@ -160,6 +223,8 @@ volumes:
   aq_supervisor_host:
   aq_supervisor_workspace:
   aq_supervisor_homes:
+  aq_internal_homes:
+  aq_internal_scratch:
   aq_worker_journal:
   aq_worker_leases:
   aq_worker_boat_state:
