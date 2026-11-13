@@ -14,6 +14,7 @@ pub mod store;
 pub mod validate;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub use api_backend::{ApiBackend, ApiEndpoint, InternalWorkConfig};
@@ -234,7 +235,18 @@ pub struct Usage {
 pub struct Candidate {
     pub provider: String,
     pub model: String,
-    pub reasoning: String,
+    /// The reasoning effort of the model choice the profile names, such as
+    /// `low`; `None` leaves the harness its default. Never the choice's
+    /// display label or the reference itself.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// The catalog's `reasoning_configuration_reference` the effort and
+    /// options were resolved from, for the record.
+    #[serde(default)]
+    pub reasoning_reference: String,
+    /// The model choice's provider options, such as a Codex `service_tier`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<String, serde_json::Value>,
     /// The logged-in harness for [`Way::Login`].
     pub harness: Option<String>,
     pub way: Way,

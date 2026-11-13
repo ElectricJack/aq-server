@@ -326,6 +326,7 @@ name = "aq-internal-work"
 version = "0.1.0"
 dependencies = [
  "aq-intelligence-config",
+ "aq-profile-settings",
  "aq-profiles",
  "aq-selection",
  "axum",

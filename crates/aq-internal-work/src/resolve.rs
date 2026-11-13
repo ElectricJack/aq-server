@@ -1,8 +1,9 @@
 //! Resolving an intelligence profile to the ordered candidates internal work
-//! tries (spec 0012 §5, §6). Pure: catalog, registry and observations come in
-//! as arguments.
+//! tries (spec 0012 §5, §6). Pure: catalog, registry, model choices and
+//! observations come in as arguments.
 use crate::{Candidate, Reason, Way};
 use aq_intelligence_config::LoadedRegistry;
+use aq_profile_settings::ModelChoice;
 use aq_profiles::{ModelCandidate, ValidatedCatalog};
 use aq_selection::{
     AuthorizedCredential, Availability, AvailabilityObservation, CredentialKind, ObservationSource,
@@ -17,15 +18,60 @@ pub struct Resolved {
     pub candidates: Vec<Candidate>,
 }
 
-/// Harness ids a logged-in run can use on the server. The catalog spells the
-/// Claude harness `claude-code`.
+/// A catalog harness id as Settings' model choices name it: the catalog may
+/// spell the Claude harness `claude-code`.
+fn harness_name(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "claude",
+        other => other,
+    }
+}
+
+/// Harness ids a logged-in run can use on the server.
 /// Returned as the name later tasks claim work by: `codex` or `claude`.
 fn login_harness(candidate: &ModelCandidate) -> Option<&'static str> {
-    candidate.harnesses.iter().find_map(|h| match h.as_str() {
-        "codex" => Some("codex"),
-        "claude" | "claude-code" => Some("claude"),
-        _ => None,
-    })
+    candidate
+        .harnesses
+        .iter()
+        .find_map(|h| match harness_name(h) {
+            "codex" => Some("codex"),
+            "claude" => Some("claude"),
+            _ => None,
+        })
+}
+
+/// The model choice `candidate`'s reference names, matched as manual
+/// sessions match it ([`aq_profile_settings::find_choice`]): on the
+/// logged-in `harness`, or for an API candidate on any harness the catalog
+/// lists for it. `None` when no choice matches.
+fn model_choice<'a>(
+    choices: &'a [ModelChoice],
+    candidate: &ModelCandidate,
+    harness: Option<&str>,
+) -> Option<&'a ModelChoice> {
+    let names = (
+        candidate.provider.as_str(),
+        candidate.model.as_str(),
+        candidate.reasoning_configuration_reference.as_str(),
+    );
+    match harness {
+        Some(harness) => aq_profile_settings::find_choice(choices, names, harness),
+        None => (candidate.harnesses.iter())
+            .find_map(|h| aq_profile_settings::find_choice(choices, names, harness_name(h))),
+    }
+}
+
+/// The concrete effort of `choice`: its `reasoning_effort` option, passed on
+/// as given (the harness checks its own values); else its `reasoning` label
+/// when the harness accepts that as an effort. The label is otherwise only
+/// for display, and `None` leaves the harness its default.
+fn effort(choice: &ModelChoice) -> Option<String> {
+    let option = choice.options.get("reasoning_effort");
+    match option.and_then(serde_json::Value::as_str) {
+        Some(effort) => Some(effort.to_owned()),
+        None => aq_profile_settings::harness_supports(&choice.harness, &choice.reasoning)
+            .then(|| choice.reasoning.clone()),
+    }
 }
 
 /// Same meaning as `aq_selection`'s observation evaluation: the newest
@@ -77,11 +123,15 @@ fn blocked(
     })
 }
 
-/// The candidates of `profile_id` that can be tried now. A missing profile, or
-/// one with nothing usable left, is [`Reason::NoCandidate`].
+/// The candidates of `profile_id` that can be tried now, each with the
+/// effort ([`effort`]) and options of the model choice in `choices` its
+/// reference names. A candidate without such a choice is dropped like one
+/// without a usable credential. A missing profile, or one with nothing usable
+/// left, is [`Reason::NoCandidate`].
 pub fn resolve(
     catalog: &ValidatedCatalog,
     registry: &LoadedRegistry,
+    choices: &[ModelChoice],
     observations: &[AvailabilityObservation],
     profile_id: &str,
     now_ms: u64,
@@ -113,13 +163,18 @@ pub fn resolve(
             },
             None => continue,
         };
+        let Some(choice) = model_choice(choices, entry, harness.as_deref()) else {
+            continue;
+        };
         if blocked(observations, credential, &entry.model, now_ms, max_age_ms) {
             continue;
         }
         candidates.push(Candidate {
             provider: entry.provider.clone(),
             model: entry.model.clone(),
-            reasoning: entry.reasoning_configuration_reference.clone(),
+            reasoning: effort(choice),
+            reasoning_reference: entry.reasoning_configuration_reference.clone(),
+            options: choice.options.clone(),
             harness,
             way,
             credential_index: index,

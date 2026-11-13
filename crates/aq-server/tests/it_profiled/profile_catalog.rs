@@ -92,6 +92,7 @@ const ACTIVATE: &str = "/api/profiles/catalogs/activate";
 const STATE: &str = "/api/profiles/catalogs";
 
 mod providers;
+mod routing_compile;
 mod swarm_settings;
 
 #[tokio::test]

@@ -2,7 +2,7 @@
 use crate::agent_access::supervisor_conversation::system_message;
 use crate::{AppState, Clock, authz::RequireOwner, error::AppError};
 use aq_intelligence_config::LoadedRegistry;
-use aq_internal_work::service::{NotifySupervisor, Service};
+use aq_internal_work::service::{NotifySupervisor, Service, settings_choices};
 use aq_internal_work::{Error, InternalWorkConfig, Outcome, Request, http};
 use axum::Router;
 use sqlx::PgPool;
@@ -21,6 +21,7 @@ impl InternalWork {
         clock: Clock,
         config: Option<&InternalWorkConfig>,
         registry: Option<Arc<LoadedRegistry>>,
+        preferences: Option<std::path::PathBuf>,
     ) -> aq_internal_work::Result<Self> {
         let now: aq_internal_work::service::Now = Arc::new(move || clock().timestamp_millis());
         let (notify_pool, notify_now) = (pool.clone(), now.clone());
@@ -31,7 +32,8 @@ impl InternalWork {
                 sent.map(drop).map_err(|e| format!("{e:?}"))
             })
         });
-        let service = Service::new(pool, now, config, registry)?.notify_supervisor(notify);
+        let choices = settings_choices(registry.clone(), preferences);
+        let service = Service::new(pool, now, config, registry, choices)?.notify_supervisor(notify);
         Ok(Self(Some(Arc::new(service))))
     }
     fn service(&self) -> Result<&Service, AppError> {

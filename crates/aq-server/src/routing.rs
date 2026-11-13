@@ -6,10 +6,11 @@ use crate::{
     agent_access::{self, human::graph_actions::current},
     error::{AppError, db},
 };
+pub mod compile;
 mod http;
 use aq_routing::{Class, CompactRoute, Placement, Route, Source};
 pub use aq_routing::{StoredRoute, Written};
-pub(crate) use http::{admin_routes, view};
+pub(crate) use http::{admin_routes, settings_routes, view};
 use serde_json::json;
 use sqlx::{PgPool, types::Json};
 use std::time::Duration;

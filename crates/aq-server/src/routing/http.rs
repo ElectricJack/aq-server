@@ -17,6 +17,36 @@ pub(crate) fn admin_routes() -> Router<AppState> {
     Router::new().route("/api/tasks/{id}/routes", get(routes))
 }
 
+/// Under the Intelligence settings, so the supervisor admin nest reaches it as well.
+pub(crate) fn settings_routes() -> Router<AppState> {
+    let policy = get(policy).post(switch);
+    Router::new().route("/api/settings/intelligence/routing", policy)
+}
+
+/// `GET /api/settings/intelligence/routing`: the switch, the active policy and the latest compile.
+async fn policy(
+    State(state): State<AppState>,
+    RequireOwner(_): RequireOwner,
+) -> Result<Json<Value>, AppError> {
+    super::compile::view(&state).await.map(Json)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Switch {
+    enabled: bool,
+}
+
+/// `POST /api/settings/intelligence/routing` with `{enabled}`; on only while a policy is active.
+async fn switch(
+    State(state): State<AppState>,
+    RequireOwner(_): RequireOwner,
+    Json(switch): Json<Switch>,
+) -> Result<Json<Value>, AppError> {
+    super::set_enabled(&state.store.pool, switch.enabled).await?;
+    super::compile::view(&state).await.map(Json)
+}
+
 /// `GET /api/tasks/{id}/routes`: every route the task has had, newest first, with its reasons
 /// and classification; a cleared route is `route: null`.
 async fn routes(

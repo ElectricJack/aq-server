@@ -7,7 +7,7 @@ use super::{
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
-    redact_login, stage_login,
+    redact_login, service_tier, stage_login,
 };
 use aq_internal_work::{Claimed, Reason, Usage, validate};
 use serde_json::Value;
@@ -53,7 +53,12 @@ async fn attempt(
     let output = home.join("last-message.txt");
     let candidate = &claimed.candidate;
     let args = exec_arguments("read-only", &candidate.model, cwd, &output).map_err(|_| setup())?;
-    let args = exec_finish(args, exec_overrides(&candidate.reasoning));
+    // The model choice's effort; without one Codex keeps its default.
+    let mut overrides = exec_overrides(candidate.reasoning.as_deref());
+    let tier = service_tier(&candidate.options)
+        .map_err(|_| failure(Reason::ProviderError, "unsupported service tier"))?;
+    overrides.extend(tier);
+    let args = exec_finish(args, overrides);
     let mut command = native_command(executable, args, home, cwd, identity);
     command
         .stdout(std::process::Stdio::piped())

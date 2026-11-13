@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 aq-intelligence-config = { path = "../aq-intelligence-config" }
+aq-profile-settings = { path = "../aq-profile-settings" }
 aq-profiles = { path = "../aq-profiles" }
 aq-selection = { path = "../aq-selection" }
 axum.workspace = true

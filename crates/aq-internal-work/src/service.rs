@@ -1,13 +1,14 @@
 //! The internal work service (spec 0012 §3, §4, §8): turning a request into a
 //! task, the in-server loop that runs API candidates and moves failures on to
 //! a supervisor or the owner, and waiting for a task to finish. The server
-//! builds one [`Service`] from its pool, clock, registry and `[internal_work]`
-//! config, and gives it the way to tell a supervisor.
+//! builds one [`Service`] from its pool, clock, registry, model choices and
+//! `[internal_work]` config, and gives it the way to tell a supervisor.
 //!
 //! Internal work is outside swarm capacity: nothing here reads the swarm
 //! settings, the provider mask or the availability switch.
 use crate::*;
 use aq_intelligence_config::LoadedRegistry;
+use aq_profile_settings::ModelChoice;
 use aq_selection::AvailabilityObservation;
 use sqlx::PgPool;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -27,11 +28,27 @@ pub type NotifySupervisor = Arc<
         + Sync,
 >;
 
+/// The model choices of Settings, read afresh at each resolution.
+pub type ModelChoices = Arc<dyn Fn() -> Vec<ModelChoice> + Send + Sync>;
+
+/// The model choices the Settings page offers: each qualified harness's
+/// models from `registry`, then the cached preferences in `preferences`.
+pub fn settings_choices(
+    registry: Option<Arc<LoadedRegistry>>,
+    preferences: Option<std::path::PathBuf>,
+) -> ModelChoices {
+    Arc::new(move || {
+        let harnesses = registry.iter().flat_map(|r| &r.config.qualified_harnesses);
+        aq_profile_settings::model_choices(harnesses, preferences.as_deref())
+    })
+}
+
 pub struct Service {
     pool: PgPool,
     now: Now,
     api: ApiBackend,
     registry: Option<Arc<LoadedRegistry>>,
+    choices: ModelChoices,
     poll: Duration,
     enabled: bool,
     /// Who claims tasks: this server process.
@@ -47,6 +64,7 @@ impl Service {
         now: Now,
         config: Option<&InternalWorkConfig>,
         registry: Option<Arc<LoadedRegistry>>,
+        choices: ModelChoices,
     ) -> Result<Self> {
         let config = config.cloned().unwrap_or_else(|| {
             serde_json::from_value(serde_json::json!({})).expect("every field has a default")
@@ -56,6 +74,7 @@ impl Service {
             now,
             api: ApiBackend::new(config.api)?,
             registry,
+            choices,
             poll: Duration::from_millis(config.poll_ms),
             enabled: config.enabled,
             runner: format!("server/{}", Uuid::new_v4()),
@@ -177,7 +196,9 @@ impl Service {
             .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
             .map_err(|_| Error::Corrupt)?;
         let now = u64::try_from(now_ms).unwrap_or(0);
-        Ok(resolve(&catalog, registry, &observations, profile, now)
+        let choices = (self.choices)();
+        let resolved = resolve(&catalog, registry, &choices, &observations, profile, now);
+        Ok(resolved
             .map(|resolved| resolved.candidates)
             .map_err(|_| format!("intelligence profile {profile:?} has no usable candidate")))
     }

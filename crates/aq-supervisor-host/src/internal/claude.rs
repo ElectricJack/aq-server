@@ -32,6 +32,11 @@ const ENVIRONMENT: [(&str, &str); 5] = [
     ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"),
 ];
 
+/// The efforts the worker's interactive Claude launch passes as `--effort`
+/// (it also accepts `default`, passing nothing, and `off`); the same values
+/// `claude --help` lists for `--effort`.
+const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 /// Runs `claimed` once on the Claude login of `h`, killing it after `budget`.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
@@ -73,8 +78,13 @@ async fn attempt(
     let secret = std::str::from_utf8(&token).map_err(|_| setup())?;
     let settings = home.join("settings.json");
     write_settings(&settings, home, identity).map_err(|_| setup())?;
-    let args = arguments(&claimed.candidate.model, &settings).ok_or_else(setup)?;
+    let candidate = &claimed.candidate;
+    let effort = candidate.reasoning.as_deref();
+    let args = arguments(&candidate.model, effort, &settings).ok_or_else(setup)?;
     let mut command = native_command(executable, args, home, cwd, identity);
+    if effort == Some("off") {
+        command.env("MAX_THINKING_TOKENS", "0");
+    }
     // `native_command` sets the Codex home; Claude's is `CLAUDE_CONFIG_DIR`.
     command
         .env_remove("CODEX_HOME")
@@ -100,8 +110,11 @@ async fn attempt(
 
 /// The run's arguments: print mode, one JSON result, the prompt as text on
 /// stdin, only the private settings, no MCP servers, no session saved, no
-/// slash commands and no tools.
-fn arguments(model: &str, settings: &Path) -> Option<Vec<String>> {
+/// slash commands and no tools. The model choice's effort follows as
+/// `--effort` when it is one of [`EFFORTS`], as the worker's interactive
+/// Claude launch passes it; `off` is `MAX_THINKING_TOKENS=0` instead, and
+/// `default`, no effort or any other value keeps the model's own.
+fn arguments(model: &str, effort: Option<&str>, settings: &Path) -> Option<Vec<String>> {
     let settings = settings.to_str()?;
     let args = [
         "-p",
@@ -121,7 +134,11 @@ fn arguments(model: &str, settings: &Path) -> Option<Vec<String>> {
         "--tools",
         "",
     ];
-    Some(args.map(String::from).to_vec())
+    let mut args = args.map(String::from).to_vec();
+    if let Some(effort) = effort.filter(|e| EFFORTS.contains(e)) {
+        args.extend(["--effort".into(), effort.into()]);
+    }
+    Some(args)
 }
 
 /// `<home>/settings.json`: no hooks and no project MCP servers. It and the

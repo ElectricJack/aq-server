@@ -15,17 +15,32 @@ CREATE TABLE routing_state (
     active_policy_digest TEXT
 );
 INSERT INTO routing_state(singleton) VALUES(TRUE);
+-- One row per compile of the routing Markdown (spec 0011 §6). A failed
+-- compile has no policy, so the digest is not the key; the same policy can
+-- also be compiled again from a later revision.
 CREATE TABLE routing_policies (
-    digest TEXT PRIMARY KEY,
-    structure_revision BIGINT,
-    source_digest TEXT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    structure_revision BIGINT NOT NULL CHECK(structure_revision >= 0),
+    source_digest TEXT NOT NULL,
+    -- The internal task compiling it; NULL when none could be submitted.
+    internal_task_id UUID UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('compiling','active','superseded','failed')),
+    -- The compiled policy, when the answer parsed.
+    digest TEXT,
     compiled JSONB,
     summary JSONB,
-    status TEXT NOT NULL CHECK(status IN ('active','superseded','failed')),
+    -- Why a compile failed: each problem as `path: message`, then each
+    -- sentence the compiler could not resolve; both also kept as lists.
     error TEXT,
-    internal_task_id UUID,
-    created_at_ms BIGINT NOT NULL
+    problems JSONB NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(problems) = 'array'),
+    unresolved JSONB NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(unresolved) = 'array'),
+    created_at_ms BIGINT NOT NULL,
+    finished_at_ms BIGINT,
+    CHECK(status <> 'active' OR (digest IS NOT NULL AND compiled IS NOT NULL AND finished_at_ms IS NOT NULL))
 );
+-- At most one compiled policy routes at a time.
+CREATE UNIQUE INDEX routing_policies_active ON routing_policies((TRUE)) WHERE status = 'active';
+CREATE INDEX routing_policies_revision ON routing_policies(structure_revision);
 CREATE TABLE route_needed_emissions (
     task_id UUID PRIMARY KEY,
     task_version BIGINT NOT NULL,

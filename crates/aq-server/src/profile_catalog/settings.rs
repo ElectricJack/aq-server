@@ -24,7 +24,7 @@ pub(crate) fn choices(state: &AppState) -> Vec<ModelChoice> {
     )
 }
 pub(crate) fn routes() -> Router<AppState> {
-    http::routes(get(read).post(save), get(operation))
+    http::routes(get(read).post(save), get(operation)).merge(crate::routing::settings_routes())
 }
 async fn read(
     State(state): State<AppState>,
@@ -42,17 +42,31 @@ async fn save(
     OriginalUri(uri): OriginalUri,
     Json(request): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    http::save(
-        &state.store.pool,
-        actor.id,
-        request,
-        &choices(&state),
-        (state.clock)().timestamp_millis(),
-        uri.path(),
-    )
-    .await
-    .map(Json)
-    .map_err(error)
+    let pool = &state.store.pool;
+    let structure = uri.path().contains("/structure");
+    let before = match structure {
+        true => Some(
+            aq_profile_settings::structure::document(pool)
+                .await
+                .map_err(error)?
+                .0,
+        ),
+        false => None,
+    };
+    let now = (state.clock)().timestamp_millis();
+    let saved = http::save(pool, actor.id, request, &choices(&state), now, uri.path()).await;
+    let saved = saved.map_err(error)?;
+    // A saved change to the routing Markdown is compiled (spec 0011 §6); the save stands either way.
+    let revision = saved["revision"].as_str().and_then(|r| r.parse().ok());
+    let markdown = saved["routing_markdown"].as_str();
+    if let (Some(before), Some(revision), Some(markdown)) = (before, revision, markdown)
+        && saved["disposition"] == "saved"
+        && markdown != before.routing_markdown
+        && let Err(error) = crate::routing::compile::requested(&state, revision, markdown).await
+    {
+        tracing::warn!(?error, "routing policy compile not requested");
+    }
+    Ok(Json(saved))
 }
 async fn operation(
     State(state): State<AppState>,
