@@ -653,6 +653,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-routing"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+]
+
+[[package]]
 name = "aq-row-retention"
 version = "0.1.0"
 dependencies = [
