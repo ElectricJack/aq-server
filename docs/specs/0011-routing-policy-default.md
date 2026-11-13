@@ -31,7 +31,7 @@ Standard for tests, docs, chores and syncs, or above Complex for ordinary
 implementation work. Asking for Deep is not enough to get it: the task still
 has to need it by the rule above, and otherwise it gets Complex, high effort.
 If the level asked for isn't available, use the nearest available level below
-it, but never below what the other rules here give.
+it. The risk and failure rules still apply to it, as to any level asked for.
 
 A bug fix that has already failed once for a real reason moves up to Complex,
 high effort.
