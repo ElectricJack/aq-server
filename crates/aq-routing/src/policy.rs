@@ -226,6 +226,21 @@ pub fn validate(policy: &Policy, options: &Options) -> Vec<Problem> {
                 format!("cheaper lane {:?} names no levels it takes", lane.id),
             );
         }
+        if lane.cheap && lane.max_risk.is_none() {
+            v.push(
+                &format!("{at}.max_risk"),
+                format!("cheaper lane {:?} names no highest risk it takes", lane.id),
+            );
+        }
+        if lane.cheap && lane.class.is_some() {
+            v.push(
+                &format!("{at}.class"),
+                format!(
+                    "cheaper lane {:?} sets a level; a cheaper lane only maps levels",
+                    lane.id
+                ),
+            );
+        }
         if !lane.cheap && !lane.classes.is_empty() {
             v.push(
                 &format!("{at}.classes"),
@@ -935,6 +950,28 @@ mod tests {
                 format!(
                     "lanes[{}].prefer[0]",
                     lane_index(&fixtures::reference().0, "local-first")
+                ),
+            ),
+            (
+                "cheap lane with no risk ceiling",
+                |p| {
+                    let i = lane_index(p, "local-first");
+                    p.lanes[i].max_risk = None;
+                },
+                format!(
+                    "lanes[{}].max_risk",
+                    lane_index(&fixtures::reference().0, "local-first")
+                ),
+            ),
+            (
+                "cheap lane that sets a level",
+                |p| {
+                    let i = lane_index(p, "local-medium-risk");
+                    p.lanes[i].class = Some(class("standard-high"));
+                },
+                format!(
+                    "lanes[{}].class",
+                    lane_index(&fixtures::reference().0, "local-medium-risk")
                 ),
             ),
             (

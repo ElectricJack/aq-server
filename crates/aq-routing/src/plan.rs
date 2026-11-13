@@ -204,19 +204,10 @@ pub fn plan(
         }
     };
 
-    // 6. Deep only for advanced reasoning.
-    if class.parent == Parent::Deep && !flag(Flag::DeepReasoning) {
-        reason(
-            &mut reasons,
-            "deep_requires_reasoning",
-            format!(
-                "{} is only for work that needs advanced reasoning, and this task does not: lowered to {}",
-                class_words(class),
-                class_words(COMPLEX_HIGH)
-            ),
-        );
-        class = COMPLEX_HIGH;
-    }
+    // 6. Deep only for advanced reasoning, here and wherever the class
+    // changes below.
+    let deep_reasoning = flag(Flag::DeepReasoning);
+    class = keep_deep_for_reasoning(class, deep_reasoning, &mut reasons);
 
     // 7. Lane by kind, else by origin.
     let origin = task
@@ -247,14 +238,16 @@ pub fn plan(
             class = to;
         }
         reason(&mut reasons, "lane_matched", detail);
+        class = keep_deep_for_reasoning(class, deep_reasoning, &mut reasons);
         harnesses = allow(&matched.harnesses);
         providers = allow(&matched.providers);
         lane = Some(matched);
     }
 
     // 8. Risk floor; 9. risk harnesses.
+    let mut floor = None;
     if let Some(rule) = policy.risk.get(&risk) {
-        let floor = match &rule.relax {
+        let min = match &rule.relax {
             Some(relax) if all_set(&relax.requires) => {
                 if class < rule.min_class {
                     reason(
@@ -273,7 +266,8 @@ pub fn plan(
             }
             _ => rule.min_class,
         };
-        if class < floor {
+        floor = Some(min);
+        if class < min {
             reason(
                 &mut reasons,
                 "class_raised_for_risk",
@@ -281,26 +275,32 @@ pub fn plan(
                     "{}: raised from {} to {}",
                     risk_words(risk).to_lowercase(),
                     class_words(class),
-                    class_words(floor)
+                    class_words(min)
                 ),
             );
-            class = floor;
+            class = min;
         }
         harnesses = intersect(harnesses, allow(&rule.harnesses));
     }
 
-    // 10. Cheap lanes, for answered narrow work with no lane yet.
+    // 10. Cheap lanes, for answered narrow work with no lane yet. A lane with
+    // no risk ceiling is closed, and one whose level would be below the risk
+    // floor is passed over.
     let origin_closes = origin.is_some_and(|(_, rule)| rule.narrow == Some(false));
     if lane.is_none() && kind.narrow && !origin_closes && answer.is_some() {
         let cheap = policy.lanes.iter().filter(|l| l.cheap).find_map(|l| {
-            if !all_set(&l.requires) || l.max_risk.is_some_and(|max| max < risk) {
+            if !all_set(&l.requires) || l.max_risk.is_none_or(|max| max < risk) {
                 return None;
             }
             let to = *l.classes.get(&class)?;
+            let lands = deep_only_for_reasoning(to, deep_reasoning);
+            if floor.is_some_and(|min| lands < min) {
+                return None;
+            }
             let (h, p) = (allow(&l.harnesses), allow(&l.providers));
             options
                 .classes
-                .get(&to)?
+                .get(&lands)?
                 .iter()
                 .any(|o| admits(&h, &o.harness) && admits(&p, &o.provider))
                 .then_some((l, to))
@@ -319,7 +319,7 @@ pub fn plan(
                 );
             }
             reason(&mut reasons, "lane_matched", detail);
-            class = to;
+            class = keep_deep_for_reasoning(to, deep_reasoning, &mut reasons);
             harnesses = allow(&matched.harnesses);
             providers = allow(&matched.providers);
             lane = Some(matched);
@@ -417,6 +417,38 @@ pub fn plan(
     })
 }
 
+/// `class`, or Complex, high effort when it is Deep and the task does not
+/// need advanced reasoning.
+fn deep_only_for_reasoning(class: Class, deep_reasoning: bool) -> Class {
+    if class.parent == Parent::Deep && !deep_reasoning {
+        COMPLEX_HIGH
+    } else {
+        class
+    }
+}
+
+/// [`deep_only_for_reasoning`], recording `deep_requires_reasoning` when it
+/// lowers the class. Applied at every step that can change the class.
+fn keep_deep_for_reasoning(
+    class: Class,
+    deep_reasoning: bool,
+    reasons: &mut Vec<RouteReason>,
+) -> Class {
+    let to = deep_only_for_reasoning(class, deep_reasoning);
+    if to != class {
+        reason(
+            reasons,
+            "deep_requires_reasoning",
+            format!(
+                "{} is only for work that needs advanced reasoning, and this task does not: lowered to {}",
+                class_words(class),
+                class_words(to)
+            ),
+        );
+    }
+    to
+}
+
 /// Every harness offered at `class`, each once, in offer order.
 fn offered_harnesses(options: &Options, class: Class) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -431,6 +463,8 @@ fn offered_harnesses(options: &Options, class: Class) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use crate::classify::{Flag, Offer, Risk};
     use crate::fixtures;
     use crate::{Parent, ProviderIntent, Source};
@@ -1195,14 +1229,106 @@ mod tests {
         }
     }
 
-    /// Every kind × risk × flags × failed attempts × level answered × origin,
-    /// plus every failed classification: each is a consistent, repeatable route.
-    #[test]
-    fn every_reference_plan_is_a_consistent_route_and_planning_twice_gives_the_same() {
-        let (policy, options) = fixtures::reference();
+    /// The reason codes listed on `RouteReason` in lib.rs.
+    const REASON_CODES: [&str; 10] = [
+        "hint_clamped",
+        "class_raised_for_risk",
+        "risk_relaxed",
+        "risk_assumed",
+        "escalated_after_failure",
+        "deep_requires_reasoning",
+        "lane_matched",
+        "reserved_harness_removed",
+        "classification_failed",
+        "owner_set",
+    ];
+
+    fn lane_mut<'a>(policy: &'a mut Policy, id: &str) -> &'a mut Lane {
+        policy.lanes.iter_mut().find(|l| l.id == id).unwrap()
+    }
+
+    fn cheap_lane(id: &str, map: &[(&str, &str)], requires: &[Flag], max_risk: Risk) -> Lane {
+        Lane {
+            id: id.into(),
+            class: None,
+            classes: map
+                .iter()
+                .map(|(from, to)| (class(from), class(to)))
+                .collect(),
+            harnesses: vec![],
+            providers: vec![],
+            prefer: vec![],
+            hold: false,
+            requires: requires.to_vec(),
+            max_risk: Some(max_risk),
+            cheap: true,
+        }
+    }
+
+    fn plain_lane(id: &str, level: &str) -> Lane {
+        Lane {
+            class: Some(class(level)),
+            classes: BTreeMap::new(),
+            max_risk: None,
+            cheap: false,
+            ..cheap_lane(id, &[], &[], Risk::Low)
+        }
+    }
+
+    /// A test policy built to break the Deep and risk-floor rules: the design
+    /// lane sets Deep, docs go through a lane that sets Simple, and two cheap
+    /// lanes ahead of the reference ones map Standard, high effort to Deep and
+    /// to Standard, low effort for work up to medium risk.
+    fn hostile() -> (Policy, Options) {
+        let (mut policy, options) = fixtures::reference();
+        lane_mut(&mut policy, "design").class = Some(class("deep-high"));
+        policy.lanes.push(plain_lane("quick", "simple-high"));
+        policy.kinds.get_mut("docs").unwrap().lane = Some("quick".into());
+        let deep = cheap_lane(
+            "cheap-deep",
+            &[("standard-high", "deep-low")],
+            &[Flag::Narrow],
+            Risk::Medium,
+        );
+        let low = cheap_lane(
+            "cheap-low",
+            &[("standard-high", "standard-low")],
+            &[],
+            Risk::Medium,
+        );
+        policy.lanes.splice(0..0, [low, deep]);
+        (policy, options)
+    }
+
+    /// The floor rule 8 sets for the classification's risk and flags.
+    fn risk_floor(policy: &Policy, classified: &Classified) -> Option<Class> {
+        let answer = match classified {
+            Classified::Answered(c) => Some(c),
+            _ => None,
+        };
+        let rule = policy.risk.get(&answer.map_or(Risk::Medium, |c| c.risk))?;
+        let set = |f: &Flag| {
+            answer.is_some_and(|c| match f {
+                Flag::Narrow => c.narrow,
+                Flag::TestVerified => c.test_verified,
+                Flag::DeepReasoning => c.deep_reasoning,
+            })
+        };
+        Some(match &rule.relax {
+            Some(relax) if relax.requires.iter().all(set) => relax.class,
+            _ => rule.min_class,
+        })
+    }
+
+    /// Every kind × origin × failed attempts × hint (none, one level below
+    /// and one above the kind's highest) × risk × flags × level answered,
+    /// plus every failed classification: each is a consistent, repeatable
+    /// route. Returns how many were planned.
+    fn check_every_plan(policy: &Policy, options: &Options) -> usize {
         let flags = [Flag::Narrow, Flag::TestVerified, Flag::DeepReasoning];
+        let levels: Vec<Class> = options.classes.keys().copied().collect();
         let check = |facts: &TaskFacts, classified: &Classified| {
-            let route = planned(&policy, &options, facts, classified);
+            let route = planned(policy, options, facts, classified);
             let at = format!("{facts:?} {classified:?}: {route:?}");
             assert!(options.classes.contains_key(&route.class), "{at}");
             assert!(
@@ -1223,40 +1349,279 @@ mod tests {
             }
             if route.class.parent == Parent::Deep {
                 let Classified::Answered(c) = classified else {
-                    panic!("{at}")
+                    panic!("Deep without a classification: {at}")
                 };
-                assert!(c.deep_reasoning, "{at}");
+                assert!(c.deep_reasoning, "Deep without deep_reasoning: {at}");
             }
-            let again = planned(&policy, &options, facts, classified);
+            if let Some(floor) = risk_floor(policy, classified) {
+                assert!(route.class >= floor, "below the risk floor {floor}: {at}");
+            }
+            for r in &route.reasons {
+                assert!(REASON_CODES.contains(&r.code.as_str()), "{}: {at}", r.code);
+            }
+            let again = planned(policy, options, facts, classified);
             assert_eq!(again, route);
         };
-        let mut planned_count = 0;
+        let mut count = 0;
         for (id, kind) in &policy.kinds {
-            for origin in [None, Some("repair".to_string())] {
-                for failed_attempts in [0, 1] {
-                    let facts = TaskFacts {
-                        kind: Some(id.clone()),
-                        class_hint: None,
-                        origin: origin.clone(),
-                        failed_attempts,
-                    };
-                    check(&facts, &Classified::Failed);
-                    for risk in Risk::ALL {
-                        for set in 0..8u8 {
-                            let on: Vec<Flag> = (0..3)
-                                .filter(|bit| set & (1 << bit) != 0)
-                                .map(|bit| flags[bit])
-                                .collect();
-                            for level in [kind.class, kind.max_class] {
-                                let classified = answered(id, &level.to_string(), risk, &on);
-                                check(&facts, &classified);
-                                planned_count += 1;
+            let below = levels.iter().rev().find(|c| **c < kind.max_class).copied();
+            let above = levels.iter().find(|c| **c > kind.max_class).copied();
+            let hints = [None]
+                .into_iter()
+                .chain([below, above].map(|h| h.map(Some)).into_iter().flatten());
+            for class_hint in hints {
+                for origin in [None, Some("repair".to_string())] {
+                    for failed_attempts in [0, 1] {
+                        let facts = TaskFacts {
+                            kind: Some(id.clone()),
+                            class_hint,
+                            origin: origin.clone(),
+                            failed_attempts,
+                        };
+                        check(&facts, &Classified::Failed);
+                        count += 1;
+                        for risk in Risk::ALL {
+                            for set in 0..8u8 {
+                                let on: Vec<Flag> = (0..3)
+                                    .filter(|bit| set & (1 << bit) != 0)
+                                    .map(|bit| flags[bit])
+                                    .collect();
+                                for level in [kind.class, kind.max_class] {
+                                    let classified = answered(id, &level.to_string(), risk, &on);
+                                    check(&facts, &classified);
+                                    count += 1;
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        assert_eq!(planned_count, policy.kinds.len() * 2 * 2 * 4 * 8 * 2);
+        count
+    }
+
+    #[test]
+    fn every_reference_plan_is_a_consistent_route_and_planning_twice_gives_the_same() {
+        let (policy, options) = fixtures::reference();
+        let count = check_every_plan(&policy, &options);
+        assert!(
+            count >= policy.kinds.len() * 2 * 2 * 2 * 4 * 8 * 2,
+            "{count}"
+        );
+    }
+
+    #[test]
+    fn a_policy_built_to_break_the_deep_and_risk_floor_rules_still_plans_consistent_routes() {
+        let (policy, options) = hostile();
+        let count = check_every_plan(&policy, &options);
+        assert!(
+            count >= policy.kinds.len() * 2 * 2 * 2 * 4 * 8 * 2,
+            "{count}"
+        );
+    }
+
+    #[test]
+    fn a_lane_that_sets_deep_still_needs_deep_reasoning() {
+        let (policy, options) = hostile();
+        let without = planned(
+            &policy,
+            &options,
+            &task("design"),
+            &answered("design", "complex-high", Risk::Medium, NO_FLAGS),
+        );
+        assert_eq!(without.class, class("complex-high"));
+        assert_eq!(codes(&without), ["lane_matched", "deep_requires_reasoning"]);
+        let with = planned(
+            &policy,
+            &options,
+            &task("design"),
+            &answered(
+                "design",
+                "complex-high",
+                Risk::Medium,
+                &[Flag::DeepReasoning],
+            ),
+        );
+        assert_eq!(with.class, class("deep-high"));
+        assert_eq!(codes(&with), ["lane_matched"]);
+    }
+
+    #[test]
+    fn a_cheap_lane_that_maps_to_deep_still_needs_deep_reasoning() {
+        let (policy, options) = hostile();
+        let without = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered("feature", "standard-high", Risk::Medium, &[Flag::Narrow]),
+        );
+        assert_eq!(without.lane.as_deref(), Some("cheap-deep"));
+        assert_eq!(without.class, class("complex-high"));
+        assert_eq!(codes(&without), ["lane_matched", "deep_requires_reasoning"]);
+        let with = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered(
+                "feature",
+                "standard-high",
+                Risk::Medium,
+                &[Flag::Narrow, Flag::DeepReasoning],
+            ),
+        );
+        assert_eq!(with.lane.as_deref(), Some("cheap-deep"));
+        assert_eq!(with.class, class("deep-low"));
+    }
+
+    #[test]
+    fn a_cheap_lane_that_maps_below_the_risk_floor_is_skipped_for_the_next() {
+        let (policy, options) = hostile();
+        // Medium risk: the floor is Standard, high effort, so the lane mapping
+        // to Standard, low effort is skipped.
+        let medium = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered("feature", "standard-high", Risk::Medium, NO_FLAGS),
+        );
+        assert_eq!(medium.class, class("standard-high"));
+        assert_eq!(medium.lane, None);
+        assert_eq!(medium.harnesses, ["claude", "codex"]);
+        // Low risk has no floor: the first cheap lane takes it.
+        let low = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered("feature", "standard-high", Risk::Low, NO_FLAGS),
+        );
+        assert_eq!(low.lane.as_deref(), Some("cheap-low"));
+        assert_eq!(low.class, class("standard-low"));
+    }
+
+    #[test]
+    fn a_lane_class_below_the_risk_floor_is_raised_to_it() {
+        let (policy, options) = hostile();
+        let medium = planned(
+            &policy,
+            &options,
+            &task("docs"),
+            &answered("docs", "standard-high", Risk::Medium, NO_FLAGS),
+        );
+        assert_eq!(medium.lane.as_deref(), Some("quick"));
+        assert_eq!(medium.class, class("standard-high"));
+        assert_eq!(codes(&medium), ["lane_matched", "class_raised_for_risk"]);
+        let low = planned(
+            &policy,
+            &options,
+            &task("docs"),
+            &answered("docs", "standard-high", Risk::Low, NO_FLAGS),
+        );
+        assert_eq!(low.class, class("simple-high"));
+    }
+
+    #[test]
+    fn a_kinds_lane_class_replaces_the_requested_level() {
+        let (mut policy, options) = fixtures::reference();
+        lane_mut(&mut policy, "art").class = Some(class("complex-low"));
+        let route = planned(
+            &policy,
+            &options,
+            &hinted("art", "standard-medium"),
+            &answered("art", "standard-high", Risk::Low, NO_FLAGS),
+        );
+        assert_eq!(route.class, class("complex-low"));
+        assert_eq!(codes(&route), ["lane_matched"]);
+        assert!(
+            route.reasons[0]
+                .detail
+                .contains("sets Complex, low effort in place of Standard, medium effort"),
+            "{:?}",
+            route.reasons
+        );
+    }
+
+    #[test]
+    fn an_escalated_bugfix_keeps_its_class_through_a_lane_with_a_class() {
+        let (mut policy, options) = fixtures::reference();
+        policy.lanes.push(plain_lane("fixes", "standard-medium"));
+        policy.kinds.get_mut("bugfix").unwrap().lane = Some("fixes".into());
+        let classified = answered("bugfix", "standard-high", Risk::Low, NO_FLAGS);
+        let first = planned(&policy, &options, &task("bugfix"), &classified);
+        assert_eq!(first.class, class("standard-medium"));
+        let escalated = TaskFacts {
+            failed_attempts: 1,
+            ..task("bugfix")
+        };
+        let route = planned(&policy, &options, &escalated, &classified);
+        assert_eq!(route.class, class("complex-high"));
+        assert_eq!(codes(&route), ["escalated_after_failure", "lane_matched"]);
+    }
+
+    #[test]
+    fn a_cheap_lane_that_maps_to_another_level_moves_the_class_and_says_so() {
+        let (mut policy, options) = fixtures::reference();
+        let local = lane_mut(&mut policy, "local-first");
+        local
+            .classes
+            .insert(class("standard-high"), class("standard-medium"));
+        let route = planned(
+            &policy,
+            &options,
+            &task("docs"),
+            &answered("docs", "standard-high", Risk::Low, NARROW_TESTED),
+        );
+        assert_eq!(route.lane.as_deref(), Some("local-first"));
+        assert_eq!(route.class, class("standard-medium"));
+        assert_eq!(codes(&route), ["lane_matched"]);
+        assert!(
+            route.reasons[0]
+                .detail
+                .ends_with("moves Standard, high effort to Standard, medium effort"),
+            "{:?}",
+            route.reasons
+        );
+    }
+
+    #[test]
+    fn a_cheap_lane_with_no_admissible_offer_falls_through_to_the_next() {
+        let (mut policy, options) = fixtures::reference();
+        let mut gemini_only = cheap_lane(
+            "gemini-only",
+            &[("standard-medium", "standard-medium")],
+            NARROW_TESTED,
+            Risk::Low,
+        );
+        // Settings offers no Gemini at Standard, medium effort.
+        gemini_only.harnesses = vec!["gemini".into()];
+        policy.lanes.insert(0, gemini_only);
+        let route = planned(
+            &policy,
+            &options,
+            &hinted("chore", "standard-medium"),
+            &answered("chore", "simple-high", Risk::Low, NARROW_TESTED),
+        );
+        assert_eq!(route.lane.as_deref(), Some("local-first"));
+        assert_eq!(route.class, class("standard-medium"));
+        assert_eq!(route.prefer, ["opencode"]);
+    }
+
+    #[test]
+    fn a_cheap_lane_without_a_risk_ceiling_is_never_used() {
+        let (mut policy, options) = fixtures::reference();
+        policy.lanes.retain(|l| l.id != "local-medium-risk");
+        let local = lane_mut(&mut policy, "local-first");
+        local.max_risk = None;
+        for risk in Risk::ALL {
+            let route = planned(
+                &policy,
+                &options,
+                &task("feature"),
+                &answered("feature", "standard-high", risk, NARROW_TESTED),
+            );
+            assert_eq!(route.lane, None, "{risk:?}");
+            if risk >= Risk::High {
+                assert_eq!(route.harnesses, ["claude", "codex"], "{risk:?}");
+            }
+        }
     }
 }
