@@ -194,12 +194,30 @@ pub fn validate(policy: &Policy, options: &Options) -> Vec<Problem> {
     for (risk, rule) in &policy.risk {
         let at = format!("risk.{}", risk.as_str());
         v.class(&format!("{at}.min_class"), rule.min_class);
+        if rule.min_class.parent == Parent::Deep {
+            v.push(
+                &format!("{at}.min_class"),
+                format!(
+                    "risk never raises work to Deep, but {} has a minimum of {}",
+                    risk_words(*risk).to_lowercase(),
+                    class_words(rule.min_class)
+                ),
+            );
+        }
         for (i, h) in rule.harnesses.iter().enumerate() {
             v.harness(&format!("{at}.harnesses[{i}]"), h);
         }
         if let Some(relax) = &rule.relax {
             v.class(&format!("{at}.relax.class"), relax.class);
-            if relax.class > rule.min_class {
+            if relax.class.parent == Parent::Deep {
+                v.push(
+                    &format!("{at}.relax.class"),
+                    format!(
+                        "risk never raises work to Deep, but the relaxed level is {}",
+                        class_words(relax.class)
+                    ),
+                );
+            } else if relax.class > rule.min_class {
                 v.push(
                     &format!("{at}.relax.class"),
                     format!(
@@ -903,6 +921,19 @@ mod tests {
                 "risk min class unassigned",
                 |p| p.risk.get_mut(&Risk::High).unwrap().min_class = class("standard-max"),
                 "risk.high.min_class".into(),
+            ),
+            (
+                "risk floor at Deep",
+                |p| p.risk.get_mut(&Risk::High).unwrap().min_class = class("deep-low"),
+                "risk.high.min_class".into(),
+            ),
+            (
+                "relaxed risk floor at Deep",
+                |p| {
+                    let rule = p.risk.get_mut(&Risk::VeryHigh).unwrap();
+                    rule.relax.as_mut().unwrap().class = class("deep-low");
+                },
+                "risk.very_high.relax.class".into(),
             ),
             (
                 "relax class above min class",

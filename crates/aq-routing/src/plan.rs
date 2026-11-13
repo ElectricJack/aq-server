@@ -266,7 +266,8 @@ pub fn plan(
             }
             _ => rule.min_class,
         };
-        floor = Some(min);
+        // The Deep rule wins over a Deep floor, which `validate` refuses.
+        floor = Some(deep_only_for_reasoning(min, deep_reasoning));
         if class < min {
             reason(
                 &mut reasons,
@@ -278,7 +279,7 @@ pub fn plan(
                     class_words(min)
                 ),
             );
-            class = min;
+            class = keep_deep_for_reasoning(min, deep_reasoning, &mut reasons);
         }
         harnesses = intersect(harnesses, allow(&rule.harnesses));
     }
@@ -1276,11 +1277,13 @@ mod tests {
     }
 
     /// A test policy built to break the Deep and risk-floor rules: the design
-    /// lane sets Deep, docs go through a lane that sets Simple, and two cheap
+    /// lane sets Deep, docs go through a lane that sets Simple, two cheap
     /// lanes ahead of the reference ones map Standard, high effort to Deep and
-    /// to Standard, low effort for work up to medium risk.
+    /// to Standard, low effort for work up to medium risk, and high risk has a
+    /// Deep floor (which `validate` refuses).
     fn hostile() -> (Policy, Options) {
         let (mut policy, options) = fixtures::reference();
+        policy.risk.get_mut(&Risk::High).unwrap().min_class = class("deep-low");
         lane_mut(&mut policy, "design").class = Some(class("deep-high"));
         policy.lanes.push(plain_lane("quick", "simple-high"));
         policy.kinds.get_mut("docs").unwrap().lane = Some("quick".into());
@@ -1300,7 +1303,9 @@ mod tests {
         (policy, options)
     }
 
-    /// The floor rule 8 sets for the classification's risk and flags.
+    /// The floor rule 8 sets for the classification's risk and flags, capped
+    /// at Complex, high effort when it is Deep and the task does not need
+    /// advanced reasoning (the Deep rule wins).
     fn risk_floor(policy: &Policy, classified: &Classified) -> Option<Class> {
         let answer = match classified {
             Classified::Answered(c) => Some(c),
@@ -1314,10 +1319,11 @@ mod tests {
                 Flag::DeepReasoning => c.deep_reasoning,
             })
         };
-        Some(match &rule.relax {
+        let floor = match &rule.relax {
             Some(relax) if relax.requires.iter().all(set) => relax.class,
             _ => rule.min_class,
-        })
+        };
+        Some(deep_only_for_reasoning(floor, set(&Flag::DeepReasoning)))
     }
 
     /// Every kind × origin × failed attempts × hint (none, one level below
@@ -1496,6 +1502,34 @@ mod tests {
         );
         assert_eq!(low.lane.as_deref(), Some("cheap-low"));
         assert_eq!(low.class, class("standard-low"));
+    }
+
+    #[test]
+    fn a_deep_risk_floor_raises_only_work_that_needs_advanced_reasoning() {
+        let (policy, options) = hostile();
+        let without = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered("feature", "standard-high", Risk::High, NO_FLAGS),
+        );
+        assert_eq!(without.class, class("complex-high"));
+        assert_eq!(
+            codes(&without),
+            ["class_raised_for_risk", "deep_requires_reasoning"]
+        );
+        let with = planned(
+            &policy,
+            &options,
+            &task("feature"),
+            &answered(
+                "feature",
+                "standard-high",
+                Risk::High,
+                &[Flag::DeepReasoning],
+            ),
+        );
+        assert_eq!(with.class, class("deep-low"));
     }
 
     #[test]
