@@ -27,7 +27,18 @@ for field, value in (("used_percent", -1), ("used_percent", 101), ("state", "sur
     invalid = deepcopy(valid)
     invalid["data"][0]["windows"][0][field] = value
     assert not jsonschema.Draft202012Validator(schema).is_valid(invalid), field
-print("5 quota examples and invalid quota fields checked")
+# Reset metadata is additive; old fixtures omit it. Null details and zero count
+# are distinct from unknown and valid alongside independently timed observations.
+for state, count, grants in (("known", 0, []), ("known", 2, None), ("unknown", None, None), ("unavailable", None, None)):
+    example = deepcopy(valid)
+    reset = example["data"][0]["reset_credits"]
+    reset.update(state=state, available_count=count, grants=grants)
+    jsonschema.validate(example, schema)
+for field, value in (("state", "surprising"), ("available_count", -1), ("extra", True)):
+    invalid = deepcopy(valid)
+    invalid["data"][0]["reset_credits"][field] = value
+    assert not jsonschema.Draft202012Validator(schema).is_valid(invalid), field
+print("5 quota examples, reset metadata and invalid quota fields checked")
 
 # Owner-backed overview with a null decision transition time and exact digest pins.
 overview = json.loads((root / "fixtures" / "overview-nonempty.json").read_text())

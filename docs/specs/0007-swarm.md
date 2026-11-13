@@ -1,8 +1,9 @@
 # 0007: The swarm (always-on workers, cloud VMs and swarm controls)
 
 **Status:** Approved by the owner on 2026-11-07 (brainstorming session; builder-check answers folded in). Cloudflare §7.5 follows the recommendation (manual tokens).
+**Controls correction, 2026-11-11 (owner):** provider concurrency allocation sliders and burn estimates belong in a compact Swarm header row; the existing Intelligence settings row gains one Max agents column for the selected provider. This supersedes the earlier Settings › Swarm and Normal/Reduced controls.
 **Repositories:** aq-server, aq-worker, aq-dashboard.
-**Mockup:** `aq-dashboard/.superpowers/brainstorm/2382938-1794083621/content/swarm-tree-v3.html` (React Flow plus dagre, the same libraries as v1's graph).
+**Mockup:** `aq-dashboard/docs/design/swarm-tree-v4.html` (revised controls prototype, labelled sample data). `swarm-tree-v3.html` and `14-swarm-tree-v3.png` retain the earlier tree reference. React Flow plus dagre remain the tree libraries.
 
 Decisions are marked **(owner)** when the owner made them and **(my call)** when the supervisor filled a gap; the owner should check the second kind while reading.
 
@@ -30,7 +31,7 @@ The motivating moment: the owner wants to play games and stops the desktop's wor
 ## 3. Non-goals
 
 - **Per-project pool sizes.** They are replaced by the swarm controls **(owner)**. Projects share one swarm.
-- **Graceful throttling near provider plan limits.** This is deferred to a later brainstorming session **(owner)**; §7.4 has the interim behaviour.
+- **Automatic throttling near provider plan limits.** Manual concurrency limits are in scope (§5.3); automatic adjustment is deferred **(owner, clarified 2026-11-11)**.
 - **Windows-native workers.** Only Linux (including WSL2) and macOS are supported **(owner)**.
 - **Manual VM management.** The owner does not start or stop VMs by hand.
 
@@ -48,12 +49,12 @@ These would count as failure even if everything technically works:
 
 Agents › Swarm becomes the Agents landing page **(owner)**:
 
-1. **Controls bar** at the top (§5.3).
-2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
+1. **Compact provider allocation row** at the top (§5.3), with two sliders and burn estimates always visible.
+2. **Swarm tree** below it, with a **properties pane** on the right (§5.4). A draggable vertical divider adjusts the desktop split; remember the viewer’s preferred width and keep both panes usable. Keyboard arrows, Home, and End also adjust the split. Resizing preserves selection, pan/zoom, and the connected terminal. Phones retain the stacked tree/pane layout. It opens with the whole tree fitted on screen (zoom between 0.5 and 1); a `?select=` link centres on that object **(owner, 2026-11-07)**.
 
 ### 5.2 The tree
 
-It is drawn with `@xyflow/react` 12 and laid out by `@dagrejs/dagre`, as in v1 **(owner)**. It is top-down, with the AQ server at the root **(owner)**:
+It is drawn with `@xyflow/react` 12. The top-down layout measures complete subtrees and aligns sibling headers at the top; the optional left-to-right path retains `@dagrejs/dagre`. The AQ server is at the root **(owner)**:
 
 - **AQ server**, with machines below it.
   - **Machine** (local or cloud, visibly distinct). A cloud VM appears as a short-lived machine with exactly one agent, because each cloud VM runs one agent attempt (§7.5) **(owner)**. Each machine card shows:
@@ -62,6 +63,8 @@ It is drawn with `@xyflow/react` 12 and laid out by `@dagrejs/dagre`, as in v1 *
     - its agent maximum.
     - **Worker node.** Shows the backend (docker-local, boat) and slots used/total.
       - **Agent.** A pill coloured by intelligence class and ringed by provider.
+
+**Owner layout correction, 2026-11-11:** agent and free-slot cards use two-column vertical stacks beneath each worker. Waiting agents use the same bounded stacking rule. Entire subtree widths and heights are reserved so hundreds of agents grow vertically and neither short worker branches nor the waiting queue displace neighboring headers. Existing free-slot aggregation remains, and every rendered card retains its selection identity.
 
 **States are always visible, never hidden:**
 - **Free slot:** a dashed pill **(my call)**.
@@ -72,20 +75,15 @@ It is drawn with `@xyflow/react` 12 and laid out by `@dagrejs/dagre`, as in v1 *
 
 Pan and zoom are supported. Left-to-right layout is optional **(my call)**.
 
-### 5.3 Controls
+### 5.3 Status header and quick control
 
-The controls are sliders **(owner)**:
+The Swarm header shows the two configured provider allocation sliders side by side in a single compact row, with burn estimates beneath each slider. Slider changes save automatically after adjustment, with serialized writes and explicit pending/failure feedback. Do not add Unlimited checkboxes, Apply buttons, or an expand/collapse control. The far-right slider position means No limit; zero pauses new starts. The global top bar already shows usage, so do not repeat usage-window displays here. Keep both sliders usable on phones without horizontal page scrolling.
 
-| Control | What it sets |
-| --- | --- |
-| Agents per provider (Claude, Codex, …) | Target number of concurrently running agents for that provider |
-| Mix by intelligence class (fast, standard, deep, …) | Share of agents per class. This drives burn rate. |
-| Boat VMs | Shows the current VM ceiling, which is also the ceiling on cloud agents, since each VM runs one agent. The maximum is set in Settings **(owner)**. |
-| Projected burn gauge | Read-only. Shows how fast the configured swarm uses each provider's usage window. |
+Each provider cap is independent of optional profile/provider overrides. An unset limit (`null`) is unlimited; zero pauses new starts. Lowering a cap does not stop existing agents. Routing remains unchanged and work waits when its required capacity is unavailable.
 
-- **Sliders are ceilings, not commands** **(my call)**. AQ runs agents only for ready work, up to these numbers.
-- **Slider ranges are bounded by Settings maximums** **(owner)**.
-- Changes take effect on the next placement decision. They never kill running agents. Lowering a slider lets running agents finish **(my call)**.
+Estimate account quota points per hour from fresh browser sample history. Project burn at the provider cap only when active-agent calibration supports it; otherwise show gathering or unavailable. These estimates are not monetary cost and account usage outside AQ can affect them.
+
+Changing allocation preserves tree pan, zoom, and selection. Conflicting or uncertain saves preserve the user's intended values and require explicit recovery rather than silently overwriting concurrent changes.
 
 ### 5.4 Properties pane
 
@@ -123,9 +121,10 @@ Clicking any tree object shows its details **(owner)**:
 
 ## 6. Settings
 
-Settings gains a **Swarm** section **(owner: maximums live in Settings)**:
+Add one **Max agents** column to the existing Intelligence settings row for the selected provider. Each optional profile/provider override limits concurrent agents for that pair across projects and machines. A blank/unset override is unlimited; zero pauses new starts. Show running and waiting context, including when running exceeds a newly lowered limit. Unsupported pairs remain unavailable. Use the row’s existing Save button for profile and Max agents changes; there is no separate Apply control, Swarm settings tab, or Normal/Reduced mode UI. If the profile saves but its subsequent limit save fails, retain the limit draft and report that partial outcome clearly.
 
-- **Provider maximums:** the upper bound of each provider slider.
+Other settings remain:
+
 - **Cloud:**
   - the maximum number of boat VMs, which is also the maximum number of cloud agents running at once;
   - the VM size.
@@ -139,14 +138,15 @@ Settings gains a **Swarm** section **(owner: maximums live in Settings)**:
 
 ### 7.1 Placement
 
-When ready work exists and a provider is under its slider target, AQ places an agent:
+The router selects a task's intelligence class from its requirements and independently determines eligible providers. It never changes the required class to meet a target mix **(owner, 2026-11-11)**. Placement then applies the independent provider cap and any configured provider/class override:
 
-1. **Which machines are eligible.** An online machine whose worker is running, that is under its agent maximum, and under its CPU and memory thresholds.
-2. **Local machines first,** then running VMs.
-3. **Overflow to the cloud.** If no machine is eligible and running VMs are under the VM maximum, AQ starts a new VM **(owner: automatic scaling)**.
-4. **Otherwise the agent waits,** and the waiting branch shows the specific reason (§5.2).
+1. **A matching intelligence slot must be available.** Reserve capacity against the provider/class ceiling before admitting work, across concurrent placement decisions. Cloud capacity cannot bypass this check. Eligible-provider fallback remains governed by routing policy, not by changing the intelligence class or borrowing another class's slots.
+2. **Which machines are eligible.** An online machine whose worker is running, that is under its agent maximum, and under its CPU and memory thresholds.
+3. **Local machines first,** then running VMs.
+4. **Overflow to the cloud.** If an intelligence slot is available but no machine is eligible, and running VMs are under the VM maximum, AQ starts a new VM **(owner: automatic scaling)**.
+5. **Otherwise the task waits,** retaining its required class. Show the specific reason (§5.2), including `Claude deep concurrency limit reached`, zero-limit pauses, provider usage exhaustion, and machine/VM constraints. Distinguish queued tasks from already running agents.
 
-The intelligence-class mix is applied when the router picks a class for each task: the mix becomes the target shares across running agents **(my call; how the mix interacts with the router's per-task class choice is for the builder to settle and document)**.
+Limit changes affect new admissions only. Running agents finish; lowering a limit never cancels or reclassifies them. Release reservations when launches fail or attempts finish so a failed start cannot permanently consume a slot. Verify that queued work starts when matching capacity becomes available and that simultaneous admissions cannot exceed the ceiling.
 
 ### 7.2 Workers as services
 
@@ -180,7 +180,7 @@ The machine then appears in the tree. Boat VMs run the same enrollment automatic
 ### 7.4 Provider usage limits (interim)
 
 Until the deferred design (§3):
-- The burn gauge shows each provider window's level where AQ has a source.
+- The header shows each provider window's level where AQ has a source; projected burn is separate from measured usage and appears only with a supported estimate.
   - **Codex:** the existing quota collector.
   - **Claude:** "unknown" until a source exists. Today nothing reads Claude usage.
 - When a window is exhausted, that provider's agents **wait for the reset** instead of failing, and the page says so **(my call)**. For Claude, "exhausted" is detected from rate-limit errors reported by the harness.
@@ -219,7 +219,8 @@ Until the deferred design (§3):
 - **Data model:**
   - machines vs nodes;
   - live CPU and RAM reporting;
-  - how slider targets are stored;
+  - how independent provider caps and sparse provider-class overrides are stored and versioned;
+  - how running agents map to authoritative routing classes (model-name guesses are insufficient for enforcing limits);
   - how "holding back" reasons are computed and exposed.
 - **Migration:** how the existing B4 per-project replacement budgets and any remaining per-project pool settings migrate to the swarm controls.
 - **Install script:** distribution and update path.
@@ -234,7 +235,7 @@ Each phase has its own implementation plan in `docs/superpowers/plans/`. Phases 
 | --- | --- | --- |
 | 1. Workers as services | A multi-slot `aq-worker run` that actually takes docker-local work, a Linux/WSL2 systemd service, enrollment by install script and single-use code, start/stop/drain from the server, a fresh attempt from saved work after a restart, automatic re-measurement | — |
 | 2. Swarm page (read-only) | Server swarm read model (machines, nodes, agents, live CPU/RAM including the WSL2 Windows probe, holding reasons), the dashboard tree page (React Flow and dagre), the properties pane and the agent terminal | — |
-| 3. Controls and placement | Swarm settings (provider and VM maximums, per-machine limits and thresholds), sliders replacing per-project pool sizes, the placement rules of §7.1, waiting reasons, the burn gauge | 1, 2 |
+| 3. Controls and placement | provider cap sliders and burn estimates in the compact Swarm header; Max agents in existing Intelligence settings; VM maximums, per-machine limits and thresholds; replacement of per-project pool sizes; requirement-driven routing with slot admission (§7.1); waiting reasons; measured usage and supported burn estimates | 1, 2 |
 | 4. Cloud VMs | The server starts one boat VM per attempt, the boat agent launch, the in-VM channel proxy, the Codex restriction, the cloud Access token | 1, 3 |
 | 5. macOS | launchd service, multi-arch templates and `aqv2`, a proven Docker Desktop channel transport | 1 |
 

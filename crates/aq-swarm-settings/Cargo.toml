@@ -1,0 +1,16 @@
+[package]
+name = "aq-swarm-settings"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+aq-profiles = { path = "../aq-profiles" }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+axum.workspace = true
+aq-selection = { path = "../aq-selection" }

@@ -2238,3 +2238,342 @@ async fn worker_host_shell_is_scoped_separate_persistent_and_fenced() {
         new.to_string()
     );
 }
+
+/// Provider/class admission uses real SQL locks and committed preparation
+/// reservations across workers, with no model process involved.
+#[tokio::test]
+async fn swarm_parallel_admission_reserves_once_and_failure_releases_capacity() {
+    use aq_swarm_settings::admission::{self, CEILING, Cell};
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')")
+        .bind(project).execute(&pool).await.unwrap();
+    let cell = Cell {
+        provider: "openai".into(),
+        intelligence_class: "complex".into(),
+    };
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(json!([{"provider":"openai","intelligence_class":"complex","limit":1}]))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let id = Uuid::new_v4();
+        ids.push(id);
+        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting for a slot',1,1)")
+            .bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(json!({"provider":"openai","intelligence_class":"complex"})).execute(&pool).await.unwrap();
+    }
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut tasks = Vec::new();
+    for id in &ids {
+        let pool = pool.clone();
+        let cell = cell.clone();
+        let barrier = barrier.clone();
+        let id = *id;
+        tasks.push(tokio::spawn(async move {
+            let mut tx = pool.begin().await.unwrap();
+            barrier.wait().await;
+            let refused = admission::check(&mut tx, Some(&cell)).await.unwrap();
+            if refused.is_none() {
+                sqlx::query("UPDATE manual_agent_sessions SET status='preparing' WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+            tx.commit().await.unwrap();
+            (id, refused)
+        }));
+    }
+    let a = tasks.remove(0).await.unwrap();
+    let b = tasks.remove(0).await.unwrap();
+    assert_eq!([a.1, b.1].iter().filter(|r| r.is_none()).count(), 1);
+    assert!([a.1, b.1].contains(&Some(CEILING)));
+    let running = if a.1.is_none() { a.0 } else { b.0 };
+    let mut conn = pool.acquire().await.unwrap();
+    let counts = admission::counts(&mut conn).await.unwrap();
+    let count = counts
+        .iter()
+        .find(|c| c.provider == cell.provider && c.intelligence_class == cell.intelligence_class)
+        .unwrap();
+    assert_eq!((count.running, count.waiting), (1, 1));
+    // Lowering to zero holds new work without touching a running reservation.
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(json!([{"provider":"openai","intelligence_class":"complex","limit":0}]))
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    tx.rollback().await.unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM manual_agent_sessions WHERE id=$1")
+        .bind(running)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(status, "preparing");
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(json!([{"provider":"openai","intelligence_class":"complex","limit":1}]))
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    // Repeated polls of one queued task count once, and a stale observation
+    // expires without leaving a permanent wait behind.
+    let waiting_task = Uuid::new_v4();
+    let mut wait_tx = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::observe(&mut wait_tx, waiting_task, Some(&cell), 10_000)
+            .await
+            .unwrap(),
+        Some(CEILING)
+    );
+    assert_eq!(
+        admission::observe(&mut wait_tx, waiting_task, Some(&cell), 10_000)
+            .await
+            .unwrap(),
+        Some(CEILING)
+    );
+    wait_tx.commit().await.unwrap();
+    assert_eq!(admission::counts_at(&mut conn,10_001).await.unwrap().iter().find(|c|c.provider==cell.provider && c.intelligence_class==cell.intelligence_class).unwrap().waiting,2);
+    assert_eq!(admission::counts_at(&mut conn,70_001).await.unwrap().iter().find(|c|c.provider==cell.provider && c.intelligence_class==cell.intelligence_class).unwrap().waiting,1);
+    admission::clear_waiting(&mut conn, waiting_task)
+        .await
+        .unwrap();
+    // Cancelled/deleted tasks stop polling. Later observations reclaim their
+    // expired rows in bounded batches while retaining fresh waits.
+    sqlx::query("INSERT INTO swarm_waiting(task_id,provider,intelligence_class,reason,observed_at_ms,expires_at_ms) SELECT gen_random_uuid(),'openai','complex',$1,1,1 FROM generate_series(1,129)")
+        .bind(CEILING).execute(&mut *conn).await.unwrap();
+    let fresh_wait = Uuid::new_v4();
+    sqlx::query("INSERT INTO swarm_waiting(task_id,provider,intelligence_class,reason,observed_at_ms,expires_at_ms) VALUES($1,'openai','complex',$2,70000,1000000)")
+        .bind(fresh_wait).bind(CEILING).execute(&mut *conn).await.unwrap();
+    let mut cleanup_tx = pool.begin().await.unwrap();
+    admission::observe(&mut cleanup_tx, waiting_task, Some(&cell), 70_001)
+        .await
+        .unwrap();
+    let expired: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM swarm_waiting WHERE expires_at_ms<=70001")
+            .fetch_one(&mut *cleanup_tx)
+            .await
+            .unwrap();
+    assert_eq!(
+        expired, 1,
+        "one observation reclaims at most 128 expired waits"
+    );
+    admission::observe(&mut cleanup_tx, waiting_task, Some(&cell), 70_001)
+        .await
+        .unwrap();
+    let expired: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM swarm_waiting WHERE expires_at_ms<=70001")
+            .fetch_one(&mut *cleanup_tx)
+            .await
+            .unwrap();
+    assert_eq!(expired, 0);
+    let fresh: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM swarm_waiting WHERE task_id=$1)")
+            .bind(fresh_wait)
+            .fetch_one(&mut *cleanup_tx)
+            .await
+            .unwrap();
+    assert!(fresh, "cleanup preserves unexpired observations");
+    cleanup_tx.commit().await.unwrap();
+    admission::clear_waiting(&mut conn, waiting_task)
+        .await
+        .unwrap();
+    admission::clear_waiting(&mut conn, fresh_wait)
+        .await
+        .unwrap();
+    // Launch failure releases exactly the preparing session's occupied slot.
+    sqlx::query("UPDATE manual_agent_sessions SET status='failed',stopped_at_ms=2 WHERE id=$1")
+        .bind(running)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(admission::check(&mut tx, Some(&cell)).await.unwrap(), None);
+    // A failed publication rolls back the tentative reservation and its lock.
+    sqlx::query(
+        "UPDATE manual_agent_sessions SET status='preparing' WHERE id=$1 AND status='pending'",
+    )
+    .bind(if a.1.is_some() { a.0 } else { b.0 })
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(admission::check(&mut tx, Some(&cell)).await.unwrap(), None);
+    tx.rollback().await.unwrap();
+    // Native publication uses SERIALIZABLE. Its earlier snapshot cannot miss a
+    // manual admission committed while it waited: the settings row version
+    // forces a retry even though the user-facing revision stays unchanged.
+    drop(conn);
+    let mut stale = pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *stale)
+        .await
+        .unwrap();
+    sqlx::query("SELECT revision FROM swarm_settings")
+        .execute(&mut *stale)
+        .await
+        .unwrap();
+    let mut winner = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::check(&mut winner, Some(&cell)).await.unwrap(),
+        None
+    );
+    winner.commit().await.unwrap();
+    let error = admission::check(&mut stale, Some(&cell)).await.unwrap_err();
+    assert!(
+        matches!(error,sqlx::Error::Database(ref error) if error.code().as_deref()==Some("40001"))
+    );
+    stale.rollback().await.unwrap();
+}
+
+#[test]
+fn swarm_class_uses_catalog_profile_identity_including_automatic_routing() {
+    use aq_swarm_settings::admission::classify;
+    let candidate = json!({"provider":"openai","model":"same-model","harnesses":["codex"],"reasoning_configuration_reference":"high"});
+    let catalog = json!({"catalog":{"intelligence":[
+        {"id":"simple","version":7,"candidates":[candidate.clone()]},
+        {"id":"complex","version":2,"candidates":[candidate.clone()]},
+        {"id":"router","version":1,"automatic_routing":true,"candidates":[candidate]}
+    ]}});
+    let choice = json!({"provider":"openai","model":"same-model","harness":"codex","reasoning_configuration_reference":"high"});
+    assert_eq!(
+        classify(&catalog, Some("simple@7"), &choice)
+            .unwrap()
+            .intelligence_class,
+        "simple"
+    );
+    assert_eq!(
+        classify(&catalog, Some("complex@2"), &choice)
+            .unwrap()
+            .intelligence_class,
+        "complex"
+    );
+    assert_eq!(
+        classify(&catalog, Some("router@1"), &choice)
+            .unwrap()
+            .intelligence_class,
+        "router"
+    );
+    assert!(classify(&catalog, None, &choice).is_none());
+    assert!(classify(&catalog, Some("complex@99"), &choice).is_none());
+}
+
+#[tokio::test]
+async fn swarm_manual_poll_explains_zero_limit_and_rejects_report_admission_bypass() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"enabled\":true}',1,'{}')").bind(project).execute(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'pending','Waiting',1,1)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(json!({"provider":"openai","intelligence_class":"complex"})).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(json!([{"provider":"openai","intelligence_class":"complex","limit":0}]))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let worker = build_worker_router(f.state.clone());
+    let report = json!({"max_slots":2,"repositories":[],"providers":["openai"],"reports":[{"id":id,"status":"preparing","stage":"Bypass"}]});
+    let (status, body) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(report),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["sessions"].as_array().unwrap().is_empty());
+    let saved: (String, String) =
+        sqlx::query_as("SELECT status,stage FROM manual_agent_sessions WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        saved,
+        (
+            "pending".into(),
+            aq_swarm_settings::admission::CEILING.into()
+        )
+    );
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(json!([{"provider":"openai","intelligence_class":"complex","limit":1}]))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let poll = json!({"max_slots":2,"repositories":[],"providers":["openai"],"reports":[]});
+    let (status, body) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(poll),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["sessions"][0]["status"], "preparing");
+}
+
+#[tokio::test]
+async fn swarm_provider_ceiling_counts_other_classes_and_unclassified_reservations() {
+    use aq_swarm_settings::admission::{self, CEILING, Cell};
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')")
+        .bind(project).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"openai","limit":2}],"cell_limits":[{"provider":"openai","intelligence_class":"complex","limit":5}]}))
+        .execute(&pool).await.unwrap();
+    let mut ids = Vec::new();
+    for spec in [
+        json!({"provider":"openai","intelligence_class":"simple"}),
+        json!({"provider":"openai"}),
+    ] {
+        let id = Uuid::new_v4();
+        ids.push(id);
+        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,'preparing','Preparing',1,1)")
+            .bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(spec).execute(&pool).await.unwrap();
+    }
+    let cell = Cell {
+        provider: "openai".into(),
+        intelligence_class: "complex".into(),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    // Remove the unclassified reservation; other-class usage still counts,
+    // while one remaining slot admits this class below its own ceiling.
+    sqlx::query("UPDATE manual_agent_sessions SET stopped_at_ms=2,status='failed' WHERE id=$1")
+        .bind(ids[1])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(admission::check(&mut tx, Some(&cell)).await.unwrap(), None);
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(json!({"provider_limits":[{"provider":"openai","limit":0}]}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(live, 1, "lowering ceilings preserves existing reservations");
+    tx.rollback().await.unwrap();
+}

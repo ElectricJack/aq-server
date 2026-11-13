@@ -60,7 +60,7 @@ async fn spec(
     if let Some(selected) = selected {
         let choice = intelligence::resolve(s, selected).await?;
         return Ok(
-            json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"reasoning_configuration_reference":choice["reasoning_configuration_reference"],"options":choice["options"],"harness":choice["harness"],"intelligence_profile":selected,"profile_name":choice["name"]}),
+            json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"reasoning_configuration_reference":choice["reasoning_configuration_reference"],"options":choice["options"],"harness":choice["harness"],"intelligence_profile":selected,"profile_name":choice["name"],"catalog_digest":choice["catalog_digest"],"intelligence_class":choice["profile_id"]}),
         );
     }
     let artifact: Vec<u8> =
@@ -87,14 +87,18 @@ async fn spec(
             profiles
                 .iter()
                 .find(|p| format!("{}@{}", p["id"].as_str().unwrap_or(""), p["version"]) == id)
-                .and_then(|p| p["candidates"].as_array())
-                .and_then(|cs| cs.iter().find(|c| c["provider"] == "anthropic"))
+                .and_then(|p| {
+                    p["candidates"]
+                        .as_array()
+                        .and_then(|cs| cs.iter().find(|c| c["provider"] == "anthropic"))
+                        .map(|c| (p, c))
+                })
         })
         .ok_or_else(|| {
             conflict("No installed interactive provider is configured for this project")
         })?;
     Ok(
-        json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":model["provider"],"model":model["model"]}),
+        json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":model.1["provider"],"model":model.1["model"],"reasoning_configuration_reference":model.1["reasoning_configuration_reference"],"catalog_digest":b["catalog_digest"],"intelligence_class":model.0["id"],"intelligence_profile":{"profile_id":model.0["id"],"profile_version":model.0["version"],"candidate_id":model.1["id"]}}),
     )
 }
 async fn list(
@@ -152,14 +156,17 @@ fn same_launch(
 ) -> bool {
     old.node_id == node
         && old.project_id == project
-        && old.spec.get("intelligence_profile")
-            == selected
-                .as_ref()
-                .map(serde_json::to_value)
-                .transpose()
-                .ok()
-                .flatten()
-                .as_ref()
+        && old.spec.get("requested_intelligence_profile").or_else(|| {
+            old.spec
+                .get("intelligence_profile")
+                .filter(|_| old.spec.get("intelligence_class").is_none())
+        }) == selected
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .ok()
+            .flatten()
+            .as_ref()
 }
 async fn start(
     State(s): State<Service>,
@@ -175,7 +182,11 @@ async fn start(
         }
         return Err(conflict("Launch identity is already used"));
     }
-    let spec = spec(&s, project, node, op.intelligence_profile.as_ref()).await?;
+    let mut spec = spec(&s, project, node, op.intelligence_profile.as_ref()).await?;
+    if let Some(selected) = &op.intelligence_profile {
+        spec["requested_intelligence_profile"] =
+            serde_json::to_value(selected).map_err(|_| bad("Invalid profile choice"))?;
+    }
     let mut tx = s.pool.begin().await?;
     aq_machine_control::management::lock(&mut tx)
         .await

@@ -88,7 +88,7 @@ async fn poll(
     sqlx::query("INSERT INTO manual_worker_reports(node_id,max_slots,repositories,observed_at_ms,providers) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET max_slots=EXCLUDED.max_slots,repositories=EXCLUDED.repositories,observed_at_ms=EXCLUDED.observed_at_ms,providers=EXCLUDED.providers").bind(node).bind(v.max_slots as i32).bind(json!(v.repositories)).bind(at).bind(json!(v.providers)).execute(&mut *tx).await?;
     let mut owned = Vec::new();
     for r in &v.reports {
-        let changed=sqlx::query("UPDATE manual_agent_sessions SET status=$3,stage=$4,updated_at_ms=CASE WHEN status<>$3 OR stage<>$4 THEN $5 ELSE updated_at_ms END,worker_seen_at_ms=$5,stopped_at_ms=CASE WHEN $3 IN ('stopped','failed') THEN $5 ELSE NULL END WHERE id=$1 AND node_id=$2 AND stopped_at_ms IS NULL AND NOT(status='pending' AND $3='running') RETURNING id").bind(r.id).bind(node).bind(&r.status).bind(&r.stage).bind(at).fetch_optional(&mut *tx).await?;
+        let changed=sqlx::query("UPDATE manual_agent_sessions SET status=$3,stage=$4,updated_at_ms=CASE WHEN status<>$3 OR stage<>$4 THEN $5 ELSE updated_at_ms END,worker_seen_at_ms=$5,stopped_at_ms=CASE WHEN $3 IN ('stopped','failed') THEN $5 ELSE NULL END WHERE id=$1 AND node_id=$2 AND stopped_at_ms IS NULL AND NOT(status='pending' AND $3 NOT IN ('stopped','failed')) RETURNING id").bind(r.id).bind(node).bind(&r.status).bind(&r.stage).bind(at).fetch_optional(&mut *tx).await?;
         if changed.is_some() {
             owned.push(r);
         }
@@ -130,6 +130,16 @@ async fn poll(
                 || total >= limits.maximum(v.max_slots)
                 || used.get(&x.project_id).copied().unwrap_or(0) >= limit
             {
+                continue;
+            }
+            let cell =
+                aq_swarm_settings::admission::manual_cell(&mut tx, &x.spec, x.project_id).await?;
+            if let Some(reason) =
+                aq_swarm_settings::admission::check(&mut tx, cell.as_ref()).await?
+            {
+                x.stage = reason.into();
+                sqlx::query("UPDATE manual_agent_sessions SET stage=$2,updated_at_ms=$3 WHERE id=$1 AND status='pending'")
+                    .bind(x.id).bind(reason).bind(at).execute(&mut *tx).await?;
                 continue;
             }
             total += 1;

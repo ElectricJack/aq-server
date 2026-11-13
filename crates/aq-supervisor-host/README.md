@@ -27,6 +27,15 @@ already migrated by aq-server (F1b requires state format 48 or later). It never
 migrates the database itself. A new plan does not bypass a retained generation's stop or mail
 fence. F1b supplies application dispatch and original-mail authorization.
 
+Swarm concurrency controls require the supervisor host from the same rollout
+as server migration 115. Each new turn pins its selected intelligence profile
+and reserves that provider/profile cell in the preparation transaction. Existing
+generations retain their admission when limits or mode change; only confirmed
+stop or cancellation before start releases their capacity. Upgrade controllers
+after active turns finish and preserve `/host`. Once limits are configured, the
+database refuses new generations from older hosts without a reservation marker;
+upgrade the host before expecting those queued supervisor turns to start.
+
 After Running, `run` verifies the exact staged turn's handoff and issues the
 generation-bound supervisor reply credential. It installs the token as
 `/host/<launch-id>/supervisor.credential` (root-owned 0600), with expiry no later

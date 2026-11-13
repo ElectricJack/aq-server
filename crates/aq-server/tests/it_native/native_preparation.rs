@@ -514,3 +514,82 @@ async fn incoming_preparation_bytes_cannot_overshoot_retained_storage_limit() {
         0
     );
 }
+
+#[tokio::test]
+async fn swarm_native_offer_reserves_class_and_lowering_limit_preserves_preparation() {
+    use aq_swarm_settings::admission::{self, CEILING};
+    let c = setup().await;
+    let pool = c.f.db.pool().await;
+    let decision: serde_json::Value =
+        sqlx::query_scalar("SELECT decision FROM intelligence_decisions WHERE decision_id=$1")
+            .bind(c.f.decision)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let cell = admission::resolve(
+        &mut conn,
+        decision["inputs"]["project"]["catalog_digest"].as_str(),
+        decision["inputs"]["project"]["intelligence_profile"].as_str(),
+        &decision["outcome"]["resolved"]["choice"],
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton").bind(serde_json::json!([{"provider":cell.provider,"intelligence_class":cell.intelligence_class,"limit":1}])).execute(&mut *conn).await.unwrap();
+    // The committed offer consumes the one slot before any process starts.
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        admission::check(&mut tx, Some(&cell)).await.unwrap(),
+        Some(CEILING)
+    );
+    tx.rollback().await.unwrap();
+    let counts = admission::counts(&mut conn).await.unwrap();
+    assert_eq!(counts.iter().find(|x|x.provider==cell.provider && x.intelligence_class==cell.intelligence_class).unwrap().running,1);
+    // A zero ceiling applies only to new admissions. The offered reservation
+    // remains valid for its owner and may continue through preparation.
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton").bind(serde_json::json!([{"provider":cell.provider,"intelligence_class":cell.intelligence_class,"limit":0}])).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let auth = context(&c).await;
+    preparation::accept(&c.f.state, &auth, &c.request, Uuid::new_v4())
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    // The pill's named class comes from the immutable catalog used to admit
+    // this attempt, even if the owner's active routing catalog later changes.
+    let mut swarm: aq_dashboard_contract::Swarm = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../../protocol/dashboard-read/v1/fixtures/swarm.json"
+        ))
+        .unwrap()["data"]
+            .clone(),
+    )
+    .unwrap();
+    let agent = swarm
+        .machines
+        .iter_mut()
+        .flat_map(|m| &mut m.nodes)
+        .flat_map(|n| &mut n.agents)
+        .next()
+        .unwrap();
+    agent.attempt_id = c.f.profiled.offer.binding.attempt_id;
+    sqlx::query("UPDATE profile_catalog_registry SET active_digest=NULL WHERE singleton")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    aq_swarm::routing::apply(&mut conn, &mut swarm)
+        .await
+        .unwrap();
+    let routing = swarm
+        .machines
+        .iter()
+        .flat_map(|m| &m.nodes)
+        .flat_map(|n| &n.agents)
+        .find(|a| a.attempt_id == c.f.profiled.offer.binding.attempt_id)
+        .unwrap()
+        .routing_profile
+        .as_ref()
+        .unwrap();
+    assert_eq!(routing.id, cell.intelligence_class);
+    assert!(!routing.display_name.is_empty());
+}

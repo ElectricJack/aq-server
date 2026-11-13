@@ -150,7 +150,9 @@ A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
 reserved for placement and are not produced yet. Each `agents` entry is a running
-session of the node; its `intelligence_class` is derived from the model name
+session of the node; its optional `routing_profile` identifies the authoritative
+pinned intelligence profile (`id` and `display_name`). Historical attempts without
+that identity omit it. Its `intelligence_class` is a legacy palette hint derived from the model name
 (`haiku`, `mini`, `spark` or `flash` fast, `sonnet` standard, `opus` deep) and is
 absent otherwise. `waiting.reasons` says why new work cannot start now:
 `no_machine_online` when no machine is online, holding or stopped,
@@ -176,3 +178,13 @@ question, `asked_at_ms` and `expires_at_ms`. `answer`, `answered_at_ms` and
 `questions.answer@1` is enabled with `dashboard.actions` and names the
 dashboard-actions-1 kind `question.answer`. Fixtures:
 `question-inbox-{open,closed}.json` and `question-detail.json`.
+
+Provider usage may include `reset_credits` per account. Its state is `known`,
+`unknown`, or `unavailable`; a known count of zero is distinct from a null
+count. `grants: null` means details were not supplied and `[]` means an empty
+detail list. Each grant carries display-only restrictions and nullable expiry,
+remaining count and usability. Reset observation timestamps and freshness are
+independent of the quota windows; old clients and snapshots may omit the field.
+The snapshot collector bounds display text and counts and rejects malformed
+metadata without discarding valid windows. Direct legacy HTTP sources omit
+reset metadata.

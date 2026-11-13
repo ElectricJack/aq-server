@@ -3,7 +3,7 @@ pub mod inventory;
 mod snapshot;
 use aq_dashboard_contract::{
     Completeness, Observation, ProviderScope, ProviderUsage, Quality, QuotaState, QuotaWindow,
-    Timestamp,
+    ResetCreditState, ResetCredits, ResetGrant, Timestamp,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
@@ -262,8 +262,13 @@ fn auth(source: &CodexSource, now: u64) -> Option<Zeroizing<String>> {
     Some(token)
 }
 #[derive(Clone)]
+struct Collected {
+    windows: Vec<QuotaWindow>,
+    reset_credits: Option<ResetCredits>,
+}
+#[derive(Clone)]
 struct Cache {
-    windows: Option<Vec<QuotaWindow>>,
+    value: Option<Collected>,
     observed_at: u64,
     attempted_at: u64,
     failed: bool,
@@ -289,7 +294,7 @@ impl Collector {
             cells: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
-    async fn request(&self, source: CodexSource, now: u64) -> Option<Vec<QuotaWindow>> {
+    async fn request(&self, source: CodexSource, now: u64) -> Option<Collected> {
         if source.snapshot_file.is_some() {
             return tokio::task::spawn_blocking(move || snapshot::read(&source, now))
                 .await
@@ -327,7 +332,10 @@ impl Collector {
             }
             bytes.extend_from_slice(&chunk);
         }
-        parse(&bytes, &source.chatgpt_account_id, now)
+        Some(Collected {
+            windows: parse(&bytes, &source.chatgpt_account_id, now)?,
+            reset_credits: None,
+        })
     }
     async fn account(
         &self,
@@ -364,24 +372,24 @@ impl Collector {
                     && now - c.attempted_at < if c.failed { 5_000 } else { CACHE_MS }
             });
             if let Some(c) = cached {
-                value = c.windows.clone();
+                value = c.value.clone();
                 partial |= c.failed;
-            } else if let Some(windows) = self.request(source, now).await {
+            } else if let Some(collected) = self.request(source, now).await {
                 *cache = Some(Cache {
-                    windows: Some(windows.clone()),
+                    value: Some(collected.clone()),
                     observed_at: now,
                     attempted_at: now,
                     failed: false,
                 });
-                value = Some(windows);
+                value = Some(collected);
             } else {
                 let previous = cache
                     .as_ref()
                     .filter(|c| now >= c.observed_at)
-                    .and_then(|c| c.windows.clone());
+                    .and_then(|c| c.value.clone());
                 let observed_at = cache.as_ref().map_or(now, |c| c.observed_at);
                 *cache = Some(Cache {
-                    windows: previous.clone(),
+                    value: previous.clone(),
                     observed_at,
                     attempted_at: now,
                     failed: true,
@@ -390,7 +398,8 @@ impl Collector {
                 partial = true;
             }
         }
-        let windows = value.unwrap_or_else(|| {
+        let reset_credits = value.as_ref().and_then(|v| v.reset_credits.clone());
+        let windows = value.map(|v| v.windows).unwrap_or_else(|| {
             partial = true;
             unknown("unknown".into(), "Unavailable".into(), now)
                 .into_iter()
@@ -418,6 +427,7 @@ impl Collector {
                 windows,
                 preferred_window_id,
                 availability_ref: None,
+                reset_credits,
             },
             partial,
         )

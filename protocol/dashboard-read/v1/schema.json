@@ -2002,6 +2002,16 @@
         "provider_id": {
           "type": "string"
         },
+        "reset_credits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResetCredits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "scope": {
           "$ref": "#/$defs/ProviderScope"
         },
@@ -2380,9 +2390,110 @@
       ],
       "type": "string"
     },
+    "ResetCreditState": {
+      "enum": [
+        "known",
+        "unknown",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "ResetCredits": {
+      "additionalProperties": false,
+      "properties": {
+        "available_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/ResetGrant"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "state": {
+          "$ref": "#/$defs/ResetCreditState"
+        }
+      },
+      "required": [
+        "state",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "ResetGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "clears": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "remaining_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usable_now": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "clears"
+      ],
+      "type": "object"
+    },
     "Revision": {
       "pattern": "^[1-9][0-9]{0,39}$",
       "type": "string"
+    },
+    "RoutingProfile": {
+      "additionalProperties": false,
+      "description": "The authoritative intelligence profile pinned for this attempt.",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "display_name"
+      ],
+      "type": "object"
     },
     "Scope": {
       "oneOf": [
@@ -3325,7 +3436,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Legacy model-based palette hint; routing_profile identifies the enforced class."
         },
         "model": {
           "type": [
@@ -3340,6 +3452,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "routing_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingProfile"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "session_id": {

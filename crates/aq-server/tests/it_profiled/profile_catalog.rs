@@ -85,6 +85,9 @@ fn activation(catalog: &ValidatedCatalog, revision: u64) -> Value {
 const ACTIVATE: &str = "/api/profiles/catalogs/activate";
 const STATE: &str = "/api/profiles/catalogs";
 
+mod providers;
+mod swarm_settings;
+
 #[tokio::test]
 async fn missing_registry_is_an_explicit_conflict() {
     let (_db, app, pool) = setup().await;
@@ -979,4 +982,255 @@ fn automatic_routing_keeps_agent_and_intelligence_reference_namespaces_separate(
         updated["allowed_intelligence_profiles"],
         json!(["router@1"])
     );
+}
+
+const INTELLIGENCE_STRUCTURE: &str = "/api/settings/intelligence/structure";
+fn structure_request(snapshot: &Value) -> Value {
+    json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
+        "expected_catalog_revision":snapshot["catalog_revision"],"routing_markdown":snapshot["routing_markdown"],
+        "parents":snapshot["parents"],"assignments":snapshot["assignments"]})
+}
+
+#[tokio::test]
+async fn intelligence_structure_source_is_inert_and_save_receipts_survive_reload() {
+    let (_db, app, pool, _, project) = settings_fixture().await;
+    let initial = call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1;
+    assert_eq!(initial["revision"], "0");
+    assert_eq!(initial["catalog_revision"], "1");
+    assert_eq!(initial["parents"].as_array().unwrap().len(), 4);
+    assert_eq!(initial["assignments"], json!([])); // Arbitrary profile names remain legacy.
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut request = structure_request(&initial);
+    request["routing_markdown"] =
+        json!("# Routing\n<script>alert(1)</script>\n$(touch /tmp/never-run)\n");
+    request["parents"][0]["description"] = json!("Routine changes");
+    request["assignments"] =
+        json!([{ "profile_id":"engineering","parent_id":"simple","effort":"low" }]);
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(request.clone()), false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, saved) = call(&app, INTELLIGENCE_STRUCTURE, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], "1");
+    assert_eq!(saved["routing_markdown"], request["routing_markdown"]);
+    let reloaded = call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1;
+    assert_eq!(reloaded["routing_markdown"], request["routing_markdown"]);
+    assert_eq!(reloaded["assignments"], request["assignments"]);
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(request.clone()), true)
+            .await
+            .1,
+        saved
+    );
+    let receipt = format!(
+        "{INTELLIGENCE_STRUCTURE}/operations/{}",
+        request["operation_id"].as_str().unwrap()
+    );
+    assert_eq!(call(&app, &receipt, None, false).await.1, saved);
+    assert!(matches!(
+        aq_profile_settings::structure::operation(
+            &pool,
+            Uuid::new_v4(),
+            serde_json::from_value(request["operation_id"].clone()).unwrap()
+        )
+        .await,
+        Err(aq_profile_settings::Error::NotFound(_))
+    ));
+    let mut reused = request.clone();
+    reused["routing_markdown"] = json!("different");
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(reused), true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    request["operation_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(request), true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(call(&app, STATE, None, false).await.1["revision"], 1);
+    let retained: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retained, binding);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profile_catalog_artifacts")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM swarm_setting_operations")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn intelligence_structure_exact_id_seed_keeps_legacy_profiles_and_versions() {
+    let (_db, app, _pool) = setup().await;
+    let original = seed();
+    let mut catalog = original.artifact().catalog.clone();
+    for id in [
+        "fast-low",
+        "fast-high",
+        "simple-high",
+        "standard-medium",
+        "complex-max",
+        "deep-low",
+        "fast-off",
+        "routing-sol-low",
+        "supervisor-medium",
+        "my-fast-low",
+    ] {
+        let mut profile = catalog.intelligence[0].clone();
+        profile.id = id.into();
+        catalog.intelligence.push(profile);
+    }
+    let catalog = validate(catalog, original.artifact().instructions.clone()).unwrap();
+    assert_eq!(
+        call(&app, ACTIVATE, Some(activation(&catalog, 0)), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let structure = call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1;
+    let assignments = structure["assignments"].as_array().unwrap();
+    assert_eq!(assignments.len(), 5);
+    assert!(assignments.iter().any(|a| a["profile_id"] == "fast-low"
+        && a["parent_id"] == "simple"
+        && a["effort"] == "low"));
+    assert!(!assignments.iter().any(|a| {
+        [
+            "fast-off",
+            "routing-sol-low",
+            "supervisor-medium",
+            "my-fast-low",
+        ]
+        .contains(&a["profile_id"].as_str().unwrap())
+    }));
+    assert!(assignments.iter().any(|a| a["profile_id"] == "simple-high"));
+    assert!(!assignments.iter().any(|a| a["profile_id"] == "fast-high"));
+    let mut duplicate_slot = structure_request(&structure);
+    duplicate_slot["assignments"] = json!([
+        {"profile_id":"engineering","parent_id":"simple","effort":"low"},
+        {"profile_id":"fast-low","parent_id":"simple","effort":"low"}
+    ]);
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(duplicate_slot), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let settings = call(&app, INTELLIGENCE_SETTINGS, None, false).await.1;
+    assert_eq!(settings["profiles"].as_array().unwrap().len(), 11);
+    assert!(
+        settings["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["version"] == 1)
+    );
+    assert_eq!(
+        call(
+            &app,
+            INTELLIGENCE_STRUCTURE,
+            Some(structure_request(&structure)),
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, None, false).await.1,
+        settings
+    );
+}
+
+#[tokio::test]
+async fn intelligence_structure_bounds_utf8_and_rejects_stale_catalog_unknown_profiles() {
+    let (_db, app, pool, runtime_request, _) = settings_fixture().await;
+    let initial = call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1;
+    let mut invalid = structure_request(&initial);
+    invalid["assignments"] =
+        json!([{ "profile_id":"missing","parent_id":"simple","effort":"low" }]);
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(invalid), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut invalid = structure_request(&initial);
+    invalid["routing_markdown"] = json!("é".repeat(65537));
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(invalid), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut maximum = structure_request(&initial);
+    maximum["routing_markdown"] = json!("\u{1}".repeat(131072)); // Worst-case JSON escaping still fits HTTP boundary.
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(maximum.clone()), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let current = call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1;
+    assert_eq!(current["routing_markdown"], maximum["routing_markdown"]);
+    let stale = structure_request(&current);
+    let mut oversized_row = runtime_request.clone();
+    oversized_row["description"] = json!("x".repeat(131072));
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(oversized_row), true)
+            .await
+            .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_SETTINGS, Some(runtime_request), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, Some(stale), true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(&app, INTELLIGENCE_STRUCTURE, None, false).await.1["revision"],
+        "1"
+    );
+    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'structure-viewer@localhost','viewer','dev','structure-viewer@localhost',now())")
+        .bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::get(INTELLIGENCE_STRUCTURE)
+                .header("x-aq-dev-email", "structure-viewer@localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
