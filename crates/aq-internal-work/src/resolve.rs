@@ -19,22 +19,27 @@ pub struct Resolved {
 
 /// Harness ids a logged-in run can use on the server. The catalog spells the
 /// Claude harness `claude-code`.
-fn login_harness(candidate: &ModelCandidate) -> Option<&String> {
-    candidate
-        .harnesses
-        .iter()
-        .find(|h| matches!(h.as_str(), "codex" | "claude" | "claude-code"))
+/// Returned as the name later tasks claim work by: `codex` or `claude`.
+fn login_harness(candidate: &ModelCandidate) -> Option<&'static str> {
+    candidate.harnesses.iter().find_map(|h| match h.as_str() {
+        "codex" => Some("codex"),
+        "claude" | "claude-code" => Some("claude"),
+        _ => None,
+    })
 }
 
 /// Same meaning as `aq_selection`'s observation evaluation: the newest
-/// observation per scope and source decides, and it counts while it is fresh
-/// and its cooldown has not passed. Observations a worker made on its own node
+/// observation per scope and source decides. A fresh one counts while it is
+/// within `max_age_ms` of being received (the profile's
+/// `observation_max_age_ms`; no limit when the profile has no selection
+/// policy) or while its cooldown has not passed. Observations a worker made on its own node
 /// do not describe the server's use of the credential.
 fn blocked(
     observations: &[AvailabilityObservation],
     credential: &AuthorizedCredential,
     model: &str,
     now_ms: u64,
+    max_age_ms: u64,
 ) -> bool {
     let mut newest = BTreeMap::<String, &AvailabilityObservation>::new();
     for o in observations {
@@ -60,8 +65,9 @@ fn blocked(
     }
     newest.values().any(|o| {
         let fresh = o.received_at_ms > 0 && o.received_at_ms <= now_ms && now_ms < o.expires_at_ms;
+        let observed = now_ms - o.received_at_ms.min(now_ms) <= max_age_ms;
         fresh
-            && o.cooldown_until_ms > now_ms
+            && (observed || o.cooldown_until_ms > now_ms)
             && matches!(
                 o.state,
                 Availability::QuotaUnavailable
@@ -87,6 +93,8 @@ pub fn resolve(
         .iter()
         .find(|p| p.id == profile_id)
         .ok_or(Reason::NoCandidate)?;
+    let max_age_ms =
+        (profile.selection_policy.as_ref()).map_or(u64::MAX, |p| p.observation_max_age_ms);
     let mut candidates = Vec::new();
     for entry in &profile.candidates {
         let Some((index, credential)) = registry
@@ -100,12 +108,12 @@ pub fn resolve(
         let (way, harness) = match registry.config.credentials.get(index).map(|c| c.kind) {
             Some(CredentialKind::ApiKey) => (Way::Api, None),
             Some(CredentialKind::SubscriptionLogin) => match login_harness(entry) {
-                Some(harness) => (Way::Login, Some(harness.clone())),
+                Some(harness) => (Way::Login, Some(harness.to_string())),
                 None => continue,
             },
             None => continue,
         };
-        if blocked(observations, credential, &entry.model, now_ms) {
+        if blocked(observations, credential, &entry.model, now_ms, max_age_ms) {
             continue;
         }
         candidates.push(Candidate {

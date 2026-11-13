@@ -629,7 +629,7 @@ mod resolve {
         assert_eq!(
             got,
             vec![
-                ("anthropic", Way::Login, Some("claude-code"), 0),
+                ("anthropic", Way::Login, Some("claude"), 0),
                 ("openai", Way::Api, None, 1),
             ]
         );
@@ -645,6 +645,16 @@ mod resolve {
             Availability::AuthenticationFailed,
             Availability::TemporaryUnavailable,
         ] {
+            for cooldown in [0, NOW + 30_000] {
+                let seen = [observation(&login, state, NOW + 60_000, cooldown)];
+                let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
+                assert_eq!(
+                    resolved.candidates.len(),
+                    1,
+                    "{state:?} cooldown {cooldown}"
+                );
+                assert_eq!(resolved.candidates[0].provider, "openai");
+            }
             let seen = [observation(&login, state, NOW + 60_000, NOW + 30_000)];
             let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
             assert_eq!(resolved.candidates.len(), 1, "{state:?}");
@@ -660,12 +670,15 @@ mod resolve {
         assert_eq!(resolved.candidates[0].provider, "anthropic");
     }
 
+    fn lapsed_without_cooldown(login: &AuthorizedCredential) -> AvailabilityObservation {
+        observation(login, Availability::QuotaUnavailable, NOW, 0)
+    }
+
     #[test]
     fn expired_observation_does_not_skip() {
         let (catalog, registry, login) = two_providers();
-        let cooled = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, NOW);
         let lapsed = observation(&login, Availability::QuotaUnavailable, NOW, NOW + 30_000);
-        for seen in [cooled, lapsed] {
+        for seen in [lapsed, lapsed_without_cooldown(&login)] {
             let resolved = resolve(&catalog, &registry, &[seen], "internal", NOW).unwrap();
             assert_eq!(resolved.candidates[0].provider, "anthropic");
         }
@@ -717,5 +730,59 @@ mod resolve {
         assert_eq!(resolved.candidates.len(), 1);
         assert_eq!(resolved.candidates[0].provider, "openai");
         assert_eq!(resolved.candidates[0].harness.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn claude_code_in_the_catalog_resolves_to_the_claude_harness() {
+        let catalog = catalog(vec![(
+            "internal",
+            vec![
+                candidate("a", "anthropic", &["gemini", "claude-code"]),
+                candidate("c", "claude-direct", &["claude"]),
+            ],
+        )]);
+        let registry = registry(vec![
+            (
+                credential("a-login", "anthropic", true),
+                CredentialKind::SubscriptionLogin,
+            ),
+            (
+                credential("c-login", "claude-direct", true),
+                CredentialKind::SubscriptionLogin,
+            ),
+        ]);
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        let harnesses: Vec<_> = resolved
+            .candidates
+            .iter()
+            .map(|c| c.harness.as_deref())
+            .collect();
+        assert_eq!(harnesses, vec![Some("claude"), Some("claude")]);
+    }
+
+    #[test]
+    fn recent_observation_older_than_the_policy_age_without_cooldown_does_not_skip() {
+        let (mut catalog_value, registry, login) =
+            (two_providers().0, two_providers().1, two_providers().2);
+        let mut raw = catalog_value.artifact().catalog.clone();
+        raw.intelligence[0].selection_policy = Some(
+            serde_json::from_value(serde_json::json!({
+                "schema_version":1,"fallback_on":[],"allow_unknown_availability":true,
+                "observation_max_age_ms":1000,"max_output_tokens":1000,"max_attempts":2,
+                "max_lineage_elapsed_ms":60000,"required_capabilities":[],
+                "budget":{"max_cost_microunits":null,"currency":null,"require_complete_accounting":false,
+                    "require_hard_cost_enforcement":false,"unknown_cost":"deny"}
+            }))
+            .unwrap(),
+        );
+        let instructions = catalog_value.artifact().instructions.clone();
+        catalog_value = aq_profiles::validate(raw, instructions).unwrap();
+        let mut old = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, 0);
+        old.received_at_ms = NOW - 5_000;
+        let resolved = resolve(&catalog_value, &registry, &[old.clone()], "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates[0].provider, "anthropic");
+        old.received_at_ms = NOW - 500;
+        let resolved = resolve(&catalog_value, &registry, &[old], "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates[0].provider, "openai");
     }
 }
