@@ -5,6 +5,7 @@
 //! tries the ordered [`Candidate`] list until one answers or the task fails.
 pub mod api_backend;
 pub mod http;
+mod notice;
 pub mod resolve;
 pub mod runs;
 pub mod service;
@@ -33,6 +34,19 @@ pub const CANDIDATE_TIMEOUT_MS: i64 = 120_000;
 /// How long past its candidate budget a runner may take to report before the
 /// sweeper takes the candidate back.
 pub const SWEEP_GRACE_MS: i64 = 5_000;
+/// A purpose with this many failed runs within [`FAILURE_BURST_WINDOW_MS`]
+/// goes to a supervisor even when no run asked to escalate (spec 0012 §8).
+pub const FAILURE_BURST_RUNS: i64 = 5;
+/// The window for [`FAILURE_BURST_RUNS`], and how often one purpose's burst
+/// may reach a supervisor.
+pub const FAILURE_BURST_WINDOW_MS: i64 = 10 * 60_000;
+/// Retries a supervisor gets at one failure; a run carrying this many that
+/// fails again goes straight to the owner.
+pub const SUPERVISOR_ATTEMPTS: i32 = 3;
+/// How long a run waits in the supervisor's hands before it goes to the owner.
+pub const SUPERVISOR_SILENCE_MS: i64 = 30 * 60_000;
+/// Largest diagnosis a supervisor may give when it escalates, in bytes.
+pub const MAX_DIAGNOSIS_BYTES: usize = 4000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

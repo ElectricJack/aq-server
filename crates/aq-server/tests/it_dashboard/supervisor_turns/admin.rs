@@ -430,4 +430,43 @@ async fn supervisor_can_list_and_retry_internal_runs() {
     let row = store::get(&a.f.pool, new).await.unwrap().unwrap();
     assert_eq!(row.retry_of, Some(failed));
     assert_eq!(row.request.affected.id, "T-12");
+    // A supervisor's retry counts against its attempts; the owner's does not.
+    let original = store::get(&a.f.pool, failed).await.unwrap().unwrap();
+    assert_eq!(
+        (original.supervisor_attempts, row.supervisor_attempts),
+        (1, 1)
+    );
+    let (status, _) = a
+        .as_owner(
+            "POST",
+            &format!("/api/internal-work/runs/{new}/retry"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let row = store::get(&a.f.pool, new).await.unwrap().unwrap();
+    assert_eq!(row.supervisor_attempts, 1);
+
+    let diagnosis = "profile internal has no working model";
+    let (status, escalated) = a
+        .supervisor(
+            "POST",
+            &format!("/api/internal-work/runs/{new}/escalate"),
+            Some(json!({"diagnosis": diagnosis})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{escalated}");
+    assert_eq!(
+        (&escalated["escalation"], &escalated["diagnosis"]),
+        (&json!("owner"), &json!(diagnosis))
+    );
+    let (status, resolved) = a
+        .supervisor(
+            "POST",
+            &format!("/api/internal-work/runs/{new}/resolve"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(resolved["escalation"], "resolved");
 }

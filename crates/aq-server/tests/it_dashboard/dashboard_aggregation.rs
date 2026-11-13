@@ -690,3 +690,91 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
     assert!(native.get("disk_total_bytes").is_none());
     assert!(native.get("storage_observed_at").is_none());
 }
+
+/// Spec 0012 §8 step 3: a failed internal run a supervisor could not fix
+/// opens the affected item, not the run, and leaves once it is resolved.
+#[tokio::test]
+async fn owner_escalated_internal_run_is_an_attention_item_pointing_at_the_affected_item() {
+    use aq_internal_work::{Affected, AnswerShape, Purpose, Request as Work, store};
+    use serde_json::json;
+    use uuid::Uuid;
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let project = f.selection.lineage.project_id;
+    let task = Uuid::new_v4();
+    let work = Work {
+        purpose: Purpose::RoutingClassification,
+        instructions: "Classify the task.".into(),
+        input: "Task: fix the login page".into(),
+        answer: AnswerShape::Choice {
+            choices: vec!["small".into(), "large".into()],
+            rationale_max_bytes: 512,
+        },
+        blocking: false,
+        affected: Affected {
+            kind: "task".into(),
+            id: task.to_string(),
+            project_id: Some(project),
+        },
+        deadline_ms: 60_000,
+        max_output_bytes: 4_096,
+        escalate: true,
+        profile_override: None,
+    };
+    let failed = store::submit(&pool, &work, &[], 1_000).await.unwrap();
+    // With a supervisor only: not the owner's yet.
+    let waiting = store::submit(&pool, &work, &[], 1_000).await.unwrap();
+    assert_eq!(store::escalate_due(&pool, 1_000).await.unwrap().len(), 2);
+    let diagnosis = "profile internal has no working model";
+    store::mark_owner(&pool, failed, diagnosis, 2_000)
+        .await
+        .unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let internal = |body: &Value| -> Vec<Value> {
+        body["data"]["attention"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|v| v["kind"] == "internal_work")
+            .cloned()
+            .collect()
+    };
+    let (status, body) = read(&app, "/api/v1/overview").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = internal(&body);
+    assert_eq!(items.len(), 1, "{body}");
+    assert_eq!(
+        items[0],
+        json!({
+            "id": format!("internal_work:{failed}"),
+            "kind": "internal_work",
+            "title": "Internal work failed",
+            "project": body["data"]["in_motion"][0]["project"],
+            "reason": diagnosis,
+            "impact": "Review the owning record for current context",
+            "since": "1970-01-01T00:00:02.000Z",
+            "subject": {"type": "task", "id": task},
+            "action": null
+        })
+    );
+    assert_eq!(items[0]["project"]["id"], json!(project));
+    assert!(!body.to_string().contains(&waiting.to_string()));
+    assert!(
+        body["data"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["source"] == "internal_work" && s["coverage"]["state"] == "complete"),
+        "{body}"
+    );
+    let (_, other) = read(
+        &app,
+        &format!("/api/v1/overview?scope=project:{}", Uuid::new_v4()),
+    )
+    .await;
+    assert!(internal(&other).is_empty());
+    store::resolve(&pool, failed).await.unwrap();
+    let (_, body) = read(&app, "/api/v1/overview").await;
+    assert!(internal(&body).is_empty(), "{body}");
+}

@@ -1,7 +1,9 @@
 //! Internal work (spec 0012): the server side of `aq-internal-work`.
+use crate::agent_access::supervisor_conversation::system_message;
 use crate::{AppState, Clock, authz::RequireOwner, error::AppError};
 use aq_intelligence_config::LoadedRegistry;
-use aq_internal_work::{Error, InternalWorkConfig, Outcome, Request, http, service::Service};
+use aq_internal_work::service::{NotifySupervisor, Service};
+use aq_internal_work::{Error, InternalWorkConfig, Outcome, Request, http};
 use axum::Router;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -20,8 +22,16 @@ impl InternalWork {
         config: Option<&InternalWorkConfig>,
         registry: Option<Arc<LoadedRegistry>>,
     ) -> aq_internal_work::Result<Self> {
-        let now = Arc::new(move || clock().timestamp_millis());
-        let service = Service::new(pool, now, config, registry)?;
+        let now: aq_internal_work::service::Now = Arc::new(move || clock().timestamp_millis());
+        let (notify_pool, notify_now) = (pool.clone(), now.clone());
+        let notify: NotifySupervisor = Arc::new(move |project, body| {
+            let (pool, at_ms) = (notify_pool.clone(), notify_now() as u64);
+            Box::pin(async move {
+                let sent = system_message(&pool, project, &body, at_ms).await;
+                sent.map(drop).map_err(|e| format!("{e:?}"))
+            })
+        });
+        let service = Service::new(pool, now, config, registry)?.notify_supervisor(notify);
         Ok(Self(Some(Arc::new(service))))
     }
     fn service(&self) -> Result<&Service, AppError> {
@@ -70,6 +80,12 @@ impl http::Host for AppState {
     fn service(&self) -> aq_internal_work::Result<&Service> {
         let unwired = || Error::Conflict("internal work is not available".into());
         self.internal_work.0.as_deref().ok_or_else(unwired)
+    }
+    /// The supervisor admin nest's gate leaves the approving owner on the request.
+    fn by_supervisor(extensions: &axum::http::Extensions) -> bool {
+        extensions
+            .get::<aq_supervisor_control::read::ReadOwner>()
+            .is_some()
     }
 }
 pub(crate) fn admin_routes() -> Router<AppState> {

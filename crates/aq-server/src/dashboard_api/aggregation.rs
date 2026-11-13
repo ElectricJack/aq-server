@@ -216,7 +216,7 @@ pub(super) async fn overview(
     // SO-01: results holds node row locks for its whole page while attempts
     // locks each node with a 250 ms timeout. Run concurrently, attempts lost
     // that wait on ~40% of reads, so these two sources run in turn.
-    let ((results, attempts), ready, reviews, settlements, operations) = tokio::join!(
+    let ((results, attempts), ready, reviews, settlements, operations, internal) = tokio::join!(
         Box::pin(async {
             let results = bounded_source(
                 "results",
@@ -250,6 +250,10 @@ pub(super) async fn overview(
         Box::pin(bounded_source(
             "operations",
             operations(state, runtime, user, &scope, &labels, truncated)
+        )),
+        Box::pin(bounded_source(
+            "internal_work",
+            internal_work(state, runtime, &scope, &labels)
         )),
     );
     let counts = Counts {
@@ -285,7 +289,15 @@ pub(super) async fn overview(
         ],
     };
     let decisions = reviews.needs_you.is_some();
-    for c in [attempts, ready, reviews, results, settlements, operations] {
+    for c in [
+        attempts,
+        ready,
+        reviews,
+        results,
+        settlements,
+        operations,
+        internal,
+    ] {
         data.sources.extend(c.sources);
         data.attention.extend(c.attention);
         data.recent_outcomes.extend(c.outcomes);
@@ -789,6 +801,62 @@ async fn operations(
         c.attention.len(),
         truncated || rows.len() > MEMBERS,
         Some("dashboard_journal_only"),
+    )?);
+    Ok(c)
+}
+
+/// Spec 0012 §8 step 3: one item per internal run a supervisor could not fix.
+/// It opens the affected item; a run about an item without a UUID id cannot.
+async fn internal_work(
+    state: &AppState,
+    runtime: &Runtime,
+    scope: &Scope,
+    labels: &BTreeMap<Uuid, ProjectRef>,
+) -> Result<Contribution> {
+    let mut transaction = tx(runtime).await?;
+    let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
+        .bind(scope.project()).fetch_all(&mut *transaction).await?;
+    transaction.commit().await?;
+    let mut c = Contribution::default();
+    let mut unreferenced = false;
+    for row in rows.iter().take(MEMBERS) {
+        let project: Option<Uuid> = row.get("project_id");
+        let label = project.and_then(|id| labels.get(&id).cloned());
+        let affected = row.get::<String, _>("affected_id").parse::<Uuid>();
+        let (Ok(affected), true) = (affected, project.is_none() || label.is_some()) else {
+            unreferenced = true;
+            continue;
+        };
+        let subject = EntityRef {
+            kind: row.get("affected_kind"),
+            id: affected,
+            revision: None,
+        };
+        let diagnosis: Option<String> = row.get("diagnosis");
+        let since = row.get::<Option<i64>, _>("escalated_at_ms");
+        let since = since.map(|ms| timestamp(ms as u64)).transpose()?;
+        let mut item = attention(
+            AttentionKind::InternalWork,
+            subject,
+            label,
+            "Internal work failed",
+            diagnosis
+                .as_deref()
+                .unwrap_or("A supervisor could not fix it"),
+            since,
+        );
+        item.id = format!("internal_work:{}", row.get::<Uuid, _>("id"));
+        c.attention.push(item);
+    }
+    let reason = unreferenced.then_some("affected_item_unreferenceable");
+    let n = c.attention.len();
+    c.sources.push(source(
+        "internal_work",
+        None,
+        stamp(state)?,
+        n,
+        rows.len() > MEMBERS,
+        reason,
     )?);
     Ok(c)
 }

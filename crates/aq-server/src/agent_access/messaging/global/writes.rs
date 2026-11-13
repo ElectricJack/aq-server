@@ -335,6 +335,65 @@ async fn enqueue_domain(
     tx.commit().await.map_err(db)?;
     Ok(result)
 }
+/// Spec 0012 §8: AQ itself tells a supervisor, through the same mailbox
+/// append and retained-capacity charge as an owner's message, so the next
+/// turn of that supervisor receives it. `project` addresses that project's
+/// supervisor, or the global one when it is `None` or the project has none.
+/// The sender is the fixed system component, as for the stall ladder's
+/// nudges; the receipt is what `central_global_mail_source_valid` proves.
+pub(crate) async fn system_message(
+    pool: &PgPool,
+    project: Option<Uuid>,
+    body: &str,
+    at_ms: u64,
+) -> Result<Uuid> {
+    if body.trim().is_empty() || body.len() > 16384 || body.contains('\0') || at_ms == 0 {
+        return Err(invalid());
+    }
+    let mut tx = pool.begin().await.map_err(db)?;
+    sqlx::query("SELECT set_config('statement_timeout','1000ms',true),set_config('lock_timeout','500ms',true)").execute(&mut *tx).await.map_err(db)?;
+    let scoped: Option<Uuid> = match project {
+        Some(p) => sqlx::query_scalar(
+            "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+        )
+        .bind(p)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?,
+        None => None,
+    };
+    let conversation = definition(&mut tx, scoped, true).await?.id;
+    let sender = json!({"kind":"system","component":"internal_work"});
+    let sender_key = sender_key(&sender).map_err(|_| unavailable())?;
+    let (operation, message) = (Uuid::new_v4(), Uuid::new_v4());
+    let payload = digest(&json!({"kind":"internal_work_supervisor_notice","conversation_id":conversation,"operation_id":operation,"body":body}))
+        .map_err(|_| unavailable())?;
+    let reserved = i64::try_from(body.len() + 4096).map_err(|_| invalid())?;
+    if !aq_supervisor_control::charge(&mut tx, conversation, reserved, MAX_OPERATIONS, MAX_BYTES)
+        .await
+        .map_err(db)?
+    {
+        return Err(AppError::Maintenance(
+            "supervisor mailbox retention capacity exhausted".into(),
+        ));
+    }
+    let mail = Mail {
+        message_id: message,
+        thread_id: conversation,
+        recipient: recipient(conversation),
+        mailbox_key: key(conversation)?,
+        body,
+    };
+    let cursor = append(&mut tx, mail, &sender, &payload, at_ms)
+        .await
+        .map_err(|_| unavailable())?;
+    let response = json!({"contract":"internal-work-supervisor-notice-1","operation_id":operation,"message_id":message,"thread_id":conversation,"cursor":cursor.to_string(),"disposition":"queued"});
+    receipt(&mut tx, &sender_key, operation, &payload, &response)
+        .await
+        .map_err(|_| unavailable())?;
+    tx.commit().await.map_err(db)?;
+    Ok(message)
+}
 pub(super) async fn lookup(
     Extension(service): Extension<Arc<Service>>,
     RequireOwner(user): RequireOwner,

@@ -538,3 +538,19 @@ fn swarm_routing_profile_is_an_additive_pinned_schema_field() {
             .all(|a| a.routing_profile.is_none())
     );
 }
+
+#[test]
+fn internal_work_attention_is_an_additive_pinned_schema_kind() {
+    let schema: Value = serde_json::from_slice(&aq_dashboard_contract::schema_bytes()).unwrap();
+    let kinds = &schema["$defs"]["AttentionKind"]["enum"];
+    assert_eq!(kinds.as_array().unwrap().last().unwrap(), "internal_work");
+    // Overviews recorded before the kind existed still read.
+    for fixture in [
+        include_str!("../../../../protocol/dashboard-read/v1/fixtures/overview-nonempty.json"),
+        include_str!("../../../../protocol/dashboard-read/v1/fixtures/overview.json"),
+    ] {
+        let fixture: Value = serde_json::from_str(fixture).unwrap();
+        let _: aq_dashboard_contract::Overview =
+            serde_json::from_value(fixture["data"].clone()).unwrap();
+    }
+}
