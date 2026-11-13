@@ -18,8 +18,12 @@ use uuid::Uuid;
 
 pub mod agent_task;
 mod catalog;
+mod queries;
 pub mod routes;
+mod summaries;
 pub use catalog::catalog;
+pub use queries::QueryParam;
+pub use summaries::{PLACEHOLDER_SUMMARY, action_summary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -116,8 +120,8 @@ pub enum Body {
 pub enum Params {
     /// The action payload schema the `ActionKind` registers.
     Action,
-    /// Generated from the route's path segments; any other scalar param is
-    /// passed as a query string value.
+    /// Generated from the route's path segments and the query params
+    /// declared for its path ([`Route::query`]); any other param is refused.
     Path,
     /// A published schema elsewhere in the repository.
     Ref(&'static str),
@@ -170,6 +174,11 @@ impl Route {
             params: Params::Inline(r#"{"type":"object","additionalProperties":false}"#),
             rename: &[],
         }
+    }
+    /// The query params the handler at this path accepts, for a GET. `None`
+    /// when the path has no declaration (a test requires one per GET).
+    pub fn query(&self) -> Option<&'static [QueryParam]> {
+        queries::declared(self.path)
     }
     fn segments(&self) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
         self.path.split('/').filter_map(|s| {
@@ -256,7 +265,7 @@ impl Registry {
                     kind: Kind::Mutation,
                     grant: Some(a.grant),
                     target: a.target,
-                    summary: "Dashboard action (protocol/dashboard-actions/v1)",
+                    summary: action_summary(a.kind).unwrap_or(PLACEHOLDER_SUMMARY),
                     owner: Some(Route::action()),
                     supervisor: None,
                     agent: None,
@@ -383,7 +392,11 @@ pub fn forward(
         Body::Local => None,
         Body::Query => {
             let mut first = true;
+            let declared = route.query().unwrap_or_default();
             for (k, v) in &params {
+                if !declared.iter().any(|q| q.name == k) {
+                    return Err(BuildError("unknown param"));
+                }
                 let text = scalar(v).ok_or(BuildError("query param must be a scalar"))?;
                 uri.push(if first { '?' } else { '&' });
                 first = false;
@@ -503,9 +516,16 @@ pub fn params_schema(
                 );
                 required.push(json!(param));
             }
+            for q in route.query().unwrap_or_default() {
+                let schema = serde_json::from_str(q.schema).expect("static query schema");
+                props.insert(q.name.into(), schema);
+                if q.required {
+                    required.push(json!(q.name));
+                }
+            }
             json!({"type":"object","properties":props,"required":required,
-                "additionalProperties":{"type":["string","integer","boolean"]},
-                "description":"Path params as named; every other param is passed as a query string value."})
+                "additionalProperties":false,
+                "description":"Path params as named; the other params are the route's query string. A param not listed is refused."})
         }
     }
 }

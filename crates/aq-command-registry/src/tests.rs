@@ -60,17 +60,19 @@ fn forward_builds_each_body_kind() {
     };
     let show = r.get("task.show").unwrap();
     let p = Uuid::from_u128(2);
+    // A declared query param follows the path params (queries.rs).
+    let record = r.get("knowledge.show").unwrap();
     let f = forward(
-        show,
-        show.owner.as_ref().unwrap(),
-        &req(json!({"project_id":p,"task_id":"t-1","revision":3})),
+        record,
+        record.owner.as_ref().unwrap(),
+        &req(json!({"project_id":p,"node_id":"t-1","revision":3})),
         None,
         rid,
     )
     .unwrap();
     assert_eq!(
         f.uri,
-        format!("/api/human/projects/{p}/tasks/t-1?revision=3")
+        format!("/api/human/projects/{p}/knowledge/t-1?revision=3")
     );
     assert!(f.body.is_none());
     let bad = forward(
@@ -304,4 +306,111 @@ fn a_task_read_must_have_read_a_task() {
         r.get("knowledge.show").unwrap(),
         &node("knowledge")
     ));
+}
+
+/// Every GET command route, with its command name.
+fn query_routes() -> Vec<(&'static str, Route)> {
+    let r = Registry::new(&actions()).unwrap();
+    r.commands()
+        .iter()
+        .flat_map(|c| {
+            [c.owner, c.supervisor, c.agent]
+                .into_iter()
+                .flatten()
+                .filter(|route| route.body == Body::Query)
+                .map(|route| (c.name, route))
+        })
+        .collect()
+}
+
+#[test]
+fn every_get_route_declares_its_query_and_publishes_a_closed_schema() {
+    let routes = query_routes();
+    assert!(routes.len() >= 60);
+    for (name, route) in routes {
+        assert_eq!(route.params, Params::Path, "{name}");
+        let declared = route
+            .query()
+            .unwrap_or_else(|| panic!("{name}: declare the query of {} in queries.rs", route.path));
+        let schema = params_schema(&route, &BTreeMap::new(), name);
+        assert_eq!(schema["additionalProperties"], false, "{name}");
+        let path: Vec<&str> = route.segments().map(|(_, p)| p).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        for q in declared {
+            let s: Value = serde_json::from_str(q.schema)
+                .unwrap_or_else(|_| panic!("{name}: {} schema is not JSON", q.name));
+            assert!(
+                s.get("type").is_some() || s.get("enum").is_some(),
+                "{name}: {}",
+                q.name
+            );
+            assert!(
+                seen.insert(q.name) && !path.contains(&q.name),
+                "{name}: {}",
+                q.name
+            );
+            assert_eq!(schema["properties"][q.name], s, "{name}: {}", q.name);
+            let required = schema["required"].as_array().unwrap();
+            assert_eq!(
+                required.contains(&json!(q.name)),
+                q.required,
+                "{name}: {}",
+                q.name
+            );
+        }
+        assert_eq!(
+            schema["properties"].as_object().unwrap().len(),
+            path.len() + declared.len(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn supervisor_reads_declare_the_owner_query() {
+    let r = Registry::new(&actions()).unwrap();
+    for c in r.commands() {
+        let (Some(owner), Some(supervisor)) = (c.owner, c.supervisor) else {
+            continue;
+        };
+        if owner.body == Body::Query
+            && supervisor.body == Body::Query
+            && supervisor.path.ends_with(owner.path)
+        {
+            assert_eq!(owner.query(), supervisor.query(), "{}", c.name);
+        }
+    }
+}
+
+#[test]
+fn forward_refuses_an_undeclared_query_param() {
+    let r = Registry::new(&actions()).unwrap();
+    let req = |params: Value| CommandRequest {
+        params: params.as_object().unwrap().clone(),
+        ..Default::default()
+    };
+    let p = Uuid::from_u128(2);
+    for name in ["task.show", "task.list"] {
+        let c = r.get(name).unwrap();
+        for route in [c.owner.as_ref().unwrap(), c.supervisor.as_ref().unwrap()] {
+            let refused = forward(
+                c,
+                route,
+                &req(json!({"project_id":p,"task_id":"t-1","bogus":1})),
+                None,
+                Uuid::nil(),
+            );
+            assert_eq!(refused, Err(BuildError("unknown param")), "{name}");
+        }
+    }
+    let list = r.get("task.list").unwrap();
+    let f = forward(
+        list,
+        list.owner.as_ref().unwrap(),
+        &req(json!({"project_id":p,"limit":5})),
+        None,
+        Uuid::nil(),
+    )
+    .unwrap();
+    assert_eq!(f.uri, format!("/api/human/projects/{p}/tasks?limit=5"));
 }

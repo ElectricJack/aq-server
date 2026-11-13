@@ -1,4 +1,8 @@
-use crate::{Result, cli::CreateTask, error};
+use crate::{
+    Result,
+    cli::{CreateTask, TaskChange},
+    error,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -10,8 +14,9 @@ use uuid::Uuid;
 pub struct Subject {
     #[serde(rename = "type")]
     entity_type: String,
-    id: Uuid,
-    revision: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
 }
 #[derive(Serialize)]
 pub struct ActionRequest {
@@ -34,8 +39,8 @@ fn action(
         kind,
         subject: Subject {
             entity_type: entity.into(),
-            id,
-            revision: revision.clone(),
+            id: id.to_string(),
+            revision: Some(revision.clone()),
         },
         expected_versions: BTreeMap::from([(entity.into(), revision)]),
         payload,
@@ -53,6 +58,27 @@ pub fn task(args: &CreateTask) -> ActionRequest {
             "operation_id":id,"expected_project_revision":args.expected_project_revision,"title":args.title,"body":args.body,"acceptance_criteria":args.acceptance_criteria,"labels":args.labels,"task_state":args.task_state
         }),
     )
+}
+/// `task.cancel` or `task.retry` at the task version `revision`.
+pub fn task_change(kind: &'static str, c: &TaskChange, revision: String) -> ActionRequest {
+    let id = Uuid::new_v4();
+    let payload = json!({"operation_id":id,"project_id":c.project,"expected_version":revision});
+    action(kind, "task", c.id, revision, id, payload)
+}
+/// `worker.revoke`: the subject carries no revision (revoking is idempotent).
+pub fn worker_revoke(machine: &str) -> ActionRequest {
+    let operation_id = Uuid::new_v4();
+    ActionRequest {
+        operation_id,
+        kind: "worker.revoke",
+        subject: Subject {
+            entity_type: "machine".into(),
+            id: machine.into(),
+            revision: None,
+        },
+        expected_versions: BTreeMap::new(),
+        payload: json!({"operation_id":operation_id,"machine":machine}),
+    }
 }
 pub fn message(conversation: Uuid, revision: String, body: &str) -> ActionRequest {
     let id = Uuid::new_v4();
