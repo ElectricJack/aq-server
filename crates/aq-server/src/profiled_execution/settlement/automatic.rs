@@ -378,7 +378,8 @@ async fn evaluate_locked(
     for op in &r.report.source_receipt_ids {
         match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
             Ok(confirmed) => {
-                source = Some((*op, confirmed.manifest.checkpoint.hex.clone()));
+                let m = &confirmed.manifest;
+                source = Some((*op, m.checkpoint.hex.clone(), m.checkpoint != m.source.base));
                 break;
             }
             Err(crate::error::AppError::Conflict(_)) => {}
@@ -391,7 +392,7 @@ async fn evaluate_locked(
     for check in &r.outcome.required_checks {
         let verdict = match &source {
             None => CheckVerdict::Missing,
-            Some((op, checkpoint)) => {
+            Some((op, checkpoint, _)) => {
                 let found: Option<String> = sqlx::query_scalar("SELECT verdict FROM profiled_check_evidence WHERE attempt_id=$1 AND check_id=$2 AND source_operation_id=$3 AND checkpoint=$4 AND validator_digest=$5")
                     .bind(attempt).bind(check.id.as_str()).bind(op).bind(checkpoint).bind(check.validator.digest.as_str())
                     .fetch_optional(&mut **tx).await.map_err(db)?;
@@ -408,7 +409,9 @@ async fn evaluate_locked(
     }
     let delivery_state = match &source {
         None => DeliveryState::Missing,
-        Some((op, _)) => {
+        // An unchanged source has nothing to publish (owner decision 2026-11-13).
+        Some((_, _, false)) => DeliveryState::NoChange,
+        Some((op, _, true)) => {
             let found: Option<String> = sqlx::query_scalar(
                 "SELECT state FROM profiled_delivery_evidence WHERE attempt_id=$1 AND source_operation_id=$2",
             )
@@ -438,7 +441,7 @@ async fn evaluate_locked(
         "policy": r.outcome.validation_policy,
         "report": r.receipt_artifact,
         "accepted": {"current_report_head": r.is_current_report_head, "stopped": v.stopped, "cancelled": v.cancellation_id.is_some(), "revoked": v.revoked, "holds_task": v.holds_task},
-        "source": source.as_ref().map(|(op, checkpoint)| json!({"operation_id": op, "checkpoint": checkpoint})),
+        "source": source.as_ref().map(|(op, checkpoint, changed)| json!({"operation_id": op, "checkpoint": checkpoint, "changed": changed})),
         "checks": check_evidence,
         "delivery": {"policy": delivery, "state": delivery_state},
     });

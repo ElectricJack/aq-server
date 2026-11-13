@@ -59,6 +59,27 @@ async fn auto_env_profiled(
     process_outcome: Option<aq_admission::transport::ProcessOutcome>,
     graph_profile: Option<Value>,
 ) -> AutoEnv {
+    Box::pin(auto_env_source(
+        delivery,
+        graph_status,
+        keep_checks,
+        process_outcome,
+        graph_profile,
+        true,
+    ))
+    .await
+}
+
+/// `changed`: the retained checkpoint is a new commit on the admitted base;
+/// otherwise it is the admitted base itself (the attempt changed no file).
+async fn auto_env_source(
+    delivery: &str,
+    graph_status: axum::http::StatusCode,
+    keep_checks: bool,
+    process_outcome: Option<aq_admission::transport::ProcessOutcome>,
+    graph_profile: Option<Value>,
+    changed: bool,
+) -> AutoEnv {
     let (mut f, _, mut report) = Box::pin(prepare_with_policy_checks(
         true,
         true,
@@ -97,7 +118,14 @@ async fn auto_env_profiled(
     let manifest = aq_worker_protocol::TransferManifest {
         transfer_id,
         role: aq_worker_protocol::SourceRole::Checkpoint,
-        checkpoint: f.profiled.source.base.clone(),
+        checkpoint: if changed {
+            aq_worker_protocol::ObjectId {
+                algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
+                hex: "4".repeat(40),
+            }
+        } else {
+            f.profiled.source.base.clone()
+        },
         attempt: aq_worker_protocol::AttemptRef {
             attempt_id: report.binding.attempt_id,
             session_id: match report.binding.session {
@@ -192,7 +220,7 @@ async fn auto_env_profiled(
         .unwrap(),
     ));
     AutoEnv {
-        checkpoint: f.profiled.source.base.hex.clone(),
+        checkpoint: manifest.checkpoint.hex.clone(),
         f,
         report,
         source,
@@ -676,6 +704,63 @@ async fn retained_result_publishes_then_completes_and_advances_source() {
         .unwrap();
     assert_eq!(again.disposition, AutoDisposition::Confirmed);
     assert_eq!(env.writes.load(Ordering::SeqCst), 1);
+}
+
+/// Owner decision 2026-11-13: an attempt that finishes successfully without
+/// changing a file succeeds. Its retained checkpoint is the admitted base, so
+/// required delivery has nothing to publish: no candidate, no push, no
+/// delivery evidence, and the task completes.
+#[tokio::test]
+async fn unchanged_source_completes_without_publication() {
+    use aq_server::profiled_execution::settlement::publication;
+    let env = Box::pin(auto_env_source(
+        "required",
+        axum::http::StatusCode::OK,
+        true,
+        None,
+        None,
+        false,
+    ))
+    .await;
+    assert_eq!(env.checkpoint, admitted(&env).await.resolved_object.hex);
+    let (checkpoint, validator) = (env.checkpoint.clone(), env.validator.clone());
+    env.check(env.source, &checkpoint, &validator, "passed")
+        .await;
+    let pool = env.f.db.pool().await;
+    let project = admitted(&env).await.project_id;
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{publication}',$2) WHERE project_id=$1")
+        .bind(project)
+        .bind(json!({"mode":"fast_forward","target":"refs/heads/main"}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let git = tempfile::tempdir().unwrap();
+    let socket = git.path().join("git.sock");
+    let calls = silent_git(&socket);
+    let config = aq_server::source_retention::SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
+        staging_root: git.path().join("staging"),
+        git_root: git.path().join("git"),
+        git_socket: socket,
+        max_staging_bytes: 2097152,
+        max_bundle_bytes: 4096,
+        bulk_concurrency: 2,
+        incomplete_ttl_secs: 60,
+    };
+    let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config);
+    let s = publication::deliver_then_settle(&env.f.state, &delivery, env.report.report_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.disposition, AutoDisposition::Confirmed, "{s:?}");
+    assert_eq!(s.evidence["delivery"]["state"], "no_change", "{s:?}");
+    assert_eq!(s.evidence["source"]["changed"], false, "{s:?}");
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1, "one Graph completion");
+    assert!(!env.holds_task().await, "dependents are released");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing sent to aq-git");
+    assert!(evidence_rows(&env).await.is_empty(), "no delivery evidence");
+    assert!(head_of(&env).await.is_none(), "the source head never moves");
 }
 
 #[tokio::test]

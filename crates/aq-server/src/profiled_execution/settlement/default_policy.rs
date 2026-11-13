@@ -42,6 +42,9 @@ pub(super) enum DeliveryState {
     Published,
     Unpublished,
     Indeterminate,
+    /// The retained source is the admitted base: the attempt changed no file
+    /// and there is nothing to deliver (owner decision 2026-11-13).
+    NoChange,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Acceptance {
@@ -89,6 +92,7 @@ pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
             // Server-owned evidence that required delivery definitively did not
             // publish refuses the result, like a failed required check.
             DeliveryState::Unpublished => return Verdict::Rework("delivery_unpublished"),
+            DeliveryState::NoChange => {}
         }
     }
     Verdict::Complete
@@ -144,6 +148,12 @@ mod tests {
         }
         g.delivery = Delivery::NotRequired;
         assert_eq!(evaluate(&g), Verdict::Complete);
+        // A retained source equal to the admitted base has nothing to deliver.
+        g.delivery = Delivery::Required;
+        g.delivery_state = DeliveryState::NoChange;
+        assert_eq!(evaluate(&g), Verdict::Complete);
+        g.checks = &[Failed];
+        assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
     }
     #[test]
     fn default_policy_offers_name_the_policy_actor() {

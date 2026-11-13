@@ -134,12 +134,16 @@ This needs no playbook work. In order:
    agent blocked the restart.
 2. The worker needs a fresh context-qualification measurement. A node enrolled
    without a provider login shows online and is refused every offer (spec 0007).
-3. The task must be Active. The dashboard's create dialog defaults to Draft,
-   and only Active tasks are ready. Its project must be enabled.
-4. The task must change a file. A task with no change settles as failed under
-   the default completion policy.
-5. Owner availability on, machine not stopped or draining, history and rate
+3. The task must be Active, and its project enabled. New tasks start as Draft
+   by design: the owner reviews a task and its dependencies before making it
+   Active, and only Active tasks are ready.
+4. Owner availability on, machine not stopped or draining, history and rate
    caps clear, provider quota available.
+
+A task does not have to change a file. Since 2026-11-13 (on
+`feat/internal-work`, not yet on `main`) an attempt that finishes successfully
+without changing a file succeeds: its result is the agent's final message, and
+nothing is published.
 
 ## 6. Boat workers
 
@@ -157,7 +161,7 @@ questions in aq-worker `docs/implementation/0006-P7.md`.
 | M1 | `nodes`-row lock timeouts return 500 on idle-slot starts while the dashboard is open. |
 | M2 | Retry on a task held by the retry budget does nothing and reports success. |
 | M3 | `release-sandbox` needs `--force`. |
-| Completion policy | A read-only task settles as failed. |
+| Completion policy | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. A task that changes no file succeeds, with nothing published. |
 | Owner decisions | W13 (terminal input on queued attempts), 0008 phase B retention, the A1 soak, true resume, the three boat channel questions. |
 | Forward-only schemas | 113, 114, 116 and 117. Rolling back the binary alone is unsafe. |
 | Stale pull requests | aq-server #3, #9, #53, #60, #63, #64; aq-worker #32. |

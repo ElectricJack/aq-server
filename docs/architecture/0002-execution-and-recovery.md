@@ -202,7 +202,7 @@ Any other schema version, kind or extra field, or a missing `delivery`, means th
 1. **Acceptance.** The report is the current head, carries a stop proof, and is neither cancelled nor superseded (see §6).
 2. **Retained source.** The source has a confirmed aq-git retention receipt.
 3. **Required checks.** Each required check has a row in `profiled_check_evidence` bound to (report, source digest, check id, validator digest).
-4. **Delivery.** This gate runs only when `delivery` is `required`. It reads `profiled_delivery_evidence`, and only `published` passes.
+4. **Delivery.** This gate runs only when `delivery` is `required`. It reads `profiled_delivery_evidence`, and only `published` passes. A retained source whose checkpoint is the admitted base (the attempt changed no file) has nothing to deliver: it passes with delivery state `no_change`, and no candidate, push or delivery evidence is made. Owner decision 2026-11-13: a task does not have to change a file to succeed.
 
 **Reason codes.** A `rework` verdict means the evidence shows the work is wrong. A `hold` verdict means evidence is missing or not yet determinate.
 
