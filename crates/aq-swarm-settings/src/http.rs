@@ -66,6 +66,18 @@ pub async fn operation(pool: &PgPool, actor: Uuid, id: Uuid, path: &str) -> Resu
 pub fn catalog(credentials: &[aq_selection::AuthorizedCredential]) -> Vec<Provider> {
     let mut map =
         std::collections::BTreeMap::<&str, (std::collections::BTreeSet<String>, bool, bool)>::new();
+    // Provider presets are discoverable before a connection is configured.
+    for id in [
+        "anthropic",
+        "openai",
+        "google",
+        "ollama",
+        "opencode",
+        "longcat",
+        "nemotron",
+    ] {
+        map.entry(id).or_default();
+    }
     for c in credentials {
         let (id, account, enabled, present) = (
             c.provider.as_str(),
@@ -86,11 +98,16 @@ pub fn catalog(credentials: &[aq_selection::AuthorizedCredential]) -> Vec<Provid
                 "openai" => "OpenAI",
                 "google" => "Google",
                 "ollama" => "Ollama",
+                "opencode" => "OpenCode",
+                "longcat" => "LongCat",
+                "nemotron" => "Nemotron",
                 _ => id,
             }
             .into(),
-            accounts: accounts.into_iter().collect(),
-            credential_status: if present {
+            accounts: accounts.iter().cloned().collect(),
+            credential_status: if accounts.is_empty() {
+                "not_configured"
+            } else if present {
                 "present"
             } else if enabled {
                 "missing"
