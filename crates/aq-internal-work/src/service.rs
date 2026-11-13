@@ -99,14 +99,23 @@ impl Service {
     }
 
     /// Reads the task every poll interval until it has an answer or a failure.
+    /// Past the deadline plus [`SWEEP_GRACE_MS`] it sweeps itself, so a
+    /// stopped, disabled or failing loop cannot leave the caller waiting.
     pub async fn wait(&self, id: Uuid) -> Result<Outcome> {
+        let mut swept = false;
         loop {
             let row = store::get(&self.pool, id)
                 .await?
                 .ok_or_else(|| Error::NotFound("Internal task not found".into()))?;
-            match row.status.as_str() {
-                "answered" | "failed" => return row.outcome().ok_or(Error::Corrupt),
-                _ => tokio::time::sleep(self.poll).await,
+            if matches!(row.status.as_str(), "answered" | "failed") {
+                return row.outcome().ok_or(Error::Corrupt);
+            }
+            // Re-read straight after a sweep; sleep before sweeping again.
+            swept = !swept && (self.now)() > row.deadline_at_ms + SWEEP_GRACE_MS;
+            if swept {
+                store::sweep(&self.pool, (self.now)()).await?;
+            } else {
+                tokio::time::sleep(self.poll).await;
             }
         }
     }
@@ -118,10 +127,14 @@ impl Service {
 
     /// Sweeps, then runs one queued API task end to end: the provider call,
     /// the answer check, then the answer or the candidate's failure. False
-    /// when no API task was queued.
+    /// when no API task was queued, or with `enabled = false`, which only
+    /// stops claiming.
     pub async fn tick(&self) -> Result<bool> {
         let (pool, now) = (&self.pool, &self.now);
         store::sweep(pool, now()).await?;
+        if !self.enabled {
+            return Ok(false);
+        }
         let Some(claimed) = store::claim(pool, Way::Api, &[], &self.runner, now()).await? else {
             return Ok(false);
         };
@@ -153,11 +166,9 @@ impl Service {
 
     /// The in-server loop: ticks until no API task is queued, then sleeps the
     /// poll interval, until `stop` turns true or its sender is gone. It runs
-    /// regardless of swarm availability; `enabled = false` turns it off.
+    /// regardless of swarm availability, and with `enabled = false` it still
+    /// sweeps but claims nothing.
     pub async fn serve(&self, mut stop: tokio::sync::watch::Receiver<bool>) {
-        if !self.enabled {
-            return;
-        }
         while !*stop.borrow() {
             loop {
                 match self.tick().await {

@@ -1407,6 +1407,75 @@ mod service {
         assert!(row.finished_at_ms.unwrap() >= row.deadline_at_ms);
     }
 
+    fn failed_deadline(outcome: Outcome) {
+        match outcome {
+            Outcome::Failed { reason, .. } => assert_eq!(reason, Reason::DeadlineExceeded),
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn with_internal_work_disabled_the_loop_claims_nothing_but_still_fails_past_deadline() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let config = InternalWorkConfig {
+            api: vec![],
+            poll_ms: 20,
+            enabled: false,
+        };
+        let registry = Some(registry(CredentialKind::ApiKey));
+        let clock = aq_server::system_clock();
+        let disabled = InternalWork::new(f.pool.clone(), clock, Some(&config), registry).unwrap();
+        let _stop = start(&disabled);
+        let short = Request {
+            deadline_ms: 1_000,
+            ..request(true)
+        };
+        let started = std::time::Instant::now();
+        let id = disabled.submit(short).await.unwrap();
+        failed_deadline(wait(&disabled, id).await);
+        // The loop's sweep ends it, well before wait's own sweep would.
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let row = store::get(&f.pool, id).await.unwrap().unwrap();
+        assert!(row.attempts.is_empty());
+        assert!(f.openai.lock().unwrap().bodies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wait_without_a_running_loop_still_fails_a_login_task_past_its_deadline() {
+        let f = fixture(SMALL, LARGE, CredentialKind::SubscriptionLogin).await;
+        configure_login_only(&f.pool).await;
+        let short = || Request {
+            deadline_ms: 1_000,
+            ..request(true)
+        };
+        // A login host claims one task and dies without reporting.
+        let running = f.work.submit(short()).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let held = store::claim(&f.pool, Way::Login, &["claude"], "dead-host", now)
+            .await
+            .unwrap()
+            .expect("the login task");
+        assert_eq!(held.id, running);
+        // Nothing claims the other one.
+        let queued = f.work.submit(short()).await.unwrap();
+        let (queued, running) = tokio::join!(wait(&f.work, queued), wait(&f.work, running));
+        failed_deadline(queued);
+        match running {
+            Outcome::Failed {
+                reason, attempts, ..
+            } => {
+                assert_eq!(reason, Reason::DeadlineExceeded);
+                assert_eq!(attempts.len(), 1);
+                assert_eq!(attempts[0].detail, "runner did not report");
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+    }
+
     /// A second active catalog whose profile `internal` lists only anthropic.
     async fn configure_login_only(pool: &PgPool) {
         let catalog = resolve::catalog(vec![(
