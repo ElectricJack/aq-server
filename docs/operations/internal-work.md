@@ -28,14 +28,46 @@ database and runs the model CLI for each, one at a time. Spec:
 - The image holds neither CLI. Mount both native executables read-only and put
   each one's SHA-256 in the config.
 
+## Ownership the host enforces
+
+The host refuses to start, or fails the run, unless these hold. Inside the
+container the host runs as root, so "owned by the host" means owned by root.
+
+- **Config file** (`protected_read`, `config.rs`): absolute canonical path, not a
+  symlink, a regular file with one link, owned by the host's effective uid (root),
+  no group or other permission bits (mode 0600), at most 64 KiB. Otherwise the
+  host exits with `protected file rejected`.
+- **Login files** (`secret_file`): the same `protected_read` check (owned by the
+  host's uid, no group or other bits, one link, not a symlink), at most 64 KiB,
+  and the file must be mounted at an absolute canonical path.
+- **Native executables** (`subscription.rs`): owned by uid 0, not group or world
+  writable, with an execute bit, and matching `native_digest`.
+- **`homes` and `scratch`** (`private_parent`, `internal.rs`): canonical
+  directories owned by uid 0 and not group or world writable (no `0o022` bits).
+
+Files made by the developer (for example the one `scripts/dev-stack.py` writes,
+owned by uid 1000 and holding the database URL) fail these checks. Make them
+root-owned in one of two ways:
+
+1. Copy the file to the directory you mount at `/config` (or the login
+   directories) and run `sudo chown root:root <file> && sudo chmod 0600 <file>`.
+   Every file the host reads must be done this way, and the directory containing
+   it must not let another user replace the file.
+2. Place the file in a volume or container with root ownership, the way the local
+   supervisor manager places supervisor host config. The repository documents the
+   requirement, not a procedure: [the supervisor host README](../../crates/aq-supervisor-host/README.md)
+   says to mount `secret_file` and the native executable root-owned, and
+   [supervisors](supervisors.md) covers the manager. I found no documented
+   tar-copy procedure to point to, so use way 1 unless your manager provides one.
+
 ## Config file
 
 `/config/internal.json` must be an absolute, canonical, owner-only (0600)
-regular file of at most 64 KiB. Unknown fields are rejected.
+regular file of at most 64 KiB, owned by root in the container (see above). Unknown fields are rejected.
 
 | Field | Meaning |
 | --- | --- |
-| `database_url` | Database the host claims from (it holds the password, hence 0600). |
+| `database_url` | Database the host claims from (it holds the password, hence 0600 and root ownership). |
 | `homes` | Parent of the per-run native homes. Canonical, owned by the executable owner, not group or world writable. |
 | `scratch` | Parent of the per-run empty working directories. Same rules. |
 | `poll_ms` | 1 to 60000. Sleep between polls when nothing was claimed. |
@@ -106,5 +138,5 @@ rows and the swarm availability switch does not stop it.
 `AQ_DEV_INTERNAL_DATABASE_URL` and, per harness, `AQ_DEV_INTERNAL_CODEX_NATIVE` and
 `AQ_DEV_INTERNAL_CODEX_LOGIN` (or the `CLAUDE` pair) are set; it hashes the native
 file itself and uses the container paths above. Without them nothing is written.
-Optional: `AQ_DEV_INTERNAL_POLL_MS`. It prints `AQ_INTERNAL_CONFIG_DIR` for use with
+Optional: `AQ_DEV_INTERNAL_POLL_MS`. The generated file is owned by you and holds the database URL: do not commit or share it, and make a root-owned copy before mounting it (see above). It prints `AQ_INTERNAL_CONFIG_DIR` for use with
 `compose.workers.yaml`; the other `AQ_INTERNAL_*` variables are yours to set.

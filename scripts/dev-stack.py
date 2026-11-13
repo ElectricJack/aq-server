@@ -202,6 +202,12 @@ def internal_config(state):
     AQ_DEV_INTERNAL_DATABASE_URL and at least one harness are given by
     AQ_DEV_INTERNAL_{CODEX,CLAUDE}_NATIVE and _LOGIN (absolute paths; the native
     executable is hashed here). Returns {} and writes nothing otherwise.
+
+    The file is owned by the invoking developer, mode 0600, and holds the
+    database URL (a credential): do not commit or share it. The host refuses a
+    config file (and login files) not owned by the uid it runs as, which is
+    root in the container, so make a root-owned copy before mounting it
+    (`chown root:root`, `chmod 0600`; see docs/operations/internal-work.md).
     """
     url = os.environ.get("AQ_DEV_INTERNAL_DATABASE_URL")
     config = dict(database_url=url, homes="/internal/homes", scratch="/internal/scratch",

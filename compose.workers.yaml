@@ -58,9 +58,12 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
     command: [internal, /config/internal.json]
     volumes:
-      # Root-owned 0600 internal.json only; mounted into no other service. The
-      # login files are not under it (config load refuses a login file under
-      # homes or scratch).
+      # internal.json only; mounted into no other service. The host reads it
+      # only if it is owned by root (the uid it runs as) with mode 0600, which
+      # nothing here enforces: the operator must chown root:root and chmod 0600
+      # the file in this directory (docs/operations/internal-work.md). The same
+      # holds for the login files below. The login files must not sit under
+      # homes or scratch.
       - type: bind
         source: ${AQ_INTERNAL_CONFIG_DIR:-/var/empty/aq-internal-config-dir-unset}
         target: /config
