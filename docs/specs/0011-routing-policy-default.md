@@ -18,7 +18,8 @@ Start from what kind of work it is, then adjust for risk.
 - Chores and syncs are Simple, high effort.
 - Specs, designs, implementation plans and reviews of someone else's work are
   Complex, high effort.
-- Research is Standard, high effort, unless it is clearly harder.
+- Research is Standard, high effort, unless it is clearly harder, in which
+  case it is Complex, high effort.
 - Deep is only for analysis, planning or spec writing that needs advanced
   mathematics or unusually hard reasoning. A big task is not a Deep task, and
   neither is a risky one.
@@ -49,7 +50,7 @@ When a task touches several areas, go by the riskiest. When you can't tell,
 call it medium.
 
 Medium and high risk work is at least Standard, high effort. Very high risk
-work is at least Complex, unless it is narrow and covered by a test, in which
+work is at least Complex, medium effort, unless it is narrow and covered by a test, in which
 case Standard, high effort is enough.
 
 Never raise the level because providers are busy, and never use a task's
