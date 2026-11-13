@@ -103,10 +103,9 @@ impl Runtime {
         } else if config.profile.is_host2() {
             let graph = state.agent_access.clone().ok_or_else(refused)?;
             // No production sandbox check executor (server->node check-attempt
-            // execution with profiled check evidence) or judgment provider
-            // (credential lease) exists yet. The ports stay unbound, so
-            // check.request refuses `unavailable` and judgment.request refuses
-            // `no_permitted_profile`; nothing is fabricated.
+            // execution with profiled check evidence) exists yet, so
+            // check.request refuses `unavailable`. judgment.request is served
+            // by internal work (spec 0012 §6) with purpose "playbook call".
             //
             // The D7 integration port binds to D1 delivery only when an
             // integration policy is configured and aq-git (source retention)
@@ -132,7 +131,10 @@ impl Runtime {
                 config.profile,
                 Arc::new(super::host_adapters::GatewayGraph(graph)),
                 None,
-                None,
+                Some(Arc::new(super::internal_judgments::InternalJudgments::new(
+                    state.internal_work.clone(),
+                    aq_internal_work::Purpose::PlaybookCall,
+                ))),
                 integration,
             )
             .await

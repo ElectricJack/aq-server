@@ -65,8 +65,9 @@ engine namespace acquisition. It supports only the twelve specified command
 names and reconcilable effects; installation/restart rejects changed or unknown
 contracts. This is not a wire-supplied authority permit. The concrete AQ service
 adapter lives in aq-server (`crates/aq-server/src/playbooks/host_adapters.rs`).
-It registers all twelve commands. `judgment.request` and `check.request` have no
-provider or executor bound, so they refuse (`playbooks/runtime.rs`).
+It registers all twelve commands. `judgment.request` is served by the server's
+internal work service (`playbooks/internal_judgments.rs`). `check.request` has no
+executor bound, so it refuses (`playbooks/runtime.rs`).
 
 The0.1.1 version consumed the separately qualified exact a463e59 source publication
 (runner/Postgres0.1.1, unchanged model0.1.0); the original42/0.1.0 vendor source

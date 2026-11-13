@@ -977,10 +977,11 @@ mod definitions;
 mod catalog;
 
 /// Production Host7 construction: the configured owner binds the gateway
-/// work graph and leaves the check executor and judgment provider unbound,
-/// so both commands refuse with typed reasons and record no evidence.
+/// work graph, leaves the check executor unbound, so check.request refuses
+/// with a typed reason and records no evidence, and serves judgment.request
+/// through internal work (spec 0012 §6), so it is accepted.
 #[tokio::test]
-async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_ports() {
+async fn host7_profile_starts_on_gateway_graph_with_unbound_check_port_and_internal_judgments() {
     use aq_playbook_host::runner::{Intent, IntentStatus};
     use aq_server::playbooks::review_domain::{CatalogProfile, HOST7_CAPABILITIES};
     let s = setup().await;
@@ -1101,15 +1102,8 @@ async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_p
         )
         .await
         .unwrap();
-    assert_eq!(
-        (
-            r.outcome.as_str(),
-            &r.output["reason"],
-            &r.output["provenance"]
-        ),
-        ("refused", &json!("no_permitted_profile"), &Value::Null),
-        "{r:?}"
-    );
+    assert_eq!(r.outcome, "accepted", "{r:?}");
+    assert!(r.output["handle"].is_string(), "{r:?}");
     // Refusals fabricate no check evidence.
     let evidence: i64 = sqlx::query_scalar("SELECT count(*) FROM profiled_check_evidence")
         .fetch_one(&pool)
