@@ -13,6 +13,44 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Who must own the native executable, and who the native child runs as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Identity {
+    /// Owner uid the verified native executable must have.
+    pub(crate) executable_owner: u32,
+    /// uid and gid of the native child, and owner of the files it writes.
+    pub(crate) run_as: u32,
+    /// Drop to `run_as` before exec and chown the child's files to it.
+    pub(crate) drop_privileges: bool,
+}
+
+impl Identity {
+    /// The only identity production builds: a root-owned executable run as 10001.
+    pub(crate) const NATIVE: Identity = Identity {
+        executable_owner: 0,
+        run_as: 10001,
+        drop_privileges: true,
+    };
+
+    /// The current uid, with no privilege drop and no chown, for tests that
+    /// do not run as root.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn current() -> Identity {
+        let uid = unsafe { libc::geteuid() };
+        Identity {
+            executable_owner: uid,
+            run_as: uid,
+            drop_privileges: false,
+        }
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self::NATIVE
+    }
+}
+
 pub async fn native(
     c: &Config,
     directory: &Path,
@@ -20,6 +58,7 @@ pub async fn native(
     credential: &Path,
     startup: &[u8],
 ) -> Result<()> {
+    let identity = Identity::NATIVE;
     unsafe {
         libc::umask(0o077);
     }
@@ -32,82 +71,22 @@ pub async fn native(
         settings.instructions.len() <= 131072,
         "supervisor instruction bound"
     );
-    let auth = Zeroizing::new(protected_read(&c.secret_file, 65536)?);
-    aq_session_host::PrivateLaunchInput::validate_chatgpt_auth_json(&auth)?;
+    let auth = stage_login(&c.secret_file, home, identity)?;
     let auth_path = home.join("auth.json");
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&auth_path)?
-        .write_all(&auth)?;
-    std::os::unix::fs::chown(&auth_path, Some(10001), Some(10001))?;
-    std::os::unix::fs::chown(home, Some(10001), Some(10001))?;
-    let executable = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&c.native)?;
-    let metadata = executable.metadata()?;
-    ensure!(
-        metadata.is_file()
-            && metadata.uid() == 0
-            && metadata.mode() & 0o022 == 0
-            && metadata.mode() & 0o111 != 0
-            && metadata.len() <= 512 * 1024 * 1024,
-        "native executable rejected"
-    );
-    let mut bytes = Vec::new();
-    (&executable)
-        .take(512 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        Digest::of(&bytes) == c.native_digest,
-        "native digest mismatch"
-    );
-    drop(bytes);
-    use std::os::fd::AsRawFd;
-    let fd = executable.as_raw_fd();
-    let path = std::path::PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let executable = verify_native(&c.native, &c.native_digest, identity)?;
     let output = home.join("last-message.txt");
     let actions = home.join("action-receipts");
-    let mut args = vec![
-        "--no-daemon".to_owned(),
-        "exec".into(),
-        "--ignore-user-config".into(),
-        "--ignore-rules".into(),
-        "--ephemeral".into(),
-        "--json".into(),
-        "--color".into(),
-        "never".into(),
-        "--sandbox".into(),
-        "danger-full-access".into(),
-        "--skip-git-repo-check".into(),
-        "--model".into(),
-        c.model.model.as_str().into(),
-        "--cd".into(),
-        c.workspace.to_str().context("workspace UTF8")?.into(),
-        "--output-last-message".into(),
-        output.to_str().context("output UTF8")?.into(),
-    ];
-    let quote = |v: &str| serde_json::to_string(v).expect("text serializes");
-    let mut overrides = vec![
-        format!(
-            "model_reasoning_effort={}",
-            quote(c.model.reasoning.as_str())
-        ),
-        "approval_policy=\"never\"".into(),
-        "model_provider=\"openai\"".into(),
-        "forced_login_method=\"chatgpt\"".into(),
-        "cli_auth_credentials_store=\"file\"".into(),
-        "project_doc_max_bytes=0".into(),
-        "features.plugins=false".into(),
-        "features.apps=false".into(),
-        "features.shell_snapshot=false".into(),
-        "features.shell_snapshot_v2=false".into(),
-        "shell_environment_policy.inherit=\"none\"".into(),
-        "shell_environment_policy.set.PATH=\"/usr/local/bin:/usr/bin:/bin\"".into(),
-        format!("developer_instructions={}", quote(&settings.instructions)),
-    ];
+    let args = exec_arguments(
+        "danger-full-access",
+        c.model.model.as_str(),
+        &c.workspace,
+        &output,
+    )?;
+    let mut overrides = exec_overrides(c.model.reasoning.as_str());
+    overrides.push(format!(
+        "developer_instructions={}",
+        quote(&settings.instructions)
+    ));
     for (key, value) in [
         (
             "AQ_SUPERVISOR_CREDENTIAL_FILE",
@@ -131,34 +110,13 @@ pub async fn native(
         );
         overrides.push(format!("service_tier={}", quote(tier)));
     }
-    for value in overrides {
-        args.extend(["--config".into(), value]);
-    }
-    args.push("-".into());
-    let mut command = std::process::Command::new(path);
-    command
-        .args(args)
-        .env_clear()
-        .env("HOME", home)
-        .env("CODEX_HOME", home)
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .current_dir(&c.workspace)
-        .stdin(std::process::Stdio::piped());
-    unsafe {
-        command.pre_exec(move || {
-            crate::adapter::new_session()?;
-            if libc::fcntl(fd, libc::F_SETFD, 0) < 0
-                || libc::setgroups(0, std::ptr::null()) != 0
-                || libc::setgid(10001) != 0
-                || libc::setuid(10001) != 0
-                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                || libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let mut command = native_command(
+        &executable,
+        exec_finish(args, overrides),
+        home,
+        &c.workspace,
+        identity,
+    );
     let mut child = command.spawn()?;
     child
         .stdin
@@ -168,35 +126,251 @@ pub async fn native(
     let status = tokio::task::spawn_blocking(move || child.wait()).await??;
     // Retain only a validated refresh of this subscription account inside this
     // central container; never write the operator's original host auth document.
-    if let Ok(refreshed) = protected_read_native(&auth_path)
-        && aq_session_host::PrivateLaunchInput::validate_chatgpt_auth_json(&refreshed).is_ok()
+    copy_back(&c.secret_file, &auth_path, &auth, identity)?;
+    let _ = std::fs::remove_file(&auth_path);
+    ensure!(status.success(), "native supervisor turn failed");
+    let mut text = read_message(&output)?;
+    let aq_token = Zeroizing::new(protected_read_native(credential, identity.run_as)?);
+    text = text.replace(std::str::from_utf8(&aq_token)?, "[credential redacted]");
+    let text = redact_login(
+        text,
+        &[
+            &auth,
+            &Zeroizing::new(protected_read(&c.secret_file, 65536)?),
+        ],
+    )?;
+
+    publish(c, directory, credential, &text, &actions).await
+}
+
+/// JSON string literal for a `--config` value.
+pub(crate) fn quote(v: &str) -> String {
+    serde_json::to_string(v).expect("text serializes")
+}
+
+/// Exclusive `flock` on `<secret_file>.lock`, released when the file drops.
+/// Every copy of a login file in or back holds it, so no two runs on this
+/// host read or replace the file at the same time.
+pub(crate) fn lock_login(secret_file: &Path) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let mut path = secret_file.as_os_str().to_owned();
+    path.push(".lock");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error.into());
+        }
+    }
+}
+
+/// Copies the validated ChatGPT login at `secret_file` to `home/auth.json`
+/// for the native child, under the login lock. Returns the bytes copied in.
+pub(crate) fn stage_login(
+    secret_file: &Path,
+    home: &Path,
+    identity: Identity,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let _lock = lock_login(secret_file)?;
+    let auth = Zeroizing::new(protected_read(secret_file, 65536)?);
+    aq_session_host::PrivateLaunchInput::validate_chatgpt_auth_json(&auth)?;
+    let auth_path = home.join("auth.json");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&auth_path)?
+        .write_all(&auth)?;
+    if identity.drop_privileges {
+        let id = Some(identity.run_as);
+        std::os::unix::fs::chown(&auth_path, id, id)?;
+        std::os::unix::fs::chown(home, id, id)?;
+    }
+    Ok(auth)
+}
+
+/// Copies the child's refreshed `auth.json` back to `secret_file` when it is
+/// a valid, changed login of the same account and the secret file still
+/// holds exactly the bytes `original` copied in (compare-and-swap under the
+/// login lock). A file someone else refreshed meanwhile is left as it is.
+/// Returns the refreshed login, if the child left a valid one.
+pub(crate) fn copy_back(
+    secret_file: &Path,
+    auth_path: &Path,
+    original: &[u8],
+    identity: Identity,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let Ok(refreshed) = protected_read_native(auth_path, identity.run_as) else {
+        return Ok(None);
+    };
+    if aq_session_host::PrivateLaunchInput::validate_chatgpt_auth_json(&refreshed).is_err() {
+        return Ok(None);
+    }
+    let before: Value = serde_json::from_slice(original)?;
+    let after: Value = serde_json::from_slice(&refreshed)?;
+    if before["tokens"]["account_id"] == after["tokens"]["account_id"]
+        && refreshed.as_slice() != original
     {
-        let original: Value = serde_json::from_slice(&auth)?;
-        let current: Value = serde_json::from_slice(&refreshed)?;
-        if original["tokens"]["account_id"] == current["tokens"]["account_id"]
-            && refreshed.as_slice() != auth.as_slice()
-        {
-            let temp = c
-                .secret_file
-                .with_extension(format!("refresh-{}", uuid::Uuid::new_v4()));
+        let _lock = lock_login(secret_file)?;
+        let current = Zeroizing::new(protected_read(secret_file, 65536)?);
+        if Digest::of(&current) != Digest::of(original) {
+            eprintln!("login file changed during the native run; kept it and dropped this refresh");
+        } else {
+            let temp = secret_file.with_extension(format!("refresh-{}", uuid::Uuid::new_v4()));
             std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
                 .open(&temp)?
                 .write_all(&refreshed)?;
-            std::fs::rename(temp, &c.secret_file)?;
+            std::fs::rename(temp, secret_file)?;
         }
     }
-    let _ = std::fs::remove_file(&auth_path);
-    ensure!(status.success(), "native supervisor turn failed");
-    let mut text = read_message(&output)?;
-    let aq_token = Zeroizing::new(protected_read_native(credential)?);
-    text = text.replace(std::str::from_utf8(&aq_token)?, "[credential redacted]");
-    for doc in [
-        &auth,
-        &Zeroizing::new(protected_read(&c.secret_file, 65536)?),
-    ] {
+    Ok(Some(refreshed))
+}
+
+/// Opens the native executable and checks its owner, mode, size and digest.
+/// Keep the descriptor open until spawn: the child execs `/proc/self/fd/N`,
+/// so replacing the path cannot substitute a different binary.
+pub(crate) fn verify_native(
+    native: &Path,
+    digest: &Digest,
+    identity: Identity,
+) -> Result<std::fs::File> {
+    let executable = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(native)?;
+    let metadata = executable.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == identity.executable_owner
+            && metadata.mode() & 0o022 == 0
+            && metadata.mode() & 0o111 != 0
+            && metadata.len() <= 512 * 1024 * 1024,
+        "native executable rejected"
+    );
+    let mut bytes = Vec::new();
+    (&executable)
+        .take(512 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(Digest::of(&bytes) == *digest, "native digest mismatch");
+    Ok(executable)
+}
+
+/// The `codex exec` arguments before the `--config` overrides.
+pub(crate) fn exec_arguments(
+    sandbox: &str,
+    model: &str,
+    cd: &Path,
+    output: &Path,
+) -> Result<Vec<String>> {
+    Ok(vec![
+        "--no-daemon".to_owned(),
+        "exec".into(),
+        "--ignore-user-config".into(),
+        "--ignore-rules".into(),
+        "--ephemeral".into(),
+        "--json".into(),
+        "--color".into(),
+        "never".into(),
+        "--sandbox".into(),
+        sandbox.into(),
+        "--skip-git-repo-check".into(),
+        "--model".into(),
+        model.into(),
+        "--cd".into(),
+        cd.to_str().context("workspace UTF8")?.into(),
+        "--output-last-message".into(),
+        output.to_str().context("output UTF8")?.into(),
+    ])
+}
+
+/// The `--config` overrides every native run takes; callers append theirs.
+pub(crate) fn exec_overrides(reasoning: &str) -> Vec<String> {
+    vec![
+        format!("model_reasoning_effort={}", quote(reasoning)),
+        "approval_policy=\"never\"".into(),
+        "model_provider=\"openai\"".into(),
+        "forced_login_method=\"chatgpt\"".into(),
+        "cli_auth_credentials_store=\"file\"".into(),
+        "project_doc_max_bytes=0".into(),
+        "features.plugins=false".into(),
+        "features.apps=false".into(),
+        "features.shell_snapshot=false".into(),
+        "features.shell_snapshot_v2=false".into(),
+        "shell_environment_policy.inherit=\"none\"".into(),
+        "shell_environment_policy.set.PATH=\"/usr/local/bin:/usr/bin:/bin\"".into(),
+    ]
+}
+
+/// `args`, then each override as `--config VALUE`, then `-` (prompt on stdin).
+pub(crate) fn exec_finish(mut args: Vec<String>, overrides: Vec<String>) -> Vec<String> {
+    for value in overrides {
+        args.extend(["--config".into(), value]);
+    }
+    args.push("-".into());
+    args
+}
+
+/// The native child: a clean environment, `home` as its Codex home, `cwd` as
+/// its directory, stdin piped, its own session, and (in production) the
+/// unprivileged identity with no new privileges and no core dumps.
+pub(crate) fn native_command(
+    executable: &std::fs::File,
+    args: Vec<String>,
+    home: &Path,
+    cwd: &Path,
+    identity: Identity,
+) -> std::process::Command {
+    use std::os::fd::AsRawFd;
+    let fd = executable.as_raw_fd();
+    let path = std::path::PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let mut command = std::process::Command::new(path);
+    command
+        .args(args)
+        .env_clear()
+        .env("HOME", home)
+        .env("CODEX_HOME", home)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped());
+    let Identity {
+        run_as,
+        drop_privileges,
+        ..
+    } = identity;
+    unsafe {
+        command.pre_exec(move || {
+            crate::adapter::new_session()?;
+            if libc::fcntl(fd, libc::F_SETFD, 0) < 0
+                || (drop_privileges
+                    && (libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(run_as) != 0
+                        || libc::setuid(run_as) != 0))
+                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
+/// Replaces the login tokens of each auth document in `text`.
+pub(crate) fn redact_login(mut text: String, documents: &[&[u8]]) -> Result<String> {
+    for doc in documents {
         let value: Value = serde_json::from_slice(doc)?;
         for key in ["id_token", "access_token", "refresh_token"] {
             if let Some(secret) = value["tokens"][key].as_str()
@@ -206,17 +380,17 @@ pub async fn native(
             }
         }
     }
-
-    publish(c, directory, credential, &text, &actions).await
+    Ok(text)
 }
-fn protected_read_native(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+
+fn protected_read_native(path: &Path, owner: u32) -> Result<Zeroizing<Vec<u8>>> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)?;
     let meta = file.metadata()?;
     ensure!(
-        meta.is_file() && meta.uid() == 10001 && meta.mode() & 0o077 == 0 && meta.len() <= 65536,
+        meta.is_file() && meta.uid() == owner && meta.mode() & 0o077 == 0 && meta.len() <= 65536,
         "private native file rejected"
     );
     let mut bytes = Zeroizing::new(Vec::new());
@@ -224,24 +398,32 @@ fn protected_read_native(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(bytes.len() <= 65536, "private native file bound");
     Ok(bytes)
 }
-fn read_message(path: &Path) -> Result<String> {
+
+/// The child's final message at `path`: an owner-only file of `owner`, at
+/// most 1 MiB of UTF-8, not blank and without NUL.
+pub(crate) fn read_reply(path: &Path, owner: u32) -> Result<String> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)?;
     let meta = file.metadata()?;
     ensure!(
-        meta.is_file() && meta.uid() == 10001 && meta.mode() & 0o077 == 0 && meta.len() <= 1048576,
+        meta.is_file() && meta.uid() == owner && meta.mode() & 0o077 == 0 && meta.len() <= 1048576,
         "native reply bounds"
     );
     let mut bytes = Vec::new();
     file.take(1048577).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 1048576, "native reply bounds");
-    let mut body = String::from_utf8(bytes.to_vec()).context("native reply UTF8")?;
+    let body = String::from_utf8(bytes.to_vec()).context("native reply UTF8")?;
     ensure!(
         !body.trim().is_empty() && !body.contains('\0'),
         "native final reply missing"
     );
+    Ok(body)
+}
+
+fn read_message(path: &Path) -> Result<String> {
+    let mut body = read_reply(path, Identity::NATIVE.run_as)?;
     if body.len() > 16000 {
         let mut end = 15900;
         while !body.is_char_boundary(end) {
@@ -270,7 +452,7 @@ async fn publish(
         return Ok(());
     }
     let mut refs = Vec::new();
-    if let Ok(bytes) = protected_read_native(actions) {
+    if let Ok(bytes) = protected_read_native(actions, Identity::NATIVE.run_as) {
         let text = std::str::from_utf8(&bytes)?;
         for line in text.lines() {
             if let Ok(id) = line.parse::<uuid::Uuid>()
@@ -282,7 +464,7 @@ async fn publish(
         }
     }
     let request = json!({"operation_id":uuid::Uuid::new_v4(),"message_id":uuid::Uuid::new_v4(),"dispatch_id":c.central.dispatch_id,"body":body,"attachments":refs.into_iter().map(|id|json!({"type":"action_receipt","operation_id":id})).collect::<Vec<_>>()});
-    let token = Zeroizing::new(protected_read_native(credential)?);
+    let token = Zeroizing::new(protected_read_native(credential, Identity::NATIVE.run_as)?);
     let mut bearer = reqwest::header::HeaderValue::from_str(&format!(
         "Bearer {}",
         std::str::from_utf8(&token)?
