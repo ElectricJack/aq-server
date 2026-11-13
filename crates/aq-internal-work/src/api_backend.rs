@@ -146,14 +146,15 @@ impl ApiBackend {
                 format!("api key file for {provider} is unusable"),
             )
         })?;
-        let mut header =
-            HeaderValue::from_str(&format!("Bearer {}", key.as_str())).map_err(|_| {
-                (
-                    Reason::ProviderUnavailable,
-                    format!("api key file for {provider} is unusable"),
-                )
-            })?;
+        let value = Zeroizing::new(format!("Bearer {}", key.as_str()));
+        let mut header = HeaderValue::from_str(value.as_str()).map_err(|_| {
+            (
+                Reason::ProviderUnavailable,
+                format!("api key file for {provider} is unusable"),
+            )
+        })?;
         header.set_sensitive(true);
+        drop(value);
         drop(key);
         let sent = self
             .client
