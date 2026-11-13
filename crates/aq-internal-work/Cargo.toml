@@ -15,3 +15,7 @@ sqlx.workspace = true
 sqlx-postgres.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+jsonschema = { version = "0.61", default-features = false }
+nix.workspace = true
+reqwest.workspace = true
+zeroize = "1"

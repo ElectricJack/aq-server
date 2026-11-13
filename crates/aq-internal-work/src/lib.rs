@@ -3,14 +3,17 @@
 //! A caller describes a [`Request`]; the server keeps it as an internal task
 //! (`internal_tasks`), outside the graph and outside project capacity, and
 //! tries the ordered [`Candidate`] list until one answers or the task fails.
+pub mod api_backend;
 pub mod http;
 pub mod resolve;
 pub mod settings;
 pub mod store;
+pub mod validate;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use api_backend::{ApiBackend, ApiEndpoint, InternalWorkConfig};
 pub use resolve::{Resolved, resolve};
 pub use store::Row;
 

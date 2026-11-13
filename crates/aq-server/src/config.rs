@@ -68,6 +68,9 @@ pub struct Config {
     /// Explicit mappings to protected Codex OAuth files; never a browser credential.
     #[serde(default)]
     pub provider_quota: Vec<crate::dashboard_api::quota::CodexSource>,
+    /// Internal work (spec 0012): API endpoints for the model runners.
+    #[serde(default)]
+    pub internal_work: Option<aq_internal_work::InternalWorkConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -378,6 +381,7 @@ mod tests {
 
             intelligence: None,
             provider_quota: vec![],
+            internal_work: None,
         }
     }
 

@@ -238,3 +238,30 @@ fn updates_section_is_optional_strict_and_absolute() {
     let err = load(vault_with(&rel).path()).unwrap_err().to_string();
     assert!(err.contains("updates.spool_dir"), "{err}");
 }
+
+#[test]
+fn internal_work_section_is_optional_strict_and_defaulted() {
+    let cfg = load(vault_with(VALID).path()).unwrap();
+    assert!(cfg.internal_work.is_none());
+    let empty = format!("{VALID}\n[internal_work]\n");
+    let section = load(vault_with(&empty).path())
+        .unwrap()
+        .internal_work
+        .unwrap();
+    assert!(section.api.is_empty() && section.enabled && section.poll_ms == 200);
+    let full = format!(
+        "{VALID}\n[internal_work]\npoll_ms = 50\nenabled = false\napi = [{{provider = \"openai\", endpoint = \"https://api.example/v1/responses\", secret_file = \"/run/key\"}}]\n"
+    );
+    let section = load(vault_with(&full).path())
+        .unwrap()
+        .internal_work
+        .unwrap();
+    assert_eq!((section.poll_ms, section.enabled), (50, false));
+    assert_eq!(section.api[0].provider, "openai");
+    let unknown = format!("{VALID}\n[internal_work]\nworkers = 2\n");
+    assert!(load(vault_with(&unknown).path()).is_err());
+    let nested = format!(
+        "{VALID}\n[internal_work]\napi = [{{provider = \"o\", endpoint = \"e\", secret_file = \"/k\", model = \"m\"}}]\n"
+    );
+    assert!(load(vault_with(&nested).path()).is_err());
+}

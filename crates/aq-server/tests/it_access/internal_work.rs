@@ -1,7 +1,8 @@
 //! aq-internal-work queue (spec 0012 §3, §4): blocking work first, one claim
 //! per task, failover across the candidate list, and late runners ignored.
 use aq_internal_work::{
-    Affected, AnswerShape, Candidate, Outcome, Purpose, Reason, Request, Usage, Way, store,
+    Affected, AnswerShape, ApiBackend, ApiEndpoint, Candidate, Claimed, Outcome, Purpose, Reason,
+    Request, Usage, Way, store, validate,
 };
 use aq_server::test_support::TestDb;
 use serde_json::json;
@@ -784,5 +785,327 @@ mod resolve {
         old.received_at_ms = NOW - 500;
         let resolved = resolve(&catalog_value, &registry, &[old], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates[0].provider, "openai");
+    }
+}
+
+fn choice_shape() -> AnswerShape {
+    AnswerShape::Choice {
+        choices: vec!["small".into(), "large".into()],
+        rationale_max_bytes: 16,
+    }
+}
+
+#[test]
+fn fenced_json_is_accepted_and_prose_is_invalid_output() {
+    let shape = choice_shape();
+    let fenced = "```json\n{\"choice\": \"small\", \"rationale\": \"ok\"}\n```";
+    assert_eq!(
+        validate::answer(&shape, fenced, 4_096).unwrap(),
+        json!({"choice": "small", "rationale": "ok"})
+    );
+    let bare = "```\n{\"choice\": \"large\", \"rationale\": \"\"}\n```";
+    assert!(validate::answer(&shape, bare, 4_096).is_ok());
+    let err = validate::answer(&shape, "I think the task is small.", 4_096).unwrap_err();
+    assert!(err.contains("not JSON"), "{err}");
+    let err = validate::answer(&shape, "[1]", 4_096).unwrap_err();
+    assert!(err.contains("not a JSON object"), "{err}");
+    let prompt = validate::prompt(&request(false));
+    assert!(prompt.starts_with("Classify the task.\n\nTask: fix the login page\n\n"));
+    assert!(prompt.ends_with(
+        "Answer with one JSON object and nothing else: {\"choice\": one of [\"small\",\"large\"], \"rationale\": string}"
+    ));
+}
+
+#[test]
+fn choice_outside_the_list_and_oversized_rationale_are_invalid() {
+    let shape = choice_shape();
+    let err =
+        validate::answer(&shape, r#"{"choice": "huge", "rationale": "x"}"#, 4_096).unwrap_err();
+    assert!(err.contains("huge") && err.contains("choices"), "{err}");
+    let long = format!(
+        r#"{{"choice": "small", "rationale": "{}"}}"#,
+        "x".repeat(17)
+    );
+    let err = validate::answer(&shape, &long, 4_096).unwrap_err();
+    assert!(err.contains("rationale") && err.contains("16"), "{err}");
+    let err = validate::answer(&shape, r#"{"choice": "small"}"#, 4_096).unwrap_err();
+    assert!(err.contains("rationale"), "{err}");
+}
+
+#[test]
+fn json_answer_is_checked_against_the_schema() {
+    let shape = AnswerShape::Json {
+        schema: json!({
+            "type": "object",
+            "properties": {"n": {"type": "integer"}},
+            "required": ["n"],
+            "additionalProperties": false
+        }),
+    };
+    assert_eq!(
+        validate::answer(&shape, r#"{"n": 3}"#, 4_096).unwrap(),
+        json!({"n": 3})
+    );
+    assert!(validate::answer(&shape, r#"{"n": "three"}"#, 4_096).is_err());
+    assert!(validate::answer(&shape, "{}", 4_096).is_err());
+    let secret_text = "s".repeat(1_000);
+    let wrong = format!(r#"{{"n": "{secret_text}"}}"#);
+    let err = validate::answer(&shape, &wrong, 4_096).unwrap_err();
+    assert!(
+        err.len() <= 220 && !err.contains(&secret_text),
+        "{}",
+        err.len()
+    );
+    let bad_schema = AnswerShape::Json {
+        schema: json!({"type": 12}),
+    };
+    assert!(validate::answer(&bad_schema, "{}", 4_096).is_err());
+}
+
+#[test]
+fn oversized_output_is_invalid_and_the_error_does_not_echo_it() {
+    let shape = choice_shape();
+    let big = format!("zzz-marker-{}", "z".repeat(5_000));
+    let err = validate::answer(&shape, &big, 100).unwrap_err();
+    assert!(err.contains("5011") && err.contains("100"), "{err}");
+    assert!(!err.contains("zzz"), "{err}");
+    let err = validate::answer(&shape, &format!("{{{}", "y".repeat(5_000)), 9_999).unwrap_err();
+    assert!(err.len() <= 220, "{}", err.len());
+}
+
+mod fake {
+    use axum::{Router, extract::State, http::HeaderMap, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    pub struct Seen {
+        pub authorization: Vec<String>,
+        pub bodies: Vec<Value>,
+    }
+
+    /// Answers every request with `status` and `reply`; returns its endpoint.
+    pub async fn serve(status: u16, reply: Value) -> (String, Arc<Mutex<Seen>>) {
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let app = Router::new()
+            .route(
+                "/v1/responses",
+                post(
+                    move |State(seen): State<Arc<Mutex<Seen>>>,
+                          headers: HeaderMap,
+                          axum::Json(body): axum::Json<Value>| {
+                        let reply = reply.clone();
+                        async move {
+                            let mut seen = seen.lock().unwrap();
+                            seen.authorization.push(
+                                headers
+                                    .get("authorization")
+                                    .and_then(|v| v.to_str().ok())
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                            );
+                            seen.bodies.push(body);
+                            (
+                                axum::http::StatusCode::from_u16(status).unwrap(),
+                                axum::Json(reply),
+                            )
+                        }
+                    },
+                ),
+            )
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}/v1/responses"), seen)
+    }
+
+    pub fn completed(text: &str) -> Value {
+        json!({
+            "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+            "usage": {"input_tokens": 12, "output_tokens": 5}
+        })
+    }
+}
+
+fn secret_file(dir: &std::path::Path, mode: u32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("key");
+    std::fs::write(&path, "sk-test-secret-value\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    path
+}
+
+fn backend(endpoint: &str, secret: std::path::PathBuf) -> ApiBackend {
+    ApiBackend::new(vec![ApiEndpoint {
+        provider: "openai".into(),
+        endpoint: endpoint.into(),
+        secret_file: secret,
+    }])
+    .unwrap()
+}
+
+fn claimed(provider: &str) -> Claimed {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    Claimed {
+        id: uuid::Uuid::new_v4(),
+        request: request(false),
+        candidate: api(provider),
+        candidate_index: 0,
+        deadline_at_ms: now + 30_000,
+    }
+}
+
+#[tokio::test]
+async fn api_backend_returns_text_and_usage_and_never_stores_the_secret() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let dir = tempfile::tempdir().unwrap();
+    let text = r#"{"choice": "small", "rationale": "ok"}"#;
+    let (endpoint, seen) = fake::serve(200, fake::completed(text)).await;
+    let api_backend = backend(&endpoint, secret_file(dir.path(), 0o600));
+
+    let id = store::submit(&pool, &request(false), &[api("openai")], NOW)
+        .await
+        .unwrap();
+    let held = store::claim(&pool, Way::Api, &[], "r", NOW + 5)
+        .await
+        .unwrap()
+        .unwrap();
+    // The claimed deadline is in the past relative to the wall clock.
+    let past = api_backend.run(&held).await.unwrap_err();
+    assert_eq!(past.0, Reason::DeadlineExceeded);
+
+    let live = Claimed {
+        deadline_at_ms: held.deadline_at_ms + 4_000_000_000_000,
+        ..held
+    };
+    let (raw, usage) = api_backend.run(&live).await.unwrap();
+    assert_eq!(raw, text);
+    let usage = usage.unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (12, 5));
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.authorization, ["Bearer sk-test-secret-value"]);
+        let body = &seen.bodies[0];
+        assert_eq!(body["model"], "openai-model");
+        assert_eq!(body["store"], false);
+        assert!(
+            body["input"]
+                .as_str()
+                .unwrap()
+                .contains("Task: fix the login page")
+        );
+    }
+    let answer = validate::answer(&choice_shape(), &raw, 4_096).unwrap();
+    store::complete(&pool, id, 0, &answer, Some(&usage), NOW + 50)
+        .await
+        .unwrap();
+    let row = store::get(&pool, id).await.unwrap().unwrap();
+    let stored = format!("{row:?}{:?}", row.outcome());
+    assert!(!stored.contains("sk-test-secret-value"), "{stored}");
+
+    // Error strings carry no key either.
+    let bad = backend(&endpoint, dir.path().join("missing"));
+    let err = bad.run(&claimed("openai")).await.unwrap_err();
+    assert_eq!(err.0, Reason::ProviderUnavailable);
+    assert!(
+        !err.1.contains("sk-test") && !err.1.contains("missing"),
+        "{}",
+        err.1
+    );
+    let none = api_backend.run(&claimed("anthropic")).await.unwrap_err();
+    assert_eq!(
+        none,
+        (
+            Reason::ProviderUnavailable,
+            "no api endpoint configured for anthropic".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn api_429_and_500_are_unavailable_and_400_is_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = secret_file(dir.path(), 0o600);
+    for (status, reason) in [
+        (429, Reason::ProviderUnavailable),
+        (408, Reason::ProviderUnavailable),
+        (500, Reason::ProviderUnavailable),
+        (503, Reason::ProviderUnavailable),
+        (400, Reason::ProviderError),
+        (401, Reason::ProviderError),
+    ] {
+        let (endpoint, _) = fake::serve(status, json!({"error": "sk-test-secret-value"})).await;
+        let err = backend(&endpoint, secret.clone())
+            .run(&claimed("openai"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, reason, "HTTP {status}");
+        assert!(err.1.contains(&status.to_string()), "{}", err.1);
+        assert!(!err.1.contains("sk-test"), "{}", err.1);
+    }
+    // Nothing listens on this port: a transport error.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/responses", closed.local_addr().unwrap());
+    drop(closed);
+    let err = backend(&endpoint, secret)
+        .run(&claimed("openai"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, Reason::ProviderUnavailable);
+    // An incomplete response is a provider error.
+    let (endpoint, _) = fake::serve(200, json!({"status": "incomplete"})).await;
+    let dir2 = tempfile::tempdir().unwrap();
+    let err = backend(&endpoint, secret_file(dir2.path(), 0o600))
+        .run(&claimed("openai"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, Reason::ProviderError);
+}
+
+#[tokio::test]
+async fn secret_file_that_is_group_readable_or_a_symlink_is_refused() {
+    let (endpoint, seen) = fake::serve(200, fake::completed("{}")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let group = secret_file(dir.path(), 0o640);
+    let err = backend(&endpoint, group)
+        .run(&claimed("openai"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, Reason::ProviderUnavailable);
+    assert!(err.1.contains("unusable"), "{}", err.1);
+
+    let dir = tempfile::tempdir().unwrap();
+    let real = secret_file(dir.path(), 0o600);
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let err = backend(&endpoint, link)
+        .run(&claimed("openai"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, Reason::ProviderUnavailable);
+    assert!(
+        seen.lock().unwrap().authorization.is_empty(),
+        "nothing was sent"
+    );
+
+    // A relative path and a plain-http remote endpoint are refused up front.
+    for (url, file) in [
+        (endpoint.as_str(), std::path::PathBuf::from("key")),
+        ("http://example.com/v1/responses", real.clone()),
+    ] {
+        assert!(
+            ApiBackend::new(vec![ApiEndpoint {
+                provider: "openai".into(),
+                endpoint: url.into(),
+                secret_file: file,
+            }])
+            .is_err()
+        );
     }
 }
