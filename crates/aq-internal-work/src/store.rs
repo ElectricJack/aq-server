@@ -131,7 +131,36 @@ pub async fn submit(
         Reason::NoCandidate,
         "no candidate is configured for this purpose",
     ));
-    insert(pool, request, candidates, failure, None, now_ms).await
+    insert(
+        pool,
+        Uuid::new_v4(),
+        request,
+        candidates,
+        failure,
+        None,
+        now_ms,
+    )
+    .await
+}
+
+/// [`submit`] under the caller's `id`, or with no candidate (`Err` gives the
+/// detail) [`submit_failed`] with `no_candidate`. A task with that id already
+/// stored is left as it is, so a caller that records the id before it submits
+/// can submit again after a restart without making a second task.
+pub async fn submit_as(
+    pool: &PgPool,
+    id: Uuid,
+    request: &Request,
+    candidates: std::result::Result<&[Candidate], &str>,
+    now_ms: i64,
+) -> Result<Uuid> {
+    let (candidates, failure) = match candidates {
+        Ok([]) => (&[][..], Some("no candidate is configured for this purpose")),
+        Ok(candidates) => (candidates, None),
+        Err(detail) => (&[][..], Some(detail)),
+    };
+    let failure = failure.map(|detail| (Reason::NoCandidate, detail));
+    insert(pool, id, request, candidates, failure, None, now_ms).await
 }
 
 /// Stores `request` already failed with `reason` and `detail`.
@@ -142,7 +171,8 @@ pub async fn submit_failed(
     detail: &str,
     now_ms: i64,
 ) -> Result<Uuid> {
-    insert(pool, request, &[], Some((reason, detail)), None, now_ms).await
+    let failure = Some((reason, detail));
+    insert(pool, Uuid::new_v4(), request, &[], failure, None, now_ms).await
 }
 
 /// [`submit`], or [`submit_failed`] with `no_candidate` and `failure` as the
@@ -161,11 +191,23 @@ pub async fn submit_retry(
         Err(detail) => (&[][..], Some(detail)),
     };
     let failure = failure.map(|detail| (Reason::NoCandidate, detail));
-    insert(pool, request, candidates, failure, Some(lineage), now_ms).await
+    let lineage = Some(lineage);
+    insert(
+        pool,
+        Uuid::new_v4(),
+        request,
+        candidates,
+        failure,
+        lineage,
+        now_ms,
+    )
+    .await
 }
 
+/// Stores the task `id`; one already stored under `id` is left as it is.
 async fn insert(
     pool: &PgPool,
+    id: Uuid,
     request: &Request,
     candidates: &[Candidate],
     failure: Option<(Reason, &str)>,
@@ -173,14 +215,14 @@ async fn insert(
     now_ms: i64,
 ) -> Result<Uuid> {
     request.validate()?;
-    let id = Uuid::new_v4();
     let deadline_at_ms = now_ms + request.deadline_ms as i64;
     let failed = failure.is_some();
     sqlx::query(
         "INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,
              created_at_ms,finished_at_ms,reason,detail,affected_kind,affected_id,project_id,escalate,
              retry_of,supervisor_attempts,workspace_kind)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         ON CONFLICT(id) DO NOTHING",
     )
     .bind(id)
     .bind(to_text(&request.purpose))

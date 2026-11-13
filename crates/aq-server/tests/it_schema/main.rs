@@ -13,6 +13,7 @@
 mod common;
 
 mod migration_catalog;
+mod playbook_authoring_migration;
 mod result_origin_migration;
 mod routing_policies_migration;
 mod row_retention;

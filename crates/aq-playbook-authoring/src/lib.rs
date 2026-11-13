@@ -12,10 +12,10 @@ pub mod source;
 pub mod store;
 
 pub use runs::{
-    ActiveRun, GRACE_MS, Run, active, attach, requested, run_for_artifact, stranded,
-    supersede_older,
+    ActiveRun, Ended, Finished, GRACE_MS, Run, active, finish, in_flight, requested,
+    run_for_artifact, stranded, supersede_older, task_for,
 };
-pub use source::{Host, SourceKind, SourceRecord, facts_digest, source_digest};
+pub use source::{Host, SourceKind, SourceRecord, facts_digest, record_digest, source_digest};
 pub use store::{ensure_builtin, get, register, stored_markdown};
 
 /// The expiry of the grant the server holds for a source (ruling R2): never.

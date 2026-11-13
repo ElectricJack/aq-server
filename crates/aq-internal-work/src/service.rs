@@ -100,14 +100,17 @@ impl Service {
     /// Settings (or the request's override) pick the profile; the profile
     /// resolves to candidates; the task is queued, or stored `no_candidate`.
     pub async fn submit(&self, request: &Request) -> Result<Uuid> {
+        self.submit_as(Uuid::new_v4(), request).await
+    }
+
+    /// [`Service::submit`] under the caller's `id`. Submitting again with an
+    /// id already stored makes no second task and returns the id.
+    pub async fn submit_as(&self, id: Uuid, request: &Request) -> Result<Uuid> {
         request.validate()?;
         let (pool, now_ms) = (&self.pool, (self.now)());
-        match self.resolve(request, now_ms).await? {
-            Ok(candidates) => store::submit(pool, request, &candidates, now_ms).await,
-            Err(detail) => {
-                store::submit_failed(pool, request, Reason::NoCandidate, &detail, now_ms).await
-            }
-        }
+        let candidates = self.resolve(request, now_ms).await?;
+        let candidates = candidates.as_deref().map_err(String::as_str);
+        store::submit_as(pool, id, request, candidates, now_ms).await
     }
 
     /// Settings (or the request's override) pick the profile; the profile

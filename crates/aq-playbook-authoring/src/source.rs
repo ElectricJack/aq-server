@@ -86,6 +86,26 @@ pub fn source_digest(markdown: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(markdown.as_bytes()))
 }
 
+/// `sha256:<hex>` of everything the record says except its revision: a run
+/// authored under one record is stale under another (a newer server widening
+/// the built-in record, or a registered source given fewer commands).
+pub fn record_digest(record: &SourceRecord) -> String {
+    let value = serde_json::json!({
+        "id": record.id,
+        "kind": record.kind,
+        "binding": record.binding,
+        "scope": record.scope,
+        "purpose": record.purpose,
+        "judgment_purpose": record.judgment_purpose,
+        "commands": record.commands,
+        "events": record.events,
+        "capabilities": record.capabilities,
+        "facts": record.facts,
+    });
+    let bytes = serde_json::to_vec(&sorted(&value)).unwrap_or_default();
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
 /// `sha256:<hex>` of the facts as JSON with every object's keys sorted, so the
 /// digest does not depend on the order a provider built them in.
 pub fn facts_digest(facts: &BTreeMap<String, Value>) -> String {
@@ -152,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn records_differing_only_in_revision_are_the_same() {
+    fn records_differing_only_in_revision_are_the_same_and_digest_alike() {
         let record = SourceRecord {
             id: "routing".into(),
             kind: SourceKind::Builtin,
@@ -171,10 +191,17 @@ mod tests {
             ..record.clone()
         };
         assert!(record.same_as(&later));
+        assert_eq!(record_digest(&record), record_digest(&later));
         let wider = SourceRecord {
             capabilities: BTreeSet::from(["work.read".into(), "work.route".into()]),
             ..later
         };
         assert!(!record.same_as(&wider));
+        assert_ne!(record_digest(&record), record_digest(&wider));
+        let narrower = SourceRecord {
+            events: BTreeSet::from(["aq.work.route_needed".to_string()]),
+            ..record.clone()
+        };
+        assert_ne!(record_digest(&record), record_digest(&narrower));
     }
 }

@@ -3,7 +3,7 @@
 use crate::{Error, Result, SourceKind, SourceRecord, now_ms};
 use aq_internal_work::Purpose;
 use serde_json::Value;
-use sqlx::{PgExecutor, PgPool, Postgres, Row, Transaction, postgres::PgRow, types::Json};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow, types::Json};
 use std::collections::BTreeSet;
 
 const COLUMNS: &str =
@@ -46,13 +46,6 @@ pub async fn get(pool: &PgPool, id: &str) -> Result<Option<SourceRecord>> {
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    row.as_ref().map(decode).transpose()
-}
-
-/// The source `id`, locked until the end of the transaction `db` is in.
-pub(crate) async fn locked(db: impl PgExecutor<'_>, id: &str) -> Result<Option<SourceRecord>> {
-    let sql = format!("SELECT {COLUMNS} FROM playbook_sources WHERE id=$1 FOR UPDATE");
-    let row = sqlx::query(&sql).bind(id).fetch_optional(db).await?;
     row.as_ref().map(decode).transpose()
 }
 

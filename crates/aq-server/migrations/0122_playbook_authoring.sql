@@ -20,6 +20,9 @@ CREATE TABLE playbook_sources (
     markdown TEXT,
     revision BIGINT NOT NULL CHECK (revision > 0),
     updated_at_ms BIGINT NOT NULL,
+    -- The newest Markdown revision an authoring request has read: a request
+    -- that read an older one is stale and records nothing.
+    requested_revision BIGINT NOT NULL DEFAULT 0 CHECK (requested_revision >= 0),
     CHECK (kind <> 'registered' OR markdown IS NOT NULL)
 );
 -- One row per authoring of a source, recorded before its internal task is
@@ -31,6 +34,8 @@ CREATE TABLE playbook_authoring_runs (
     source_revision BIGINT NOT NULL CHECK (source_revision >= 0),
     source_digest TEXT NOT NULL,
     facts_digest TEXT NOT NULL,
+    -- The source record the run was authored under, without its revision.
+    record_digest TEXT NOT NULL,
     internal_task_id UUID UNIQUE,
     status TEXT NOT NULL DEFAULT 'running'
         CHECK (status IN ('running','saved','question','unable','refused','failed','superseded')),
