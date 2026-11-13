@@ -30,6 +30,7 @@ async fn fresh_closure_schema_is_empty_and_default_router_has_no_owner() {
     let mut config:aq_server::config::Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='nobody@example.invalid'\n[bootstrap]\nenabled=false\n").unwrap();
     config.profiled_execution = None;
     let state = aq_server::AppState {
+        internal_work: Default::default(),
         store: store.clone(),
         config: std::sync::Arc::new(config),
         identity: std::sync::Arc::new(aq_server::identity::DevIdentity::new(

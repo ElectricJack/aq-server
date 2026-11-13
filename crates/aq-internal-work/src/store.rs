@@ -114,10 +114,35 @@ pub async fn submit(
     candidates: &[Candidate],
     now_ms: i64,
 ) -> Result<Uuid> {
+    let failure = candidates.is_empty().then_some((
+        Reason::NoCandidate,
+        "no candidate is configured for this purpose",
+    ));
+    insert(pool, request, candidates, failure, now_ms).await
+}
+
+/// Stores `request` already failed with `reason` and `detail`.
+pub async fn submit_failed(
+    pool: &PgPool,
+    request: &Request,
+    reason: Reason,
+    detail: &str,
+    now_ms: i64,
+) -> Result<Uuid> {
+    insert(pool, request, &[], Some((reason, detail)), now_ms).await
+}
+
+async fn insert(
+    pool: &PgPool,
+    request: &Request,
+    candidates: &[Candidate],
+    failure: Option<(Reason, &str)>,
+    now_ms: i64,
+) -> Result<Uuid> {
     request.validate()?;
     let id = Uuid::new_v4();
     let deadline_at_ms = now_ms + request.deadline_ms as i64;
-    let empty = candidates.is_empty();
+    let failed = failure.is_some();
     sqlx::query(
         "INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,
              created_at_ms,finished_at_ms,reason,detail,affected_kind,affected_id,project_id,escalate)
@@ -127,13 +152,13 @@ pub async fn submit(
     .bind(to_text(&request.purpose))
     .bind(to_json(request))
     .bind(to_json(&candidates))
-    .bind(if empty { "failed" } else { "queued" })
+    .bind(if failed { "failed" } else { "queued" })
     .bind(request.blocking)
     .bind(deadline_at_ms)
     .bind(now_ms)
-    .bind(empty.then_some(now_ms))
-    .bind(empty.then(|| to_text(&Reason::NoCandidate)))
-    .bind(empty.then_some("no candidate is configured for this purpose"))
+    .bind(failed.then_some(now_ms))
+    .bind(failure.map(|(reason, _)| to_text(&reason)))
+    .bind(failure.map(|(_, detail)| detail))
     .bind(&request.affected.kind)
     .bind(&request.affected.id)
     .bind(request.affected.project_id)
@@ -231,9 +256,22 @@ pub async fn fail_candidate(
     detail: &str,
     now_ms: i64,
 ) -> Result<()> {
+    fail_held(pool, id, candidate_index, reason, detail, now_ms).await?;
+    Ok(())
+}
+
+/// [`fail_candidate`], returning whether the candidate still held the task.
+async fn fail_held(
+    pool: &PgPool,
+    id: Uuid,
+    candidate_index: u32,
+    reason: Reason,
+    detail: &str,
+    now_ms: i64,
+) -> Result<bool> {
     let mut tx = pool.begin().await?;
     let Some(row) = held(&mut tx, id, candidate_index).await? else {
-        return Ok(());
+        return Ok(false);
     };
     let attempt = to_json(&attempt(&row, Some(reason), detail, now_ms)?);
     let retryable = matches!(
@@ -270,15 +308,45 @@ pub async fn fail_candidate(
         .await?;
     }
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Ends tasks whose deadline or runner is gone and returns how many it
-/// changed. Its behavior is defined by Task 5 of the internal-work plan; until
-/// then it changes nothing and returns 0.
+/// changed. A `running` task whose runner has not reported within the
+/// candidate budget ([`CANDIDATE_TIMEOUT_MS`], or less when the task deadline
+/// is nearer) plus [`SWEEP_GRACE_MS`] fails that candidate as
+/// `deadline_exceeded`, exactly as the runner would have: it moves on to the
+/// next candidate, never back to `queued` on the same one, so a late runner
+/// stays fenced out. A `queued` task past its deadline fails
+/// `deadline_exceeded`.
 pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {
-    let _ = (pool, now_ms);
-    Ok(0)
+    let stale: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT id,candidate_index FROM internal_tasks
+         WHERE status='running' AND LEAST(claimed_at_ms+$2, deadline_at_ms)+$3 < $1",
+    )
+    .bind(now_ms)
+    .bind(CANDIDATE_TIMEOUT_MS)
+    .bind(SWEEP_GRACE_MS)
+    .fetch_all(pool)
+    .await?;
+    let mut changed = 0;
+    for (id, index) in stale {
+        let index = u32::try_from(index).map_err(|_| Error::Corrupt)?;
+        let reason = Reason::DeadlineExceeded;
+        if fail_held(pool, id, index, reason, "runner did not report", now_ms).await? {
+            changed += 1;
+        }
+    }
+    let expired = sqlx::query(
+        "UPDATE internal_tasks SET status='failed', reason=$2, detail=$3, finished_at_ms=$1
+         WHERE status='queued' AND deadline_at_ms <= $1",
+    )
+    .bind(now_ms)
+    .bind(to_text(&Reason::DeadlineExceeded))
+    .bind("deadline passed before a runner took the task")
+    .execute(pool)
+    .await?;
+    Ok(changed + expired.rows_affected())
 }
 
 pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<Row>> {

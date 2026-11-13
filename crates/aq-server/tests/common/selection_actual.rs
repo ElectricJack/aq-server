@@ -210,6 +210,7 @@ enabled=true
         .validate(&config.projects)
         .map_err(anyhow::Error::msg)?;
     let state = AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store,
         identity: Arc::new(aq_server::identity::DevIdentity::new(

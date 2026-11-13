@@ -105,6 +105,7 @@ enabled=false
     )
     .unwrap();
     let state = aq_server::AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: std::sync::Arc::new(aq_server::identity::DevIdentity::new(

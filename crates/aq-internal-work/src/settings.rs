@@ -38,32 +38,40 @@ fn value<T: Serialize>(v: &T) -> Result<Value> {
 /// Catalog revision and the ids of the active profiles that may be chosen
 /// (every profile except the automatic router).
 async fn catalog(conn: &mut PgConnection) -> Result<(String, BTreeSet<String>)> {
+    let (revision, catalog) = active_catalog(conn).await?;
+    let ids = catalog
+        .iter()
+        .flat_map(|c| &c.artifact().catalog.intelligence);
+    let ids = ids
+        .filter(|p| p.automatic_routing != Some(true))
+        .map(|p| p.id.clone())
+        .collect();
+    Ok((revision.to_string(), ids))
+}
+
+/// The catalog registry revision and the active catalog, if one is active.
+pub async fn active_catalog(
+    conn: &mut PgConnection,
+) -> Result<(i64, Option<aq_profiles::ValidatedCatalog>)> {
     let row =
         sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
             .fetch_one(&mut *conn)
             .await?;
-    let mut ids = BTreeSet::new();
-    if let Some(digest) = row.get::<Option<String>, _>("active_digest") {
-        let bytes: Vec<u8> =
-            sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-                .bind(&digest)
-                .fetch_one(&mut *conn)
-                .await?;
-        let catalog =
-            aq_profiles::ValidatedCatalog::from_artifact(&bytes).map_err(|_| Error::Corrupt)?;
-        if catalog.digest() != digest {
-            return Err(Error::Corrupt);
-        }
-        ids = catalog
-            .artifact()
-            .catalog
-            .intelligence
-            .iter()
-            .filter(|p| p.automatic_routing != Some(true))
-            .map(|p| p.id.clone())
-            .collect();
+    let revision = row.get("revision");
+    let Some(digest) = row.get::<Option<String>, _>("active_digest") else {
+        return Ok((revision, None));
+    };
+    let bytes: Vec<u8> =
+        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
+            .bind(&digest)
+            .fetch_one(&mut *conn)
+            .await?;
+    let catalog =
+        aq_profiles::ValidatedCatalog::from_artifact(&bytes).map_err(|_| Error::Corrupt)?;
+    if catalog.digest() != digest {
+        return Err(Error::Corrupt);
     }
-    Ok((row.get::<i64, _>("revision").to_string(), ids))
+    Ok((revision, Some(catalog)))
 }
 
 fn decode(row: &sqlx::postgres::PgRow) -> Result<Document> {

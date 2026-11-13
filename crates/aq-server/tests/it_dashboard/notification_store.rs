@@ -500,6 +500,7 @@ enabled=false
         )
         .unwrap();
         aq_server::AppState {
+            internal_work: Default::default(),
             agent_access: None,
             source_retention: None,
             store: self._db.store().await,

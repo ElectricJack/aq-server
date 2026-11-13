@@ -6,6 +6,7 @@
 pub mod api_backend;
 pub mod http;
 pub mod resolve;
+pub mod service;
 pub mod settings;
 pub mod store;
 pub mod validate;
@@ -25,6 +26,12 @@ pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 pub const DEADLINE_MS: std::ops::RangeInclusive<u64> = 1_000..=900_000;
 /// Allowed `Request::max_output_bytes`.
 pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
+/// Longest one candidate may run, in milliseconds; less when the task
+/// deadline is nearer.
+pub const CANDIDATE_TIMEOUT_MS: i64 = 120_000;
+/// How long past its candidate budget a runner may take to report before the
+/// sweeper takes the candidate back.
+pub const SWEEP_GRACE_MS: i64 = 5_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

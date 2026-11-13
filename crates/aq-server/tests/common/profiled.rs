@@ -139,6 +139,7 @@ enabled=true
     let time = Arc::new(AtomicI64::new(NOW as i64));
     let clock = time.clone();
     let state = AppState {
+        internal_work: Default::default(),
         store,
         identity: verifier_from_config(&cfg.auth, reqwest::Client::new()),
         config: Arc::new(cfg),

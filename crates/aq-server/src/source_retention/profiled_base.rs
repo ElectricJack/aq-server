@@ -1017,6 +1017,7 @@ mod actual_git_test {
         let db = TestDb::create().await;
         let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
         let state = AppState {
+            internal_work: Default::default(),
             agent_access: None,
             source_retention: Some(runtime.clone()),
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),

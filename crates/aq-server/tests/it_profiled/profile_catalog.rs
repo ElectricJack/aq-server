@@ -45,6 +45,7 @@ enabled=true
     ))
     .unwrap();
     let state = AppState {
+        internal_work: Default::default(),
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),
         config: Arc::new(config),
         store,

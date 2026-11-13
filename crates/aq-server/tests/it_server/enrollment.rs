@@ -68,6 +68,7 @@ async fn harness() -> Harness {
     );
     let clock: Clock = Arc::new(t0);
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         config: Arc::new(config()),
@@ -462,6 +463,7 @@ enabled = true
     .unwrap();
     let clock: Clock = Arc::new(t0);
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         config: Arc::new(cfg),

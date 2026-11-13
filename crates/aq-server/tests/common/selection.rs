@@ -296,6 +296,7 @@ enabled=true
     let time = Arc::new(AtomicI64::new(now.timestamp_millis()));
     let clock = time.clone();
     let state = AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store,
         identity: Arc::new(aq_server::identity::DevIdentity::new(

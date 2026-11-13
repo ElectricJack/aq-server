@@ -478,7 +478,7 @@ mod resolve {
 
     const NOW: u64 = 1_000_000;
 
-    fn candidate(id: &str, provider: &str, harnesses: &[&str]) -> ModelCandidate {
+    pub(super) fn candidate(id: &str, provider: &str, harnesses: &[&str]) -> ModelCandidate {
         ModelCandidate {
             id: id.into(),
             provider: provider.into(),
@@ -488,7 +488,7 @@ mod resolve {
         }
     }
 
-    fn catalog(profiles: Vec<(&str, Vec<ModelCandidate>)>) -> ValidatedCatalog {
+    pub(super) fn catalog(profiles: Vec<(&str, Vec<ModelCandidate>)>) -> ValidatedCatalog {
         let base = aq_profiles::load(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../aq-profiles/examples/catalog"),
@@ -524,7 +524,7 @@ mod resolve {
         }
     }
 
-    fn credential(name: &str, provider: &str, enabled: bool) -> AuthorizedCredential {
+    pub(super) fn credential(name: &str, provider: &str, enabled: bool) -> AuthorizedCredential {
         AuthorizedCredential {
             profile: profile_ref(name),
             provider: provider.into(),
@@ -538,7 +538,7 @@ mod resolve {
         }
     }
 
-    fn registry(items: Vec<(AuthorizedCredential, CredentialKind)>) -> LoadedRegistry {
+    pub(super) fn registry(items: Vec<(AuthorizedCredential, CredentialKind)>) -> LoadedRegistry {
         IntelligenceConfig {
             accounting: Default::default(),
             material_store: None,
@@ -1107,5 +1107,355 @@ async fn secret_file_that_is_group_readable_or_a_symlink_is_refused() {
             }])
             .is_err()
         );
+    }
+}
+
+/// The service (spec 0012 §3, §4, §8 step 1): Settings pick the profile, the
+/// in-server loop runs API candidates in profile order, and the sweeper ends
+/// tasks whose runner or deadline is gone.
+mod service {
+    use super::{fake, migrated, request, resolve, secret_file};
+    use aq_intelligence_config::LoadedRegistry;
+    use aq_internal_work::{ApiEndpoint, InternalWorkConfig, Outcome, Reason, Request, Way, store};
+    use aq_selection::CredentialKind;
+    use aq_server::{InternalWork, test_support::TestDb};
+    use serde_json::{Value, json};
+    use sqlx::PgPool;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::watch;
+    use uuid::Uuid;
+
+    fn now_ms() -> i64 {
+        chrono::Utc::now().timestamp_millis()
+    }
+
+    async fn user(pool: &PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,$2,'owner',now())")
+            .bind(id)
+            .bind(format!("{id}@localhost"))
+            .execute(pool)
+            .await
+            .unwrap();
+        id
+    }
+
+    /// Activates a catalog whose profile `internal` lists openai, then
+    /// anthropic, and makes it the internal work default.
+    async fn configure(pool: &PgPool) {
+        let catalog = resolve::catalog(vec![(
+            "internal",
+            vec![
+                resolve::candidate("o", "openai", &["codex"]),
+                resolve::candidate("a", "anthropic", &["claude-code"]),
+            ],
+        )]);
+        sqlx::query(
+            "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
+             VALUES($1,$2,$3,1)",
+        )
+        .bind(catalog.digest())
+        .bind(catalog.canonical_bytes().unwrap())
+        .bind(user(pool).await)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+            .bind(catalog.digest())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
+            .bind(json!({"default_profile_id": "internal", "overrides": {}}))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn registry(anthropic: CredentialKind) -> Arc<LoadedRegistry> {
+        Arc::new(resolve::registry(vec![
+            (
+                resolve::credential("openai-key", "openai", true),
+                CredentialKind::ApiKey,
+            ),
+            (
+                resolve::credential("anthropic-key", "anthropic", true),
+                anthropic,
+            ),
+        ]))
+    }
+
+    struct Fixture {
+        _db: TestDb,
+        _dir: tempfile::TempDir,
+        pool: PgPool,
+        work: InternalWork,
+        openai: Arc<std::sync::Mutex<fake::Seen>>,
+        anthropic: Arc<std::sync::Mutex<fake::Seen>>,
+    }
+
+    /// A configured service whose providers answer `openai` and `anthropic`.
+    async fn fixture(openai: &str, anthropic: &str, kind: CredentialKind) -> Fixture {
+        let db = TestDb::create().await;
+        let pool = migrated(&db).await;
+        configure(&pool).await;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = secret_file(dir.path(), 0o600);
+        let (openai_url, openai) = fake::serve(200, fake::completed(openai)).await;
+        let (anthropic_url, anthropic) = fake::serve(200, fake::completed(anthropic)).await;
+        let config = InternalWorkConfig {
+            api: [("openai", openai_url), ("anthropic", anthropic_url)]
+                .into_iter()
+                .map(|(provider, endpoint)| ApiEndpoint {
+                    provider: provider.into(),
+                    endpoint,
+                    secret_file: secret.clone(),
+                })
+                .collect(),
+            poll_ms: 20,
+            enabled: true,
+        };
+        let work = InternalWork::new(
+            pool.clone(),
+            aq_server::system_clock(),
+            Some(&config),
+            Some(registry(kind)),
+        )
+        .unwrap();
+        Fixture {
+            _db: db,
+            _dir: dir,
+            pool,
+            work,
+            openai,
+            anthropic,
+        }
+    }
+
+    const SMALL: &str = r#"{"choice": "small", "rationale": "one page"}"#;
+    const LARGE: &str = r#"{"choice": "large", "rationale": "many pages"}"#;
+
+    /// Runs the in-server loop until the returned sender is dropped.
+    fn start(work: &InternalWork) -> watch::Sender<bool> {
+        let (stop, rx) = watch::channel(false);
+        tokio::spawn(work.clone().serve(rx));
+        stop
+    }
+
+    async fn wait(work: &InternalWork, id: Uuid) -> Outcome {
+        tokio::time::timeout(Duration::from_secs(20), work.wait(id))
+            .await
+            .expect("the task finishes")
+            .unwrap()
+    }
+
+    fn answered(outcome: Outcome) -> (Value, String, Vec<aq_internal_work::Attempt>) {
+        match outcome {
+            Outcome::Answered {
+                answer,
+                provider,
+                way,
+                attempts,
+                ..
+            } => {
+                assert_eq!(way, Way::Api);
+                (answer, provider, attempts)
+            }
+            failed => panic!("expected an answer, got {failed:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_returns_the_validated_answer_from_the_first_candidate() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let _stop = start(&f.work);
+        let outcome = tokio::time::timeout(Duration::from_secs(20), f.work.run(request(true)))
+            .await
+            .expect("run returns")
+            .unwrap();
+        let usage = match &outcome {
+            Outcome::Answered { usage, .. } => usage.clone().unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!((usage.input_tokens, usage.output_tokens), (12, 5));
+        let (answer, provider, attempts) = answered(outcome);
+        assert_eq!(answer, json!({"choice": "small", "rationale": "one page"}));
+        assert_eq!(provider, "openai");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].reason, None);
+        assert_eq!(f.openai.lock().unwrap().bodies.len(), 1);
+        assert!(f.anthropic.lock().unwrap().bodies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_output_from_the_first_candidate_falls_to_the_second() {
+        let f = fixture("I would say small.", LARGE, CredentialKind::ApiKey).await;
+        let _stop = start(&f.work);
+        let (answer, provider, attempts) = answered(f.work.run(request(false)).await.unwrap());
+        assert_eq!(answer["choice"], "large");
+        assert_eq!(provider, "anthropic");
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].provider, "openai");
+        assert_eq!(attempts[0].reason, Some(Reason::InvalidOutput));
+        assert!(
+            attempts[0].detail.contains("not JSON"),
+            "{}",
+            attempts[0].detail
+        );
+        assert_eq!(attempts[1].provider, "anthropic");
+        assert_eq!(attempts[1].reason, None);
+    }
+
+    #[tokio::test]
+    async fn no_configured_profile_fails_no_candidate_naming_the_setting() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
+            .bind(json!({"default_profile_id": null, "overrides": {}}))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let id = f.work.submit(request(true)).await.unwrap();
+        match wait(&f.work, id).await {
+            Outcome::Failed {
+                reason,
+                detail,
+                attempts,
+            } => {
+                assert_eq!(reason, Reason::NoCandidate);
+                assert_eq!(detail, "no internal work profile configured");
+                assert!(attempts.is_empty());
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+        // An explicit override still runs without the setting.
+        let _stop = start(&f.work);
+        let overridden = Request {
+            profile_override: Some("internal".into()),
+            ..request(true)
+        };
+        let (_, provider, _) = answered(f.work.run(overridden).await.unwrap());
+        assert_eq!(provider, "openai");
+    }
+
+    #[tokio::test]
+    async fn a_running_task_whose_runner_vanished_is_swept_and_retried_on_the_next_candidate() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let id = f.work.submit(request(false)).await.unwrap();
+        let held = store::claim(&f.pool, Way::Api, &[], "vanished", now_ms())
+            .await
+            .unwrap()
+            .expect("the queued task");
+        assert_eq!((held.id, held.candidate.provider.as_str()), (id, "openai"));
+        // Within its 120 s budget the runner is left alone.
+        assert_eq!(store::sweep(&f.pool, now_ms()).await.unwrap(), 0);
+        assert_eq!(
+            store::get(&f.pool, id).await.unwrap().unwrap().status,
+            "running"
+        );
+        sqlx::query("UPDATE internal_tasks SET claimed_at_ms=$2 WHERE id=$1")
+            .bind(id)
+            .bind(now_ms() - 126_000)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let _stop = start(&f.work);
+        let (answer, provider, attempts) = answered(wait(&f.work, id).await);
+        assert_eq!(
+            (answer["choice"].as_str(), provider.as_str()),
+            (Some("large"), "anthropic")
+        );
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].provider, "openai");
+        assert_eq!(attempts[0].reason, Some(Reason::DeadlineExceeded));
+        assert_eq!(attempts[0].detail, "runner did not report");
+        assert!(f.openai.lock().unwrap().bodies.is_empty());
+        // The vanished runner reporting late changes nothing.
+        store::complete(&f.pool, id, 0, &json!({"choice": "small"}), None, now_ms())
+            .await
+            .unwrap();
+        let (answer, provider, _) = answered(wait(&f.work, id).await);
+        assert_eq!(
+            (answer["choice"].as_str(), provider.as_str()),
+            (Some("large"), "anthropic")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_queued_task_past_its_deadline_fails_deadline_exceeded() {
+        // Only anthropic resolves, by login: nothing on the server claims it yet.
+        let f = fixture(SMALL, LARGE, CredentialKind::SubscriptionLogin).await;
+        configure_login_only(&f.pool).await;
+        let login_only = Request {
+            deadline_ms: 1_000,
+            ..request(true)
+        };
+        let id = f.work.submit(login_only).await.unwrap();
+        let row = store::get(&f.pool, id).await.unwrap().unwrap();
+        assert_eq!(row.status, "queued");
+        assert_eq!(row.candidates[0].way, Way::Login);
+        let _stop = start(&f.work);
+        match wait(&f.work, id).await {
+            Outcome::Failed {
+                reason, attempts, ..
+            } => {
+                assert_eq!(reason, Reason::DeadlineExceeded);
+                assert!(attempts.is_empty());
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+        let row = store::get(&f.pool, id).await.unwrap().unwrap();
+        assert!(row.finished_at_ms.unwrap() >= row.deadline_at_ms);
+    }
+
+    /// A second active catalog whose profile `internal` lists only anthropic.
+    async fn configure_login_only(pool: &PgPool) {
+        let catalog = resolve::catalog(vec![(
+            "internal",
+            vec![resolve::candidate("a", "anthropic", &["claude-code"])],
+        )]);
+        sqlx::query(
+            "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
+             VALUES($1,$2,$3,1)",
+        )
+        .bind(catalog.digest())
+        .bind(catalog.canonical_bytes().unwrap())
+        .bind(user(pool).await)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+            .bind(catalog.digest())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn internal_work_runs_while_swarm_availability_is_off_and_adds_no_swarm_admission_rows() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let owner = user(&f.pool).await;
+        let mut conn = f.pool.acquire().await.unwrap();
+        let off = aq_machine_control::set_owner_availability(
+            &mut conn,
+            false,
+            1,
+            owner,
+            Uuid::new_v4(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(off.state, aq_machine_control::Availability::Off);
+        drop(conn);
+        let _stop = start(&f.work);
+        let (_, provider, _) = answered(f.work.run(request(true)).await.unwrap());
+        assert_eq!(provider, "openai");
+        for table in ["swarm_supervisor_admissions", "swarm_waiting"] {
+            let rows: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+            assert_eq!(rows, 0, "{table}");
+        }
     }
 }

@@ -92,6 +92,7 @@ enabled=false
     .unwrap();
     let identity = verifier_from_config(&config.auth, reqwest::Client::new());
     let state = AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store,
         identity,

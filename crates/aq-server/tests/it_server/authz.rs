@@ -64,6 +64,7 @@ async fn harness(bootstrap_enabled: bool) -> Harness {
     );
     let clock: Clock = Arc::new(|| Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         config: Arc::new(config(bootstrap_enabled)),

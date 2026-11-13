@@ -15,6 +15,7 @@ pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
 mod internal_work;
+pub use internal_work::InternalWork;
 pub mod lifecycle_artifacts;
 pub mod machine_actions;
 pub mod machine_api;
@@ -105,6 +106,7 @@ pub struct AppState {
     pub store: Store,
     pub identity: Arc<dyn IdentityVerifier>,
     pub clock: Clock,
+    pub internal_work: InternalWork,
 }
 
 impl AppState {
@@ -506,6 +508,7 @@ async fn run_with_listeners_and_dashboard(
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
     let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
+    let internal_work_task = tokio::spawn(state.internal_work.clone().serve(rx.clone()));
     tokio::spawn(async move {
         shutdown.await;
         let _ = tx.send(true);
@@ -555,6 +558,8 @@ async fn run_with_listeners_and_dashboard(
     let _ = expiry_task.await;
     stall_task.abort();
     let _ = stall_task.await;
+    internal_work_task.abort();
+    let _ = internal_work_task.await;
     let policy_shutdown = match policy_runtime {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
@@ -602,13 +607,21 @@ pub async fn build_state(
         Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
         None => None,
     };
+    let clock = system_clock();
+    let internal_work = InternalWork::new(
+        store.pool.clone(),
+        clock.clone(),
+        config.internal_work.as_ref(),
+        config.intelligence.clone(),
+    )?;
     Ok(AppState {
         agent_access,
         source_retention,
         identity: identity::verifier_from_config(&config.auth, http),
         config: Arc::new(config),
         store,
-        clock: system_clock(),
+        clock,
+        internal_work,
     })
 }
 
