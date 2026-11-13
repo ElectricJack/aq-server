@@ -52,6 +52,15 @@ async fn providers_save_remove_restore_empty_and_replay() {
     assert_eq!(status, StatusCode::OK, "{initial}");
     assert_eq!(initial["providers"], json!(["anthropic", "openai"]));
     assert_eq!(initial["available"][0]["credential_status"], "missing");
+    let google = initial["available"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "google")
+        .unwrap();
+    assert_eq!(google["name"], "Google");
+    assert_eq!(google["credential_status"], "not_configured");
+    assert_eq!(google["accounts"], json!([]));
     assert_eq!(allowed(&pool, "anthropic").await, None);
     let remove = request(&initial, json!(["openai"]));
     let (status, saved) = call(&app, PROVIDERS, Some(remove.clone()), true).await;
@@ -217,4 +226,34 @@ async fn provider_concurrent_saves_have_one_winner_and_failed_receipts_roll_back
     );
     let (_, after) = call(&app, PROVIDERS, None, false).await;
     assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn provider_presets_can_be_added_without_claiming_connection_readiness() {
+    let (_db, app, _) = configured().await;
+    let (_, initial) = call(&app, PROVIDERS, None, false).await;
+    assert_eq!(initial["providers"], json!(["anthropic", "openai"]));
+    let (status, saved) = call(
+        &app,
+        PROVIDERS,
+        Some(request(&initial, json!(["anthropic", "openai", "google"]))),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert!(
+        saved["providers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("google"))
+    );
+    let google = saved["available"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "google")
+        .unwrap();
+    assert_eq!(google["credential_status"], "not_configured");
+    let (_, current) = call(&app, PROVIDERS, None, false).await;
+    assert_eq!(current["providers"], saved["providers"]);
 }

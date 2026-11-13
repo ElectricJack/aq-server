@@ -22,7 +22,13 @@ pub struct SaveRequest {
     pub providers: Vec<String>,
 }
 fn snapshot(revision: i64, stored: Option<Vec<String>>, available: &[Provider]) -> Value {
-    let providers = stored.unwrap_or_else(|| available.iter().map(|p| p.id.clone()).collect());
+    let providers = stored.unwrap_or_else(|| {
+        available
+            .iter()
+            .filter(|p| p.credential_status != "not_configured")
+            .map(|p| p.id.clone())
+            .collect()
+    });
     json!({"revision":revision.to_string(),"providers":providers,"available":available,"available_revision":aq_profiles::digest(&json!(available)).expect("serializable provider metadata")})
 }
 pub async fn read(pool: &PgPool, available: &[Provider]) -> Result<Value> {
@@ -114,7 +120,7 @@ pub async fn save(
         .iter()
         .any(|id| !available.iter().any(|p| &p.id == id) && !old.contains(id))
     {
-        return Err(crate::invalid("Add a provider configured on this server"));
+        return Err(crate::invalid("Choose a provider from the available list"));
     }
     let changed = initial
         || old.iter().collect::<BTreeSet<_>>() != request.providers.iter().collect::<BTreeSet<_>>();
