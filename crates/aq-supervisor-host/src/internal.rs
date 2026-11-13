@@ -11,7 +11,7 @@ use crate::{
     subscription::{Identity, verify_native},
 };
 use anyhow::{Result, ensure};
-use aq_internal_work::{CANDIDATE_TIMEOUT_MS, Reason, Way, store, validate};
+use aq_internal_work::{Claimed, Reason, Usage, Way, store, validate};
 use aq_session_protocol::Digest;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -123,6 +123,11 @@ pub async fn run(path: &Path) -> Result<()> {
 /// configured, runs it, and records the answer or the candidate's failure.
 /// Returns whether it claimed. One task at a time: the next claim waits for
 /// this run to end.
+///
+/// `now_ms` is the claim time. The run, its preparation included, is stopped
+/// at [`Claimed::stop_at_ms`], counted from the claim exactly as the sweep
+/// counts: the native's session is killed and the failure recorded first,
+/// and only then are the run directories removed and a login copied back.
 pub async fn tick(
     config: &InternalConfig,
     pool: &PgPool,
@@ -136,33 +141,36 @@ pub async fn tick(
     if configured.is_empty() {
         return Ok(false);
     }
+    // At `now_ms`: the claim records it as `claimed_at_ms`.
+    let started = Instant::now();
     let Some(claimed) = store::claim(pool, Way::Login, &configured, runner, now_ms).await? else {
         return Ok(false);
     };
-    let started = Instant::now();
-    // The same per-candidate budget as the in-server API loop.
-    let budget = (claimed.deadline_at_ms - now_ms).clamp(0, CANDIDATE_TIMEOUT_MS);
-    let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
-    let duration = Duration::from_millis(budget as u64);
-    let result = match (
-        claimed.candidate.harness.as_deref(),
-        &config.codex,
-        &config.claude,
-    ) {
-        _ if budget == 0 => Err((
-            Reason::DeadlineExceeded,
-            "the task deadline passed before the run".into(),
-        )),
-        (Some("codex"), Some(h), _) => {
-            codex::codex(h, homes, scratch, &claimed, identity, duration).await
-        }
-        (Some("claude"), _, Some(h)) => {
-            claude::claude(h, homes, scratch, &claimed, identity, duration).await
-        }
-        _ => Err((
-            Reason::ProviderUnavailable,
-            "no runner for this harness on this host".into(),
-        )),
+    let finished = || {
+        let elapsed = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+        now_ms.saturating_add(elapsed)
+    };
+    let stop_after = u64::try_from(claimed.stop_at_ms() - now_ms).unwrap_or(0);
+    let session = Session::default();
+    let run = run_candidate(config, &claimed, &session);
+    tokio::pin!(run);
+    let ran = tokio::select! {
+        biased;
+        result = &mut run => Some(result),
+        () = tokio::time::sleep_until((started + Duration::from_millis(stop_after)).into()) => None,
+    };
+    let (id, index) = (claimed.id, claimed.candidate_index);
+    let Some(result) = ran else {
+        session.stop();
+        let harness = claimed.candidate.harness.as_deref().unwrap_or("native");
+        let detail = claimed.unanswered(harness);
+        let reason = Reason::DeadlineExceeded;
+        let reported = store::fail_candidate(pool, id, index, reason, &detail, finished()).await;
+        // The killed run still reaps the native, copies a refreshed login
+        // back and removes its directories; its outcome is not used.
+        let _ = run.await;
+        reported?;
+        return Ok(true);
     };
     let request = &claimed.request;
     let checked = result.and_then(|(raw, usage)| {
@@ -170,9 +178,7 @@ pub async fn tick(
             .map(|answer| (answer, usage))
             .map_err(|detail| (Reason::InvalidOutput, detail))
     });
-    let elapsed = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
-    let finished = now_ms.saturating_add(elapsed);
-    let (id, index) = (claimed.id, claimed.candidate_index);
+    let finished = finished();
     match checked {
         Ok((answer, usage)) => {
             store::complete(pool, id, index, &answer, usage.as_ref(), finished).await
@@ -184,10 +190,36 @@ pub async fn tick(
     Ok(true)
 }
 
+/// Runs `claimed` on the harness its candidate names, in `session`.
+async fn run_candidate(
+    config: &InternalConfig,
+    claimed: &Claimed,
+    session: &Session,
+) -> Result<(String, Option<Usage>), Failure> {
+    let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
+    let harness = claimed.candidate.harness.as_deref();
+    match (harness, &config.codex, &config.claude) {
+        _ if claimed.budget_ms() == 0 => Err(failure(
+            Reason::DeadlineExceeded,
+            "the task deadline passed before the run",
+        )),
+        (Some("codex"), Some(h), _) => {
+            codex::codex(h, homes, scratch, claimed, identity, session).await
+        }
+        (Some("claude"), _, Some(h)) => {
+            claude::claude(h, homes, scratch, claimed, identity, session).await
+        }
+        _ => Err(failure(
+            Reason::ProviderUnavailable,
+            "no runner for this harness on this host",
+        )),
+    }
+}
+
 /// Longest failure `detail`, in bytes; it is stored in the task row.
 const DETAIL_BYTES: usize = 500;
 /// The stdout read from a native; the rest is drained unread.
-const STDOUT_BYTES: u64 = 8 * 1024 * 1024;
+const STDOUT_BYTES: usize = 8 * 1024 * 1024;
 
 type Failure = (Reason, String);
 
@@ -253,54 +285,116 @@ fn private_parent(dir: &Path, identity: Identity) -> anyhow::Result<()> {
     Ok(())
 }
 
-enum Exit {
-    Finished(std::process::ExitStatus, Vec<u8>),
-    TimedOut,
+/// How long a native's stdout may stay open after the native has exited and
+/// its session was killed: a grandchild that left the session can hold the
+/// pipe no longer than this.
+const DRAIN_MS: u64 = 500;
+
+/// The process session a native leads, so that [`tick`] can stop the run
+/// from outside it. A stop before the spawn keeps the native from starting.
+#[derive(Default)]
+struct Session(std::sync::Mutex<SessionState>);
+
+#[derive(Default)]
+enum SessionState {
+    #[default]
+    NotStarted,
+    Running(i32),
+    Stopped,
 }
 
-/// Spawns `command`, writes `prompt` to its stdin, reads its stdout and waits
-/// for it, all within `budget`. At the budget the child's whole session (it
-/// leads one) is killed and reaped.
+impl Session {
+    fn state(&self) -> std::sync::MutexGuard<'_, SessionState> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn spawn(
+        &self,
+        command: &mut tokio::process::Command,
+    ) -> std::io::Result<tokio::process::Child> {
+        let mut state = self.state();
+        if matches!(*state, SessionState::Stopped) {
+            return Err(std::io::Error::other("the run was stopped"));
+        }
+        let child = command.spawn()?;
+        let pid = child.id().and_then(|pid| i32::try_from(pid).ok());
+        *state = pid.map_or(SessionState::Stopped, SessionState::Running);
+        Ok(child)
+    }
+
+    /// Kills every process left in the session, and keeps a native that has
+    /// not started from starting.
+    fn stop(&self) {
+        let mut state = self.state();
+        if let SessionState::Running(pid) = *state {
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+        *state = SessionState::Stopped;
+    }
+}
+
+/// Spawns `command` in `session`, writes `prompt` to its stdin, reads its
+/// stdout and waits for it to exit. Once it has exited, whatever is left of
+/// its session is killed and stdout read for at most [`DRAIN_MS`] more, so a
+/// grandchild holding the pipe cannot hold up the result. [`Session::stop`]
+/// ends the run the same way.
 async fn execute(
     command: std::process::Command,
     prompt: String,
-    budget: Duration,
-) -> std::io::Result<Exit> {
+    session: &Session,
+) -> std::io::Result<(std::process::ExitStatus, Vec<u8>)> {
     let mut command = tokio::process::Command::from(command);
     command.kill_on_drop(true);
-    let mut child = command.spawn()?;
-    let pid = child.id();
+    let mut child = session.spawn(&mut command)?;
     let stdin = child.stdin.take();
     let mut stdout = child.stdout.take();
-    let run = async {
-        let write = async move {
-            if let Some(mut stdin) = stdin {
-                // A child that exits without reading is judged by its status.
-                let _ = stdin.write_all(prompt.as_bytes()).await;
-            }
-        };
-        let read = async {
-            let mut bytes = Vec::new();
-            if let Some(out) = stdout.as_mut() {
-                let _ = (&mut *out).take(STDOUT_BYTES).read_to_end(&mut bytes).await;
-                let _ = tokio::io::copy(out, &mut tokio::io::sink()).await;
-            }
-            bytes
-        };
-        let ((), bytes, status) = tokio::join!(write, read, child.wait());
-        status.map(|status| Exit::Finished(status, bytes))
-    };
-    match tokio::time::timeout(budget, run).await {
-        Ok(finished) => finished,
-        Err(_) => {
-            if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-            }
-            let _ = child.wait().await;
-            Ok(Exit::TimedOut)
+    let write = async move {
+        if let Some(mut stdin) = stdin {
+            // A child that exits without reading is judged by its status.
+            let _ = stdin.write_all(prompt.as_bytes()).await;
         }
+    };
+    tokio::pin!(write);
+    let (mut bytes, mut chunk) = (Vec::new(), vec![0u8; 64 * 1024]);
+    let (mut written, mut status, mut drain_until) = (false, None, None);
+    while status.is_none() || stdout.is_some() {
+        let drained =
+            tokio::time::sleep_until(drain_until.unwrap_or_else(tokio::time::Instant::now));
+        tokio::select! {
+            () = &mut write, if !written => written = true,
+            read = read_some(&mut stdout, &mut chunk), if stdout.is_some() => match read {
+                Ok(0) | Err(_) => stdout = None,
+                Ok(n) => {
+                    // Past the limit the rest is drained unread.
+                    let room = STDOUT_BYTES.saturating_sub(bytes.len());
+                    bytes.extend_from_slice(&chunk[..n.min(room)]);
+                }
+            },
+            exited = child.wait(), if status.is_none() => {
+                session.stop();
+                status = Some(exited?);
+                let drain = Duration::from_millis(DRAIN_MS);
+                drain_until = Some(tokio::time::Instant::now() + drain);
+            },
+            () = drained, if drain_until.is_some() => break,
+        }
+    }
+    let status = status.expect("the loop ends only after the native has exited");
+    Ok((status, bytes))
+}
+
+/// The next bytes of `out`; none once it is closed.
+async fn read_some(
+    out: &mut Option<tokio::process::ChildStdout>,
+    chunk: &mut [u8],
+) -> std::io::Result<usize> {
+    match out {
+        Some(out) => out.read(chunk).await,
+        None => Ok(0),
     }
 }
 

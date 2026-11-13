@@ -29,12 +29,42 @@ pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 pub const DEADLINE_MS: std::ops::RangeInclusive<u64> = 1_000..=900_000;
 /// Allowed `Request::max_output_bytes`.
 pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
-/// Longest one candidate may run, in milliseconds; less when the task
-/// deadline is nearer.
-pub const CANDIDATE_TIMEOUT_MS: i64 = 120_000;
+/// The smallest candidate budget, unless less time is left to the deadline.
+pub const MIN_CANDIDATE_BUDGET_MS: i64 = 30_000;
+/// How long before the end of its candidate budget a runner stops the
+/// candidate and reports it, so that the sweep, which waits
+/// [`SWEEP_GRACE_MS`] past the full budget, only catches a runner that died.
+pub const RUNNER_MARGIN_MS: i64 = 5_000;
 /// How long past its candidate budget a runner may take to report before the
 /// sweeper takes the candidate back.
 pub const SWEEP_GRACE_MS: i64 = 5_000;
+
+/// How long candidate `candidate_index` of `candidate_count` may run when it
+/// was claimed at `claimed_at_ms`: the time left to the task deadline shared
+/// evenly among the candidates not yet tried (this one and those after it),
+/// at least [`MIN_CANDIDATE_BUDGET_MS`], and never more than is left. The one
+/// definition of the budget: runners stop at [`runner_budget_ms`] of it, and
+/// [`store::sweep`] computes the same in SQL.
+pub fn candidate_budget_ms(
+    deadline_at_ms: i64,
+    claimed_at_ms: i64,
+    candidate_index: u32,
+    candidate_count: usize,
+) -> i64 {
+    let remaining = deadline_at_ms.saturating_sub(claimed_at_ms);
+    let count = i64::try_from(candidate_count).unwrap_or(i64::MAX);
+    let left = count.saturating_sub(i64::from(candidate_index)).max(1);
+    remaining
+        .min(MIN_CANDIDATE_BUDGET_MS.max(remaining / left))
+        .max(0)
+}
+
+/// How long after the claim a runner stops a candidate with `budget_ms` and
+/// reports it: [`RUNNER_MARGIN_MS`] before the end of the budget, but never
+/// before half of it.
+pub fn runner_budget_ms(budget_ms: i64) -> i64 {
+    (budget_ms - RUNNER_MARGIN_MS).max(budget_ms / 2)
+}
 /// A purpose with this many failed runs within [`FAILURE_BURST_WINDOW_MS`]
 /// goes to a supervisor even when no run asked to escalate (spec 0012 §8).
 pub const FAILURE_BURST_RUNS: i64 = 5;
@@ -261,4 +291,83 @@ pub struct Claimed {
     pub candidate_index: u32,
     /// The task deadline: submission time plus `Request::deadline_ms`.
     pub deadline_at_ms: i64,
+    /// When this candidate's attempt began; its budget counts from here.
+    pub claimed_at_ms: i64,
+    /// How many candidates the task has.
+    pub candidate_count: usize,
+}
+
+impl Claimed {
+    /// This attempt's [`candidate_budget_ms`].
+    pub fn budget_ms(&self) -> i64 {
+        let (index, count) = (self.candidate_index, self.candidate_count);
+        candidate_budget_ms(self.deadline_at_ms, self.claimed_at_ms, index, count)
+    }
+
+    /// When the runner stops this attempt and reports it, in Unix
+    /// milliseconds: [`runner_budget_ms`] after the claim.
+    pub fn stop_at_ms(&self) -> i64 {
+        self.claimed_at_ms + runner_budget_ms(self.budget_ms())
+    }
+
+    /// The failure detail of an attempt stopped at [`Claimed::stop_at_ms`]:
+    /// "`who` did not answer within N s".
+    pub fn unanswered(&self, who: &str) -> String {
+        let waited_ms = runner_budget_ms(self.budget_ms()).max(0);
+        format!("{who} did not answer within {} s", (waited_ms + 999) / 1000)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_candidate_gets_an_even_share_of_what_is_left_with_a_floor() {
+        for (remaining, index, count, budget) in [
+            // A 600 s compile with two candidates: half each.
+            (600_000, 0, 2, 300_000),
+            // The first used all of its share: the second gets what is left.
+            (295_000, 1, 2, 295_000),
+            // A 120 s request with two candidates: about 60 s each.
+            (120_000, 0, 2, 60_000),
+            (60_000, 1, 2, 60_000),
+            // A single candidate gets the whole deadline.
+            (600_000, 0, 1, 600_000),
+            (100_000, 1, 3, 50_000),
+            (100_001, 0, 2, 50_000),
+            // The floor, but never more than is left.
+            (60_000, 0, 3, 30_000),
+            (20_000, 0, 3, 20_000),
+            (7, 0, 2, 7),
+            // The last candidate gets everything left.
+            (450_000, 3, 4, 450_000),
+            // Nothing is left.
+            (0, 0, 2, 0),
+            (-10_000, 1, 2, 0),
+        ] {
+            let claimed_at_ms = 1_000_000;
+            let deadline_at_ms = claimed_at_ms + remaining;
+            assert_eq!(
+                candidate_budget_ms(deadline_at_ms, claimed_at_ms, index, count),
+                budget,
+                "remaining {remaining}, candidate {index} of {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_runner_stops_its_margin_before_the_budget_but_never_before_half_of_it() {
+        assert_eq!(RUNNER_MARGIN_MS, 5_000);
+        for (budget, runner) in [
+            (300_000, 295_000),
+            (30_000, 25_000),
+            (10_000, 5_000),
+            (4_000, 2_000),
+            (1_000, 500),
+            (0, 0),
+        ] {
+            assert_eq!(runner_budget_ms(budget), runner, "budget {budget}");
+        }
+    }
 }

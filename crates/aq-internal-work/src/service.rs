@@ -243,13 +243,14 @@ impl Service {
         let Some(claimed) = store::claim(pool, Way::Api, &[], &self.runner, now()).await? else {
             return Ok(false);
         };
-        // ApiBackend stops at the task deadline; the candidate budget is shorter.
-        let budget = (claimed.deadline_at_ms - now()).clamp(0, CANDIDATE_TIMEOUT_MS);
-        let sent =
-            tokio::time::timeout(Duration::from_millis(budget as u64), self.api.run(&claimed));
+        // ApiBackend stops at the task deadline; this stops at the runner's
+        // share of the candidate budget, counted from the claim, so the
+        // failure is recorded here before the sweep would take it.
+        let wait_ms = u64::try_from(claimed.stop_at_ms() - now()).unwrap_or(0);
+        let sent = tokio::time::timeout(Duration::from_millis(wait_ms), self.api.run(&claimed));
         let result = sent.await.unwrap_or_else(|_| {
-            let detail = "provider did not answer within the candidate budget";
-            Err((Reason::DeadlineExceeded, detail.into()))
+            let detail = claimed.unanswered(&claimed.candidate.provider);
+            Err((Reason::DeadlineExceeded, detail))
         });
         let request = &claimed.request;
         let checked = result.and_then(|(raw, usage)| {

@@ -3,7 +3,7 @@
 //! `--output-last-message`. The Codex CLI has no switch that removes its
 //! shell tool, so this is what "tools off" means for Codex.
 use super::{
-    DETAIL_BYTES, Exit, Failure, Harness, clip, execute, failure, in_run_dirs, unavailable,
+    DETAIL_BYTES, Failure, Harness, Session, clip, execute, failure, in_run_dirs, unavailable,
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
@@ -11,10 +11,10 @@ use crate::subscription::{
 };
 use aq_internal_work::{Claimed, Reason, Usage, validate};
 use serde_json::Value;
-use std::{path::Path, time::Duration};
+use std::path::Path;
 use zeroize::Zeroizing;
 
-/// Runs `claimed` once on the Codex login of `h`, killing it after `budget`.
+/// Runs `claimed` once on the Codex login of `h` in `session`.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
 pub(crate) async fn codex(
@@ -23,7 +23,7 @@ pub(crate) async fn codex(
     scratch: &Path,
     claimed: &Claimed,
     identity: Identity,
-    budget: Duration,
+    session: &Session,
 ) -> Result<(String, Option<Usage>), Failure> {
     in_run_dirs(
         h,
@@ -31,7 +31,7 @@ pub(crate) async fn codex(
         scratch,
         identity,
         async |executable, home, cwd| {
-            attempt(h, executable, home, cwd, claimed, identity, budget).await
+            attempt(h, executable, home, cwd, claimed, identity, session).await
         },
     )
     .await
@@ -44,7 +44,7 @@ async fn attempt(
     cwd: &Path,
     claimed: &Claimed,
     identity: Identity,
-    budget: Duration,
+    session: &Session,
 ) -> Result<(String, Option<Usage>), Failure> {
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let auth = stage_login(&h.secret_file, home, identity)
@@ -63,7 +63,7 @@ async fn attempt(
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let ran = execute(command, validate::prompt(&claimed.request), budget).await;
+    let ran = execute(command, validate::prompt(&claimed.request), session).await;
     let refreshed = match copy_back(&h.secret_file, &auth_path, &auth, identity) {
         Ok(refreshed) => refreshed,
         Err(_) => {
@@ -84,11 +84,7 @@ async fn attempt(
     let redact = |text: String| redact_login(text, &documents).ok();
     match ran {
         Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
-        Ok(Exit::TimedOut) => Err(failure(
-            Reason::DeadlineExceeded,
-            "native did not finish within the candidate budget",
-        )),
-        Ok(Exit::Finished(status, stdout)) => {
+        Ok((status, stdout)) => {
             let events = Events::parse(&stdout);
             if !status.success() {
                 let reason = if events.unavailable {

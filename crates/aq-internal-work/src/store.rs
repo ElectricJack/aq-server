@@ -242,6 +242,8 @@ pub async fn claim(
         candidate,
         candidate_index: row.candidate_index,
         deadline_at_ms: row.deadline_at_ms,
+        claimed_at_ms: row.claimed_at_ms.ok_or(Error::Corrupt)?,
+        candidate_count: row.candidates.len(),
     }))
 }
 
@@ -346,21 +348,29 @@ async fn fail_held(
     Ok(true)
 }
 
+/// [`candidate_budget_ms`] of a row's current attempt, in SQL over its
+/// columns; `$2` is [`MIN_CANDIDATE_BUDGET_MS`]. Integer division truncates
+/// toward zero in both. NULL without a `claimed_at_ms`, which only a claim
+/// sets; the sweep then falls back to the task deadline.
+const BUDGET_SQL: &str = "GREATEST(0, LEAST(deadline_at_ms-claimed_at_ms,
+    GREATEST($2, (deadline_at_ms-claimed_at_ms)
+        / GREATEST(jsonb_array_length(candidates)-candidate_index, 1))))";
+
 /// Ends tasks whose deadline or runner is gone and returns how many it
-/// changed. A `running` task whose runner has not reported within the
-/// candidate budget ([`CANDIDATE_TIMEOUT_MS`], or less when the task deadline
-/// is nearer) plus [`SWEEP_GRACE_MS`] fails that candidate as
-/// `deadline_exceeded`, exactly as the runner would have: it moves on to the
-/// next candidate, never back to `queued` on the same one, so a late runner
-/// stays fenced out. A `queued` task past its deadline fails
-/// `deadline_exceeded`.
+/// changed. A `running` task whose runner has not reported within its
+/// candidate budget ([`candidate_budget_ms`]) plus [`SWEEP_GRACE_MS`] fails
+/// that candidate as `deadline_exceeded` with "runner did not report": a
+/// live runner stops and reports [`RUNNER_MARGIN_MS`] before the budget ends,
+/// so only a runner that died gets here. The task moves on to the next
+/// candidate, never back to `queued` on the same one, so a late runner stays
+/// fenced out. A `queued` task past its deadline fails `deadline_exceeded`.
 pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {
-    let stale: Vec<(Uuid, i32)> = sqlx::query_as(
+    let stale: Vec<(Uuid, i32)> = sqlx::query_as(&format!(
         "SELECT id,candidate_index FROM internal_tasks
-         WHERE status='running' AND LEAST(claimed_at_ms+$2, deadline_at_ms)+$3 < $1",
-    )
+         WHERE status='running' AND COALESCE(claimed_at_ms+{BUDGET_SQL}, deadline_at_ms)+$3 < $1"
+    ))
     .bind(now_ms)
-    .bind(CANDIDATE_TIMEOUT_MS)
+    .bind(MIN_CANDIDATE_BUDGET_MS)
     .bind(SWEEP_GRACE_MS)
     .fetch_all(pool)
     .await?;

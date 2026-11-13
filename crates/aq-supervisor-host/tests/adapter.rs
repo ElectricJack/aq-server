@@ -588,6 +588,100 @@ mod internal {
         assert!(left.is_empty(), "scratch keeps {left:?}");
     }
 
+    /// A native that never answers is stopped at the runner's share of its
+    /// candidate budget and the runner records it, while a sweeper runs as the
+    /// server's would; the next candidate's budget is what is left.
+    #[tokio::test]
+    async fn a_native_that_never_answers_is_reported_by_the_runner_before_the_sweep() {
+        use aq_internal_work::{Reason, candidate_budget_ms, runner_budget_ms};
+        let silent = "touch \"$rec/started\"\nsleep 30";
+        let f = Fixture::with_claude(silent, silent).await;
+        // Two candidates, 4 s: the floor gives the first all 4 s.
+        let short = Request {
+            deadline_ms: 4_000,
+            ..request()
+        };
+        let id = f
+            .submit_request(&short, &[codex_candidate(), claude_candidate()])
+            .await;
+        let deadline = f.row(id).await.deadline_at_ms;
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let sweeper = async {
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                store::sweep(&f.pool, now_ms()).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        let runs = async {
+            let mut claims = Vec::new();
+            for _ in 0..2 {
+                let claimed_at = now_ms();
+                tick(&f.config, &f.pool, RUNNER, claimed_at).await.unwrap();
+                claims.push(claimed_at);
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            claims
+        };
+        let ((), claims) = tokio::join!(sweeper, runs);
+        let row = f.row(id).await;
+        for (index, (attempt, harness)) in row.attempts.iter().zip(["codex", "claude"]).enumerate()
+        {
+            let budget = candidate_budget_ms(deadline, claims[index], index as u32, 2);
+            let stop = runner_budget_ms(budget);
+            assert_eq!(attempt.reason, Some(Reason::DeadlineExceeded));
+            let seconds = (stop + 999) / 1000;
+            let detail = format!("{harness} did not answer within {seconds} s");
+            assert_eq!(attempt.detail, detail, "candidate {index}");
+            let elapsed = attempt.elapsed_ms as i64;
+            assert!(
+                (stop..budget).contains(&elapsed),
+                "candidate {index}: {elapsed} ms, stop {stop}, budget {budget}"
+            );
+        }
+        assert_eq!(row.attempts.len(), 2, "{:?}", row.attempts);
+        assert_eq!(row.status, "failed");
+        for dir in ["scratch", "homes"] {
+            let left: Vec<_> = std::fs::read_dir(f.root().join(dir)).unwrap().collect();
+            assert!(left.is_empty(), "{dir} keeps {left:?}");
+        }
+    }
+
+    /// The native answers and exits, but a grandchild it left behind still
+    /// holds stdout open: the answer is reported at once and the grandchild
+    /// is killed with the session.
+    #[tokio::test]
+    async fn a_grandchild_holding_stdout_open_does_not_delay_the_report() {
+        let behaviour = format!("sleep 30 &\necho $! > \"$rec/grandchild\"\n{}", answering());
+        let f = Fixture::new(&behaviour).await;
+        let short = Request {
+            deadline_ms: 4_000,
+            ..request()
+        };
+        let id = f.submit_request(&short, &[codex_candidate()]).await;
+        let started = std::time::Instant::now();
+        assert!(f.tick().await);
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "{:?}",
+            started.elapsed()
+        );
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        let pid = std::fs::read_to_string(f.rec("grandchild")).unwrap();
+        let stat = format!("/proc/{}/stat", pid.trim());
+        let mut alive = true;
+        for _ in 0..100 {
+            // Gone, or a zombie waiting for its reaper.
+            alive = std::fs::read_to_string(&stat)
+                .is_ok_and(|s| !s[s.rfind(')').unwrap()..].starts_with(") Z"));
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!alive, "the grandchild still runs");
+    }
+
     #[tokio::test]
     async fn native_whose_digest_differs_is_refused_before_exec() {
         let f = Fixture::with_digest(&answering(), Some(Digest::of(b"another binary"))).await;

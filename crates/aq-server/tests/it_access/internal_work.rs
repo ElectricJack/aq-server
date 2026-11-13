@@ -2,7 +2,7 @@
 //! per task, failover across the candidate list, and late runners ignored.
 use aq_internal_work::{
     Affected, AnswerShape, ApiBackend, ApiEndpoint, Candidate, Claimed, Outcome, Purpose, Reason,
-    Request, Usage, Way, store, validate,
+    Request, SWEEP_GRACE_MS, Usage, Way, candidate_budget_ms, store, validate,
 };
 use aq_server::test_support::TestDb;
 use serde_json::json;
@@ -75,6 +75,7 @@ async fn blocking_tasks_are_claimed_before_older_background_tasks() {
     assert_eq!(first.id, blocking);
     assert_eq!(first.candidate_index, 0);
     assert_eq!(first.deadline_at_ms, NOW + 10 + 60_000);
+    assert_eq!((first.claimed_at_ms, first.candidate_count), (NOW + 20, 1));
     let second = store::claim(&pool, Way::Api, &[], "runner-a", NOW + 30)
         .await
         .unwrap()
@@ -465,6 +466,56 @@ async fn request_bounds_are_enforced() {
         .await
         .unwrap();
     assert_eq!(none, 0);
+}
+
+/// The sweep computes the candidate budget in SQL; for each case it must end
+/// the attempt exactly [`SWEEP_GRACE_MS`] after the budget
+/// [`candidate_budget_ms`] gives, not a millisecond earlier.
+#[tokio::test]
+async fn the_sweep_and_candidate_budget_ms_agree_on_every_budget() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    for (remaining, index, count) in [
+        (600_000, 0, 2),
+        (295_000, 1, 2),
+        (120_000, 0, 2),
+        (60_000, 1, 2),
+        (600_000, 0, 1),
+        (100_000, 1, 3),
+        (100_001, 0, 2),
+        (60_000, 0, 3),
+        (20_000, 0, 3),
+        (7, 0, 2),
+        (450_000, 3, 4),
+        (0, 0, 2),
+        (-10_000, 1, 2),
+    ] {
+        let candidates = vec![api("openai"); count];
+        let id = store::submit(&pool, &request(false), &candidates, NOW)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE internal_tasks SET status='running', runner='r', claimed_at_ms=$2,
+                 deadline_at_ms=$3, candidate_index=$4 WHERE id=$1",
+        )
+        .bind(id)
+        .bind(NOW)
+        .bind(NOW + remaining)
+        .bind(index as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let budget = candidate_budget_ms(NOW + remaining, NOW, index, count);
+        let case = format!("remaining {remaining}, candidate {index} of {count}: budget {budget}");
+        let held = |row: store::Row| row.status == "running" && row.candidate_index == index;
+        let last_moment = NOW + budget + SWEEP_GRACE_MS;
+        store::sweep(&pool, last_moment).await.unwrap();
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert!(held(row), "swept too early; {case}");
+        store::sweep(&pool, last_moment + 1).await.unwrap();
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert!(!held(row), "not swept; {case}");
+    }
 }
 
 /// Candidate resolution (spec 0012 §5, §6): pure, so plain tests.
@@ -1044,6 +1095,8 @@ fn claimed(provider: &str) -> Claimed {
         candidate: api(provider),
         candidate_index: 0,
         deadline_at_ms: now + 30_000,
+        claimed_at_ms: now,
+        candidate_count: 1,
     }
 }
 
@@ -1460,7 +1513,7 @@ mod service {
             .unwrap()
             .expect("the queued task");
         assert_eq!((held.id, held.candidate.provider.as_str()), (id, "openai"));
-        // Within its 120 s budget the runner is left alone.
+        // Within its budget (half of the 60 s deadline) the runner is left alone.
         assert_eq!(store::sweep(&f.pool, now_ms()).await.unwrap(), 0);
         assert_eq!(
             store::get(&f.pool, id).await.unwrap().unwrap().status,
@@ -1491,6 +1544,55 @@ mod service {
         assert_eq!(
             (answer["choice"].as_str(), provider.as_str()),
             (Some("large"), "anthropic")
+        );
+    }
+
+    /// The loop stops a provider that never answers at the runner's share of
+    /// the candidate budget and reports it itself, well before the sweep
+    /// would; the next candidate gets what is left.
+    #[tokio::test]
+    async fn an_api_candidate_that_never_answers_is_reported_by_the_loop_not_the_sweep() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = secret_file(dir.path(), 0o600);
+        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+        let config = InternalWorkConfig {
+            api: [("openai", fake::hang().await), ("anthropic", anthropic)]
+                .into_iter()
+                .map(|(provider, endpoint)| ApiEndpoint {
+                    provider: provider.into(),
+                    endpoint,
+                    secret_file: secret.clone(),
+                })
+                .collect(),
+            poll_ms: 20,
+            enabled: true,
+        };
+        let registry = Some(registry(CredentialKind::ApiKey));
+        let clock = aq_server::system_clock();
+        let preferences = Some(f.preferences.clone());
+        let work =
+            InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap();
+        let _stop = start(&work);
+        // Two candidates, 4 s: the floor gives the first all 4 s, the runner
+        // stops at half of it, and the sweep would wait 5 s past all of it.
+        let short = Request {
+            deadline_ms: 4_000,
+            ..request(true)
+        };
+        let id = work.submit(short).await.unwrap();
+        let (answer, provider, attempts) = answered(wait(&work, id).await);
+        assert_eq!(
+            (answer["choice"].as_str(), provider.as_str()),
+            (Some("large"), "anthropic")
+        );
+        let first = &attempts[0];
+        assert_eq!(first.reason, Some(Reason::DeadlineExceeded));
+        assert_eq!(first.detail, "openai did not answer within 2 s");
+        assert!(
+            (1_900..3_000).contains(&first.elapsed_ms),
+            "{}",
+            first.elapsed_ms
         );
     }
 

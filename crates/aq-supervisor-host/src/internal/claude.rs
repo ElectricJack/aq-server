@@ -4,7 +4,7 @@
 //! token reaches the native only in its environment and is never written to
 //! disk, so nothing is copied back.
 use super::{
-    DETAIL_BYTES, Exit, Failure, Harness, clip, execute, failure, in_run_dirs, unavailable,
+    DETAIL_BYTES, Failure, Harness, Session, clip, execute, failure, in_run_dirs, unavailable,
 };
 use crate::{
     config::protected_read,
@@ -18,7 +18,6 @@ use std::{
     os::unix::{ffi::OsStrExt, fs::OpenOptionsExt},
     path::Path,
     process::ExitStatus,
-    time::Duration,
 };
 use zeroize::Zeroizing;
 
@@ -37,7 +36,7 @@ const ENVIRONMENT: [(&str, &str); 5] = [
 /// `claude --help` lists for `--effort`.
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// Runs `claimed` once on the Claude login of `h`, killing it after `budget`.
+/// Runs `claimed` once on the Claude login of `h` in `session`.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
 pub(crate) async fn claude(
@@ -46,7 +45,7 @@ pub(crate) async fn claude(
     scratch: &Path,
     claimed: &Claimed,
     identity: Identity,
-    budget: Duration,
+    session: &Session,
 ) -> Result<(String, Option<Usage>), Failure> {
     in_run_dirs(
         h,
@@ -54,7 +53,7 @@ pub(crate) async fn claude(
         scratch,
         identity,
         async |executable, home, cwd| {
-            attempt(h, executable, home, cwd, claimed, identity, budget).await
+            attempt(h, executable, home, cwd, claimed, identity, session).await
         },
     )
     .await
@@ -67,7 +66,7 @@ async fn attempt(
     cwd: &Path,
     claimed: &Claimed,
     identity: Identity,
-    budget: Duration,
+    session: &Session,
 ) -> Result<(String, Option<Usage>), Failure> {
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let token = protected_read(&h.secret_file, 65536)
@@ -96,15 +95,11 @@ async fn attempt(
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let ran = execute(command, validate::prompt(&claimed.request), budget).await;
+    let ran = execute(command, validate::prompt(&claimed.request), session).await;
     let redact = |text: &str| text.replace(secret, "[credential redacted]");
     match ran {
         Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
-        Ok(Exit::TimedOut) => Err(failure(
-            Reason::DeadlineExceeded,
-            "native did not finish within the candidate budget",
-        )),
-        Ok(Exit::Finished(status, stdout)) => outcome(status, &stdout, redact),
+        Ok((status, stdout)) => outcome(status, &stdout, redact),
     }
 }
 

@@ -54,6 +54,15 @@ pub async fn serve_each(status: u16, replies: Vec<Value>) -> (String, Arc<Mutex<
     (format!("http://{addr}/v1/responses"), seen)
 }
 
+/// Accepts every request and never answers; returns its endpoint.
+pub async fn hang() -> String {
+    let app = Router::new().route("/v1/responses", post(std::future::pending::<()>));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/v1/responses")
+}
+
 pub fn completed(text: &str) -> Value {
     json!({
         "status": "completed",
