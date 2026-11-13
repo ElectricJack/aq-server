@@ -46,6 +46,8 @@ pub fn settings_choices(
 /// How many API tasks the in-server loop runs at once, so that one slow
 /// provider call does not hold up the tasks queued behind it.
 pub const API_CONCURRENCY: usize = 4;
+/// How long API attempts in flight at stop get to record what they got.
+pub const STOP_DRAIN: Duration = Duration::from_secs(3);
 
 pub struct Service {
     pool: PgPool,
@@ -297,10 +299,26 @@ impl Service {
 
     /// Claims queued API tasks while fewer than [`API_CONCURRENCY`] run and
     /// runs each in its own task; looks again when one ends or after the
-    /// poll interval. Stopping drops the tasks still running; the sweep
-    /// moves them on.
-    async fn claim_loop(self: &Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+    /// poll interval. At stop the attempts in flight get [`STOP_DRAIN`] to
+    /// record what they got, in a task of their own, since the server aborts
+    /// this loop as it shuts down; the rest are dropped, and the sweep moves
+    /// them on.
+    async fn claim_loop(self: &Arc<Self>, stop: tokio::sync::watch::Receiver<bool>) {
         let mut running = tokio::task::JoinSet::new();
+        self.claim_until_stop(stop, &mut running).await;
+        if !running.is_empty() {
+            tokio::spawn(async move {
+                let ended = async { while running.join_next().await.is_some() {} };
+                let _ = tokio::time::timeout(STOP_DRAIN, ended).await;
+            });
+        }
+    }
+
+    async fn claim_until_stop(
+        self: &Arc<Self>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+        running: &mut tokio::task::JoinSet<Result<()>>,
+    ) {
         while !*stop.borrow() {
             while self.enabled && running.len() < API_CONCURRENCY {
                 let claimed = store::claim(&self.pool, Way::Api, &[], &self.runner, (self.now)());

@@ -79,7 +79,7 @@ mod internal {
         Affected, AnswerShape, Candidate, Purpose, Request, Way, store, validate,
     };
     use aq_session_protocol::Digest;
-    use aq_supervisor_host::internal::{InternalConfig, serve, tick};
+    use aq_supervisor_host::internal::{InternalConfig, recover_run_dirs, serve, tick};
     use serde_json::json;
     use std::{
         collections::BTreeMap,
@@ -95,9 +95,13 @@ mod internal {
     const CLAUDE_TOKEN: &str = "sk-ant-oat01-fixture-token";
 
     fn login(tag: &str) -> String {
+        login_at(tag, "2026-11-12T00:00:00Z")
+    }
+
+    fn login_at(tag: &str, last_refresh: &str) -> String {
         json!({"auth_mode":"chatgpt","tokens":{"id_token":format!("id-{tag}"),
             "access_token":format!("access-{tag}"),"refresh_token":format!("refresh-{tag}"),
-            "account_id":"account-1"},"last_refresh":"2026-11-12T00:00:00Z"})
+            "account_id":"account-1"},"last_refresh":last_refresh})
         .to_string()
     }
 
@@ -593,7 +597,7 @@ mod internal {
     /// next candidate's budget is what is left of the deadline.
     #[tokio::test]
     async fn a_native_that_never_answers_is_reported_by_the_runner_before_the_sweep() {
-        use aq_internal_work::{Reason, SWEEP_GRACE_MS, candidate_budget_ms, runner_budget_ms};
+        use aq_internal_work::{Reason, SWEEP_GRACE_MS, candidate_budget_ms};
         let silent = "touch \"$rec/started\"\nsleep 30";
         let f = Fixture::with_claude(silent, silent).await;
         // Two candidates, 4 s: the floor gives the first all 4 s.
@@ -645,7 +649,8 @@ mod internal {
                 // The last candidate gets all that is left.
                 assert_eq!(budget, deadline - claimed_at);
             }
-            let stop = runner_budget_ms(budget);
+            // The rule spelled out (budgets under 10 s): a tenth before the end.
+            let stop = budget - budget / 10;
             assert_eq!(attempt.reason, Some(Reason::DeadlineExceeded));
             let seconds = (stop + 999) / 1000;
             let detail = format!("{harness} did not answer within {seconds} s");
@@ -731,6 +736,224 @@ mod internal {
         host.abort();
         assert!(answered.is_ok(), "the judgment waited behind the compile");
         assert_eq!(f.row(compile).await.status, "running");
+    }
+
+    /// A fake Codex whose provider rotates the refresh token on every
+    /// refresh and rejects a token already used, as the real one does. The
+    /// provider's current token is in `$rec/current` (the test writes
+    /// `refresh-A`); a reuse leaves `$rec/reused`. A run on the model
+    /// `gpt-slow` refreshes and then hangs, taking 0.5 s to exit on SIGTERM.
+    fn rotating() -> String {
+        format!(
+            r#"until mkdir "$rec/provider.lock" 2>/dev/null; do sleep 0.01; done
+tok=$(sed 's/.*"refresh_token":"\([^"]*\)".*/\1/' "$CODEX_HOME/auth.json")
+if [ "$tok" != "$(cat "$rec/current")" ]; then
+  rmdir "$rec/provider.lock"
+  touch "$rec/reused"
+  echo '{{"type":"turn.failed","error":{{"message":"refresh token was already used"}}}}'
+  exit 1
+fi
+printf '%s' "${{tok}}x" > "$rec/current"
+sed "s/\"$tok\"/\"${{tok}}x\"/" "$CODEX_HOME/auth.json" > "$CODEX_HOME/next.json"
+mv "$CODEX_HOME/next.json" "$CODEX_HOME/auth.json"
+rmdir "$rec/provider.lock"
+touch "$rec/started"
+case " $* " in *" gpt-slow "*) trap 'sleep 0.5; exit 0' TERM; sleep 30 & wait;; esac
+sleep 0.5
+{}"#,
+            answering()
+        )
+    }
+
+    /// Runs the host's claim loop until every task in `ids` has ended.
+    async fn serve_until_done(f: &Fixture, ids: &[uuid::Uuid]) {
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let host = tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)));
+        let ended = tokio::time::timeout(Duration::from_secs(20), async {
+            for id in ids {
+                while !matches!(f.row(*id).await.status.as_str(), "answered" | "failed") {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+        })
+        .await;
+        host.abort();
+        assert!(ended.is_ok(), "the tasks did not end");
+    }
+
+    /// The refresh token in the login file.
+    fn refresh_token(f: &Fixture) -> String {
+        let login: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(f.secret()).unwrap()).unwrap();
+        login["tokens"]["refresh_token"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// One Codex run per login at a time: two queued Codex tasks run one
+    /// after the other, the second starting from the first's refresh.
+    #[tokio::test]
+    async fn two_codex_tasks_never_spend_one_refresh_token() {
+        let f = Fixture::new(&rotating()).await;
+        std::fs::write(f.rec("current"), "refresh-A").unwrap();
+        let a = f.submit(&[codex_candidate()]).await;
+        let b = f.submit(&[codex_candidate()]).await;
+        serve_until_done(&f, &[a, b]).await;
+        for id in [a, b] {
+            let row = f.row(id).await;
+            assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        }
+        assert!(!f.rec("reused").exists(), "a refresh token was used twice");
+        assert_eq!(refresh_token(&f), "refresh-Axx");
+    }
+
+    /// A Codex candidate that refreshed and timed out is copied back before
+    /// the same task's Codex fallback copies the login in.
+    #[tokio::test]
+    async fn a_codex_fallback_after_a_timeout_starts_from_the_copied_back_login() {
+        let f = Fixture::new(&rotating()).await;
+        std::fs::write(f.rec("current"), "refresh-A").unwrap();
+        let slow = Candidate {
+            model: "gpt-slow".into(),
+            ..codex_candidate()
+        };
+        let request = Request {
+            deadline_ms: 4_000,
+            ..request()
+        };
+        let id = f.submit_request(&request, &[slow, codex_candidate()]).await;
+        let extend = async {
+            // The floor gives the slow candidate all 4 s; give the fallback
+            // 3 s more so it has time to answer.
+            f.started().await;
+            sqlx::query("UPDATE internal_tasks SET deadline_at_ms=deadline_at_ms+3000 WHERE id=$1")
+                .bind(id)
+                .execute(&f.pool)
+                .await
+                .unwrap();
+        };
+        let ids = [id];
+        let ((), ()) = tokio::join!(serve_until_done(&f, &ids), extend);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::DeadlineExceeded)
+        );
+        assert!(!f.rec("reused").exists(), "a refresh token was used twice");
+        assert_eq!(refresh_token(&f), "refresh-Axx");
+    }
+
+    /// A config check that fails is treated like a config change: nothing
+    /// more is claimed, the run in progress ends and copies its refresh back,
+    /// and then the error is returned.
+    #[tokio::test]
+    async fn a_failing_config_check_lets_the_run_in_progress_finish_and_copy_back() {
+        let behaviour = format!(
+            "printf '%s' '{}' > \"$CODEX_HOME/auth.json\"\nsleep 1\n{}",
+            login("B"),
+            answering()
+        );
+        let f = Fixture::new(&behaviour).await;
+        let id = f.submit(&[codex_candidate()]).await;
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let check = || Err(anyhow::anyhow!("protected file rejected"));
+        let served = tokio::time::timeout(
+            Duration::from_secs(10),
+            serve(config, pool, RUNNER.into(), check),
+        )
+        .await
+        .expect("serve returns");
+        assert!(served.is_err());
+        assert_eq!(f.row(id).await.status, "answered");
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("B"));
+    }
+
+    /// A run dropped mid-way (its host task aborted) kills the native's
+    /// whole session, not only its leader.
+    #[tokio::test]
+    async fn a_dropped_run_kills_the_whole_session() {
+        let behaviour =
+            "sleep 30 &\necho $! > \"$rec/grandchild\"\ntouch \"$rec/started\"\nsleep 30";
+        let f = std::sync::Arc::new(Fixture::new(behaviour).await);
+        f.submit(&[codex_candidate()]).await;
+        let running = {
+            let f = f.clone();
+            tokio::spawn(async move { f.tick().await })
+        };
+        f.started().await;
+        running.abort();
+        let _ = running.await;
+        let pid = std::fs::read_to_string(f.rec("grandchild")).unwrap();
+        let stat = format!("/proc/{}/stat", pid.trim());
+        let mut alive = true;
+        for _ in 0..100 {
+            alive = std::fs::read_to_string(&stat)
+                .is_ok_and(|s| !s[s.rfind(')').unwrap()..].starts_with(") Z"));
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!alive, "the grandchild survived the dropped run");
+    }
+
+    /// A native that ignores SIGTERM is killed when the grace ends; the run
+    /// still records the runner's failure and removes its directories.
+    #[tokio::test]
+    async fn a_native_that_ignores_sigterm_is_killed_after_the_grace() {
+        let f = Fixture::new("trap '' TERM\nsleep 30").await;
+        let id = f.submit_request(&short(), &[codex_candidate()]).await;
+        let started = std::time::Instant::now();
+        assert!(f.tick().await);
+        let took = started.elapsed();
+        // The stop at about 2.7 s, then the 1 s grace.
+        assert!(
+            (Duration::from_millis(3_500)..Duration::from_secs(6)).contains(&took),
+            "{took:?}"
+        );
+        let row = f.row(id).await;
+        assert_eq!(row.attempts[0].detail, "codex did not answer within 3 s");
+        for dir in ["scratch", "homes"] {
+            let left: Vec<_> = std::fs::read_dir(f.root().join(dir)).unwrap().collect();
+            assert!(left.is_empty(), "{dir} keeps {left:?}");
+        }
+    }
+
+    /// At start the host clears what a crashed run left: only run
+    /// directories (named by a UUID), and a Codex login a run refreshed is
+    /// copied back first when it is newer than the login file.
+    #[tokio::test]
+    async fn startup_copies_back_a_newer_leftover_login_before_clearing_run_directories() {
+        let f = Fixture::new(&answering()).await;
+        let homes = f.root().join("homes");
+        let leftover = |login: &str| {
+            let home = homes.join(uuid::Uuid::new_v4().to_string());
+            std::fs::create_dir(&home).unwrap();
+            replace(&home.join("auth.json"), login);
+        };
+        leftover(&login_at("B", "2026-11-13T08:00:00Z"));
+        leftover(&login_at("C", "2026-11-01T00:00:00Z"));
+        let scratch = f
+            .root()
+            .join("scratch")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&scratch).unwrap();
+        std::fs::create_dir(homes.join("not-a-run")).unwrap();
+        recover_run_dirs(&f.config);
+        assert_eq!(
+            std::fs::read_to_string(f.secret()).unwrap(),
+            login_at("B", "2026-11-13T08:00:00Z")
+        );
+        let names = |dir: &str| -> Vec<_> {
+            std::fs::read_dir(f.root().join(dir))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect()
+        };
+        assert_eq!(names("homes"), ["not-a-run"]);
+        assert!(names("scratch").is_empty());
     }
 
     /// A 3 s single-candidate request: the runner stops it at 2.7 s.

@@ -218,17 +218,58 @@ pub(crate) fn copy_back(
         if Digest::of(&current) != Digest::of(original) {
             eprintln!("login file changed during the native run; kept it and dropped this refresh");
         } else {
-            let temp = secret_file.with_extension(format!("refresh-{}", uuid::Uuid::new_v4()));
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temp)?
-                .write_all(&refreshed)?;
-            std::fs::rename(temp, secret_file)?;
+            replace_login(secret_file, &refreshed)?;
         }
     }
     Ok(Some(refreshed))
+}
+
+/// Replaces `secret_file` with `login`: an owner-only temporary file renamed
+/// over it. The caller holds the login lock.
+fn replace_login(secret_file: &Path, login: &[u8]) -> Result<()> {
+    let temp = secret_file.with_extension(format!("refresh-{}", uuid::Uuid::new_v4()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)?
+        .write_all(login)?;
+    std::fs::rename(temp, secret_file)?;
+    Ok(())
+}
+
+/// Offers `leftover`, the login a Codex run that never finished left in its
+/// home, to `secret_file` under the login lock. It is copied in when it is a
+/// valid login of the same account as the file, differs from it and was
+/// refreshed later (`last_refresh`). Returns false only when such a login
+/// could not be copied in, or the file could not be compared, so that the
+/// caller keeps it; a leftover that is unreadable or not a login is not
+/// worth keeping.
+pub(crate) fn recover_login(secret_file: &Path, leftover: &Path, identity: Identity) -> bool {
+    let Ok(candidate) = protected_read_native(leftover, identity.run_as) else {
+        return true;
+    };
+    if aq_session_host::PrivateLaunchInput::validate_chatgpt_auth_json(&candidate).is_err() {
+        return true;
+    }
+    let offer = || -> Result<()> {
+        let _lock = lock_login(secret_file)?;
+        let current = Zeroizing::new(protected_read(secret_file, 65536)?);
+        let before: Value = serde_json::from_slice(&current)?;
+        let after: Value = serde_json::from_slice(&candidate)?;
+        let refreshed = |login: &Value| {
+            let at = login["last_refresh"].as_str()?;
+            chrono::DateTime::parse_from_rfc3339(at).ok()
+        };
+        if before["tokens"]["account_id"] == after["tokens"]["account_id"]
+            && candidate.as_slice() != current.as_slice()
+            && refreshed(&after) > refreshed(&before)
+        {
+            replace_login(secret_file, &candidate)?;
+        }
+        Ok(())
+    };
+    offer().is_ok()
 }
 
 /// Opens the native executable and checks its owner, mode, size and digest.

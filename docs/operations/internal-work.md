@@ -3,7 +3,11 @@
 The internal work host is `aq-supervisor-host internal <CONFIG>`. It claims
 queued internal tasks that use a subscription login (Codex or Claude) from the
 database and runs the model CLI for each, up to two at a time, so that one long
-run does not keep the next task waiting. Spec:
+run does not keep the next task waiting. At most one of them is a Codex run: two
+Codex runs on one login could both spend the same single-use refresh token, so
+while a Codex run holds the login (until its refresh is copied back) the host
+claims only Claude tasks. Claude runs can share their token, which is never
+refreshed. Spec:
 [0012 internal work](../specs/0012-internal-work.md). Build notes:
 [implementation](../implementation/0012-internal-work.md).
 
@@ -101,6 +105,12 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
 - Give each internal work host its own copy of each login file. Sharing one file
   between hosts relies on compare-and-swap and loses a refresh when two hosts
   refresh at once.
+- A host that stopped mid-run can leave a run home holding a Codex login the run
+  refreshed. At start the host copies such a login back when it is the same
+  account and its `last_refresh` is later than the login file's, then removes the
+  run directories (only entries named by a UUID). A home whose newer login could
+  not be copied back is kept and the host prints
+  `internal work: kept a run home whose newer login was not copied back`.
 - Codex: the file is copied in and back under a read-only `flock` on the login
   file's directory. The directory must be writable only if a refreshed login is to
   be kept; a refresh is written by temp-file-and-rename, and only if the file still
@@ -133,6 +143,10 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   reason on stderr.
 - Each native is hashed when the host starts and again only when its file's
   device, inode, size, mtime or ctime change.
+- A config change, or a config file the host can no longer accept, takes effect
+  only after the runs in progress have ended (each within its task deadline, at
+  most 900 s): the host stops claiming, lets them finish and copy their logins
+  back, then exits (with the error, if the file was refused) to be restarted.
 
 ## Time limits
 

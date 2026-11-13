@@ -8,7 +8,7 @@ mod codex;
 
 use crate::{
     config::protected_read,
-    subscription::{Identity, file_digest, open_native},
+    subscription::{Identity, file_digest, open_native, recover_login},
 };
 use anyhow::{Result, ensure};
 use aq_internal_work::{Claimed, DEADLINE_PASSED, Reason, Usage, Way, store, validate};
@@ -158,7 +158,7 @@ pub async fn run(path: &Path) -> Result<()> {
         libc::umask(0o077);
     }
     let (config, digest) = InternalConfig::load(path)?;
-    clear_run_dirs(&config);
+    recover_run_dirs(&config);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(MAX_RUNS as u32 + 1)
         .connect(&config.database_url)
@@ -168,16 +168,31 @@ pub async fn run(path: &Path) -> Result<()> {
     serve(config, pool, runner, || unchanged(path, &digest)).await
 }
 
-/// Removes what a host that stopped mid-run left under `homes` and
-/// `scratch` (a home can hold a login copy). One host owns both, and nothing
-/// runs yet.
-fn clear_run_dirs(config: &InternalConfig) {
+/// At start, before anything runs (one host owns both directories):
+/// removes the run directories, named by a UUID, that a host which stopped
+/// mid-run left under `homes` and `scratch`. Anything else there is left
+/// alone. A Codex login such a run refreshed is first offered back to the
+/// login file ([`recover_login`]); a home whose newer login could not be
+/// copied back is kept.
+pub fn recover_run_dirs(config: &InternalConfig) {
     for parent in [&config.homes, &config.scratch] {
         if private_parent(parent, config.identity).is_err() {
             continue;
         }
         for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+            if !is_run_dir(&entry.file_name()) {
+                continue;
+            }
             let path = entry.path();
+            let login = path.join("auth.json");
+            if parent == &config.homes
+                && let Some(codex) = &config.codex
+                && std::fs::symlink_metadata(&login).is_ok()
+                && !recover_login(&codex.secret_file, &login, config.identity)
+            {
+                eprintln!("internal work: kept a run home whose newer login was not copied back");
+                continue;
+            }
             if std::fs::remove_dir_all(&path).is_err() {
                 let _ = std::fs::remove_file(&path);
             }
@@ -185,35 +200,58 @@ fn clear_run_dirs(config: &InternalConfig) {
     }
 }
 
+/// Whether `name` is a run directory's: a UUID in its hyphenated form.
+fn is_run_dir(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_str().unwrap_or_default();
+    uuid::Uuid::try_parse(name).is_ok_and(|id| id.hyphenated().to_string() == name)
+}
+
 /// The claim loop: claims while fewer than [`MAX_RUNS`] runs are in
 /// progress and runs each claimed task in its own task; looks again when a
-/// run ends or after the poll interval. Once `keep_going` returns false it
-/// claims nothing more and returns when the runs in progress have ended.
+/// run ends or after the poll interval.
+///
+/// At most one Codex run holds the Codex login at a time, decided when
+/// claiming: while one does, only Claude tasks are claimed (Claude's token is
+/// never refreshed, so its runs can share it). The Codex run keeps the login
+/// until it has ended, its refresh copied back included, so the next Codex
+/// run, even the same task's fallback, copies in the newest login.
+///
+/// Once `keep_going` returns false, or an error, it claims nothing more and
+/// returns that when the runs in progress have ended.
 pub async fn serve(
     config: std::sync::Arc<InternalConfig>,
     pool: PgPool,
     runner: String,
     mut keep_going: impl FnMut() -> Result<bool>,
 ) -> Result<()> {
+    let codex_login = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let mut runs = tokio::task::JoinSet::new();
     loop {
         let mut claimed = false;
         if runs.len() < MAX_RUNS {
-            match claim(&config, &pool, &runner, now_ms()?).await {
+            let codex = codex_login.clone().try_acquire_owned().ok();
+            match claim(&config, &pool, &runner, now_ms()?, codex.is_some()).await {
                 Ok(Some(job)) => {
+                    let is_codex = job.claimed.candidate.harness.as_deref() == Some("codex");
+                    let login = codex.filter(|_| is_codex);
                     let (config, pool) = (config.clone(), pool.clone());
-                    runs.spawn(async move { finish(job, &config, &pool).await });
+                    runs.spawn(async move {
+                        let ended = finish(job, &config, &pool).await;
+                        drop(login);
+                        ended
+                    });
                     claimed = true;
                 }
                 Ok(None) => {}
                 Err(_) => eprintln!("internal work: claim failed"),
             }
         }
-        if !keep_going()? {
+        let keep = keep_going();
+        if !matches!(keep, Ok(true)) {
             while let Some(ended) = runs.join_next().await {
                 report_end(ended);
             }
-            return Ok(());
+            return keep.map(drop);
         }
         if !claimed {
             tokio::select! {
@@ -256,23 +294,26 @@ pub async fn tick(
     runner: &str,
     now_ms: i64,
 ) -> Result<bool> {
-    let Some(job) = claim(config, pool, runner, now_ms).await? else {
+    let Some(job) = claim(config, pool, runner, now_ms, true).await? else {
         return Ok(false);
     };
     finish(job, config, pool).await?;
     Ok(true)
 }
 
-/// Claims the next queued login task for a harness this host has configured.
+/// Claims the next queued login task for a harness this host has
+/// configured; for Codex only when `codex` (its login is free).
 async fn claim(
     config: &InternalConfig,
     pool: &PgPool,
     runner: &str,
     now_ms: i64,
+    codex: bool,
 ) -> Result<Option<Job>> {
-    let configured: Vec<&str> = [("codex", &config.codex), ("claude", &config.claude)]
+    let codex = config.codex.as_ref().filter(|_| codex);
+    let configured: Vec<&str> = [("codex", codex), ("claude", config.claude.as_ref())]
         .into_iter()
-        .filter_map(|(name, harness)| harness.as_ref().map(|_| name))
+        .filter_map(|(name, harness)| harness.map(|_| name))
         .collect();
     if configured.is_empty() {
         return Ok(None);
@@ -509,6 +550,14 @@ impl Session {
             }
         }
         *state = SessionState::Stopped;
+    }
+}
+
+/// A run dropped before its end (an aborted task, a panic) kills the whole
+/// session, not only the leader `kill_on_drop` reaches.
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 

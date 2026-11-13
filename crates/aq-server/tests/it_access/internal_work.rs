@@ -1257,7 +1257,8 @@ mod service {
     use super::{fake, login, migrated, request, resolve, secret_file};
     use aq_intelligence_config::LoadedRegistry;
     use aq_internal_work::{
-        ApiEndpoint, InternalWorkConfig, Outcome, Reason, Request, SWEEP_GRACE_MS, Way, store,
+        ApiEndpoint, InternalWorkConfig, Outcome, Reason, Request, SWEEP_GRACE_MS, Way,
+        candidate_budget_ms, store,
     };
     use aq_selection::CredentialKind;
     use aq_server::{InternalWork, test_support::TestDb};
@@ -1593,6 +1594,17 @@ mod service {
             ..request(true)
         };
         let id = work.submit(short).await.unwrap();
+        let (claimed_at, deadline) = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let row = store::get(&f.pool, id).await.unwrap().unwrap();
+                if let (Some(at), "running") = (row.claimed_at_ms, row.status.as_str()) {
+                    return (at, row.deadline_at_ms);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the loop claims the task");
         let attempts = match wait(&work, id).await {
             Outcome::Answered {
                 provider, attempts, ..
@@ -1613,12 +1625,51 @@ mod service {
             "{}",
             first.detail
         );
-        let before_the_sweep = 6_000 + SWEEP_GRACE_MS as u64;
+        // Not before the stop, the budget less a tenth of it here (spelled
+        // out, so a flat 1 s margin fails), and before the sweep would have
+        // taken it.
+        let budget = candidate_budget_ms(deadline, claimed_at, 0, 2);
+        let stop = (budget - budget / 10) as u64;
+        let before_the_sweep = (budget + SWEEP_GRACE_MS) as u64;
         assert!(
-            (5_000..before_the_sweep).contains(&first.elapsed_ms),
-            "{}",
+            (stop..before_the_sweep).contains(&first.elapsed_ms),
+            "{} ms, stop {stop}",
             first.elapsed_ms
         );
+    }
+
+    /// At stop the loop gives attempts in flight a few seconds to record
+    /// what they got, instead of dropping an answer on the floor.
+    #[tokio::test]
+    async fn at_stop_an_attempt_in_flight_still_records_its_answer() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let dir = tempfile::tempdir().unwrap();
+        let delay = Duration::from_millis(800);
+        let (openai, seen) = fake::slow(delay, fake::completed(SMALL)).await;
+        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+        let work = work_on(&f, dir.path(), openai, anthropic);
+        let stop = start(&work);
+        let id = work.submit(request(true)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while seen.lock().unwrap().bodies.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the provider call is in flight");
+        drop(stop);
+        let recorded = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let row = store::get(&f.pool, id).await.unwrap().unwrap();
+                if row.status == "answered" {
+                    return row;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the answer is recorded after the stop");
+        assert_eq!(recorded.answer.unwrap()["choice"], "small");
     }
 
     /// The owner's requirement: internal work never waits behind other
