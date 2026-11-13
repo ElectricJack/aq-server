@@ -36,6 +36,8 @@ pub struct Case {
     pub second_task: Uuid,
     /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
     pub metadata: Arc<std::sync::Mutex<Value>>,
+    /// The synthetic Graph peer's base URL.
+    pub graph_url: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -417,6 +419,7 @@ pub async fn setup() -> Case {
         observation_resume,
         second_task,
         metadata,
+        graph_url: format!("http://{addr}"),
         tasks,
     }
 }

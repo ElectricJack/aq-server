@@ -117,6 +117,16 @@ fn failed(prior: &Prior, now: u64) -> bool {
         || prior.execution_deadline_ms.is_some_and(|d| now >= d)
 }
 
+/// The started attempts charged to the retry budget, counted as [`assess`] counts them (spec
+/// 0007 Q1 exempts owner and service stops), and the latest attempt.
+pub fn charged(priors: &[Prior]) -> (u32, Option<Uuid>) {
+    let mut ordered = priors.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
+    let exempt = aq_machine_control::cap_exempt(ordered.iter().map(|p| p.exempt));
+    let n = u32::try_from(exempt.iter().filter(|e| !**e).count()).unwrap_or(u32::MAX);
+    (n, ordered.last().map(|p| p.attempt_id))
+}
+
 /// Pure replacement decision over the complete started-attempt history.
 pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     use Assessment::Blocked;
@@ -401,6 +411,11 @@ mod tests {
             assess(&history, &limits, now),
             Assessment::Blocked("lineage_retry_budget_exhausted")
         );
+        // The refusal names the charged count the budget used up, and the latest attempt.
+        assert_eq!(charged(&history), (2, Some(history[1].attempt_id)));
+        let mut stopped = history.clone();
+        stopped[0].exempt = true;
+        assert_eq!(charged(&stopped).0, 1, "an owner stop is not charged");
         assert_eq!(
             assess(
                 &history,

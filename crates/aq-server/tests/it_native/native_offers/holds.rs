@@ -222,6 +222,78 @@ async fn a_task_past_its_policy_max_attempts_is_held_visibly_once_and_other_work
 /// I1, I3, M7: a hold is recorded only against the attempt count its decision saw, racing
 /// recorders write one row and one comment, a lost mark is repaired without a second comment,
 /// and a new attempt clears the hold in the view and the swarm alike.
+/// The owner's `task.retry` dashboard action on the case's task.
+async fn retry(c: &Case, operation: Uuid) -> (axum::http::StatusCode, Value) {
+    let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
+    let action = serde_json::json!({"operation_id":operation,"kind":"task.retry",
+        "subject":{"type":"task","id":task,"revision":"1"},"expected_versions":{"task":"1"},
+        "payload":{"operation_id":operation,"project_id":project,"expected_version":"1"}});
+    let res = aq_server::build_admin_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/api/v1/actions")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(action.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// M2 (owner decision 2026-11-13): Retry on a task its retry budget holds used to answer
+/// "confirmed" and change nothing (B4 admitted a replacement that the predecessor's pinned
+/// catalog policy then refused at offer time). It is refused, with the budget, the charged
+/// attempts and what the owner can do, and nothing changes.
+#[tokio::test]
+async fn retry_on_a_task_its_retry_budget_holds_is_refused_with_the_reason() {
+    let (mut c, _) = failed_once(Some(1)).await;
+    let task = c.env.lineage.task_id;
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(offered_tasks(&body).is_empty(), "{body}");
+    // Owner task actions need the configured Graph mutation identity.
+    let config = aq_server::agent_access::AgentAccessConfig {
+        graph_url: c.graph_url.clone(),
+        graph_token_file: c.env.env._dir.path().join("graph-token"),
+        credential_ttl_ms: 10000,
+        mutation_actor_id: Some("synthetic-owner-actions".into()),
+    };
+    let runtime = aq_server::agent_access::Runtime::new(&config)
+        .await
+        .unwrap();
+    c.env.env.state.agent_access = Some(std::sync::Arc::new(runtime));
+    let held = Some("replacement_policy_retry_budget_exhausted".to_owned());
+    assert_eq!(held_reason(&work(&c, task).await), held);
+
+    let (status, body) = retry(&c, Uuid::new_v4()).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "replacement_policy_retry_budget_exhausted");
+    assert_eq!(body["retryable"], false);
+    let message = body["message"].as_str().unwrap();
+    for part in [
+        "the catalog retry policy's maximum attempts are used up",
+        "1 of 1 allowed attempts",
+        "retire this task",
+    ] {
+        assert!(message.contains(part), "{message}");
+    }
+    // Nothing changed: no operation was admitted, the task stays held and is not offered.
+    let admitted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dashboard_operations WHERE kind='task.retry'")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(admitted, 0);
+    assert_eq!(held_reason(&work(&c, task).await), held);
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(offered_tasks(&body).is_empty(), "{body}");
+}
+
 #[tokio::test]
 async fn hold_records_race_free_and_post_their_stored_comment_once() {
     let (c, predecessor) = failed_once(None).await;

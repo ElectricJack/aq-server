@@ -783,6 +783,33 @@ async fn task_retry_creates_replacement_attempt() {
         .execute(&pool)
         .await
         .unwrap();
+    // Retry decides as the offer path does (M2), which also requires that the
+    // predecessor's input pins the current project revision: a synthetic
+    // linked source export (guards bypassed in this disposable database).
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM project_execution_bindings WHERE project_id=$1")
+            .bind(x.project())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let export = Uuid::new_v4();
+    let request = json!({"project_revision": revision}).to_string();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) VALUES($1,$2,convert_to($3,'UTF8'),encode(sha256(convert_to($3,'UTF8')),'hex'),1048577,1048577,'pending')")
+        .bind(export).bind(x.project()).bind(&request).execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "INSERT INTO profiled_launch_source_exports(attempt_id,operation_id) VALUES($1,$2)",
+    )
+    .bind(predecessor)
+    .bind(export)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
 
     let (status, body) = x.act(&retry(Uuid::new_v4())).await;
     assert_eq!(status, StatusCode::OK, "{body}");

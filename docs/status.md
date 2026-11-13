@@ -159,7 +159,7 @@ questions in aq-worker `docs/implementation/0006-P7.md`.
 | --- | --- |
 | aq-server `main` CI | Red since the #130 merge (2026-11-11). The `tests` job also runs over its 10-minute budget. |
 | M1 | `nodes`-row lock timeouts return 500 on idle-slot starts while the dashboard is open. |
-| M2 | Retry on a task held by the retry budget does nothing and reports success. |
+| M2 | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. Retry on a task held by its retry budget (or another hold) is refused with the hold, the charged and allowed attempts, and the remedy (retire the task and create a new one). It used to report success and change nothing. |
 | M3 | `release-sandbox` needs `--force`. |
 | Completion policy | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. A task that changes no file succeeds, with nothing published. |
 | Owner decisions | W13 (terminal input on queued attempts), 0008 phase B retention, the A1 soak, true resume, the three boat channel questions. |

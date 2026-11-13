@@ -82,6 +82,23 @@ pub fn phrase(code: &str) -> String {
     fixed.into()
 }
 
+/// Why an owner Retry of a held task is refused (M2, owner decision 2026-11-13): the hold's
+/// phrase, the charged and allowed attempts for an attempt budget, and what the owner can do.
+/// A retry never overrides a budget. Fixed text and integers only; at most 256 characters.
+pub fn retry_refusal(code: &str, budget: Option<(u32, u32)>) -> String {
+    let facts = budget.map_or(String::new(), |(charged, allowed)| {
+        format!(" ({charged} of {allowed} allowed attempts charged)")
+    });
+    let next = match code.ends_with("_budget_exhausted") {
+        true => "A retry cannot override the budget",
+        false => "A retry cannot clear this hold",
+    };
+    format!(
+        "Retry refused: {}{facts}. {next}: retire this task and create a new one to run it again.",
+        phrase(code)
+    )
+}
+
 /// Whether an offer-path refusal is a hold: it stays until an owner acts or the task changes
 /// (a quarantine has no release path; H3 holds it until an owner acts). A wait that clears by
 /// itself (a prior attempt still settling, a history read that failed) is not.
@@ -590,6 +607,18 @@ mod tests {
             phrase("some_new_code"),
             "held by the retry policy: some_new_code"
         );
+        // A refused retry says why, with the budget, and fits the 256-character error message.
+        assert_eq!(
+            retry_refusal("replacement_policy_retry_budget_exhausted", Some((2, 2))),
+            "Retry refused: the catalog retry policy's maximum attempts are used up (2 of 2 \
+             allowed attempts charged). A retry cannot override the budget: retire this task \
+             and create a new one to run it again."
+        );
+        assert!(retry_refusal("stall_quarantined", None).contains("cannot clear this hold"));
+        for code in known {
+            let text = retry_refusal(code, Some((u32::MAX, u32::MAX)));
+            assert!(text.chars().count() <= 256, "{code}: {text}");
+        }
     }
     #[test]
     fn holds_are_budget_and_stuck_codes_and_waits_are_not() {

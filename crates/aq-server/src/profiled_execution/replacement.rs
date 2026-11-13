@@ -186,6 +186,47 @@ pub async fn assess_task_for_revision(
     )
 }
 
+/// Why an owner retry of `task` cannot take effect: the hold the offer path records for it
+/// ([`assess_task_for_revision`]) and, for an attempt budget, (charged, allowed) attempts.
+pub async fn retry_hold(
+    state: &AppState,
+    task: Uuid,
+    now: u64,
+    revision: u64,
+) -> Result<Option<(&'static str, Option<(u32, u32)>)>, AppError> {
+    let Assessment::Blocked(code) = assess_task_for_revision(state, task, now, revision).await?
+    else {
+        return Ok(None);
+    };
+    if !aq_machine_control::holds::is_hold(code) {
+        return Ok(None);
+    }
+    let allowed = match code {
+        "lineage_retry_budget_exhausted" => Some(Limits::default().max_attempts),
+        "replacement_policy_retry_budget_exhausted" => None,
+        _ => return Ok(Some((code, None))),
+    };
+    let mut conn = state
+        .store
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let counts = super::no_grant::attempt_counts_locked(&mut conn, task).await?;
+    let priors = load(&mut conn, task, counts.started).await?;
+    drop(conn);
+    let Some((charged, Some(latest))) = priors.as_deref().map(charged) else {
+        return Ok(Some((code, None)));
+    };
+    let allowed = match allowed {
+        Some(n) => Some(n),
+        None => super::continuation_policy::pinned_limits(&state.store.pool, latest)
+            .await?
+            .map(|l| l.0),
+    };
+    Ok(Some((code, allowed.map(|n| (charged, n)))))
+}
+
 /// The project revision pinned by an attempt's linked source export request.
 pub async fn predecessor_project_revision(
     pool: &sqlx::PgPool,
