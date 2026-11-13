@@ -73,8 +73,12 @@ async fn attempt(
     let secret = std::str::from_utf8(&token).map_err(|_| setup())?;
     let settings = home.join("settings.json");
     write_settings(&settings, home, identity).map_err(|_| setup())?;
-    let args = arguments(&claimed.candidate.model, &settings).ok_or_else(setup)?;
+    let candidate = &claimed.candidate;
+    let args = arguments(&candidate.model, &candidate.reasoning, &settings).ok_or_else(setup)?;
     let mut command = native_command(executable, args, home, cwd, identity);
+    if candidate.reasoning == "off" {
+        command.env("MAX_THINKING_TOKENS", "0");
+    }
     // `native_command` sets the Codex home; Claude's is `CLAUDE_CONFIG_DIR`.
     command
         .env_remove("CODEX_HOME")
@@ -100,8 +104,10 @@ async fn attempt(
 
 /// The run's arguments: print mode, one JSON result, the prompt as text on
 /// stdin, only the private settings, no MCP servers, no session saved, no
-/// slash commands and no tools.
-fn arguments(model: &str, settings: &Path) -> Option<Vec<String>> {
+/// slash commands and no tools. The model choice's effort follows as
+/// `--effort`, as the worker's interactive Claude launch passes it; `default`
+/// keeps the model's own and `off` is `MAX_THINKING_TOKENS=0` instead.
+fn arguments(model: &str, effort: &str, settings: &Path) -> Option<Vec<String>> {
     let settings = settings.to_str()?;
     let args = [
         "-p",
@@ -121,7 +127,11 @@ fn arguments(model: &str, settings: &Path) -> Option<Vec<String>> {
         "--tools",
         "",
     ];
-    Some(args.map(String::from).to_vec())
+    let mut args = args.map(String::from).to_vec();
+    if !matches!(effort, "default" | "off") {
+        args.extend(["--effort".into(), effort.into()]);
+    }
+    Some(args)
 }
 
 /// `<home>/settings.json`: no hooks and no project MCP servers. It and the

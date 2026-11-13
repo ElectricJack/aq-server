@@ -42,6 +42,8 @@ fn api(provider: &str) -> Candidate {
         provider: provider.into(),
         model: format!("{provider}-model"),
         reasoning: "medium".into(),
+        reasoning_reference: format!("v1-{provider}-5749150b@1"),
+        options: Default::default(),
         harness: None,
         way: Way::Api,
         credential_index: 0,
@@ -469,11 +471,13 @@ async fn request_bounds_are_enforced() {
 mod resolve {
     use aq_intelligence_config::{CredentialConfig, IntelligenceConfig, LoadedRegistry};
     use aq_internal_work::{Reason, Way, resolve};
+    use aq_profile_settings::ModelChoice;
     use aq_profiles::{ModelCandidate, ValidatedCatalog};
     use aq_selection::{
         ArtifactRef, AuthorizedCredential, Availability, AvailabilityObservation, CredentialKind,
         Digest, ObservationScope, ObservationSource, Text,
     };
+    use serde_json::json;
     use uuid::Uuid;
 
     const NOW: u64 = 1_000_000;
@@ -483,9 +487,41 @@ mod resolve {
             id: id.into(),
             provider: provider.into(),
             model: format!("{provider}-model"),
-            reasoning_configuration_reference: format!("{provider}-reasoning:1"),
+            reasoning_configuration_reference: reference(provider),
             harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
         }
+    }
+
+    /// The catalog reference of `provider`'s fixture candidate: an identifier
+    /// like the live ones, never an effort, so the two cannot be confused.
+    pub(super) fn reference(provider: &str) -> String {
+        format!("v1-{provider}-dcedeb62@1")
+    }
+
+    /// The model choices of Settings for the fixture candidates: openai on
+    /// Codex at `low` with the fast service tier, anthropic on Claude at
+    /// `high`, claude-direct on Claude at `medium`.
+    pub(super) fn choices() -> Vec<ModelChoice> {
+        [
+            (
+                "openai",
+                "codex",
+                "low",
+                json!({"reasoning_effort": "low", "service_tier": "fast"}),
+            ),
+            ("anthropic", "claude", "high", json!({"thinking": "high"})),
+            ("claude-direct", "claude", "medium", json!({})),
+        ]
+        .into_iter()
+        .map(|(provider, harness, effort, options)| {
+            serde_json::from_value(json!({
+                "provider": provider, "model": format!("{provider}-model"),
+                "reasoning_configuration_reference": reference(provider),
+                "reasoning": effort, "harness": harness, "options": options,
+            }))
+            .unwrap()
+        })
+        .collect()
     }
 
     pub(super) fn catalog(profiles: Vec<(&str, Vec<ModelCandidate>)>) -> ValidatedCatalog {
@@ -612,7 +648,7 @@ mod resolve {
     #[test]
     fn candidates_keep_profile_order_and_carry_the_way_of_their_credential() {
         let (catalog, registry, _) = two_providers();
-        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
         assert_eq!(resolved.profile_id, "internal");
         assert_eq!(resolved.profile_version, 1);
         let got: Vec<_> = resolved
@@ -634,8 +670,74 @@ mod resolve {
                 ("openai", Way::Api, None, 1),
             ]
         );
-        assert_eq!(resolved.candidates[0].reasoning, "anthropic-reasoning:1");
+        assert_eq!(resolved.candidates[0].reasoning, "high");
+        assert_eq!(resolved.candidates[1].reasoning, "low");
         assert_eq!(resolved.candidates[1].model, "openai-model");
+    }
+
+    #[test]
+    fn a_reference_resolves_to_the_effort_and_options_of_its_model_choice() {
+        let catalog = catalog(vec![(
+            "internal",
+            vec![candidate("o", "openai", &["codex"])],
+        )]);
+        let registry = registry(vec![(
+            credential("openai-login", "openai", true),
+            CredentialKind::SubscriptionLogin,
+        )]);
+        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
+        let codex = &resolved.candidates[0];
+        assert_eq!(codex.harness.as_deref(), Some("codex"));
+        assert_eq!(codex.reasoning, "low");
+        assert_eq!(codex.reasoning_reference, "v1-openai-dcedeb62@1");
+        assert_eq!(codex.options["service_tier"], "fast");
+    }
+
+    #[test]
+    fn a_reference_without_a_model_choice_on_its_harness_drops_the_candidate() {
+        let (catalog, registry, _) = two_providers();
+        let mut elsewhere = choices();
+        // The anthropic choice exists only for another harness.
+        elsewhere[1].harness = "opencode".into();
+        let without: Vec<_> = choices()
+            .into_iter()
+            .filter(|c| c.provider != "anthropic")
+            .collect();
+        for choices in [elsewhere, without] {
+            let resolved = resolve(&catalog, &registry, &choices, &[], "internal", NOW).unwrap();
+            let providers: Vec<_> = resolved.candidates.iter().map(|c| &c.provider).collect();
+            assert_eq!(providers, ["openai"]);
+        }
+    }
+
+    #[test]
+    fn an_effort_the_harness_does_not_support_drops_the_candidate() {
+        let (catalog, registry, _) = two_providers();
+        // `ultra` is a Codex effort only; the label is how a v1 import may read.
+        for effort in ["ultra", "low (fast service)"] {
+            let mut choices = choices();
+            choices[1].reasoning = effort.into();
+            let resolved = resolve(&catalog, &registry, &choices, &[], "internal", NOW).unwrap();
+            let providers: Vec<_> = resolved.candidates.iter().map(|c| &c.provider).collect();
+            assert_eq!(providers, ["openai"], "{effort}");
+        }
+    }
+
+    #[test]
+    fn a_profile_whose_candidates_all_lack_a_usable_model_choice_is_no_candidate() {
+        let (catalog, registry, _) = two_providers();
+        assert_eq!(
+            resolve(&catalog, &registry, &[], &[], "internal", NOW).unwrap_err(),
+            Reason::NoCandidate
+        );
+        let mut unsupported = choices();
+        for choice in &mut unsupported {
+            choice.reasoning = "Provider default".into();
+        }
+        assert_eq!(
+            resolve(&catalog, &registry, &unsupported, &[], "internal", NOW).unwrap_err(),
+            Reason::NoCandidate
+        );
     }
 
     #[test]
@@ -648,7 +750,8 @@ mod resolve {
         ] {
             for cooldown in [0, NOW + 30_000] {
                 let seen = [observation(&login, state, NOW + 60_000, cooldown)];
-                let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
+                let resolved =
+                    resolve(&catalog, &registry, &choices(), &seen, "internal", NOW).unwrap();
                 assert_eq!(
                     resolved.candidates.len(),
                     1,
@@ -657,7 +760,8 @@ mod resolve {
                 assert_eq!(resolved.candidates[0].provider, "openai");
             }
             let seen = [observation(&login, state, NOW + 60_000, NOW + 30_000)];
-            let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
+            let resolved =
+                resolve(&catalog, &registry, &choices(), &seen, "internal", NOW).unwrap();
             assert_eq!(resolved.candidates.len(), 1, "{state:?}");
             assert_eq!(resolved.candidates[0].provider, "openai");
         }
@@ -667,7 +771,8 @@ mod resolve {
             NOW + 60_000,
             0,
         )];
-        let resolved = resolve(&catalog, &registry, &available, "internal", NOW).unwrap();
+        let resolved =
+            resolve(&catalog, &registry, &choices(), &available, "internal", NOW).unwrap();
         assert_eq!(resolved.candidates[0].provider, "anthropic");
     }
 
@@ -680,7 +785,8 @@ mod resolve {
         let (catalog, registry, login) = two_providers();
         let lapsed = observation(&login, Availability::QuotaUnavailable, NOW, NOW + 30_000);
         for seen in [lapsed, lapsed_without_cooldown(&login)] {
-            let resolved = resolve(&catalog, &registry, &[seen], "internal", NOW).unwrap();
+            let resolved =
+                resolve(&catalog, &registry, &choices(), &[seen], "internal", NOW).unwrap();
             assert_eq!(resolved.candidates[0].provider, "anthropic");
         }
     }
@@ -689,7 +795,7 @@ mod resolve {
     fn missing_profile_and_profile_without_usable_credentials_are_no_candidate() {
         let (catalog, usable, _) = two_providers();
         assert_eq!(
-            resolve(&catalog, &usable, &[], "nope", NOW).unwrap_err(),
+            resolve(&catalog, &usable, &choices(), &[], "nope", NOW).unwrap_err(),
             Reason::NoCandidate
         );
         let disabled = registry(vec![
@@ -703,7 +809,7 @@ mod resolve {
             ),
         ]);
         assert_eq!(
-            resolve(&catalog, &disabled, &[], "internal", NOW).unwrap_err(),
+            resolve(&catalog, &disabled, &choices(), &[], "internal", NOW).unwrap_err(),
             Reason::NoCandidate
         );
     }
@@ -727,7 +833,7 @@ mod resolve {
                 CredentialKind::SubscriptionLogin,
             ),
         ]);
-        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates.len(), 1);
         assert_eq!(resolved.candidates[0].provider, "openai");
         assert_eq!(resolved.candidates[0].harness.as_deref(), Some("codex"));
@@ -752,7 +858,7 @@ mod resolve {
                 CredentialKind::SubscriptionLogin,
             ),
         ]);
-        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
         let harnesses: Vec<_> = resolved
             .candidates
             .iter()
@@ -780,10 +886,26 @@ mod resolve {
         catalog_value = aq_profiles::validate(raw, instructions).unwrap();
         let mut old = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, 0);
         old.received_at_ms = NOW - 5_000;
-        let resolved = resolve(&catalog_value, &registry, &[old.clone()], "internal", NOW).unwrap();
+        let resolved = resolve(
+            &catalog_value,
+            &registry,
+            &choices(),
+            &[old.clone()],
+            "internal",
+            NOW,
+        )
+        .unwrap();
         assert_eq!(resolved.candidates[0].provider, "anthropic");
         old.received_at_ms = NOW - 500;
-        let resolved = resolve(&catalog_value, &registry, &[old], "internal", NOW).unwrap();
+        let resolved = resolve(
+            &catalog_value,
+            &registry,
+            &choices(),
+            &[old],
+            "internal",
+            NOW,
+        )
+        .unwrap();
         assert_eq!(resolved.candidates[0].provider, "openai");
     }
 }
@@ -1188,6 +1310,8 @@ mod service {
     struct Fixture {
         _db: TestDb,
         _dir: tempfile::TempDir,
+        /// The Settings model choices file the service reads.
+        preferences: std::path::PathBuf,
         pool: PgPool,
         work: InternalWork,
         openai: Arc<std::sync::Mutex<fake::Seen>>,
@@ -1201,6 +1325,8 @@ mod service {
         configure(&pool).await;
         let dir = tempfile::tempdir().unwrap();
         let secret = secret_file(dir.path(), 0o600);
+        let preferences = dir.path().join("models.json");
+        std::fs::write(&preferences, json!(resolve::choices()).to_string()).unwrap();
         let (openai_url, openai) = fake::serve(200, fake::completed(openai)).await;
         let (anthropic_url, anthropic) = fake::serve(200, fake::completed(anthropic)).await;
         let config = InternalWorkConfig {
@@ -1220,11 +1346,13 @@ mod service {
             aq_server::system_clock(),
             Some(&config),
             Some(registry(kind)),
+            Some(preferences.clone()),
         )
         .unwrap();
         Fixture {
             _db: db,
             _dir: dir,
+            preferences,
             pool,
             work,
             openai,
@@ -1338,6 +1466,27 @@ mod service {
     }
 
     #[tokio::test]
+    async fn a_profile_without_a_usable_model_choice_fails_no_candidate_naming_the_profile() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        // Settings read the choices afresh: none is offered any more.
+        std::fs::write(&f.preferences, "[]").unwrap();
+        let id = f.work.submit(request(true)).await.unwrap();
+        match wait(&f.work, id).await {
+            Outcome::Failed {
+                reason,
+                detail,
+                attempts,
+            } => {
+                assert_eq!(reason, Reason::NoCandidate);
+                assert!(detail.contains("\"internal\""), "{detail}");
+                assert!(attempts.is_empty());
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+        assert!(f.openai.lock().unwrap().bodies.is_empty());
+    }
+
+    #[tokio::test]
     async fn a_running_task_whose_runner_vanished_is_swept_and_retried_on_the_next_candidate() {
         let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
         let id = f.work.submit(request(false)).await.unwrap();
@@ -1424,7 +1573,9 @@ mod service {
         };
         let registry = Some(registry(CredentialKind::ApiKey));
         let clock = aq_server::system_clock();
-        let disabled = InternalWork::new(f.pool.clone(), clock, Some(&config), registry).unwrap();
+        let preferences = Some(f.preferences.clone());
+        let disabled =
+            InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap();
         let _stop = start(&disabled);
         let short = Request {
             deadline_ms: 1_000,
@@ -1572,7 +1723,7 @@ enabled=true
         ))
         .unwrap();
         let clock = Arc::new(Utc::now);
-        let work = InternalWork::new(db.pool().await, clock.clone(), None, None).unwrap();
+        let work = InternalWork::new(db.pool().await, clock.clone(), None, None, None).unwrap();
         aq_server::build_admin_router(AppState {
             internal_work: work,
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),
@@ -1910,6 +2061,7 @@ mod escalation {
             Arc::new(move || now.load(Ordering::SeqCst)),
             None,
             None,
+            Arc::new(Vec::new),
         )
         .unwrap()
         .notify_supervisor(notify);
@@ -1989,8 +2141,14 @@ mod escalation {
             poll_ms: 20,
             enabled: true,
         };
-        let work = InternalWork::new(pool.clone(), aq_server::system_clock(), Some(&config), None)
-            .unwrap();
+        let work = InternalWork::new(
+            pool.clone(),
+            aq_server::system_clock(),
+            Some(&config),
+            None,
+            None,
+        )
+        .unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         let mut about_project = loud();
         about_project.affected.project_id = Some(project);

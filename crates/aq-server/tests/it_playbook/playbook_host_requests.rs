@@ -1064,6 +1064,11 @@ async fn internal_work(
     let secret = dir.path().join("key");
     std::fs::write(&secret, format!("{SECRET}\n")).unwrap();
     std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Settings offer the catalog's `fixture-a` choice at effort `medium`.
+    let preferences = dir.path().join("models.json");
+    let choices = json!([{"provider": "fixture-a", "model": "model-a", "harness": "codex",
+        "reasoning_configuration_reference": "reasoning-a@1", "reasoning": "medium"}]);
+    std::fs::write(&preferences, choices.to_string()).unwrap();
     let config = aq_internal_work::InternalWorkConfig {
         api: vec![aq_internal_work::ApiEndpoint {
             provider: "fixture-a".into(),
@@ -1078,6 +1083,7 @@ async fn internal_work(
         aq_server::system_clock(),
         Some(&config),
         Some(Arc::new(registry)),
+        Some(preferences),
     )
     .unwrap();
     (work, dir)

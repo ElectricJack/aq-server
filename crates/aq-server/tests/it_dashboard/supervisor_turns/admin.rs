@@ -53,7 +53,7 @@ struct Admin {
 async fn admin() -> Admin {
     let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
     f.state.internal_work =
-        InternalWork::new(f.pool.clone(), f.state.clock.clone(), None, None).unwrap();
+        InternalWork::new(f.pool.clone(), f.state.clock.clone(), None, None, None).unwrap();
     f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;

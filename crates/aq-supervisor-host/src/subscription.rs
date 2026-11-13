@@ -82,7 +82,7 @@ pub async fn native(
         &c.workspace,
         &output,
     )?;
-    let mut overrides = exec_overrides(c.model.reasoning.as_str());
+    let mut overrides = exec_overrides(Some(c.model.reasoning.as_str()));
     overrides.push(format!(
         "developer_instructions={}",
         quote(&settings.instructions)
@@ -103,13 +103,7 @@ pub async fn native(
             quote(&value)
         ));
     }
-    if let Some(tier) = settings.options.get("service_tier").and_then(Value::as_str) {
-        ensure!(
-            ["fast", "flex", "priority", "default", "auto"].contains(&tier),
-            "unsupported service tier"
-        );
-        overrides.push(format!("service_tier={}", quote(tier)));
-    }
+    overrides.extend(service_tier(&settings.options)?);
     let mut command = native_command(
         &executable,
         exec_finish(args, overrides),
@@ -294,22 +288,39 @@ pub(crate) fn exec_arguments(
     ])
 }
 
+/// The `--config` override for a model choice's `service_tier` option, if it
+/// has one.
+pub(crate) fn service_tier(
+    options: &std::collections::BTreeMap<String, Value>,
+) -> Result<Option<String>> {
+    let Some(tier) = options.get("service_tier").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    ensure!(
+        ["fast", "flex", "priority", "default", "auto"].contains(&tier),
+        "unsupported service tier"
+    );
+    Ok(Some(format!("service_tier={}", quote(tier))))
+}
+
 /// The `--config` overrides every native run takes; callers append theirs.
-pub(crate) fn exec_overrides(reasoning: &str) -> Vec<String> {
-    vec![
-        format!("model_reasoning_effort={}", quote(reasoning)),
-        "approval_policy=\"never\"".into(),
-        "model_provider=\"openai\"".into(),
-        "forced_login_method=\"chatgpt\"".into(),
-        "cli_auth_credentials_store=\"file\"".into(),
-        "project_doc_max_bytes=0".into(),
-        "features.plugins=false".into(),
-        "features.apps=false".into(),
-        "features.shell_snapshot=false".into(),
-        "features.shell_snapshot_v2=false".into(),
-        "shell_environment_policy.inherit=\"none\"".into(),
-        "shell_environment_policy.set.PATH=\"/usr/local/bin:/usr/bin:/bin\"".into(),
-    ]
+/// Without `reasoning` Codex keeps the model's own effort.
+pub(crate) fn exec_overrides(reasoning: Option<&str>) -> Vec<String> {
+    let effort = reasoning.map(|r| format!("model_reasoning_effort={}", quote(r)));
+    let fixed = [
+        "approval_policy=\"never\"",
+        "model_provider=\"openai\"",
+        "forced_login_method=\"chatgpt\"",
+        "cli_auth_credentials_store=\"file\"",
+        "project_doc_max_bytes=0",
+        "features.plugins=false",
+        "features.apps=false",
+        "features.shell_snapshot=false",
+        "features.shell_snapshot_v2=false",
+        "shell_environment_policy.inherit=\"none\"",
+        "shell_environment_policy.set.PATH=\"/usr/local/bin:/usr/bin:/bin\"",
+    ];
+    effort.into_iter().chain(fixed.map(String::from)).collect()
 }
 
 /// `args`, then each override as `--config VALUE`, then `-` (prompt on stdin).

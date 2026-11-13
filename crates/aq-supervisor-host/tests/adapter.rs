@@ -130,11 +130,18 @@ mod internal {
         }
     }
 
+    /// A catalog reference as the server stores it: an identifier, never an
+    /// effort. It must reach no native's argv or environment.
+    const CODEX_REFERENCE: &str = "v1-dcedeb627973ef0987342daa2f63b4fe@1";
+    const CLAUDE_REFERENCE: &str = "discovered-5749150bf4461778998a0d738a0a8f70@1";
+
     fn codex_candidate() -> Candidate {
         Candidate {
             provider: "openai".into(),
             model: "gpt-fixture".into(),
             reasoning: "high".into(),
+            reasoning_reference: CODEX_REFERENCE.into(),
+            options: BTreeMap::from([("reasoning_effort".into(), json!("high"))]),
             harness: Some("codex".into()),
             way: Way::Login,
             credential_index: 0,
@@ -145,8 +152,23 @@ mod internal {
         Candidate {
             provider: "anthropic".into(),
             model: "claude-fixture".into(),
+            reasoning: "default".into(),
+            reasoning_reference: CLAUDE_REFERENCE.into(),
+            options: BTreeMap::new(),
             harness: Some("claude".into()),
             ..codex_candidate()
+        }
+    }
+
+    /// `candidate` with the effort and options its model choice resolved to.
+    fn with_effort(candidate: Candidate, effort: &str, options: &[(&str, &str)]) -> Candidate {
+        Candidate {
+            reasoning: effort.into(),
+            options: options
+                .iter()
+                .map(|(key, value)| (key.to_string(), json!(value)))
+                .collect(),
+            ..candidate
         }
     }
 
@@ -376,6 +398,61 @@ mod internal {
         assert_eq!(std::fs::read_to_string(f.rec("listing")).unwrap(), "");
         let stdin = std::fs::read_to_string(f.rec("stdin")).unwrap();
         assert_eq!(stdin, validate::prompt(&request()));
+    }
+
+    #[tokio::test]
+    async fn codex_run_sets_the_resolved_effort_and_service_tier_and_never_the_reference() {
+        let f = Fixture::new(&answering()).await;
+        let candidate = with_effort(
+            codex_candidate(),
+            "low",
+            &[("reasoning_effort", "low"), ("service_tier", "fast")],
+        );
+        f.submit(&[candidate]).await;
+        assert!(f.tick().await);
+        let argv = f.argv();
+        let efforts: Vec<_> = argv
+            .iter()
+            .filter(|a| a.starts_with("model_reasoning_effort="))
+            .collect();
+        assert_eq!(efforts, ["model_reasoning_effort=\"low\""]);
+        assert!(
+            argv.iter().any(|a| a == "service_tier=\"fast\""),
+            "{argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.contains(CODEX_REFERENCE)),
+            "{argv:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_run_with_the_default_effort_sets_no_effort_and_no_service_tier() {
+        let f = Fixture::new(&answering()).await;
+        f.submit(&[with_effort(codex_candidate(), "default", &[])])
+            .await;
+        assert!(f.tick().await);
+        let argv = f.argv();
+        assert!(
+            !argv.iter().any(|a| a.starts_with("model_reasoning_effort")
+                || a.starts_with("service_tier")
+                || a.contains(CODEX_REFERENCE)),
+            "{argv:?}"
+        );
+        assert_eq!(argv.last().unwrap(), "-");
+    }
+
+    #[tokio::test]
+    async fn codex_candidate_with_an_unsupported_service_tier_fails_without_running() {
+        let f = Fixture::new(&answering()).await;
+        let candidate = with_effort(codex_candidate(), "low", &[("service_tier", "turbo")]);
+        let id = f.submit(&[candidate]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.reason, Some(aq_internal_work::Reason::ProviderError));
+        assert_eq!(row.attempts[0].detail, "unsupported service tier");
+        assert!(!f.rec("argv").exists(), "the native ran");
     }
 
     #[tokio::test]
@@ -666,6 +743,40 @@ mod internal {
         assert!(detail.contains("[credential redacted]"), "{detail}");
         assert!(!detail.contains(CLAUDE_TOKEN), "{detail}");
         assert!(detail.len() <= 500, "{}", detail.len());
+    }
+
+    /// Claude's effort the way the worker's interactive launch passes it:
+    /// `--effort <effort>`, `off` as `MAX_THINKING_TOKENS=0`, `default` as
+    /// nothing. The reference reaches the native nowhere.
+    #[tokio::test]
+    async fn claude_run_passes_the_resolved_effort_and_never_the_reference() {
+        for (effort, flag, thinking) in [
+            ("high", Some("high"), None),
+            ("off", None, Some("0")),
+            ("default", None, None),
+        ] {
+            let f =
+                Fixture::with_claude("exit 1", &claude_printing(&claude_result(false, ANSWER), 0))
+                    .await;
+            let candidate = with_effort(claude_candidate(), effort, &[("thinking", effort)]);
+            let id = f.submit(&[candidate]).await;
+            assert!(f.tick().await);
+            assert_eq!(f.row(id).await.status, "answered", "{effort}");
+            let argv = f.claude_argv();
+            let passed = argv
+                .iter()
+                .position(|a| a == "--effort")
+                .map(|i| argv[i + 1].as_str());
+            assert_eq!(passed, flag, "{effort}: {argv:?}");
+            let env = f.claude_env();
+            assert_eq!(
+                env.get("MAX_THINKING_TOKENS").map(String::as_str),
+                thinking,
+                "{effort}"
+            );
+            let seen = format!("{argv:?}{env:?}{}", f.claude_rec("settings"));
+            assert!(!seen.contains(CLAUDE_REFERENCE), "{seen}");
+        }
     }
 
     /// Spec 0012 §6: fallback between providers is real.
