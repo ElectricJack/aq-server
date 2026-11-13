@@ -261,19 +261,133 @@ async fn reads_use_existing_owner_routes_and_preserve_pages() {
 }
 #[tokio::test]
 async fn unsupported_mutations_never_call_legacy_routes() {
-    let id = "00000000-0000-4000-8000-000000000020";
-    for args in [
-        vec!["tasks", "cancel", id],
-        vec!["tasks", "retry", id],
-        vec!["workers", "revoke", id],
-        vec!["workers", "enroll"],
-        vec!["projects", "onboard"],
-    ] {
+    for args in [vec!["workers", "enroll"], vec!["projects", "onboard"]] {
         let mut srv = server(vec![]).await;
         let error = aqv2::execute(srv.client.clone(), &args).await.unwrap_err();
         assert_eq!(error["code"], "unsupported");
         assert!(srv.seen.try_recv().is_err());
     }
+}
+// `tasks cancel|retry` and `workers revoke` are registered action kinds
+// (task.cancel, task.retry, worker.revoke) and go through the action union.
+#[tokio::test]
+async fn task_cancel_and_retry_send_the_registered_action() {
+    let (id, project) = (
+        "00000000-0000-4000-8000-000000000020",
+        "00000000-0000-4000-8000-000000000010",
+    );
+    for (verb, kind) in [("cancel", "task.cancel"), ("retry", "task.retry")] {
+        // With --revision: one POST, no read.
+        let mut srv = server(vec![]).await;
+        let args = ["tasks", verb, id, "--project", project, "--revision", "7"];
+        let _ = aqv2::execute(srv.client.clone(), &args).await;
+        let post = srv.next().await;
+        assert_eq!(
+            (post.method.as_str(), post.path.as_str()),
+            ("POST", "/api/v1/actions")
+        );
+        assert_eq!(post.body["kind"], kind);
+        assert_eq!(
+            post.body["subject"],
+            json!({"type":"task","id":id,"revision":"7"})
+        );
+        assert_eq!(post.body["expected_versions"], json!({"task":"7"}));
+        assert_eq!(post.body["payload"]["project_id"], project);
+        assert_eq!(post.body["payload"]["expected_version"], "7");
+        assert_eq!(
+            post.body["payload"]["operation_id"],
+            post.body["operation_id"]
+        );
+        assert!(srv.seen.try_recv().is_err());
+        // Without it: the task is read first and its version is sent.
+        let task =
+            json!({"contract":"human-graph-1","data":{"id":id,"kind":"task","version":"12"}});
+        let mut srv = server(vec![(StatusCode::OK, task)]).await;
+        let _ = aqv2::execute(
+            srv.client.clone(),
+            &["tasks", verb, id, "--project", project],
+        )
+        .await;
+        let read = srv.next().await;
+        assert_eq!(read.method, "GET");
+        assert_eq!(
+            read.path,
+            format!("/api/human/projects/{project}/tasks/{id}")
+        );
+        let post = srv.next().await;
+        assert_eq!(post.body["kind"], kind);
+        assert_eq!(post.body["subject"]["revision"], "12");
+        assert_eq!(post.body["payload"]["expected_version"], "12");
+    }
+    // A read without a usable version sends nothing.
+    let mut srv = server(vec![(StatusCode::OK, json!({"data":{"id":id}}))]).await;
+    let error = aqv2::execute(
+        srv.client.clone(),
+        &["tasks", "cancel", id, "--project", project],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error["code"], "invalid_response");
+    assert_eq!(srv.next().await.method, "GET");
+    assert!(srv.seen.try_recv().is_err());
+}
+#[tokio::test]
+async fn worker_revoke_sends_the_registered_action() {
+    let node = "00000000-0000-4000-8000-000000000020";
+    for (arg, machine) in [
+        ("desktop", "desktop".to_string()),
+        (node, format!("node:{node}")),
+    ] {
+        let mut srv = server(vec![]).await;
+        let _ = aqv2::execute(srv.client.clone(), &["workers", "revoke", arg]).await;
+        let post = srv.next().await;
+        assert_eq!(
+            (post.method.as_str(), post.path.as_str()),
+            ("POST", "/api/v1/actions")
+        );
+        let mut expected = fixture("request-worker-revoke.json");
+        expected["operation_id"] = post.body["operation_id"].clone();
+        expected["payload"]["operation_id"] = post.body["operation_id"].clone();
+        expected["subject"]["id"] = json!(machine);
+        expected["payload"]["machine"] = json!(machine);
+        if let Some(o) = expected.as_object_mut() {
+            o.remove("reason");
+        }
+        assert_eq!(post.body, expected);
+    }
+    // A confirmed receipt for a machine subject is accepted.
+    let mut srv = server(vec![(StatusCode::OK, confirmed("echo-request-id"))]).await;
+    let done = aqv2::execute(srv.client.clone(), &["workers", "revoke", "desktop"])
+        .await
+        .unwrap();
+    assert_eq!(done["data"]["disposition"], "confirmed");
+    assert_eq!(srv.next().await.method, "POST");
+    // 32 bare hex characters are a valid key, not a node ID.
+    let key = "0123456789abcdef0123456789abcdef";
+    let mut srv = server(vec![]).await;
+    let _ = aqv2::execute(srv.client.clone(), &["workers", "revoke", key]).await;
+    assert_eq!(srv.next().await.body["payload"]["machine"], key);
+    let mut srv = server(vec![]).await;
+    for bad in [
+        vec![
+            "tasks",
+            "cancel",
+            key,
+            "--project",
+            key,
+            "--revision",
+            "9999999999999999999",
+        ],
+        vec!["tasks", "cancel", key, "--project", key, "--revision", "07"],
+    ] {
+        let error = aqv2::execute(srv.client.clone(), &bad).await.unwrap_err();
+        assert_eq!(error["code"], "invalid_arguments");
+    }
+    let error = aqv2::execute(srv.client.clone(), &["workers", "revoke", "Not A Key"])
+        .await
+        .unwrap_err();
+    assert_eq!(error["code"], "invalid_arguments");
+    assert!(srv.seen.try_recv().is_err());
 }
 #[tokio::test]
 async fn server_refusals_and_unavailable_reads_do_not_leak_error_bodies() {
