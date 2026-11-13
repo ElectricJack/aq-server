@@ -45,7 +45,7 @@ pub struct Class {
 }
 
 impl Parent {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Parent::Simple => "simple",
             Parent::Standard => "standard",
@@ -56,7 +56,7 @@ impl Parent {
 }
 
 impl Effort {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Effort::Low => "low",
             Effort::Medium => "medium",
@@ -232,6 +232,57 @@ impl CompactRoute {
     }
 }
 
+/// Outcome of writing or clearing a task's route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    Routed {
+        sequence: u64,
+    },
+    /// The task changed since the expected version, or an owner route blocks the router.
+    Stale,
+}
+
+/// One entry of a task's route history.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredRoute {
+    pub sequence: u64,
+    /// `None` records a cleared route.
+    pub route: Option<Route>,
+    pub at_ms: i64,
+}
+
+/// Whether a write by `by` may replace the stored route: the router never
+/// overwrites an owner route.
+pub fn may_replace(stored: Option<&CompactRoute>, by: Source) -> bool {
+    !(by == Source::Router && stored.is_some_and(|r| r.s == Source::Owner))
+}
+
+/// Task metadata with `aq:route` set to `route`, or removed for `None`. A
+/// graph metadata patch replaces the object, so every other key is kept.
+pub fn with_route(
+    metadata: &serde_json::Value,
+    route: Option<&CompactRoute>,
+) -> Result<serde_json::Value, Error> {
+    let bad = |message: String| Error::Metadata {
+        key: ROUTE_KEY,
+        message,
+    };
+    let mut object = metadata
+        .as_object()
+        .cloned()
+        .ok_or_else(|| bad("task metadata is not an object".into()))?;
+    match route {
+        Some(r) => {
+            let value = serde_json::to_value(r).map_err(|e| bad(e.to_string()))?;
+            object.insert(ROUTE_KEY.into(), value);
+        }
+        None => {
+            object.remove(ROUTE_KEY);
+        }
+    }
+    Ok(serde_json::Value::Object(object))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +364,29 @@ mod tests {
         );
         assert_eq!(CompactRoute::from_metadata(&json!(null)).unwrap(), None);
         assert!(CompactRoute::from_metadata(&json!({"aq:route": "garbage"})).is_err());
+    }
+
+    #[test]
+    fn router_may_not_replace_an_owner_route_but_the_owner_may_replace_anything() {
+        let router = route().compact(1).unwrap();
+        let mut owner = router.clone();
+        owner.s = Source::Owner;
+        assert!(may_replace(None, Source::Router));
+        assert!(may_replace(Some(&router), Source::Router));
+        assert!(!may_replace(Some(&owner), Source::Router));
+        assert!(may_replace(Some(&owner), Source::Owner));
+        assert!(may_replace(Some(&router), Source::Owner));
+    }
+
+    #[test]
+    fn with_route_sets_or_removes_aq_route_and_keeps_other_keys() {
+        let compact = route().compact(4).unwrap();
+        let md = json!({"aq:priority": 5});
+        let set = with_route(&md, Some(&compact)).unwrap();
+        assert_eq!(set["aq:priority"], 5);
+        assert_eq!(CompactRoute::from_metadata(&set).unwrap(), Some(compact));
+        let cleared = with_route(&set, None).unwrap();
+        assert_eq!(cleared, md);
+        assert!(with_route(&json!(null), None).is_err());
     }
 }

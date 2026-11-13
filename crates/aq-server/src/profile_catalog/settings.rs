@@ -6,7 +6,7 @@ use axum::{
     routing::get,
 };
 use serde_json::Value;
-pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
+pub(crate) fn error(error: aq_profile_settings::Error) -> AppError {
     match error {
         aq_profile_settings::Error::Invalid(m) => AppError::BadRequest(m),
         aq_profile_settings::Error::Conflict(m) => AppError::Conflict(m),

@@ -674,7 +674,7 @@ pub(super) async fn lookup(
     Ok(())
 }
 /// Fresh current node version, validated for workspace, kind and liveness.
-pub(super) async fn current(rt: &Runtime, workspace: Uuid, id: Uuid, kind: &str) -> Result<Value> {
+pub(crate) async fn current(rt: &Runtime, workspace: Uuid, id: Uuid, kind: &str) -> Result<Value> {
     let raw = rt
         .human_get(
             &format!("/v1/workspaces/{workspace}/nodes/{id}"),

@@ -35,6 +35,7 @@ pub mod repository_onboarding;
 pub mod result_media;
 pub mod results_feedback;
 pub mod reviews;
+pub mod routing;
 pub mod row_retention;
 pub mod session_access;
 pub mod source_retention;
