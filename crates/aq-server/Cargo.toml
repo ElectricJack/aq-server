@@ -13,6 +13,7 @@ aq-supervisor-control = { path = "../aq-supervisor-control" }
 aq-human-http = { path = "../aq-human-http" }
 aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-profile-settings = { path = "../aq-profile-settings" }
+aq-internal-work = { path = "../aq-internal-work" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"
 http-body = "=1.1.0"

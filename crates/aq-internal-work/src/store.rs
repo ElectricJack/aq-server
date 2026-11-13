@@ -1,0 +1,346 @@
+//! The `internal_tasks` queue (spec 0012 §4). Runners claim with
+//! `FOR UPDATE SKIP LOCKED`; every write after a claim is fenced on the row
+//! still being `running` for the same `candidate_index`, so a superseded
+//! runner cannot overwrite a newer attempt or a finished task.
+use crate::*;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use sqlx::{PgPool, postgres::PgRow};
+
+/// Every column of `internal_tasks`, JSON columns decoded.
+#[derive(Clone, Debug)]
+pub struct Row {
+    pub id: Uuid,
+    pub purpose: Purpose,
+    pub workspace_kind: String,
+    pub request: Request,
+    pub candidates: Vec<Candidate>,
+    pub candidate_index: u32,
+    /// `queued`, `running`, `answered` or `failed`.
+    pub status: String,
+    pub blocking: bool,
+    pub runner: Option<String>,
+    pub claimed_at_ms: Option<i64>,
+    pub deadline_at_ms: i64,
+    pub created_at_ms: i64,
+    pub finished_at_ms: Option<i64>,
+    pub attempts: Vec<Attempt>,
+    pub answer: Option<Value>,
+    pub usage: Option<Usage>,
+    pub reason: Option<Reason>,
+    pub detail: Option<String>,
+    pub affected_kind: String,
+    pub affected_id: String,
+    pub project_id: Option<Uuid>,
+    pub escalate: bool,
+    /// `none`, `supervisor`, `owner` or `resolved`.
+    pub escalation: String,
+    pub supervisor_attempts: i32,
+    pub diagnosis: Option<String>,
+    pub retry_of: Option<Uuid>,
+}
+
+impl Row {
+    /// The answer or the failure, once the task has finished.
+    pub fn outcome(&self) -> Option<Outcome> {
+        match self.status.as_str() {
+            "answered" => {
+                let candidate = self.candidates.get(self.candidate_index as usize)?;
+                Some(Outcome::Answered {
+                    answer: self.answer.clone()?,
+                    provider: candidate.provider.clone(),
+                    model: candidate.model.clone(),
+                    way: candidate.way,
+                    elapsed_ms: elapsed(self.created_at_ms, self.finished_at_ms?),
+                    usage: self.usage.clone(),
+                    attempts: self.attempts.clone(),
+                })
+            }
+            "failed" => Some(Outcome::Failed {
+                reason: self.reason?,
+                detail: self.detail.clone().unwrap_or_default(),
+                attempts: self.attempts.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn decode(row: &PgRow) -> Result<Row> {
+        use sqlx::Row as _;
+        let candidate_index: i32 = row.try_get("candidate_index")?;
+        Ok(Row {
+            id: row.try_get("id")?,
+            purpose: from_text(&row.try_get::<String, _>("purpose")?)?,
+            workspace_kind: row.try_get("workspace_kind")?,
+            request: from_json(row.try_get("request")?)?,
+            candidates: from_json(row.try_get("candidates")?)?,
+            candidate_index: u32::try_from(candidate_index).map_err(|_| Error::Corrupt)?,
+            status: row.try_get("status")?,
+            blocking: row.try_get("blocking")?,
+            runner: row.try_get("runner")?,
+            claimed_at_ms: row.try_get("claimed_at_ms")?,
+            deadline_at_ms: row.try_get("deadline_at_ms")?,
+            created_at_ms: row.try_get("created_at_ms")?,
+            finished_at_ms: row.try_get("finished_at_ms")?,
+            attempts: from_json(row.try_get("attempts")?)?,
+            answer: row.try_get("answer")?,
+            usage: row
+                .try_get::<Option<Value>, _>("usage")?
+                .map(from_json)
+                .transpose()?,
+            reason: row
+                .try_get::<Option<String>, _>("reason")?
+                .as_deref()
+                .map(from_text)
+                .transpose()?,
+            detail: row.try_get("detail")?,
+            affected_kind: row.try_get("affected_kind")?,
+            affected_id: row.try_get("affected_id")?,
+            project_id: row.try_get("project_id")?,
+            escalate: row.try_get("escalate")?,
+            escalation: row.try_get("escalation")?,
+            supervisor_attempts: row.try_get("supervisor_attempts")?,
+            diagnosis: row.try_get("diagnosis")?,
+            retry_of: row.try_get("retry_of")?,
+        })
+    }
+}
+
+/// Queues `request` for `candidates` in fallback order. With no candidate the
+/// task is stored already `failed` with `no_candidate`.
+pub async fn submit(
+    pool: &PgPool,
+    request: &Request,
+    candidates: &[Candidate],
+    now_ms: i64,
+) -> Result<Uuid> {
+    request.validate()?;
+    let id = Uuid::new_v4();
+    let deadline_at_ms = now_ms + request.deadline_ms as i64;
+    let empty = candidates.is_empty();
+    sqlx::query(
+        "INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,
+             created_at_ms,finished_at_ms,reason,detail,affected_kind,affected_id,project_id,escalate)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+    )
+    .bind(id)
+    .bind(to_text(&request.purpose))
+    .bind(to_json(request))
+    .bind(to_json(&candidates))
+    .bind(if empty { "failed" } else { "queued" })
+    .bind(request.blocking)
+    .bind(deadline_at_ms)
+    .bind(now_ms)
+    .bind(empty.then_some(now_ms))
+    .bind(empty.then(|| to_text(&Reason::NoCandidate)))
+    .bind(empty.then_some("no candidate is configured for this purpose"))
+    .bind(&request.affected.kind)
+    .bind(&request.affected.id)
+    .bind(request.affected.project_id)
+    .bind(request.escalate)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Takes the next queued task whose current candidate is served `way` (for
+/// [`Way::Login`], by one of `harnesses`): blocking tasks first, then oldest.
+pub async fn claim(
+    pool: &PgPool,
+    way: Way,
+    harnesses: &[&str],
+    runner: &str,
+    now_ms: i64,
+) -> Result<Option<Claimed>> {
+    let row = sqlx::query(
+        "WITH next AS (
+             SELECT id FROM internal_tasks
+             WHERE status='queued'
+               AND candidates->candidate_index->>'way'=$1
+               AND ($1<>'login' OR candidates->candidate_index->>'harness'=ANY($2))
+             ORDER BY blocking DESC, created_at_ms, id
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED)
+         UPDATE internal_tasks t SET status='running', runner=$3, claimed_at_ms=$4
+         FROM next WHERE t.id=next.id
+         RETURNING t.*",
+    )
+    .bind(to_text(&way))
+    .bind(harnesses)
+    .bind(runner)
+    .bind(now_ms)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let row = Row::decode(&row)?;
+    let candidate = row
+        .candidates
+        .get(row.candidate_index as usize)
+        .cloned()
+        .ok_or(Error::Corrupt)?;
+    Ok(Some(Claimed {
+        id: row.id,
+        request: row.request,
+        candidate,
+        candidate_index: row.candidate_index,
+        deadline_at_ms: row.deadline_at_ms,
+    }))
+}
+
+/// Records the answer of candidate `candidate_index`. Does nothing when that
+/// candidate no longer holds the task.
+pub async fn complete(
+    pool: &PgPool,
+    id: Uuid,
+    candidate_index: u32,
+    answer: &Value,
+    usage: Option<&Usage>,
+    now_ms: i64,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let Some(row) = held(&mut tx, id, candidate_index).await? else {
+        return Ok(());
+    };
+    let attempt = attempt(&row, None, "", now_ms)?;
+    sqlx::query(
+        "UPDATE internal_tasks SET status='answered', answer=$2, usage=$3, finished_at_ms=$4,
+             attempts=attempts||jsonb_build_array($5::jsonb)
+         WHERE id=$1",
+    )
+    .bind(id)
+    .bind(answer)
+    .bind(usage.map(to_json))
+    .bind(now_ms)
+    .bind(to_json(&attempt))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Records the failure of candidate `candidate_index`. A provider error,
+/// unavailable provider, invalid output or per-candidate deadline moves the
+/// task to the next candidate while one exists and the task deadline has not
+/// passed; otherwise, and for any other reason, the task fails with `reason`.
+/// Does nothing when that candidate no longer holds the task.
+pub async fn fail_candidate(
+    pool: &PgPool,
+    id: Uuid,
+    candidate_index: u32,
+    reason: Reason,
+    detail: &str,
+    now_ms: i64,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let Some(row) = held(&mut tx, id, candidate_index).await? else {
+        return Ok(());
+    };
+    let attempt = to_json(&attempt(&row, Some(reason), detail, now_ms)?);
+    let retryable = matches!(
+        reason,
+        Reason::ProviderError
+            | Reason::ProviderUnavailable
+            | Reason::InvalidOutput
+            | Reason::DeadlineExceeded
+    );
+    let next = candidate_index as usize + 1;
+    if retryable && next < row.candidates.len() && now_ms < row.deadline_at_ms {
+        sqlx::query(
+            "UPDATE internal_tasks SET status='queued', candidate_index=$2, runner=NULL,
+                 claimed_at_ms=NULL, attempts=attempts||jsonb_build_array($3::jsonb)
+             WHERE id=$1",
+        )
+        .bind(id)
+        .bind(next as i32)
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE internal_tasks SET status='failed', reason=$2, detail=$3, finished_at_ms=$4,
+                 attempts=attempts||jsonb_build_array($5::jsonb)
+             WHERE id=$1",
+        )
+        .bind(id)
+        .bind(to_text(&reason))
+        .bind(detail)
+        .bind(now_ms)
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Ends tasks whose deadline or runner is gone and returns how many it
+/// changed. Its behavior is defined by Task 5 of the internal-work plan; until
+/// then it changes nothing and returns 0.
+pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {
+    let _ = (pool, now_ms);
+    Ok(0)
+}
+
+pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<Row>> {
+    sqlx::query("SELECT * FROM internal_tasks WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .as_ref()
+        .map(Row::decode)
+        .transpose()
+}
+
+/// The locked row, when candidate `candidate_index` is still running it.
+async fn held(tx: &mut sqlx::PgConnection, id: Uuid, candidate_index: u32) -> Result<Option<Row>> {
+    sqlx::query(
+        "SELECT * FROM internal_tasks WHERE id=$1 AND candidate_index=$2 AND status='running'
+         FOR UPDATE",
+    )
+    .bind(id)
+    .bind(candidate_index as i32)
+    .fetch_optional(tx)
+    .await?
+    .as_ref()
+    .map(Row::decode)
+    .transpose()
+}
+
+fn attempt(row: &Row, reason: Option<Reason>, detail: &str, now_ms: i64) -> Result<Attempt> {
+    let candidate = row
+        .candidates
+        .get(row.candidate_index as usize)
+        .ok_or(Error::Corrupt)?;
+    Ok(Attempt {
+        provider: candidate.provider.clone(),
+        model: candidate.model.clone(),
+        way: candidate.way,
+        reason,
+        detail: detail.into(),
+        elapsed_ms: elapsed(row.claimed_at_ms.unwrap_or(now_ms), now_ms),
+    })
+}
+
+fn elapsed(from_ms: i64, to_ms: i64) -> u64 {
+    u64::try_from(to_ms - from_ms).unwrap_or(0)
+}
+
+/// The snake_case name serde gives a unit variant.
+fn to_text<T: Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(Value::String(text)) => text,
+        _ => unreachable!("unit enum variants serialize to strings"),
+    }
+}
+
+fn from_text<T: DeserializeOwned>(text: &str) -> Result<T> {
+    serde_json::from_value(Value::String(text.into())).map_err(|_| Error::Corrupt)
+}
+
+fn to_json<T: Serialize + ?Sized>(value: &T) -> Value {
+    serde_json::to_value(value).expect("internal work types serialize to JSON")
+}
+
+fn from_json<T: DeserializeOwned>(value: Value) -> Result<T> {
+    serde_json::from_value(value).map_err(|_| Error::Corrupt)
+}
