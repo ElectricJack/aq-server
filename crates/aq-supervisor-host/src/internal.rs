@@ -40,7 +40,8 @@ pub struct InternalConfig {
 pub struct Harness {
     pub native: PathBuf,
     pub native_digest: Digest,
-    /// The login file. Each copy in and back holds `<secret_file>.lock`.
+    /// The login file. Each copy in and back holds a `flock` on its directory,
+    /// which needs to be writable only for a refresh to be written back.
     pub secret_file: PathBuf,
 }
 

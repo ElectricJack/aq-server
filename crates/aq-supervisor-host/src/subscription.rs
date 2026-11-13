@@ -126,8 +126,9 @@ pub async fn native(
     let status = tokio::task::spawn_blocking(move || child.wait()).await??;
     // Retain only a validated refresh of this subscription account inside this
     // central container; never write the operator's original host auth document.
-    copy_back(&c.secret_file, &auth_path, &auth, identity)?;
+    let copied = copy_back(&c.secret_file, &auth_path, &auth, identity);
     let _ = std::fs::remove_file(&auth_path);
+    copied?;
     ensure!(status.success(), "native supervisor turn failed");
     let mut text = read_message(&output)?;
     let aq_token = Zeroizing::new(protected_read_native(credential, identity.run_as)?);
@@ -148,20 +149,18 @@ pub(crate) fn quote(v: &str) -> String {
     serde_json::to_string(v).expect("text serializes")
 }
 
-/// Exclusive `flock` on `<secret_file>.lock`, released when the file drops.
-/// Every copy of a login file in or back holds it, so no two runs on this
-/// host read or replace the file at the same time.
+/// Exclusive `flock` on a read-only descriptor of the login file's
+/// directory, released when the descriptor drops. Every copy of a login file
+/// in or back holds it, so no two runs on this host read or replace the file
+/// at the same time. It needs no write access and creates nothing, and the
+/// directory stays the same inode across the rename that replaces the file.
 pub(crate) fn lock_login(secret_file: &Path) -> Result<std::fs::File> {
     use std::os::fd::AsRawFd;
-    let mut path = secret_file.as_os_str().to_owned();
-    path.push(".lock");
+    let directory = secret_file.parent().context("login file directory")?;
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(directory)?;
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
             return Ok(file);

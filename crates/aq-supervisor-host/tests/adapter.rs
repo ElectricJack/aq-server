@@ -391,6 +391,37 @@ mod internal {
         assert!(claimed);
         assert_eq!(f.row(id).await.status, "answered");
         assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("B"));
+        let entries: Vec<_> = std::fs::read_dir(f.root().join("login"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, ["auth.json"], "the lock creates nothing on disk");
+    }
+
+    /// Makes a directory read-only and restores it on drop, so the temp
+    /// directory can be removed whatever the test's outcome.
+    struct ReadOnly(PathBuf);
+    impl ReadOnly {
+        fn new(dir: PathBuf) -> Self {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_login_in_a_read_only_directory_serves_a_run_that_does_not_refresh_it() {
+        let f = Fixture::new(&answering()).await;
+        let _read_only = ReadOnly::new(f.root().join("login"));
+        let id = f.submit(&[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("A"));
     }
 
     #[tokio::test]
