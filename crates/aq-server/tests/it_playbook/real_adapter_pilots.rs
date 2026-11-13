@@ -1445,3 +1445,6 @@ async fn pilots_end_to_end() {
     println!("D11 evidence ({}):\n{evidence:#}", path.display());
     p.driver.take().unwrap().stop().await.unwrap();
 }
+
+#[path = "routing_scale.rs"]
+mod routing_scale;
