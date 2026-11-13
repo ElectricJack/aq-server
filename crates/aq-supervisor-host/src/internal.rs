@@ -8,10 +8,10 @@ mod codex;
 
 use crate::{
     config::protected_read,
-    subscription::{Identity, verify_native},
+    subscription::{Identity, file_digest, open_native},
 };
 use anyhow::{Result, ensure};
-use aq_internal_work::{Claimed, Reason, Usage, Way, store, validate};
+use aq_internal_work::{Claimed, DEADLINE_PASSED, Reason, Usage, Way, store, validate};
 use aq_session_protocol::Digest;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -47,13 +47,60 @@ pub struct Harness {
     /// refresh to be written back. Claude: the one-line setup token, read
     /// only and passed to the native in its environment.
     pub secret_file: PathBuf,
+    /// The native's file when its digest last matched.
+    #[serde(skip)]
+    verified: std::sync::Mutex<Option<Stamp>>,
+}
+
+/// What shows a change to a file's content without reading it: its device,
+/// inode, size, mtime and ctime. Every write moves the ctime, and no one can
+/// set it back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl Stamp {
+    fn of(m: &std::fs::Metadata) -> Self {
+        Stamp {
+            dev: m.dev(),
+            ino: m.ino(),
+            size: m.size(),
+            mtime: (m.mtime(), m.mtime_nsec()),
+            ctime: (m.ctime(), m.ctime_nsec()),
+        }
+    }
+}
+
+impl Harness {
+    /// The native, opened for exec through its descriptor and checked
+    /// against `native_digest`. It is hashed when the config is loaded and
+    /// again only when its [`Stamp`] differs from the last match.
+    fn verified_native(&self, identity: Identity) -> Result<std::fs::File> {
+        let executable = open_native(&self.native, identity)?;
+        let stamp = Stamp::of(&executable.metadata()?);
+        let verified = || self.verified.lock().unwrap_or_else(|p| p.into_inner());
+        // Not held while hashing, so another run is not blocked meanwhile.
+        let known = *verified();
+        if known != Some(stamp) {
+            let matches = file_digest(&executable)? == self.native_digest.as_str();
+            *verified() = matches.then_some(stamp);
+            ensure!(matches, "native digest mismatch");
+        }
+        Ok(executable)
+    }
 }
 
 impl InternalConfig {
     /// Reads `path` with the checks `Config::load` applies: an absolute,
     /// canonical, owner-only regular file of at most 64 KiB, no unknown
     /// fields, absolute installed paths, and no login file under a directory
-    /// the native child is given. Returns the file's digest too.
+    /// the native child is given. Returns the file's digest too. Each native
+    /// is hashed here once; a native that does not match fails its runs.
     pub fn load(path: &Path) -> Result<(Self, Digest)> {
         let bytes = protected_read(path, 65536)?;
         let config: Self = serde_json::from_slice(&bytes)?;
@@ -77,6 +124,11 @@ impl InternalConfig {
             }),
             "login files overlap the native directories"
         );
+        for h in harnesses.iter().copied().flatten() {
+            if h.verified_native(config.identity).is_err() {
+                eprintln!("internal work: a native executable was refused");
+            }
+        }
         Ok((config, Digest::of(&bytes)))
     }
 
@@ -89,88 +141,192 @@ impl InternalConfig {
     }
 }
 
+/// How many login tasks one host runs at once, so a long run does not keep
+/// the next task waiting. Bounded by memory: the `internal-work` service has
+/// 1 GiB, and one Claude Code native takes a few hundred MB.
+pub const MAX_RUNS: usize = 2;
+
+/// How long a native has to exit after SIGTERM at its stop before SIGKILL:
+/// Codex may be writing a refreshed login.
+const TERM_GRACE_MS: u64 = 1_000;
+
 /// Runs the claim loop for the config at `path`. Returns once the file is
-/// removed or its content changes, so a supervisor can restart it with the
-/// new config.
+/// removed or its content changes and the runs in progress have ended, so a
+/// supervisor can restart it with the new config.
 pub async fn run(path: &Path) -> Result<()> {
     unsafe {
         libc::umask(0o077);
     }
     let (config, digest) = InternalConfig::load(path)?;
+    clear_run_dirs(&config);
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(MAX_RUNS as u32 + 1)
         .connect(&config.database_url)
         .await?;
     let runner = format!("internal-host:{}", hostname()?);
-    loop {
-        let claimed = match tick(&config, &pool, &runner, now_ms()?).await {
-            Ok(claimed) => claimed,
-            Err(_) => {
-                eprintln!("internal work: tick failed");
-                false
-            }
-        };
-        if !unchanged(path, &digest)? {
-            return Ok(());
+    let config = std::sync::Arc::new(config);
+    serve(config, pool, runner, || unchanged(path, &digest)).await
+}
+
+/// Removes what a host that stopped mid-run left under `homes` and
+/// `scratch` (a home can hold a login copy). One host owns both, and nothing
+/// runs yet.
+fn clear_run_dirs(config: &InternalConfig) {
+    for parent in [&config.homes, &config.scratch] {
+        if private_parent(parent, config.identity).is_err() {
+            continue;
         }
-        if !claimed {
-            tokio::time::sleep(Duration::from_millis(config.poll_ms)).await;
+        for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if std::fs::remove_dir_all(&path).is_err() {
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 }
 
+/// The claim loop: claims while fewer than [`MAX_RUNS`] runs are in
+/// progress and runs each claimed task in its own task; looks again when a
+/// run ends or after the poll interval. Once `keep_going` returns false it
+/// claims nothing more and returns when the runs in progress have ended.
+pub async fn serve(
+    config: std::sync::Arc<InternalConfig>,
+    pool: PgPool,
+    runner: String,
+    mut keep_going: impl FnMut() -> Result<bool>,
+) -> Result<()> {
+    let mut runs = tokio::task::JoinSet::new();
+    loop {
+        let mut claimed = false;
+        if runs.len() < MAX_RUNS {
+            match claim(&config, &pool, &runner, now_ms()?).await {
+                Ok(Some(job)) => {
+                    let (config, pool) = (config.clone(), pool.clone());
+                    runs.spawn(async move { finish(job, &config, &pool).await });
+                    claimed = true;
+                }
+                Ok(None) => {}
+                Err(_) => eprintln!("internal work: claim failed"),
+            }
+        }
+        if !keep_going()? {
+            while let Some(ended) = runs.join_next().await {
+                report_end(ended);
+            }
+            return Ok(());
+        }
+        if !claimed {
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(config.poll_ms)) => {}
+                Some(ended) = runs.join_next(), if !runs.is_empty() => report_end(ended),
+            }
+        }
+        while let Some(ended) = runs.try_join_next() {
+            report_end(ended);
+        }
+    }
+}
+
+fn report_end(ended: std::result::Result<Result<()>, tokio::task::JoinError>) {
+    if !matches!(ended, Ok(Ok(()))) {
+        eprintln!("internal work: run failed");
+    }
+}
+
+/// A login task this host claimed at `now_ms`, [`Instant`] `started`.
+struct Job {
+    claimed: Claimed,
+    now_ms: i64,
+    started: Instant,
+}
+
 /// Claims at most one queued login task for a harness this host has
 /// configured, runs it, and records the answer or the candidate's failure.
-/// Returns whether it claimed. One task at a time: the next claim waits for
-/// this run to end.
+/// Returns whether it claimed; it returns when the run has ended.
 ///
 /// `now_ms` is the claim time. The run, its preparation included, is stopped
 /// at [`Claimed::stop_at_ms`], counted from the claim exactly as the sweep
-/// counts: the native's session is killed and the failure recorded first,
-/// and only then are the run directories removed and a login copied back.
+/// counts: the native's session gets SIGTERM and the failure is recorded at
+/// once, while the run gets [`TERM_GRACE_MS`] to end before SIGKILL and then
+/// reaps the native, copies a refreshed login back and removes its
+/// directories.
 pub async fn tick(
     config: &InternalConfig,
     pool: &PgPool,
     runner: &str,
     now_ms: i64,
 ) -> Result<bool> {
+    let Some(job) = claim(config, pool, runner, now_ms).await? else {
+        return Ok(false);
+    };
+    finish(job, config, pool).await?;
+    Ok(true)
+}
+
+/// Claims the next queued login task for a harness this host has configured.
+async fn claim(
+    config: &InternalConfig,
+    pool: &PgPool,
+    runner: &str,
+    now_ms: i64,
+) -> Result<Option<Job>> {
     let configured: Vec<&str> = [("codex", &config.codex), ("claude", &config.claude)]
         .into_iter()
         .filter_map(|(name, harness)| harness.as_ref().map(|_| name))
         .collect();
     if configured.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     // At `now_ms`: the claim records it as `claimed_at_ms`.
     let started = Instant::now();
-    let Some(claimed) = store::claim(pool, Way::Login, &configured, runner, now_ms).await? else {
-        return Ok(false);
-    };
+    let claimed = store::claim(pool, Way::Login, &configured, runner, now_ms).await?;
+    Ok(claimed.map(|claimed| Job {
+        claimed,
+        now_ms,
+        started,
+    }))
+}
+
+/// Runs a claimed task and records the answer or the candidate's failure.
+async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> {
+    let Job {
+        claimed,
+        now_ms,
+        started,
+    } = job;
     let finished = || {
         let elapsed = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
         now_ms.saturating_add(elapsed)
     };
     let stop_after = u64::try_from(claimed.stop_at_ms() - now_ms).unwrap_or(0);
-    let session = Session::default();
+    let stop_at = started + Duration::from_millis(stop_after);
+    let session = Session::new(stop_at);
     let run = run_candidate(config, &claimed, &session);
     tokio::pin!(run);
     let ran = tokio::select! {
         biased;
         result = &mut run => Some(result),
-        () = tokio::time::sleep_until((started + Duration::from_millis(stop_after)).into()) => None,
+        () = tokio::time::sleep_until(stop_at.into()) => None,
     };
     let (id, index) = (claimed.id, claimed.candidate_index);
     let Some(result) = ran else {
-        session.stop();
+        session.terminate();
         let harness = claimed.candidate.harness.as_deref().unwrap_or("native");
         let detail = claimed.unanswered(harness);
         let reason = Reason::DeadlineExceeded;
-        let reported = store::fail_candidate(pool, id, index, reason, &detail, finished()).await;
-        // The killed run still reaps the native, copies a refreshed login
-        // back and removes its directories; its outcome is not used.
-        let _ = run.await;
-        reported?;
-        return Ok(true);
+        let report = store::fail_candidate(pool, id, index, reason, &detail, finished());
+        // The run's outcome is not used; it still has to reap the native,
+        // copy a refreshed login back and remove its directories.
+        let end = async {
+            let grace = Duration::from_millis(TERM_GRACE_MS);
+            if tokio::time::timeout(grace, &mut run).await.is_err() {
+                session.kill();
+                let _ = run.await;
+            }
+        };
+        // The report is polled first and does not wait for the run to end.
+        let (reported, ()) = tokio::join!(report, end);
+        return Ok(reported?);
     };
     let request = &claimed.request;
     let checked = result.and_then(|(raw, usage)| {
@@ -187,7 +343,7 @@ pub async fn tick(
             store::fail_candidate(pool, id, index, reason, &detail, finished).await
         }
     }?;
-    Ok(true)
+    Ok(())
 }
 
 /// Runs `claimed` on the harness its candidate names, in `session`.
@@ -199,10 +355,7 @@ async fn run_candidate(
     let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
     let harness = claimed.candidate.harness.as_deref();
     match (harness, &config.codex, &config.claude) {
-        _ if claimed.budget_ms() == 0 => Err(failure(
-            Reason::DeadlineExceeded,
-            "the task deadline passed before the run",
-        )),
+        _ if claimed.budget_ms() == 0 => Err(failure(Reason::DeadlineExceeded, DEADLINE_PASSED)),
         (Some("codex"), Some(h), _) => {
             codex::codex(h, homes, scratch, claimed, identity, session).await
         }
@@ -243,7 +396,8 @@ async fn in_run_dirs<T>(
         private_parent(parent, identity)
             .map_err(|_| failure(Reason::ProviderError, "internal work directories rejected"))?;
     }
-    let executable = verify_native(&h.native, &h.native_digest, identity)
+    let executable = h
+        .verified_native(identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "native executable refused"))?;
     let name = uuid::Uuid::new_v4().to_string();
     let (home, cwd) = (homes.join(&name), scratch.join(&name));
@@ -290,22 +444,30 @@ fn private_parent(dir: &Path, identity: Identity) -> anyhow::Result<()> {
 /// pipe no longer than this.
 const DRAIN_MS: u64 = 500;
 
-/// The process session a native leads, so that [`tick`] can stop the run
-/// from outside it. A stop before the spawn keeps the native from starting.
-#[derive(Default)]
-struct Session(std::sync::Mutex<SessionState>);
+/// The process session a native leads, so that the runner can stop the run
+/// from outside it. No native starts once the session was stopped or its
+/// stop time has passed.
+struct Session {
+    state: std::sync::Mutex<SessionState>,
+    stop_at: Instant,
+}
 
-#[derive(Default)]
 enum SessionState {
-    #[default]
     NotStarted,
     Running(i32),
     Stopped,
 }
 
 impl Session {
+    fn new(stop_at: Instant) -> Self {
+        Session {
+            state: std::sync::Mutex::new(SessionState::NotStarted),
+            stop_at,
+        }
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, SessionState> {
-        self.0
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -315,7 +477,8 @@ impl Session {
         command: &mut tokio::process::Command,
     ) -> std::io::Result<tokio::process::Child> {
         let mut state = self.state();
-        if matches!(*state, SessionState::Stopped) {
+        if matches!(*state, SessionState::Stopped) || Instant::now() >= self.stop_at {
+            *state = SessionState::Stopped;
             return Err(std::io::Error::other("the run was stopped"));
         }
         let child = command.spawn()?;
@@ -324,9 +487,21 @@ impl Session {
         Ok(child)
     }
 
-    /// Kills every process left in the session, and keeps a native that has
-    /// not started from starting.
-    fn stop(&self) {
+    /// Asks every process in the session to end (SIGTERM), and keeps a
+    /// native that has not started from starting.
+    fn terminate(&self) {
+        let mut state = self.state();
+        match *state {
+            SessionState::Running(pid) => unsafe {
+                libc::kill(-pid, libc::SIGTERM);
+            },
+            _ => *state = SessionState::Stopped,
+        }
+    }
+
+    /// Kills every process left in the session (SIGKILL), and keeps a
+    /// native that has not started from starting.
+    fn kill(&self) {
         let mut state = self.state();
         if let SessionState::Running(pid) = *state {
             unsafe {
@@ -340,8 +515,8 @@ impl Session {
 /// Spawns `command` in `session`, writes `prompt` to its stdin, reads its
 /// stdout and waits for it to exit. Once it has exited, whatever is left of
 /// its session is killed and stdout read for at most [`DRAIN_MS`] more, so a
-/// grandchild holding the pipe cannot hold up the result. [`Session::stop`]
-/// ends the run the same way.
+/// grandchild holding the pipe cannot hold up the result. [`Session::terminate`]
+/// and [`Session::kill`] end the run the same way.
 async fn execute(
     command: std::process::Command,
     prompt: String,
@@ -375,7 +550,7 @@ async fn execute(
                 }
             },
             exited = child.wait(), if status.is_none() => {
-                session.stop();
+                session.kill();
                 status = Some(exited?);
                 let drain = Duration::from_millis(DRAIN_MS);
                 drain_until = Some(tokio::time::Instant::now() + drain);

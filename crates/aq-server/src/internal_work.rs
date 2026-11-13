@@ -49,7 +49,7 @@ impl InternalWork {
     pub async fn run(&self, request: Request) -> Result<Outcome, AppError> {
         Ok(self.service()?.run(&request).await?)
     }
-    /// Runs the loop (`Service::serve`, which calls `Service::tick`) until `stop`.
+    /// Runs the loop (`Service::serve`: the sweep and the API attempts) until `stop`.
     pub async fn serve(self, stop: tokio::sync::watch::Receiver<bool>) {
         if let Some(service) = self.0 {
             service.serve(stop).await;

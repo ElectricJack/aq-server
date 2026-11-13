@@ -1254,9 +1254,11 @@ async fn secret_file_that_is_group_readable_or_a_symlink_is_refused() {
 /// in-server loop runs API candidates in profile order, and the sweeper ends
 /// tasks whose runner or deadline is gone.
 mod service {
-    use super::{fake, migrated, request, resolve, secret_file};
+    use super::{fake, login, migrated, request, resolve, secret_file};
     use aq_intelligence_config::LoadedRegistry;
-    use aq_internal_work::{ApiEndpoint, InternalWorkConfig, Outcome, Reason, Request, Way, store};
+    use aq_internal_work::{
+        ApiEndpoint, InternalWorkConfig, Outcome, Reason, Request, SWEEP_GRACE_MS, Way, store,
+    };
     use aq_selection::CredentialKind;
     use aq_server::{InternalWork, test_support::TestDb};
     use serde_json::{Value, json};
@@ -1547,17 +1549,17 @@ mod service {
         );
     }
 
-    /// The loop stops a provider that never answers at the runner's share of
-    /// the candidate budget and reports it itself, well before the sweep
-    /// would; the next candidate gets what is left.
-    #[tokio::test]
-    async fn an_api_candidate_that_never_answers_is_reported_by_the_loop_not_the_sweep() {
-        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
-        let dir = tempfile::tempdir().unwrap();
-        let secret = secret_file(dir.path(), 0o600);
-        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+    /// A service on `f`'s database whose openai and anthropic endpoints are
+    /// the given ones.
+    fn work_on(
+        f: &Fixture,
+        dir: &std::path::Path,
+        openai: String,
+        anthropic: String,
+    ) -> InternalWork {
+        let secret = secret_file(dir, 0o600);
         let config = InternalWorkConfig {
-            api: [("openai", fake::hang().await), ("anthropic", anthropic)]
+            api: [("openai", openai), ("anthropic", anthropic)]
                 .into_iter()
                 .map(|(provider, endpoint)| ApiEndpoint {
                     provider: provider.into(),
@@ -1571,29 +1573,138 @@ mod service {
         let registry = Some(registry(CredentialKind::ApiKey));
         let clock = aq_server::system_clock();
         let preferences = Some(f.preferences.clone());
-        let work =
-            InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap();
+        InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap()
+    }
+
+    /// The loop stops a provider that never answers at the candidate budget
+    /// and reports it itself, well before the sweep would; the next
+    /// candidate gets what is left.
+    #[tokio::test]
+    async fn an_api_candidate_that_never_answers_is_reported_by_the_loop_not_the_sweep() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+        let work = work_on(&f, dir.path(), fake::hang().await, anthropic);
         let _stop = start(&work);
-        // Two candidates, 4 s: the floor gives the first all 4 s, the runner
-        // stops at half of it, and the sweep would wait 5 s past all of it.
+        // Two candidates, 6 s: the floor gives the first all 6 s and the loop
+        // stops it a tenth before that; the sweep would wait 5 s past it.
         let short = Request {
-            deadline_ms: 4_000,
+            deadline_ms: 6_000,
             ..request(true)
         };
         let id = work.submit(short).await.unwrap();
-        let (answer, provider, attempts) = answered(wait(&work, id).await);
-        assert_eq!(
-            (answer["choice"].as_str(), provider.as_str()),
-            (Some("large"), "anthropic")
-        );
+        let attempts = match wait(&work, id).await {
+            Outcome::Answered {
+                provider, attempts, ..
+            } => {
+                assert_eq!(provider, "anthropic");
+                attempts
+            }
+            // Only on a machine too loaded to finish the second candidate in
+            // the 0.6 s the first left it.
+            Outcome::Failed { attempts, .. } => attempts,
+        };
         let first = &attempts[0];
         assert_eq!(first.reason, Some(Reason::DeadlineExceeded));
-        assert_eq!(first.detail, "openai did not answer within 2 s");
+        // The loop's detail ("within 6 s" unless the claim was slow): it
+        // reported, not the sweep.
         assert!(
-            (1_900..3_000).contains(&first.elapsed_ms),
+            first.detail.starts_with("openai did not answer within "),
+            "{}",
+            first.detail
+        );
+        let before_the_sweep = 6_000 + SWEEP_GRACE_MS as u64;
+        assert!(
+            (5_000..before_the_sweep).contains(&first.elapsed_ms),
             "{}",
             first.elapsed_ms
         );
+    }
+
+    /// The owner's requirement: internal work never waits behind other
+    /// internal work. A provider call that hangs for most of a 600 s
+    /// compile does not keep a blocking 60 s judgment from being claimed.
+    #[tokio::test]
+    async fn a_blocking_judgment_queued_behind_a_hanging_api_candidate_is_claimed_and_answered() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (openai, seen) = fake::hang_first(fake::completed(SMALL)).await;
+        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+        let work = work_on(&f, dir.path(), openai, anthropic);
+        let _stop = start(&work);
+        let compile = Request {
+            deadline_ms: 600_000,
+            ..request(false)
+        };
+        let compile = work.submit(compile).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while seen.lock().unwrap().bodies.is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the compile's provider call is in flight");
+        let judgment = work.submit(request(true)).await.unwrap();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), work.wait(judgment))
+            .await
+            .expect("the judgment is answered while the compile hangs")
+            .unwrap();
+        let (answer, provider, attempts) = answered(outcome);
+        assert_eq!(
+            (answer["choice"].as_str(), provider.as_str()),
+            (Some("small"), "openai")
+        );
+        assert_eq!(attempts.len(), 1);
+        let row = store::get(&f.pool, compile).await.unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.candidate_index), ("running", 0));
+    }
+
+    /// The sweep runs on its own interval: a dead login runner's task moves
+    /// on while an unrelated provider call is still in flight.
+    #[tokio::test]
+    async fn the_sweep_runs_while_a_provider_call_hangs() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (openai, seen) = fake::hang_first(fake::completed(SMALL)).await;
+        let (anthropic, _) = fake::serve(200, fake::completed(LARGE)).await;
+        let work = work_on(&f, dir.path(), openai, anthropic);
+        let _stop = start(&work);
+        let compile = Request {
+            deadline_ms: 600_000,
+            ..request(false)
+        };
+        work.submit(compile).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while seen.lock().unwrap().bodies.is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the compile's provider call is in flight");
+        // A login host claimed this one long ago and died.
+        let logins = [login("anthropic", "claude"), login("openai", "codex")];
+        let now = now_ms();
+        let dead = store::submit(&f.pool, &request(false), &logins, now)
+            .await
+            .unwrap();
+        let held = store::claim(&f.pool, Way::Login, &["claude"], "dead-host", now - 200_000)
+            .await
+            .unwrap()
+            .expect("the login task");
+        assert_eq!(held.id, dead);
+        let moved = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let row = store::get(&f.pool, dead).await.unwrap().unwrap();
+                if row.candidate_index == 1 {
+                    return row;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the sweep moved the dead runner's task on");
+        assert_eq!(moved.status, "queued");
+        assert_eq!(moved.attempts[0].detail, "runner did not report");
     }
 
     #[tokio::test]

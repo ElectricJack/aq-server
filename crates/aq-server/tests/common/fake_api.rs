@@ -63,6 +63,37 @@ pub async fn hang() -> String {
     format!("http://{addr}/v1/responses")
 }
 
+/// Records every request; never answers the first and answers every later
+/// one with 200 and `reply`. Returns its endpoint.
+pub async fn hang_first(reply: Value) -> (String, Arc<Mutex<Seen>>) {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let app = Router::new()
+        .route(
+            "/v1/responses",
+            post(
+                move |State(seen): State<Arc<Mutex<Seen>>>, axum::Json(body): axum::Json<Value>| {
+                    let reply = reply.clone();
+                    async move {
+                        let first = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.bodies.push(body);
+                            seen.bodies.len() == 1
+                        };
+                        if first {
+                            std::future::pending::<()>().await;
+                        }
+                        axum::Json(reply)
+                    }
+                },
+            ),
+        )
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}/v1/responses"), seen)
+}
+
 pub fn completed(text: &str) -> Value {
     json!({
         "status": "completed",

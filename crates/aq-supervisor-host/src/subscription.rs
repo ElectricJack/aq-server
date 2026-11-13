@@ -239,6 +239,18 @@ pub(crate) fn verify_native(
     digest: &Digest,
     identity: Identity,
 ) -> Result<std::fs::File> {
+    let executable = open_native(native, identity)?;
+    ensure!(
+        file_digest(&executable)? == digest.as_str(),
+        "native digest mismatch"
+    );
+    Ok(executable)
+}
+
+/// Opens `native` without following a symlink and checks the file, but not
+/// its digest: a regular, executable file of at most 512 MiB, owned by
+/// `identity.executable_owner` and not writable by group or others.
+pub(crate) fn open_native(native: &Path, identity: Identity) -> Result<std::fs::File> {
     let executable = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -252,12 +264,17 @@ pub(crate) fn verify_native(
             && metadata.len() <= 512 * 1024 * 1024,
         "native executable rejected"
     );
-    let mut bytes = Vec::new();
-    (&executable)
-        .take(512 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(Digest::of(&bytes) == *digest, "native digest mismatch");
     Ok(executable)
+}
+
+/// The SHA-256 of `file` read from its current offset (the start, when it
+/// was just opened), in lowercase hex as [`Digest::of`] gives it. It streams
+/// the file instead of holding it in memory.
+pub(crate) fn file_digest(file: &std::fs::File) -> Result<String> {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    std::io::copy(&mut file.take(512 * 1024 * 1024 + 1), &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// The `codex exec` arguments before the `--config` overrides.

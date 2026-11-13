@@ -2,7 +2,8 @@
 
 The internal work host is `aq-supervisor-host internal <CONFIG>`. It claims
 queued internal tasks that use a subscription login (Codex or Claude) from the
-database and runs the model CLI for each, one at a time. Spec:
+database and runs the model CLI for each, up to two at a time, so that one long
+run does not keep the next task waiting. Spec:
 [0012 internal work](../specs/0012-internal-work.md). Build notes:
 [implementation](../implementation/0012-internal-work.md).
 
@@ -122,10 +123,30 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   is `internal-host:<hostname>`:
   `SELECT id, status, runner FROM internal_tasks WHERE status = 'running';`
 - The host prints no line when it claims a task. Its only log lines are
-  `internal work: tick failed` (a poll failed; it retries after `poll_ms`) and
+  `internal work: claim failed` (a poll failed; it retries after `poll_ms`),
+  `internal work: run failed` (recording a run's result failed),
+  `internal work: a native executable was refused` (at start, a native whose
+  SHA-256 does not match the config; its runs fail) and
   `internal work: login refresh was not copied back`. Secrets never appear in logs.
-- A container that stays up with no `tick failed` lines and no failed rows is
-  polling. A bad config makes the process exit at start with the reason on stderr.
+- A container that stays up with no `claim failed` or `run failed` lines and no
+  failed rows is polling. A bad config makes the process exit at start with the
+  reason on stderr.
+- Each native is hashed when the host starts and again only when its file's
+  device, inode, size, mtime or ctime change.
+
+## Time limits
+
+- Each candidate's budget is the time left to the task deadline when it is
+  claimed, shared evenly among the candidates not yet tried, at least 30 s and
+  never more than is left. The host and the server stop a candidate at most 1 s
+  before its budget ends and record `deadline_exceeded` with "`<harness>` did not
+  answer within N s".
+- The server's sweep fails a `running` candidate 5 s after its budget ends, with
+  "runner did not report". That means the runner died or lost the database.
+- The sweep compares the server's clock with the claim time the host wrote, so
+  the host's and the server's clocks must agree to well under those 5 s (NTP).
+- The server runs up to four API tasks at once and sweeps on its own interval,
+  so a slow provider call holds up neither other tasks nor the sweep.
 
 ## Capacity
 

@@ -43,6 +43,10 @@ pub fn settings_choices(
     })
 }
 
+/// How many API tasks the in-server loop runs at once, so that one slow
+/// provider call does not hold up the tasks queued behind it.
+pub const API_CONCURRENCY: usize = 4;
+
 pub struct Service {
     pool: PgPool,
     now: Now,
@@ -230,28 +234,24 @@ impl Service {
         self.wait(id).await
     }
 
-    /// Sweeps, then runs one queued API task end to end: the provider call,
-    /// the answer check, then the answer or the candidate's failure. False
-    /// when no API task was queued, or with `enabled = false`, which only
-    /// stops claiming.
-    pub async fn tick(&self) -> Result<bool> {
+    /// Runs one claimed API task end to end: the provider call, stopped at
+    /// [`Claimed::stop_at_ms`], the answer check, then the answer or the
+    /// candidate's failure.
+    async fn attempt(&self, claimed: Claimed) -> Result<()> {
         let (pool, now) = (&self.pool, &self.now);
-        store::sweep(pool, now()).await?;
-        if !self.enabled {
-            return Ok(false);
-        }
-        let Some(claimed) = store::claim(pool, Way::Api, &[], &self.runner, now()).await? else {
-            return Ok(false);
+        let result = if claimed.budget_ms() == 0 {
+            Err((Reason::DeadlineExceeded, DEADLINE_PASSED.to_owned()))
+        } else {
+            // ApiBackend stops at the task deadline; this stops at the
+            // candidate budget, counted from the claim, so the failure is
+            // recorded here before the sweep would take it.
+            let wait_ms = u64::try_from(claimed.stop_at_ms() - now()).unwrap_or(0);
+            let sent = tokio::time::timeout(Duration::from_millis(wait_ms), self.api.run(&claimed));
+            sent.await.unwrap_or_else(|_| {
+                let detail = claimed.unanswered(&claimed.candidate.provider);
+                Err((Reason::DeadlineExceeded, detail))
+            })
         };
-        // ApiBackend stops at the task deadline; this stops at the runner's
-        // share of the candidate budget, counted from the claim, so the
-        // failure is recorded here before the sweep would take it.
-        let wait_ms = u64::try_from(claimed.stop_at_ms() - now()).unwrap_or(0);
-        let sent = tokio::time::timeout(Duration::from_millis(wait_ms), self.api.run(&claimed));
-        let result = sent.await.unwrap_or_else(|_| {
-            let detail = claimed.unanswered(&claimed.candidate.provider);
-            Err((Reason::DeadlineExceeded, detail))
-        });
         let request = &claimed.request;
         let checked = result.and_then(|(raw, usage)| {
             validate::answer(&request.answer, &raw, request.max_output_bytes)
@@ -266,30 +266,62 @@ impl Service {
             Err((reason, detail)) => {
                 store::fail_candidate(pool, id, index, reason, &detail, now()).await
             }
-        }?;
-        Ok(true)
+        }
     }
 
-    /// The in-server loop: ticks until no API task is queued, runs the
-    /// escalation step, then sleeps the poll interval, until `stop` turns true
-    /// or its sender is gone. It runs regardless of swarm availability, and
-    /// with `enabled = false` it still sweeps and escalates but claims nothing.
-    pub async fn serve(&self, mut stop: tokio::sync::watch::Receiver<bool>) {
+    /// The in-server loop, until `stop` turns true or its sender is gone. Two
+    /// loops run side by side, so neither waits for the other: every poll
+    /// interval the sweep and the escalation step run, and queued API tasks
+    /// are claimed while fewer than [`API_CONCURRENCY`] run, each in its own
+    /// task. It runs regardless of swarm availability, and with
+    /// `enabled = false` it still sweeps and escalates but claims nothing.
+    pub async fn serve(self: Arc<Self>, stop: tokio::sync::watch::Receiver<bool>) {
+        tokio::join!(self.sweep_loop(stop.clone()), self.claim_loop(stop));
+    }
+
+    /// Sweeps and runs the escalation step every poll interval.
+    async fn sweep_loop(&self, mut stop: tokio::sync::watch::Receiver<bool>) {
         while !*stop.borrow() {
+            if let Err(error) = store::sweep(&self.pool, (self.now)()).await {
+                tracing::warn!(?error, "internal work sweep failed");
+            }
             if let Err(error) = self.escalate().await {
                 tracing::warn!(?error, "internal work escalation failed");
             }
-            loop {
-                match self.tick().await {
-                    Ok(true) => continue,
-                    Ok(false) => break,
+            tokio::select! {
+                _ = tokio::time::sleep(self.poll) => {}
+                changed = stop.changed() => if changed.is_err() { return },
+            }
+        }
+    }
+
+    /// Claims queued API tasks while fewer than [`API_CONCURRENCY`] run and
+    /// runs each in its own task; looks again when one ends or after the
+    /// poll interval. Stopping drops the tasks still running; the sweep
+    /// moves them on.
+    async fn claim_loop(self: &Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) {
+        let mut running = tokio::task::JoinSet::new();
+        while !*stop.borrow() {
+            while self.enabled && running.len() < API_CONCURRENCY {
+                let claimed = store::claim(&self.pool, Way::Api, &[], &self.runner, (self.now)());
+                match claimed.await {
+                    Ok(Some(claimed)) => {
+                        let service = Arc::clone(self);
+                        running.spawn(async move { service.attempt(claimed).await });
+                    }
+                    Ok(None) => break,
                     Err(error) => {
-                        tracing::warn!(?error, "internal work tick failed");
+                        tracing::warn!(?error, "internal work claim failed");
                         break;
                     }
                 }
             }
             tokio::select! {
+                Some(ended) = running.join_next(), if !running.is_empty() => match ended {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(?error, "internal work attempt failed"),
+                    Err(error) => tracing::warn!(?error, "internal work attempt panicked"),
+                },
                 _ = tokio::time::sleep(self.poll) => {}
                 changed = stop.changed() => if changed.is_err() { return },
             }

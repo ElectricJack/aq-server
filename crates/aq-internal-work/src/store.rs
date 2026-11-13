@@ -360,8 +360,8 @@ const BUDGET_SQL: &str = "GREATEST(0, LEAST(deadline_at_ms-claimed_at_ms,
 /// changed. A `running` task whose runner has not reported within its
 /// candidate budget ([`candidate_budget_ms`]) plus [`SWEEP_GRACE_MS`] fails
 /// that candidate as `deadline_exceeded` with "runner did not report": a
-/// live runner stops and reports [`RUNNER_MARGIN_MS`] before the budget ends,
-/// so only a runner that died gets here. The task moves on to the next
+/// live runner stops and reports by the end of the budget, so only a runner
+/// that died gets here. The task moves on to the next
 /// candidate, never back to `queued` on the same one, so a late runner stays
 /// fenced out. A `queued` task past its deadline fails `deadline_exceeded`.
 pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {

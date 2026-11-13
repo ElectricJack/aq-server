@@ -31,10 +31,12 @@ pub const DEADLINE_MS: std::ops::RangeInclusive<u64> = 1_000..=900_000;
 pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
 /// The smallest candidate budget, unless less time is left to the deadline.
 pub const MIN_CANDIDATE_BUDGET_MS: i64 = 30_000;
-/// How long before the end of its candidate budget a runner stops the
-/// candidate and reports it, so that the sweep, which waits
-/// [`SWEEP_GRACE_MS`] past the full budget, only catches a runner that died.
-pub const RUNNER_MARGIN_MS: i64 = 5_000;
+/// The most a runner stops a candidate before the end of its budget, so the
+/// attempt is recorded within the budget. The sweep waits [`SWEEP_GRACE_MS`]
+/// past the full budget, so it only catches a runner that died.
+pub const RUNNER_MARGIN_MS: i64 = 1_000;
+/// The failure detail of a candidate claimed with no time left.
+pub const DEADLINE_PASSED: &str = "the task deadline passed before the run";
 /// How long past its candidate budget a runner may take to report before the
 /// sweeper takes the candidate back.
 pub const SWEEP_GRACE_MS: i64 = 5_000;
@@ -60,10 +62,10 @@ pub fn candidate_budget_ms(
 }
 
 /// How long after the claim a runner stops a candidate with `budget_ms` and
-/// reports it: [`RUNNER_MARGIN_MS`] before the end of the budget, but never
-/// before half of it.
+/// reports it: at the end of the budget, less [`RUNNER_MARGIN_MS`] or a
+/// tenth of the budget, whichever is smaller.
 pub fn runner_budget_ms(budget_ms: i64) -> i64 {
-    (budget_ms - RUNNER_MARGIN_MS).max(budget_ms / 2)
+    budget_ms - RUNNER_MARGIN_MS.min(budget_ms / 10)
 }
 /// A purpose with this many failed runs within [`FAILURE_BURST_WINDOW_MS`]
 /// goes to a supervisor even when no run asked to escalate (spec 0012 §8).
@@ -357,14 +359,15 @@ mod tests {
     }
 
     #[test]
-    fn a_runner_stops_its_margin_before_the_budget_but_never_before_half_of_it() {
-        assert_eq!(RUNNER_MARGIN_MS, 5_000);
+    fn a_runner_stops_at_most_a_second_and_at_most_a_tenth_before_the_budget() {
+        assert_eq!(RUNNER_MARGIN_MS, 1_000);
         for (budget, runner) in [
-            (300_000, 295_000),
-            (30_000, 25_000),
-            (10_000, 5_000),
-            (4_000, 2_000),
-            (1_000, 500),
+            (300_000, 299_000),
+            (30_000, 29_000),
+            (10_000, 9_000),
+            (6_000, 5_400),
+            (1_000, 900),
+            (9, 9),
             (0, 0),
         ] {
             assert_eq!(runner_budget_ms(budget), runner, "budget {budget}");

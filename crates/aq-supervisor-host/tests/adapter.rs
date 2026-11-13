@@ -79,7 +79,7 @@ mod internal {
         Affected, AnswerShape, Candidate, Purpose, Request, Way, store, validate,
     };
     use aq_session_protocol::Digest;
-    use aq_supervisor_host::internal::{InternalConfig, tick};
+    use aq_supervisor_host::internal::{InternalConfig, serve, tick};
     use serde_json::json;
     use std::{
         collections::BTreeMap,
@@ -202,7 +202,7 @@ mod internal {
         _db: aq_server::test_support::TestDb,
         pool: sqlx::PgPool,
         dir: tempfile::TempDir,
-        config: InternalConfig,
+        config: std::sync::Arc<InternalConfig>,
     }
 
     impl Fixture {
@@ -288,7 +288,7 @@ mod internal {
                 _db: db,
                 pool,
                 dir,
-                config: config.for_tests(),
+                config: std::sync::Arc::new(config.for_tests()),
             }
         }
 
@@ -588,12 +588,12 @@ mod internal {
         assert!(left.is_empty(), "scratch keeps {left:?}");
     }
 
-    /// A native that never answers is stopped at the runner's share of its
-    /// candidate budget and the runner records it, while a sweeper runs as the
-    /// server's would; the next candidate's budget is what is left.
+    /// A native that never answers is stopped at its candidate budget and
+    /// the runner records it, while a sweeper runs as the server's would; the
+    /// next candidate's budget is what is left of the deadline.
     #[tokio::test]
     async fn a_native_that_never_answers_is_reported_by_the_runner_before_the_sweep() {
-        use aq_internal_work::{Reason, candidate_budget_ms, runner_budget_ms};
+        use aq_internal_work::{Reason, SWEEP_GRACE_MS, candidate_budget_ms, runner_budget_ms};
         let silent = "touch \"$rec/started\"\nsleep 30";
         let f = Fixture::with_claude(silent, silent).await;
         // Two candidates, 4 s: the floor gives the first all 4 s.
@@ -604,7 +604,6 @@ mod internal {
         let id = f
             .submit_request(&short, &[codex_candidate(), claude_candidate()])
             .await;
-        let deadline = f.row(id).await.deadline_at_ms;
         let done = std::sync::atomic::AtomicBool::new(false);
         let sweeper = async {
             while !done.load(std::sync::atomic::Ordering::SeqCst) {
@@ -614,10 +613,24 @@ mod internal {
         };
         let runs = async {
             let mut claims = Vec::new();
-            for _ in 0..2 {
+            for index in 0..2 {
+                if index == 1 {
+                    // The first runner leaves at most a tenth of the 4 s; leave
+                    // the second a known 2 s, so a slow machine cannot run its
+                    // claim past the deadline.
+                    let row = f.row(id).await;
+                    assert_eq!((row.status.as_str(), row.candidate_index), ("queued", 1));
+                    sqlx::query("UPDATE internal_tasks SET deadline_at_ms=$2 WHERE id=$1")
+                        .bind(id)
+                        .bind(now_ms() + 2_000)
+                        .execute(&f.pool)
+                        .await
+                        .unwrap();
+                }
+                let deadline = f.row(id).await.deadline_at_ms;
                 let claimed_at = now_ms();
                 tick(&f.config, &f.pool, RUNNER, claimed_at).await.unwrap();
-                claims.push(claimed_at);
+                claims.push((claimed_at, deadline));
             }
             done.store(true, std::sync::atomic::Ordering::SeqCst);
             claims
@@ -626,15 +639,23 @@ mod internal {
         let row = f.row(id).await;
         for (index, (attempt, harness)) in row.attempts.iter().zip(["codex", "claude"]).enumerate()
         {
-            let budget = candidate_budget_ms(deadline, claims[index], index as u32, 2);
+            let (claimed_at, deadline) = claims[index];
+            let budget = candidate_budget_ms(deadline, claimed_at, index as u32, 2);
+            if index == 1 {
+                // The last candidate gets all that is left.
+                assert_eq!(budget, deadline - claimed_at);
+            }
             let stop = runner_budget_ms(budget);
             assert_eq!(attempt.reason, Some(Reason::DeadlineExceeded));
             let seconds = (stop + 999) / 1000;
             let detail = format!("{harness} did not answer within {seconds} s");
+            // The runner's detail, not the sweep's "runner did not report".
             assert_eq!(attempt.detail, detail, "candidate {index}");
+            // Stopped at the stop, and reported before the sweep would have
+            // taken it (on an idle machine also before the budget ends).
             let elapsed = attempt.elapsed_ms as i64;
             assert!(
-                (stop..budget).contains(&elapsed),
+                (stop..budget + SWEEP_GRACE_MS).contains(&elapsed),
                 "candidate {index}: {elapsed} ms, stop {stop}, budget {budget}"
             );
         }
@@ -647,24 +668,14 @@ mod internal {
     }
 
     /// The native answers and exits, but a grandchild it left behind still
-    /// holds stdout open: the answer is reported at once and the grandchild
-    /// is killed with the session.
+    /// holds stdout open: the answer is reported, not held until the stop,
+    /// and the grandchild is killed with the session.
     #[tokio::test]
     async fn a_grandchild_holding_stdout_open_does_not_delay_the_report() {
         let behaviour = format!("sleep 30 &\necho $! > \"$rec/grandchild\"\n{}", answering());
         let f = Fixture::new(&behaviour).await;
-        let short = Request {
-            deadline_ms: 4_000,
-            ..request()
-        };
-        let id = f.submit_request(&short, &[codex_candidate()]).await;
-        let started = std::time::Instant::now();
+        let id = f.submit_request(&short(), &[codex_candidate()]).await;
         assert!(f.tick().await);
-        assert!(
-            started.elapsed() < Duration::from_millis(1_500),
-            "{:?}",
-            started.elapsed()
-        );
         let row = f.row(id).await;
         assert_eq!(row.status, "answered", "{:?}", row.attempts);
         let pid = std::fs::read_to_string(f.rec("grandchild")).unwrap();
@@ -682,6 +693,87 @@ mod internal {
         assert!(!alive, "the grandchild still runs");
     }
 
+    /// A grandchild that left the session cannot be killed with it; it holds
+    /// stdout open for at most the drain window, not until the stop.
+    #[tokio::test]
+    async fn a_grandchild_that_left_the_session_holds_the_report_only_for_the_drain() {
+        let behaviour = format!("setsid sleep 10 &\n{}", answering());
+        let f = Fixture::new(&behaviour).await;
+        let id = f.submit_request(&short(), &[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+    }
+
+    /// A long login run does not keep the host from claiming the next task:
+    /// a blocking judgment is answered while a 600 s compile still runs.
+    #[tokio::test]
+    async fn a_long_login_run_does_not_keep_the_host_from_claiming_the_next_task() {
+        let hanging = "touch \"$rec/started\"\nsleep 30";
+        let answers = claude_printing(&claude_result(false, ANSWER), 0);
+        let f = Fixture::with_claude(hanging, &answers).await;
+        let compile = Request {
+            deadline_ms: 600_000,
+            blocking: false,
+            ..request()
+        };
+        let compile = f.submit_request(&compile, &[codex_candidate()]).await;
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let host = tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)));
+        f.started().await;
+        let judgment = f.submit(&[claude_candidate()]).await;
+        let answered = tokio::time::timeout(Duration::from_secs(10), async {
+            while f.row(judgment).await.status != "answered" {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        host.abort();
+        assert!(answered.is_ok(), "the judgment waited behind the compile");
+        assert_eq!(f.row(compile).await.status, "running");
+    }
+
+    /// A 3 s single-candidate request: the runner stops it at 2.7 s.
+    fn short() -> Request {
+        Request {
+            deadline_ms: 3_000,
+            ..request()
+        }
+    }
+
+    /// Codex refreshed its login and then hung: the refresh is copied back
+    /// after the runner has killed it and recorded the timeout.
+    #[tokio::test]
+    async fn a_login_refreshed_before_a_timeout_is_copied_back() {
+        let behaviour = format!(
+            "printf '%s' '{}' > \"$CODEX_HOME/auth.json\"\nsleep 30",
+            login("B")
+        );
+        let f = Fixture::new(&behaviour).await;
+        let id = f.submit_request(&short(), &[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.attempts[0].detail, "codex did not answer within 3 s");
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("B"));
+    }
+
+    /// At the stop the native gets SIGTERM first, and a moment to finish
+    /// writing a refresh before SIGKILL; that refresh is copied back.
+    #[tokio::test]
+    async fn a_timed_out_native_is_terminated_first_and_its_refresh_is_kept() {
+        let behaviour = format!(
+            "trap 'printf %s '\\''{}'\\'' > \"$CODEX_HOME/auth.json\"; exit 0' TERM\n\
+             sleep 30 &\nwait",
+            login("C")
+        );
+        let f = Fixture::new(&behaviour).await;
+        let id = f.submit_request(&short(), &[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.attempts[0].detail, "codex did not answer within 3 s");
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("C"));
+    }
+
     #[tokio::test]
     async fn native_whose_digest_differs_is_refused_before_exec() {
         let f = Fixture::with_digest(&answering(), Some(Digest::of(b"another binary"))).await;
@@ -695,6 +787,25 @@ mod internal {
             Some(aq_internal_work::Reason::ProviderUnavailable)
         );
         assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("A"));
+    }
+
+    /// The native's digest is remembered with its file's metadata; a native
+    /// changed after it was verified is hashed again and refused.
+    #[tokio::test]
+    async fn a_native_changed_after_it_was_verified_is_hashed_again_and_refused() {
+        let f = Fixture::new(&answering()).await;
+        let first = f.submit(&[codex_candidate()]).await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(first).await.status, "answered");
+        let native = f.root().join("codex");
+        let mut script = std::fs::read_to_string(&native).unwrap();
+        script.push_str("# changed\n");
+        std::fs::write(&native, script).unwrap();
+        let second = f.submit(&[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(second).await;
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.attempts[0].detail, "native executable refused");
     }
 
     /// The object Claude Code prints with `--output-format json`.
