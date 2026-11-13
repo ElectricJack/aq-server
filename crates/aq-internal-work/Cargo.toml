@@ -5,7 +5,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+aq-intelligence-config = { path = "../aq-intelligence-config" }
 aq-profiles = { path = "../aq-profiles" }
+aq-selection = { path = "../aq-selection" }
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -311,7 +311,9 @@ dependencies = [
 name = "aq-internal-work"
 version = "0.1.0"
 dependencies = [
+ "aq-intelligence-config",
  "aq-profiles",
+ "aq-selection",
  "axum",
  "serde",
  "serde_json",

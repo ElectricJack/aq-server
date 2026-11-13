@@ -4,12 +4,14 @@
 //! (`internal_tasks`), outside the graph and outside project capacity, and
 //! tries the ordered [`Candidate`] list until one answers or the task fails.
 pub mod http;
+pub mod resolve;
 pub mod settings;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use resolve::{Resolved, resolve};
 pub use store::Row;
 
 /// Largest `Request::instructions`, in bytes.

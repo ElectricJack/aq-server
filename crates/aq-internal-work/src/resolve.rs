@@ -1,0 +1,128 @@
+//! Resolving an intelligence profile to the ordered candidates internal work
+//! tries (spec 0012 §5, §6). Pure: catalog, registry and observations come in
+//! as arguments.
+use crate::{Candidate, Reason, Way};
+use aq_intelligence_config::LoadedRegistry;
+use aq_profiles::{ModelCandidate, ValidatedCatalog};
+use aq_selection::{
+    AuthorizedCredential, Availability, AvailabilityObservation, CredentialKind, ObservationSource,
+};
+use std::collections::BTreeMap;
+
+/// The profile and the candidates left to try, in profile order.
+#[derive(Clone, Debug)]
+pub struct Resolved {
+    pub profile_id: String,
+    pub profile_version: u32,
+    pub candidates: Vec<Candidate>,
+}
+
+/// Harness ids a logged-in run can use on the server. The catalog spells the
+/// Claude harness `claude-code`.
+fn login_harness(candidate: &ModelCandidate) -> Option<&String> {
+    candidate
+        .harnesses
+        .iter()
+        .find(|h| matches!(h.as_str(), "codex" | "claude" | "claude-code"))
+}
+
+/// Same meaning as `aq_selection`'s observation evaluation: the newest
+/// observation per scope and source decides, and it counts while it is fresh
+/// and its cooldown has not passed. Observations a worker made on its own node
+/// do not describe the server's use of the credential.
+fn blocked(
+    observations: &[AvailabilityObservation],
+    credential: &AuthorizedCredential,
+    model: &str,
+    now_ms: u64,
+) -> bool {
+    let mut newest = BTreeMap::<String, &AvailabilityObservation>::new();
+    for o in observations {
+        let scope = &o.scope;
+        let matches = matches!(o.source, ObservationSource::Operator { .. })
+            && scope.node_id.is_none()
+            && scope.provider == credential.provider
+            && scope.credential_profile == credential.profile
+            && scope.credential_revision == credential.revision
+            && scope.account_reference == credential.account_reference
+            && scope.endpoint_reference == credential.endpoint_reference
+            && scope.model.as_deref().is_none_or(|m| m == model);
+        if !matches {
+            continue;
+        }
+        let Ok(key) = serde_json::to_string(&(scope, &o.source)) else {
+            continue;
+        };
+        let rank = |o: &AvailabilityObservation| (o.sequence, o.received_at_ms, o.observation_id);
+        if newest.get(&key).is_none_or(|old| rank(o) > rank(old)) {
+            newest.insert(key, o);
+        }
+    }
+    newest.values().any(|o| {
+        let fresh = o.received_at_ms > 0 && o.received_at_ms <= now_ms && now_ms < o.expires_at_ms;
+        fresh
+            && o.cooldown_until_ms > now_ms
+            && matches!(
+                o.state,
+                Availability::QuotaUnavailable
+                    | Availability::AuthenticationFailed
+                    | Availability::TemporaryUnavailable
+            )
+    })
+}
+
+/// The candidates of `profile_id` that can be tried now. A missing profile, or
+/// one with nothing usable left, is [`Reason::NoCandidate`].
+pub fn resolve(
+    catalog: &ValidatedCatalog,
+    registry: &LoadedRegistry,
+    observations: &[AvailabilityObservation],
+    profile_id: &str,
+    now_ms: u64,
+) -> Result<Resolved, Reason> {
+    let profile = catalog
+        .artifact()
+        .catalog
+        .intelligence
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or(Reason::NoCandidate)?;
+    let mut candidates = Vec::new();
+    for entry in &profile.candidates {
+        let Some((index, credential)) = registry
+            .credentials
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.enabled && c.provider == entry.provider)
+        else {
+            continue;
+        };
+        let (way, harness) = match registry.config.credentials.get(index).map(|c| c.kind) {
+            Some(CredentialKind::ApiKey) => (Way::Api, None),
+            Some(CredentialKind::SubscriptionLogin) => match login_harness(entry) {
+                Some(harness) => (Way::Login, Some(harness.clone())),
+                None => continue,
+            },
+            None => continue,
+        };
+        if blocked(observations, credential, &entry.model, now_ms) {
+            continue;
+        }
+        candidates.push(Candidate {
+            provider: entry.provider.clone(),
+            model: entry.model.clone(),
+            reasoning: entry.reasoning_configuration_reference.clone(),
+            harness,
+            way,
+            credential_index: index,
+        });
+    }
+    if candidates.is_empty() {
+        return Err(Reason::NoCandidate);
+    }
+    Ok(Resolved {
+        profile_id: profile.id.clone(),
+        profile_version: profile.version,
+        candidates,
+    })
+}

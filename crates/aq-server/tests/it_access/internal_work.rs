@@ -463,3 +463,259 @@ async fn request_bounds_are_enforced() {
         .unwrap();
     assert_eq!(none, 0);
 }
+
+/// Candidate resolution (spec 0012 §5, §6): pure, so plain tests.
+mod resolve {
+    use aq_intelligence_config::{CredentialConfig, IntelligenceConfig, LoadedRegistry};
+    use aq_internal_work::{Reason, Way, resolve};
+    use aq_profiles::{ModelCandidate, ValidatedCatalog};
+    use aq_selection::{
+        ArtifactRef, AuthorizedCredential, Availability, AvailabilityObservation, CredentialKind,
+        Digest, ObservationScope, ObservationSource, Text,
+    };
+    use uuid::Uuid;
+
+    const NOW: u64 = 1_000_000;
+
+    fn candidate(id: &str, provider: &str, harnesses: &[&str]) -> ModelCandidate {
+        ModelCandidate {
+            id: id.into(),
+            provider: provider.into(),
+            model: format!("{provider}-model"),
+            reasoning_configuration_reference: format!("{provider}-reasoning:1"),
+            harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
+        }
+    }
+
+    fn catalog(profiles: Vec<(&str, Vec<ModelCandidate>)>) -> ValidatedCatalog {
+        let base = aq_profiles::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../aq-profiles/examples/catalog"),
+        )
+        .unwrap();
+        let instructions = base.artifact().instructions.clone();
+        let mut catalog = base.artifact().catalog.clone();
+        let template = catalog.intelligence[0].clone();
+        let engineering = template.id.clone();
+        catalog.intelligence = profiles
+            .into_iter()
+            .map(|(id, candidates)| {
+                let mut profile = template.clone();
+                profile.id = id.into();
+                profile.candidates = candidates;
+                profile
+            })
+            .collect();
+        // Agents point at the example's own profile; keep it present.
+        if !catalog.intelligence.iter().any(|p| p.id == engineering) {
+            let mut keep = template;
+            keep.id = engineering;
+            catalog.intelligence.push(keep);
+        }
+        aq_profiles::validate(catalog, instructions).unwrap()
+    }
+
+    fn profile_ref(name: &str) -> ArtifactRef {
+        ArtifactRef {
+            id: Text::new(name).unwrap(),
+            version: Text::new("1").unwrap(),
+            digest: Digest::of(name.as_bytes()),
+        }
+    }
+
+    fn credential(name: &str, provider: &str, enabled: bool) -> AuthorizedCredential {
+        AuthorizedCredential {
+            profile: profile_ref(name),
+            provider: provider.into(),
+            account_reference: format!("{name}-account"),
+            endpoint_reference: format!("{name}-endpoint"),
+            revision: 1,
+            enabled,
+            provisionable: false,
+            material_owner: None,
+            allowed_backends: aq_selection::default_allowed_backends(),
+        }
+    }
+
+    fn registry(items: Vec<(AuthorizedCredential, CredentialKind)>) -> LoadedRegistry {
+        IntelligenceConfig {
+            accounting: Default::default(),
+            material_store: None,
+            revision: 1,
+            credentials: items
+                .into_iter()
+                .map(|(credential, kind)| CredentialConfig {
+                    kind,
+                    allowed_backends: aq_selection::default_allowed_backends(),
+                    credential,
+                    allowed_node_ids: vec![],
+                    allow_enrolled_nodes: true,
+                    secret_file: None,
+                    delivery_mode: None,
+                })
+                .collect(),
+            qualified_harnesses: vec![],
+        }
+        .load()
+        .unwrap()
+    }
+
+    fn observation(
+        credential: &AuthorizedCredential,
+        state: Availability,
+        expires_at_ms: u64,
+        cooldown_until_ms: u64,
+    ) -> AvailabilityObservation {
+        AvailabilityObservation {
+            observation_id: Uuid::new_v4(),
+            scope: ObservationScope {
+                credential_revision: credential.revision,
+                provider: credential.provider.clone(),
+                credential_profile: credential.profile.clone(),
+                account_reference: credential.account_reference.clone(),
+                endpoint_reference: credential.endpoint_reference.clone(),
+                model: None,
+                node_id: None,
+            },
+            source: ObservationSource::Operator {
+                principal_id: Uuid::from_u128(1),
+            },
+            sequence: 1,
+            revision: 1,
+            state,
+            received_at_ms: NOW - 10,
+            expires_at_ms,
+            cooldown_until_ms,
+        }
+    }
+
+    fn two_providers() -> (ValidatedCatalog, LoadedRegistry, AuthorizedCredential) {
+        let catalog = catalog(vec![(
+            "internal",
+            vec![
+                candidate("a", "anthropic", &["claude-code"]),
+                candidate("o", "openai", &["codex"]),
+            ],
+        )]);
+        let login = credential("anthropic-login", "anthropic", true);
+        let registry = registry(vec![
+            (login.clone(), CredentialKind::SubscriptionLogin),
+            (
+                credential("openai-key", "openai", true),
+                CredentialKind::ApiKey,
+            ),
+        ]);
+        (catalog, registry, login)
+    }
+
+    #[test]
+    fn candidates_keep_profile_order_and_carry_the_way_of_their_credential() {
+        let (catalog, registry, _) = two_providers();
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        assert_eq!(resolved.profile_id, "internal");
+        assert_eq!(resolved.profile_version, 1);
+        let got: Vec<_> = resolved
+            .candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.provider.as_str(),
+                    c.way,
+                    c.harness.as_deref(),
+                    c.credential_index,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("anthropic", Way::Login, Some("claude-code"), 0),
+                ("openai", Way::Api, None, 1),
+            ]
+        );
+        assert_eq!(resolved.candidates[0].reasoning, "anthropic-reasoning:1");
+        assert_eq!(resolved.candidates[1].model, "openai-model");
+    }
+
+    #[test]
+    fn quota_unavailable_login_is_skipped_so_the_next_provider_is_first() {
+        let (catalog, registry, login) = two_providers();
+        for state in [
+            Availability::QuotaUnavailable,
+            Availability::AuthenticationFailed,
+            Availability::TemporaryUnavailable,
+        ] {
+            let seen = [observation(&login, state, NOW + 60_000, NOW + 30_000)];
+            let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
+            assert_eq!(resolved.candidates.len(), 1, "{state:?}");
+            assert_eq!(resolved.candidates[0].provider, "openai");
+        }
+        let available = [observation(
+            &login,
+            Availability::Available,
+            NOW + 60_000,
+            0,
+        )];
+        let resolved = resolve(&catalog, &registry, &available, "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates[0].provider, "anthropic");
+    }
+
+    #[test]
+    fn expired_observation_does_not_skip() {
+        let (catalog, registry, login) = two_providers();
+        let cooled = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, NOW);
+        let lapsed = observation(&login, Availability::QuotaUnavailable, NOW, NOW + 30_000);
+        for seen in [cooled, lapsed] {
+            let resolved = resolve(&catalog, &registry, &[seen], "internal", NOW).unwrap();
+            assert_eq!(resolved.candidates[0].provider, "anthropic");
+        }
+    }
+
+    #[test]
+    fn missing_profile_and_profile_without_usable_credentials_are_no_candidate() {
+        let (catalog, usable, _) = two_providers();
+        assert_eq!(
+            resolve(&catalog, &usable, &[], "nope", NOW).unwrap_err(),
+            Reason::NoCandidate
+        );
+        let disabled = registry(vec![
+            (
+                credential("anthropic-login", "anthropic", false),
+                CredentialKind::SubscriptionLogin,
+            ),
+            (
+                credential("elsewhere", "other", true),
+                CredentialKind::ApiKey,
+            ),
+        ]);
+        assert_eq!(
+            resolve(&catalog, &disabled, &[], "internal", NOW).unwrap_err(),
+            Reason::NoCandidate
+        );
+    }
+
+    #[test]
+    fn login_candidate_whose_only_harness_is_gemini_is_dropped() {
+        let catalog = catalog(vec![(
+            "internal",
+            vec![
+                candidate("g", "google", &["gemini"]),
+                candidate("o", "openai", &["codex", "gemini"]),
+            ],
+        )]);
+        let registry = registry(vec![
+            (
+                credential("google-login", "google", true),
+                CredentialKind::SubscriptionLogin,
+            ),
+            (
+                credential("openai-login", "openai", true),
+                CredentialKind::SubscriptionLogin,
+            ),
+        ]);
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates.len(), 1);
+        assert_eq!(resolved.candidates[0].provider, "openai");
+        assert_eq!(resolved.candidates[0].harness.as_deref(), Some("codex"));
+    }
+}
