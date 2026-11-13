@@ -1014,61 +1014,7 @@ fn oversized_output_is_invalid_and_the_error_does_not_echo_it() {
     assert!(err.len() <= 220, "{}", err.len());
 }
 
-mod fake {
-    use axum::{Router, extract::State, http::HeaderMap, routing::post};
-    use serde_json::{Value, json};
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Default)]
-    pub struct Seen {
-        pub authorization: Vec<String>,
-        pub bodies: Vec<Value>,
-    }
-
-    /// Answers every request with `status` and `reply`; returns its endpoint.
-    pub async fn serve(status: u16, reply: Value) -> (String, Arc<Mutex<Seen>>) {
-        let seen = Arc::new(Mutex::new(Seen::default()));
-        let app = Router::new()
-            .route(
-                "/v1/responses",
-                post(
-                    move |State(seen): State<Arc<Mutex<Seen>>>,
-                          headers: HeaderMap,
-                          axum::Json(body): axum::Json<Value>| {
-                        let reply = reply.clone();
-                        async move {
-                            let mut seen = seen.lock().unwrap();
-                            seen.authorization.push(
-                                headers
-                                    .get("authorization")
-                                    .and_then(|v| v.to_str().ok())
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                            );
-                            seen.bodies.push(body);
-                            (
-                                axum::http::StatusCode::from_u16(status).unwrap(),
-                                axum::Json(reply),
-                            )
-                        }
-                    },
-                ),
-            )
-            .with_state(seen.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (format!("http://{addr}/v1/responses"), seen)
-    }
-
-    pub fn completed(text: &str) -> Value {
-        json!({
-            "status": "completed",
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
-            "usage": {"input_tokens": 12, "output_tokens": 5}
-        })
-    }
-}
+use crate::common::fake_api as fake;
 
 fn secret_file(dir: &std::path::Path, mode: u32) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;

@@ -1,6 +1,7 @@
 //! Route types for the routing policy (spec 0011, section 3). Pure: no I/O.
 
 pub mod classify;
+pub mod compile;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
 pub mod plan;

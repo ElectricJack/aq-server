@@ -428,7 +428,8 @@ async fn routing_cannot_be_enabled_without_an_active_policy() {
         Err(AppError::Conflict(_))
     ));
     sqlx::query(
-        "INSERT INTO routing_policies(digest,status,created_at_ms) VALUES('d1','failed',1)",
+        "INSERT INTO routing_policies(structure_revision,source_digest,digest,status,created_at_ms)
+         VALUES(1,'sha256:s','d1','failed',1)",
     )
     .execute(pool)
     .await
@@ -439,7 +440,9 @@ async fn routing_cannot_be_enabled_without_an_active_policy() {
         .unwrap();
     assert!(routing::set_enabled(pool, true).await.is_err());
     assert!(!routing::enabled(pool).await.unwrap());
-    sqlx::query("UPDATE routing_policies SET status='active' WHERE digest='d1'")
+    sqlx::query(
+        "UPDATE routing_policies SET status='active',compiled='{}',finished_at_ms=2 WHERE digest='d1'",
+    )
         .execute(pool)
         .await
         .unwrap();

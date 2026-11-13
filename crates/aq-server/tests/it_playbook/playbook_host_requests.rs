@@ -5,7 +5,7 @@
 //! comes from an executor-reported stop, never from the host. The
 //! internal-work judgment tests run the production provider against a local
 //! fake endpoint instead.
-use crate::common;
+use crate::common::{self, fake_api};
 use aq_playbook_host::runner::{CancellationResult, Intent, IntentStatus};
 use aq_server::{
     InternalWork,
@@ -970,36 +970,10 @@ async fn judgment_request_respects_budget_and_records_provenance() {
     assert_eq!(r.output["provenance"], Value::Null);
 }
 
-/// A local stand-in for a provider's responses API; every request gets
-/// `text` as the model's output. Mirrors the `fake` endpoint of
-/// `it_access/internal_work.rs`.
-async fn fake_provider(text: &str) -> (String, Arc<Mutex<Vec<Value>>>) {
-    use axum::{Json, Router, extract::State, routing::post};
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let reply = json!({"status": "completed",
-        "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
-        "usage": {"input_tokens": 12, "output_tokens": 5}});
-    let app = Router::new()
-        .route(
-            "/v1/responses",
-            post(
-                move |State(seen): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| {
-                    seen.lock().unwrap().push(body);
-                    let reply = reply.clone();
-                    async move { Json(reply) }
-                },
-            ),
-        )
-        .with_state(seen.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (format!("http://{addr}/v1/responses"), seen)
-}
-
 /// Internal work over the fixture's own catalog, made active: its profile
 /// `engineering` lists `fixture-a`/`model-a` first, which resolves by API key
-/// to `endpoint`. `profile` is the internal work default (`None`: unset).
+/// to `endpoint` at the effort its model choice names. `profile` is the
+/// internal work default (`None`: unset).
 async fn internal_work(
     f: &common::profiled::Fixture,
     endpoint: String,
@@ -1104,7 +1078,7 @@ async fn judgment_request_is_served_by_internal_work_and_records_its_provider_an
     common::profiled::insert(&f).await;
     let pool = f.db.pool().await;
     let answer = r#"{"choice": "isolated", "rationale": "The change touches shared state."}"#;
-    let (endpoint, seen) = fake_provider(answer).await;
+    let (endpoint, seen) = fake_api::serve(200, fake_api::completed(answer)).await;
     let (work, _dir) = internal_work(&f, endpoint, Some("engineering")).await;
     let (_stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(work.clone().serve(rx));
@@ -1137,6 +1111,7 @@ async fn judgment_request_is_served_by_internal_work_and_records_its_provider_an
     );
     {
         let seen = seen.lock().unwrap();
+        let seen = &seen.bodies;
         assert_eq!(seen.len(), 1, "one provider request");
         let prompt = seen[0]["input"].as_str().unwrap();
         assert!(prompt.contains("isolate?") && prompt.contains("Work item summary."));
@@ -1158,7 +1133,7 @@ async fn judgment_request_with_no_internal_profile_fails_provider_unavailable() 
     let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
     let pool = f.db.pool().await;
-    let (endpoint, seen) = fake_provider("{}").await;
+    let (endpoint, seen) = fake_api::serve(200, fake_api::completed("{}")).await;
     let (work, _dir) = internal_work(&f, endpoint, None).await;
     let judgments = InternalJudgments::new(work, aq_internal_work::Purpose::PlaybookCall);
     let h = host(&f, None, Some(Arc::new(judgments))).await;
@@ -1176,7 +1151,7 @@ async fn judgment_request_with_no_internal_profile_fails_provider_unavailable() 
         ("failed", &json!("provider_unavailable"))
     );
     assert_eq!(output["provenance"], Value::Null);
-    assert!(seen.lock().unwrap().is_empty(), "nothing sent");
+    assert!(seen.lock().unwrap().bodies.is_empty(), "nothing sent");
     let rows = internal_tasks(&pool).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].3.as_deref(), Some("no_candidate"));

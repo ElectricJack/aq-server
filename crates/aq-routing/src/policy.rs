@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::classify::{Flag, Options, Risk};
@@ -129,6 +129,82 @@ pub struct Problem {
     /// Where in the compiled policy, for example `kinds.bugfix.escalate.to_class`.
     pub path: String,
     pub message: String,
+}
+
+/// JSON Schema (draft 2020-12) of a [`Policy`], limited to the levels,
+/// harnesses and providers `options` offers.
+/// Fields with a serde default or an `Option` type are optional, and an
+/// `Option` may also be null. Every object refuses unknown fields, as the
+/// types do.
+pub fn schema(options: &Options) -> Value {
+    let classes: Vec<String> = options.classes.keys().map(Class::to_string).collect();
+    let harnesses: BTreeSet<&str> = options.offers().map(|o| o.harness.as_str()).collect();
+    let providers: BTreeSet<&str> = options.offers().map(|o| o.provider.as_str()).collect();
+    let risks: Vec<&str> = Risk::ALL.iter().map(|r| r.as_str()).collect();
+    let class = json!({"type": "string", "enum": classes});
+    let harness = json!({"type": "string", "enum": harnesses});
+    let provider = json!({"type": "string", "enum": providers});
+    let risk = json!({"type": "string", "enum": risks});
+    let flag = json!({"type": "string", "enum": ["narrow", "test_verified", "deep_reasoning"]});
+    let (text, boolean) = (json!({"type": "string"}), json!({"type": "boolean"}));
+    let list = |items: &Value| json!({"type": "array", "items": items});
+    let nullable = |s: Value| json!({"anyOf": [s, {"type": "null"}]});
+    let map = |values: Value| json!({"type": "object", "additionalProperties": values});
+    let object = |required: &[&str], properties: Value| {
+        json!({"type": "object", "additionalProperties": false,
+            "required": required, "properties": properties})
+    };
+    let escalate = object(
+        &["after_failures", "to_class"],
+        json!({"after_failures": {"type": "integer", "minimum": 0, "maximum": u32::MAX},
+            "to_class": class}),
+    );
+    let kind = object(
+        &["class", "max_class"],
+        json!({"class": class, "max_class": class, "lane": nullable(text.clone()),
+            "narrow": boolean, "prefer_harnesses": list(&harness), "escalate": nullable(escalate)}),
+    );
+    let origin = object(
+        &[],
+        json!({"narrow": nullable(boolean.clone()), "lane": nullable(text.clone())}),
+    );
+    let relax = object(
+        &["class", "requires"],
+        json!({"class": class, "requires": list(&flag)}),
+    );
+    let risk_rule = object(
+        &["min_class", "harnesses"],
+        json!({"min_class": class, "harnesses": list(&harness), "relax": nullable(relax)}),
+    );
+    let level_map = json!({"type": "object", "propertyNames": {"enum": classes},
+        "additionalProperties": class});
+    let lane = object(
+        &["id"],
+        json!({"id": text, "class": nullable(class.clone()), "classes": level_map,
+            "harnesses": list(&harness), "providers": list(&provider), "prefer": list(&harness),
+            "hold": boolean, "requires": list(&flag), "max_risk": nullable(risk.clone()),
+            "cheap": boolean}),
+    );
+    let reserved = object(
+        &["classes", "harness", "only_lanes"],
+        json!({"classes": list(&class), "harness": harness, "only_lanes": list(&text)}),
+    );
+    let mut risk_map = map(risk_rule);
+    risk_map["propertyNames"] = json!({"enum": risks});
+    let mut out = object(
+        &[
+            "version",
+            "default_kind",
+            "kinds",
+            "risk",
+            "classifier_instructions",
+        ],
+        json!({"version": {"const": POLICY_VERSION}, "default_kind": text, "kinds": map(kind),
+            "origins": map(origin), "risk": risk_map, "lanes": list(&lane),
+            "reserved": list(&reserved), "classifier_instructions": text}),
+    );
+    out["$schema"] = json!("https://json-schema.org/draft/2020-12/schema");
+    out
 }
 
 /// Every reason `policy` may not take effect with what `options` offers.
@@ -674,7 +750,7 @@ pub(crate) fn harness_list(ids: &[String]) -> Vec<String> {
 
 pub(crate) fn harness_words(id: &str) -> String {
     match id {
-        "claude" => "Claude".into(),
+        "claude" | "claude-code" => "Claude".into(),
         "codex" => "Codex".into(),
         "gemini" => "Gemini".into(),
         "opencode" => "OpenCode".into(),
@@ -724,7 +800,7 @@ pub(crate) fn lane_words(id: &str) -> String {
 }
 
 /// `free-hosted_models` to `Free hosted models`.
-fn humanize(id: &str) -> String {
+pub(crate) fn humanize(id: &str) -> String {
     let spaced = id.replace(['-', '_'], " ");
     let mut chars = spaced.chars();
     match chars.next() {
@@ -1257,6 +1333,215 @@ mod tests {
             ),
             "Simple (low or high effort) or Deep (high effort)"
         );
+    }
+
+    /// Checks `value` against the JSON Schema keywords [`schema`] uses. With
+    /// `exact`, an object schema that refuses other properties must also list
+    /// every property the value has, so a fully serialized policy proves that
+    /// schema and types name the same fields.
+    fn conforms(schema: &Value, value: &Value, at: &str, exact: bool) -> Result<(), String> {
+        let fail = |what: String| Err(format!("{at}: {what}"));
+        if let Some(any) = schema.get("anyOf").and_then(Value::as_array) {
+            if any.iter().any(|s| conforms(s, value, at, exact).is_ok()) {
+                return Ok(());
+            }
+            return fail(format!("{value} matches no alternative"));
+        }
+        if let Some(c) = schema.get("const")
+            && c != value
+        {
+            return fail(format!("{value} is not {c}"));
+        }
+        if let Some(e) = schema.get("enum").and_then(Value::as_array)
+            && !e.contains(value)
+        {
+            return fail(format!("{value} is not one of {e:?}"));
+        }
+        let kind = match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(n) if n.is_u64() || n.is_i64() => "integer",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        if let Some(t) = schema.get("type").and_then(Value::as_str)
+            && t != kind
+        {
+            return fail(format!("{kind} is not {t}"));
+        }
+        if let (Some(min), Some(n)) = (schema.get("minimum"), value.as_i64())
+            && n < min.as_i64().unwrap()
+        {
+            return fail(format!("{n} is below {min}"));
+        }
+        if let Value::Array(items) = value
+            && let Some(item) = schema.get("items")
+        {
+            for (i, v) in items.iter().enumerate() {
+                conforms(item, v, &format!("{at}[{i}]"), exact)?;
+            }
+        }
+        let Value::Object(map) = value else {
+            return Ok(());
+        };
+        let properties = schema.get("properties").and_then(Value::as_object);
+        for key in schema
+            .get("required")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if !map.contains_key(key.as_str().unwrap()) {
+                return fail(format!("{key} is required"));
+            }
+        }
+        if let Some(names) = schema.get("propertyNames") {
+            for key in map.keys() {
+                conforms(
+                    names,
+                    &Value::String(key.clone()),
+                    &format!("{at}.{key}"),
+                    exact,
+                )?;
+            }
+        }
+        let closed = schema.get("additionalProperties") == Some(&Value::Bool(false));
+        if exact && closed {
+            let mut declared: Vec<&String> =
+                properties.into_iter().flat_map(|p| p.keys()).collect();
+            let mut present: Vec<&String> = map.keys().collect();
+            declared.sort();
+            present.sort();
+            if declared != present {
+                return fail(format!("declares {declared:?} but has {present:?}"));
+            }
+        }
+        for (key, v) in map {
+            let at = format!("{at}.{key}");
+            match properties.and_then(|p| p.get(key)) {
+                Some(s) => conforms(s, v, &at, exact)?,
+                None if closed => return Err(format!("{at}: not allowed")),
+                None => {
+                    if let Some(s @ Value::Object(_)) = schema.get("additionalProperties") {
+                        conforms(s, v, &at, exact)?
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_reference_policy_conforms_to_the_schema_of_its_options_field_for_field() {
+        let (policy, options) = fixtures::reference();
+        let s = schema(&options);
+        assert_eq!(s["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        let value = serde_json::to_value(&policy).unwrap();
+        conforms(&s, &value, "policy", true).unwrap();
+        let required = |s: &Value| -> Vec<String> {
+            let mut r: Vec<String> = s["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            r.sort();
+            r
+        };
+        // Required is exactly what serde requires: no default, not an Option.
+        assert_eq!(
+            required(&s),
+            [
+                "classifier_instructions",
+                "default_kind",
+                "kinds",
+                "risk",
+                "version"
+            ]
+        );
+        let props = &s["properties"];
+        assert_eq!(
+            required(&props["kinds"]["additionalProperties"]),
+            ["class", "max_class"]
+        );
+        assert_eq!(
+            required(&props["risk"]["additionalProperties"]),
+            ["harnesses", "min_class"]
+        );
+        assert_eq!(required(&props["lanes"]["items"]), ["id"]);
+        assert_eq!(
+            required(&props["reserved"]["items"]),
+            ["classes", "harness", "only_lanes"]
+        );
+        assert_eq!(
+            required(&props["origins"]["additionalProperties"]),
+            Vec::<String>::new()
+        );
+        // Every optional field may be absent or null and still parses.
+        let minimal = serde_json::json!({
+            "version": 2, "default_kind": "feature",
+            "kinds": {"feature": {"class": "standard-high", "max_class": "standard-high",
+                "lane": null, "escalate": null}},
+            "origins": {"repair": {"narrow": null, "lane": null}},
+            "risk": {"medium": {"min_class": "standard-high", "harnesses": [], "relax": null}},
+            "lanes": [{"id": "x", "class": null, "max_risk": null, "hold": true}],
+            "classifier_instructions": "Classify the task."
+        });
+        conforms(&s, &minimal, "policy", false).unwrap();
+        serde_json::from_value::<Policy>(minimal).unwrap();
+    }
+
+    #[test]
+    fn the_schema_offers_only_the_options_levels_harnesses_and_providers() {
+        let (policy, options) = fixtures::reference();
+        let s = schema(&options);
+        let classes: Vec<Value> = options
+            .classes
+            .keys()
+            .map(|c| Value::String(c.to_string()))
+            .collect();
+        let kind = &s["properties"]["kinds"]["additionalProperties"]["properties"];
+        assert_eq!(kind["class"]["enum"], Value::Array(classes.clone()));
+        let lane = &s["properties"]["lanes"]["items"]["properties"];
+        assert_eq!(
+            lane["harnesses"]["items"]["enum"],
+            serde_json::json!(["claude", "codex", "gemini", "opencode"])
+        );
+        assert_eq!(
+            lane["providers"]["items"]["enum"],
+            serde_json::json!(["anthropic", "google", "ollama", "openai"])
+        );
+        assert_eq!(
+            s["properties"]["risk"]["propertyNames"]["enum"],
+            serde_json::json!(["low", "medium", "high", "very_high"])
+        );
+        let value = serde_json::to_value(&policy).unwrap();
+        let refused = |path: &[&str], bad: Value| {
+            let mut v = value.clone();
+            let mut at = &mut v;
+            for key in path {
+                at = match key.parse::<usize>() {
+                    Ok(i) => &mut at[i],
+                    Err(_) => &mut at[*key],
+                };
+            }
+            *at = bad;
+            assert!(conforms(&s, &v, "policy", false).is_err(), "{path:?}");
+        };
+        refused(&["kinds", "chore", "class"], "simple-medium".into());
+        refused(&["lanes", "0", "prefer", "0"], "cursor".into());
+        refused(&["lanes", "6", "providers", "0"], "groq".into());
+        refused(
+            &["risk", "medium", "relax"],
+            serde_json::json!({"class": "standard-high", "requires": ["tiny"]}),
+        );
+        refused(&["version"], 1.into());
+        refused(&["kinds", "chore", "weight"], 2.into());
+        let mut unknown_risk = value.clone();
+        unknown_risk["risk"]["extreme"] = value["risk"]["high"].clone();
+        assert!(conforms(&s, &unknown_risk, "policy", false).is_err());
     }
 
     #[test]
