@@ -1327,3 +1327,97 @@ fn inputs_without_a_route_serialize_exactly_as_before() {
         aq_selection::digest(&input).unwrap()
     );
 }
+/// The fixture whose first candidate (`primary`, fixture-a) lists only a harness that is not
+/// installed, so it has no installed composition (a placeholder row); `fallback` (fixture-b)
+/// stays eligible. `fallback_on` is the policy's.
+fn primary_not_installed(
+    fallback_on: Vec<FallbackReason>,
+) -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
+    let (catalog, mut input) = fixture();
+    let mut definitions = catalog.artifact().catalog.clone();
+    definitions.intelligence[0].candidates[0].harnesses = vec!["claude-code".into()];
+    definitions.intelligence[0]
+        .selection_policy
+        .as_mut()
+        .unwrap()
+        .fallback_on = fallback_on;
+    let updated =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest =
+        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
+    for composition in &mut input.compositions {
+        composition.composition.catalog_digest = updated.digest().into();
+        composition.composition.intelligence_profile = updated
+            .source("intelligence", &input.project.intelligence_profile)
+            .unwrap();
+        composition.digest = aq_selection::digest(&composition.composition).unwrap();
+    }
+    (updated, input)
+}
+#[test]
+fn pinned_route_is_pinned_by_a_first_provider_without_an_installed_composition() {
+    let (catalog, mut input) = primary_not_installed(policy().fallback_on);
+    let placeholder = (
+        "primary".to_string(),
+        "unavailable".to_string(),
+        CandidateState::Unsupported,
+        "compatible_installed_composition_unavailable".to_string(),
+    );
+    // Without a route, the policy falls back to fixture-b.
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
+    // Its harness is unknown, so the harness allowlist does not exclude it: it pins fixture-a.
+    input.route = route(|r| {
+        r.pinned = true;
+        r.harnesses = vec!["codex".into()];
+    });
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none(), "{out:?}");
+    assert_eq!(out.reason_codes, ["route_provider_pinned"]);
+    let rows = rows(&out);
+    assert_eq!(rows[0], placeholder);
+    assert_eq!(rows[1].0, "fallback");
+    assert_eq!(rows[1].2, CandidateState::PolicyDenied);
+    assert!(
+        out.traces[1]
+            .reason_codes
+            .contains(&"route_provider_pinned".into())
+    );
+    // A provider allowlist does exclude it, as its trace says, and fixture-b is then pinned.
+    input.route = route(|r| {
+        r.pinned = true;
+        r.providers = vec!["fixture-b".into()];
+    });
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
+    assert_eq!(
+        (out.traces[0].state, out.traces[0].reason_codes.clone()),
+        (
+            CandidateState::PolicyDenied,
+            vec!["route_excludes_provider".to_string()]
+        )
+    );
+}
+#[test]
+fn a_first_provider_without_an_installed_composition_still_bounds_fallback_under_a_route() {
+    let strict = vec![FallbackReason::Unavailable, FallbackReason::PolicyDenied];
+    let (catalog, mut input) = primary_not_installed(strict);
+    let plain = select(&catalog, &input).unwrap();
+    assert!(plain.resolved.is_none(), "{plain:?}");
+    assert_eq!(plain.reason_codes, ["no_permitted_fallback"]);
+    input.route = route(|r| r.harnesses = vec!["codex".into()]);
+    let routed = select(&catalog, &input).unwrap();
+    assert!(routed.resolved.is_none(), "{routed:?}");
+    assert_eq!(routed.reason_codes, plain.reason_codes);
+    assert_eq!(
+        rows(&routed),
+        rows(&plain),
+        "the trace matches the decision"
+    );
+    assert_eq!(rows(&routed)[0].2, CandidateState::Unsupported);
+    assert!(
+        routed.traces[1]
+            .reason_codes
+            .contains(&"fallback_not_permitted".into())
+    );
+}

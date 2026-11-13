@@ -39,15 +39,22 @@ pub fn router_of_launch<'a>(catalog: &'a Catalog, agent: &str, launched: &str) -
         .then_some(router)
 }
 
+/// Whether `allowed` is a non-empty allowlist without `value`.
+fn outside(allowed: &[String], value: &str) -> bool {
+    !allowed.is_empty() && !allowed.iter().any(|a| a == value)
+}
+
 /// The reason a route excludes a candidate on `harness` from `provider`, if it does.
 /// An empty allowlist restricts nothing.
 pub(crate) fn excludes(route: &RouteLimits, harness: &str, provider: &str) -> Option<&'static str> {
-    let outside = |allowed: &[String], value: &str| {
-        !allowed.is_empty() && !allowed.iter().any(|a| a == value)
-    };
     if outside(&route.harnesses, harness) {
         return Some("route_excludes_harness");
     }
+    excludes_provider(route, provider)
+}
+
+/// The provider allowlist alone: for a candidate whose harness is unknown.
+pub(crate) fn excludes_provider(route: &RouteLimits, provider: &str) -> Option<&'static str> {
     outside(&route.providers, provider).then_some("route_excludes_provider")
 }
 
