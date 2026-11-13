@@ -113,7 +113,10 @@ pub(crate) async fn auto_env_source(
         // Acceptance precedes every evidence gate: a non-Success report is
         // refused at once, retained source or not.
         assert_eq!(first.0, "rework_required");
-        assert_eq!(first.1.as_deref(), Some("not_accepted"));
+        assert!(matches!(
+            first.1.as_deref(),
+            Some("not_accepted" | "agent_blocked")
+        ));
     }
 
     // Synthetic retained-source owner row (validation only, not real Git).
@@ -773,6 +776,37 @@ async fn unchanged_source_completes_without_publication() {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing sent to aq-git");
     assert!(evidence_rows(&env).await.is_empty(), "no delivery evidence");
     assert!(head_of(&env).await.is_none(), "the source head never moves");
+}
+
+/// Review R1-M2: a Failed report whose agent said `Outcome: blocked` is reworked
+/// with the reason `agent_blocked`; any other failure stays `not_accepted`.
+#[tokio::test]
+async fn a_blocked_agent_is_reworked_as_agent_blocked() {
+    use aq_admission::transport::ProcessOutcome;
+    for (conclusion, reason) in [
+        (
+            "Outcome: blocked; Changes: none; Copied: none; Claude exit 0; Result: no access to the repo",
+            "agent_blocked",
+        ),
+        (
+            "Outcome: done; Changes: none; Copied: none; Claude exit 1; Result: crashed",
+            "not_accepted",
+        ),
+    ] {
+        let env = Box::pin(auto_env_source(
+            "not_required",
+            axum::http::StatusCode::OK,
+            false,
+            Some(ProcessOutcome::Failed),
+            None,
+            false,
+            Some(conclusion),
+        ))
+        .await;
+        let s = env.settle().await;
+        env.assert_not_completed(&s, AutoDisposition::ReworkRequired, reason)
+            .await;
+    }
 }
 
 /// Review I-2: a worker report whose agent claimed changes (or copied back

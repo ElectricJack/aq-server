@@ -44,6 +44,18 @@ pub fn schema(registry: &super::Registry) -> Value {
             serde_json::json!({"properties":{"kind":{"const":kind},"payload":payload},"required":["kind","payload"]})
         }).collect());
     }
+    // R1 check.py: a resolver that ignores the payloads' `$id` resolves their
+    // `#/$defs/...` refs at the root, so their definitions are also listed there.
+    let mut hoisted = serde_json::Map::new();
+    for payload in registry.schemas().values() {
+        if let Some(Value::Object(defs)) = payload.get("$defs") {
+            hoisted.extend(defs.clone());
+        }
+    }
+    let root = schema["$defs"].as_object_mut().expect("root definitions");
+    for (name, definition) in hoisted {
+        root.entry(name).or_insert(definition);
+    }
     schema["x-capability-version"] = serde_json::json!(1);
     schema
 }

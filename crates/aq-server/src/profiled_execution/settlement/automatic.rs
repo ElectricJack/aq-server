@@ -383,7 +383,12 @@ async fn evaluate_locked(
                 let m = &confirmed.manifest;
                 let task = r.spec.task.task_id;
                 let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                let changed = m.checkpoint.hex != base.await?;
+                // R1-M1: a lineage past the hop bound is held, never guessed.
+                let Some(base) = base.await? else {
+                    let evidence = json!({"policy_actor": ACTOR, "report": r.receipt_artifact});
+                    return Ok((Verdict::Hold("lineage_history_unknown"), evidence));
+                };
+                let changed = m.checkpoint.hex != base;
                 source = Some((*op, m.checkpoint.hex.clone(), changed));
                 break;
             }
@@ -435,11 +440,19 @@ async fn evaluate_locked(
         }
     };
     let unchanged = matches!(source, Some((_, _, false)));
-    let claimed = policy::claims_changes(r.report.conclusion.as_str());
+    let conclusion = r.report.conclusion.as_str();
+    let claimed = aq_profiled_state::claim::claims_changes(conclusion);
+    let failed = matches!(
+        r.report.outcome,
+        aq_admission::transport::ProcessOutcome::Failed
+    );
+    let attributable = r.is_current_report_head && v.cancellation_id.is_none() && !v.revoked;
+    let agent_blocked = failed && attributable && aq_profiled_state::claim::blocked(conclusion);
     let verdict = policy::evaluate(&policy::Gate {
         acceptance,
         source_retained: source.is_some(),
         claimed_changes_missing: unchanged && claimed,
+        agent_blocked,
         checks: &checks,
         delivery,
         delivery_state,

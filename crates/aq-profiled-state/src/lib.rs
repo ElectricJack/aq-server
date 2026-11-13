@@ -155,6 +155,7 @@ impl ProfiledState {
             && matches!(self.effects, Effects::Quiescent { .. })
     }
 }
+pub mod claim;
 pub mod fairness;
 pub mod replacement;
 pub mod replacement_sql;

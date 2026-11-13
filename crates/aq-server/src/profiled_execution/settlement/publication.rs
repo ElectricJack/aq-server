@@ -371,7 +371,11 @@ async fn publish(state: &AppState, delivery: &DeliveryService, report_id: Uuid) 
                     task,
                     &admitted.resolved_object.hex,
                 );
-                sha1(&base.await?)
+                let Some(base) = base.await? else {
+                    tracing::warn!(%report_id, "lineage history past its bound; held");
+                    return Ok(Step::Held);
+                };
+                sha1(&base)
             }
         },
     };

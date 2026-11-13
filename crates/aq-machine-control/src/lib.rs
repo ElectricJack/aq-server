@@ -559,16 +559,17 @@ pub async fn record_handoff(
 /// its predecessor's saved commit, the handoff candidate; that candidate was built on the
 /// predecessor's own admitted base (its frozen `base` input), followed back through every
 /// handoff of the task. An attempt not admitted on a handoff candidate starts from `base`.
+/// `None` (R1-M1): more than [`MAX_LINEAGE_HOPS`] handoffs; the caller holds, never guesses.
 pub async fn lineage_base(
     conn: &mut PgConnection,
     task: Uuid,
     base: &str,
-) -> Result<String, Error> {
+) -> Result<Option<String>, Error> {
     let mut current = base.to_owned();
     if !has_format(conn).await? {
-        return Ok(current);
+        return Ok(Some(current));
     }
-    for _ in 0..64 {
+    for _ in 0..=MAX_LINEAGE_HOPS {
         let earlier: Option<Option<String>> = sqlx::query_scalar(
             "SELECT i.inputs->'base'->>'hex' FROM attempt_handoffs h \
              JOIN execution_attempts a ON a.attempt_id=h.attempt_id \
@@ -582,11 +583,13 @@ pub async fn lineage_base(
         .await?;
         match earlier.flatten() {
             Some(earlier) if earlier != current => current = earlier,
-            _ => break,
+            _ => return Ok(Some(current)),
         }
     }
-    Ok(current)
+    Ok(None)
 }
+/// Handoffs [`lineage_base`] follows back; a task has a few (5 exempt, then charged).
+pub const MAX_LINEAGE_HOPS: usize = 64;
 pub async fn handoff_of(
     conn: &mut PgConnection,
     attempt: Uuid,

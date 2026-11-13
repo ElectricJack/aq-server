@@ -144,9 +144,15 @@ A task does not have to change a file. Since 2026-11-13 (on
 `feat/internal-work`, not yet on `main`) an attempt that finishes successfully
 without changing a file succeeds: its result is the agent's final message, and
 nothing is published. The task reads "Completed, no changes". An agent that
-ends with `Outcome: blocked`, or claims changes that did not arrive, fails as
-before. A handoff successor that only verified its predecessor's edits still
-publishes them.
+ends with `Outcome: blocked` fails (rework reason `agent_blocked`); one that
+claims changes that did not arrive fails too. A `Changes:` value that names no
+file ("none", "no changes", "n/a", ...) is never such a claim. A handoff
+successor that only verified its predecessor's edits still publishes them.
+
+The recorded result is a summary of at most 500 bytes (the result report's
+conclusion field). When the attempt has an agent channel, the driver also posts
+the agent's whole final message (up to 16 KiB) as an agent comment on the task;
+an attempt without a channel records the summary only.
 
 ## 6. Boat workers
 
@@ -166,7 +172,8 @@ questions in aq-worker `docs/implementation/0006-P7.md`.
 | M3 | `release-sandbox` needs `--force`. |
 | Completion policy | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. A task that changes no file succeeds, with nothing published. |
 | Owner decisions | W13 (terminal input on queued attempts), 0008 phase B retention, the A1 soak, true resume, the three boat channel questions. |
-| Forward-only schemas | 113, 114, 116 and 117. Rolling back the binary alone is unsafe. |
+| Forward-only schemas | 113, 114, 116 and 117. Rolling back the binary alone is unsafe. An older server binary also cannot read stored rejected dashboard operations that carry a `reason` (busy machine actions, refused retries, from `feat/internal-work`): their lookup or replay returns 503. |
+| Follow-ups (`feat/internal-work`) | Raise the result report's conclusion limit (aq-admission 0.3.4) so the whole final message travels without an agent channel. A task-list filter for "Completed, no changes" (the list read carries no settlement evidence). Supervisors and the owner CLI cannot Retry a task (`task.retry` is a dashboard action only). The native agent startup text (aq-agent-result-local `startup.md`) does not yet ask for `Changes: none` and the `Outcome:` line: its digest is pinned by aq-server and the aq-session-host release. Re-pin the dashboard's copies of the dashboard-actions and results-feedback contracts after merge. |
 | Stale pull requests | aq-server #3, #9, #53, #60, #63, #64; aq-worker #32. |
 
 ## 8. Next steps

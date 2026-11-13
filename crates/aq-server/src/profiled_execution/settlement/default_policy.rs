@@ -59,6 +59,8 @@ pub(super) struct Gate<'a> {
     pub source_retained: bool,
     /// The retained source is unchanged, yet the worker's report claims changes.
     pub claimed_changes_missing: bool,
+    /// A refused (Failed) report whose agent said `Outcome: blocked` (R1-M2).
+    pub agent_blocked: bool,
     pub checks: &'a [CheckVerdict],
     pub delivery: Delivery,
     pub delivery_state: DeliveryState,
@@ -73,6 +75,7 @@ pub(super) enum Verdict {
 /// Source precedes checks because check evidence binds the retained source.
 pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
     match g.acceptance {
+        Acceptance::Refused if g.agent_blocked => return Verdict::Rework("agent_blocked"),
         Acceptance::Refused => return Verdict::Rework("not_accepted"),
         Acceptance::NotStopped => return Verdict::Hold("not_stopped"),
         Acceptance::Accepted => {}
@@ -103,22 +106,6 @@ pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
     Verdict::Complete
 }
 
-/// Review I-2: the worker's conclusion opens with `Changes: <claim>;` (the agent's claim, or
-/// for an older worker the copied-back files). Anything but `none`/`unknown` claims changes.
-/// Worker text is never evidence for completion; this only refuses one.
-pub(super) fn claims_changes(conclusion: &str) -> bool {
-    let Some(rest) = conclusion.strip_prefix("Changes:") else {
-        return false;
-    };
-    let claim = rest.split(';').next().unwrap_or_default().trim();
-    let word = |w: &str| {
-        claim
-            .get(..w.len())
-            .is_some_and(|c| c.eq_ignore_ascii_case(w))
-    };
-    !claim.is_empty() && !word("none") && !word("unknown")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +114,7 @@ mod tests {
             acceptance: Acceptance::Accepted,
             source_retained: true,
             claimed_changes_missing: false,
+            agent_blocked: false,
             checks,
             delivery: Delivery::Required,
             delivery_state: DeliveryState::Published,
@@ -178,15 +166,9 @@ mod tests {
         assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
         g.claimed_changes_missing = true;
         assert_eq!(evaluate(&g), Verdict::Rework("claimed_changes_missing"));
-        for (text, claims) in [
-            ("Changes: src/lib.rs; Copied: none; Claude exit 0", true),
-            ("Changes: none; Copied: target/x", false),
-            ("Changes: None (read-only); Claude exit 0", false),
-            ("Changes: unknown; Runner failure: x", false),
-            ("worker claims task is done", false),
-        ] {
-            assert_eq!(claims_changes(text), claims, "{text}");
-        }
+        g.acceptance = Acceptance::Refused;
+        g.agent_blocked = true;
+        assert_eq!(evaluate(&g), Verdict::Rework("agent_blocked"));
     }
     #[test]
     fn default_policy_offers_name_the_policy_actor() {
