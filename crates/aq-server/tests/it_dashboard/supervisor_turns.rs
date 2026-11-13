@@ -28,6 +28,8 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+mod admin;
+
 #[derive(Clone)]
 struct Evidence;
 #[async_trait::async_trait]

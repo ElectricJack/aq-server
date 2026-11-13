@@ -140,3 +140,21 @@ rows and the swarm availability switch does not stop it.
 file itself and uses the container paths above. Without them nothing is written.
 Optional: `AQ_DEV_INTERNAL_POLL_MS`. The generated file is owned by you and holds the database URL: do not commit or share it, and make a root-owned copy before mounting it (see above). It prints `AQ_INTERNAL_CONFIG_DIR` for use with
 `compose.workers.yaml`; the other `AQ_INTERNAL_*` variables are yours to set.
+
+## Supervisor access
+
+A supervisor can change Intelligence settings and see and retry internal runs
+(spec 0012 §8). It calls the owner handlers through `/v1/supervisor/admin` on the
+machine listener, with its bearer and no CSRF header. The credential needs the
+`settings` scope. Only paths under these three prefixes are reachable; every other
+path is 404:
+
+- `/api/settings/intelligence` (profiles, and the routing policy at `/structure`)
+- `/api/settings/internal-work` (the internal work default and overrides)
+- `/api/internal-work/` (runs, a run, and retry)
+
+New supervisor credentials carry six scopes, including `settings`. A credential
+issued before this change keeps its five scopes and gets 403 on
+`/v1/supervisor/admin` until it is reissued. A supervisor gets a new credential
+when its next session starts. A save is recorded under the user id of the owner
+who approved the supervisor.

@@ -23,7 +23,7 @@ pub(crate) fn choices(state: &AppState) -> Vec<ModelChoice> {
         config.intelligence_preferences_file.as_deref(),
     )
 }
-pub(super) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<AppState> {
     http::routes(get(read).post(save), get(operation))
 }
 async fn read(

@@ -416,7 +416,7 @@ fn build_worker_router_inner(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
-        .merge(manual_agents::supervisor_reads(&state))
+        .merge(manual_agents::supervisor_nests(&state))
         .merge(source_retention::machine_routes(state.clone()))
         .merge(lifecycle_artifacts::routes(state.clone()))
         .merge(execution_permits::routes(state.clone()))

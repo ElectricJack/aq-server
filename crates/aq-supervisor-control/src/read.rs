@@ -76,13 +76,11 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
     response
 }
 
-pub fn routes<S: Clone + Send + Sync + 'static>(
-    routes: axum::Router<S>,
-    pool: sqlx::PgPool,
-    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
-) -> axum::Router<S> {
-    let project_pool = pool.clone();
-    let auth: Auth = Arc::new(move |headers| {
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+/// Authenticates the supervisor bearer for `scope` and resolves its approving
+/// owner, holding the actor/credential fence in the returned permit.
+pub(crate) fn bearer(pool: sqlx::PgPool, clock: Clock, scope: &'static str) -> Auth {
+    Arc::new(move |headers| {
         let pool = pool.clone();
         let clock = clock.clone();
         Box::pin(async move {
@@ -99,7 +97,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
                 &pool,
                 &mut tx,
                 token,
-                "graph.read",
+                scope,
                 clock(),
             )
             .await?;
@@ -110,7 +108,16 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
                 guard: tx,
             })
         })
-    });
+    })
+}
+
+pub fn routes<S: Clone + Send + Sync + 'static>(
+    routes: axum::Router<S>,
+    pool: sqlx::PgPool,
+    clock: Clock,
+) -> axum::Router<S> {
+    let project_pool = pool.clone();
+    let auth = bearer(pool, clock, "graph.read");
     let project_auth = auth.clone();
     let projects = axum::routing::get(move |headers: HeaderMap| {
         let auth = project_auth.clone();

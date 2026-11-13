@@ -1,6 +1,7 @@
 mod logins;
-use crate::{AppState, authz::RequireOwner, worker_api::authenticate_context};
+use crate::{AppState, authz::RequireOwner, internal_work, worker_api::authenticate_context};
 use aq_manual_sessions::{Auth, Error, Service};
+use aq_supervisor_control::{admin, read};
 use axum::{
     extract::FromRequestParts,
     http::{HeaderMap, Request},
@@ -59,11 +60,10 @@ pub(super) fn supervisor_controls(state: &AppState) -> axum::Router<AppState> {
     .routes()
 }
 
-pub(super) fn supervisor_reads(state: &AppState) -> axum::Router<AppState> {
-    let clock = state.clock.clone();
-    aq_supervisor_control::read::routes(
-        crate::agent_access::human::routes(state),
-        state.store.pool.clone(),
-        Arc::new(move || clock().timestamp_millis() as u64),
-    )
+pub(super) fn supervisor_nests(state: &AppState) -> axum::Router<AppState> {
+    let (clock, pool) = (state.clock.clone(), state.store.pool.clone());
+    let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
+    let settings = crate::profile_catalog::settings::routes().merge(internal_work::admin_routes());
+    let human = crate::agent_access::human::routes(state);
+    read::routes(human, pool.clone(), clock.clone()).merge(admin::routes(settings, pool, clock))
 }
