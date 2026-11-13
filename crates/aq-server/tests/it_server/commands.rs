@@ -54,6 +54,17 @@ fn every_action_kind_is_a_command_with_a_declared_grant() {
     }
 }
 
+#[test]
+fn every_command_has_its_own_summary() {
+    for c in aq_server::commands::registry().commands() {
+        assert!(
+            c.summary != aq_command_registry::PLACEHOLDER_SUMMARY && !c.summary.trim().is_empty(),
+            "{} has no summary; add it to crates/aq-command-registry/src/summaries.rs",
+            c.name
+        );
+    }
+}
+
 /// `.route(path, ...)` in the lib sources, outside `#[cfg(test)] mod` tails.
 fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     // Paths given by a constant rather than a literal.

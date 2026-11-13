@@ -144,6 +144,23 @@ pub async fn submit(http: &Client, request: &actions::ActionRequest) -> Result<V
     }
     Ok(value)
 }
+/// The change expects `--revision`, or the version the task has now. The
+/// server compares it again, so a task that moves in between is a conflict.
+async fn task_change(http: &Client, kind: &'static str, c: &TaskChange) -> Result<Value> {
+    let revision = match &c.revision {
+        Some(r) => r.clone(),
+        None => {
+            let path = format!("/api/human/projects/{}/tasks/{}", c.project, c.id);
+            let task = read(http, &path, &[]).await?;
+            task["data"]["version"]
+                .as_str()
+                .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+                .map(str::to_string)
+                .ok_or_else(|| error("invalid_response", "The task read carries no version"))?
+        }
+    };
+    submit(http, &actions::task_change(kind, c, revision)).await
+}
 pub async fn execute(http: &Client, command: &Command) -> Result<Value> {
     if let Some(operation) = command.unsupported() {
         return Err(unsupported(operation));
@@ -174,6 +191,11 @@ pub async fn execute(http: &Client, command: &Command) -> Result<Value> {
             .await
         }
         Command::Tasks(Tasks::Create(args)) => submit(http, &actions::task(args)).await,
+        Command::Tasks(Tasks::Cancel(c)) => task_change(http, "task.cancel", c).await,
+        Command::Tasks(Tasks::Retry(c)) => task_change(http, "task.retry", c).await,
+        Command::Workers(Workers::Revoke { machine }) => {
+            submit(http, &actions::worker_revoke(machine)).await
+        }
         Command::Decisions(Decisions::List {
             project,
             state,

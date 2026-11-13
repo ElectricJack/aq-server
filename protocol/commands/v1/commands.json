@@ -44,17 +44,22 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:a2bcdab6f612ee4d5828e4c8621b93bd7c2786f06060e6a742d6e1029b4a5522",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -79,17 +84,22 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:a2bcdab6f612ee4d5828e4c8621b93bd7c2786f06060e6a742d6e1029b4a5522",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -141,7 +151,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Add a corrected revision to a result comment (earlier revisions are kept)",
       "target": {
         "rule": "subject"
       }
@@ -158,16 +168,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {},
             "required": [],
             "type": "object"
@@ -195,21 +199,31 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:033dd6102e2c380b11abd7b145154745e999d003572010695a83efc827359de0",
+          "params_digest": "sha256:54eea6961092eb3918a769c8f0af4b96399ad3b7978c5afdd96ab986c0a09d8d",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "after": {
+                "description": "A message position; not with before",
+                "pattern": "^(0|[1-9][0-9]*(\\.[1-9][0-9]*)?)$",
+                "type": "string"
+              },
+              "before": {
+                "description": "A message position; not with after",
+                "pattern": "^[1-9][0-9]*(\\.[1-9][0-9]*)?$",
+                "type": "string"
+              },
               "conversation_id": {
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "limit": {
+                "default": 16,
+                "maximum": 16,
+                "minimum": 1,
+                "type": "integer"
               }
             },
             "required": [
@@ -240,16 +254,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:eaba2e789e5869772df631153531e35254833d80665d305b03904ebd344f98e1",
+          "params_digest": "sha256:d1e2b9c9a2ec6063b3339a435e5bab6fffcb6d4d111e765c8d8947090c5c7d4b",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "conversation_id": {
                 "maxLength": 128,
@@ -291,16 +299,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:033dd6102e2c380b11abd7b145154745e999d003572010695a83efc827359de0",
+          "params_digest": "sha256:c5bb7b0af14f835db7ad319016a1789aec2bc79090ba239b8f9f18b5919ff8c8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "conversation_id": {
                 "maxLength": 128,
@@ -336,16 +338,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {},
             "required": [],
             "type": "object"
@@ -373,17 +369,17 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:393c6ec263f5da3129c46c3ba1b489bfbf4e899900eb81259196753ab4a003cb",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -410,17 +406,17 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:393c6ec263f5da3129c46c3ba1b489bfbf4e899900eb81259196753ab4a003cb",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -447,17 +443,17 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:393c6ec263f5da3129c46c3ba1b489bfbf4e899900eb81259196753ab4a003cb",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -484,17 +480,17 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:393c6ec263f5da3129c46c3ba1b489bfbf4e899900eb81259196753ab4a003cb",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -531,7 +527,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Resolve a review decision: approve or reject its subject, with an optional comment",
       "target": {
         "rule": "subject"
       }
@@ -558,7 +554,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Link a result comment thread to an existing task",
       "target": {
         "rule": "subject"
       }
@@ -576,16 +572,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:75980c80a078931712d894f4219bd493e53f2f90f6ce8f799132cb4f889738eb",
+          "params_digest": "sha256:264f954fd71065a5edf32c132fce3e7fa8120fdc4bb16b4241758654f8978a2f",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "draft_id": {
                 "maxLength": 128,
@@ -631,7 +621,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Create a task from a result comment thread",
       "target": {
         "rule": "subject"
       }
@@ -746,7 +736,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Create an unverified knowledge record in a project",
       "target": {
         "param": "project_id",
         "rule": "project"
@@ -774,7 +764,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Edit a knowledge record's title, body, labels or content type",
       "target": {
         "rule": "subject"
       }
@@ -791,19 +781,30 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_digest": "sha256:5e03e475376708a8328a289ba1e68d1c6eeb8b503b61074c79ae749a776524e8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "q": {
+                "description": "Text to match; not blank, no control characters",
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               }
@@ -820,19 +821,30 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_digest": "sha256:5e03e475376708a8328a289ba1e68d1c6eeb8b503b61074c79ae749a776524e8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "q": {
+                "description": "Text to match; not blank, no control characters",
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               }
@@ -876,7 +888,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Restore a knowledge record to an earlier revision",
       "target": {
         "rule": "subject"
       }
@@ -903,7 +915,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Retire a knowledge record, with a reason and an optional successor",
       "target": {
         "rule": "subject"
       }
@@ -979,18 +991,42 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:14b4f089d7bf582ec2b268efe88fe65d2750236605a413d35fa215f35ef3526d",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "q": {
+                "description": "Text to match; not blank, no control characters",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              },
+              "types": {
+                "description": "Comma-separated; every type when omitted",
+                "pattern": "^(task|session|result|playbook|knowledge)(,(task|session|result|playbook|knowledge))*$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
-            "required": [],
+            "required": [
+              "q"
+            ],
             "type": "object"
           },
           "route": {
@@ -1043,16 +1079,10 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:30d90c0e4ad141de20aead70dd0caa66cc6dba18b21696bbe677efbf7fa74dd1",
+          "params_digest": "sha256:65386423ce222d6374969978b2ac677b3c4bdd843f078a0b780048a7b0043484",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "node_id": {
                 "maxLength": 128,
@@ -1063,6 +1093,11 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "revision": {
+                "description": "An earlier revision; the current one when omitted",
+                "minimum": 1,
+                "type": "integer"
               }
             },
             "required": [
@@ -1078,16 +1113,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:30d90c0e4ad141de20aead70dd0caa66cc6dba18b21696bbe677efbf7fa74dd1",
+          "params_digest": "sha256:65386423ce222d6374969978b2ac677b3c4bdd843f078a0b780048a7b0043484",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "node_id": {
                 "maxLength": 128,
@@ -1098,6 +1127,11 @@
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "revision": {
+                "description": "An earlier revision; the current one when omitted",
+                "minimum": 1,
+                "type": "integer"
               }
             },
             "required": [
@@ -1140,7 +1174,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Record a verified or disputed verdict on a knowledge record, with evidence",
       "target": {
         "rule": "subject"
       }
@@ -1291,17 +1325,28 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:7cbb68d1db5333fb8566aca462481d1e7358884778f609035d35f8c6430d2df8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "default": 0,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "limit": {
+                "default": 32,
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "recipient": {
+                "description": "The caller when omitted",
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1328,16 +1373,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:3581f22ecc63c42f5cbacceddce2fbfa4dfda1cad26e3f3c880791a2371b9e90",
+          "params_digest": "sha256:391cb0ca70b8e0b8e3f6827513a13902e3c2cf50ea2a9bb3467ffb89b8cafdfb",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "message_id": {
                 "maxLength": 128,
@@ -1373,16 +1412,10 @@
       "principals": {
         "agent": {
           "body": "query",
-          "params_digest": "sha256:54b4e8e3ed94783cfdbe64474e649ddab5c5f70c01b67fcdbe79014e40fed8c9",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "operation_id": {
                 "maxLength": 128,
@@ -1402,16 +1435,10 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:54b4e8e3ed94783cfdbe64474e649ddab5c5f70c01b67fcdbe79014e40fed8c9",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "operation_id": {
                 "maxLength": 128,
@@ -1431,16 +1458,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:54b4e8e3ed94783cfdbe64474e649ddab5c5f70c01b67fcdbe79014e40fed8c9",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "operation_id": {
                 "maxLength": 128,
@@ -1487,7 +1508,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Make an installed playbook artifact the active one on a binding",
       "target": {
         "rule": "subject"
       }
@@ -1515,7 +1536,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Restore a binding's previous playbook activation",
       "target": {
         "rule": "subject"
       }
@@ -1533,17 +1554,38 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:db0ad62fa6b171c6ef22ee1e3412be3605c7d42a70ae5dd7ad7055aaff82976a",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "exact": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "incarnation": {
+                "pattern": "^[1-9][0-9]{0,18}$",
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "metadata_revision": {
+                "pattern": "^[1-9][0-9]{0,18}$",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1571,17 +1613,38 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:db0ad62fa6b171c6ef22ee1e3412be3605c7d42a70ae5dd7ad7055aaff82976a",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "exact": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "incarnation": {
+                "pattern": "^[1-9][0-9]{0,18}$",
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "metadata_revision": {
+                "pattern": "^[1-9][0-9]{0,18}$",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1609,17 +1672,28 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:240e8a58f60024d26e760ada89cda6b00abd547f45c01164635b5a5b0d1984a6",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "Opaque: where the previous page ended",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1647,17 +1721,27 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:9dd24aea0173f591a34edec97a6b28c4ce19724395d613968c555e4d084bfaa1",
+          "params_digest": "sha256:5832fbd78acf3c2acaa2a89f2dab6df5ab6c6eefcc33aa709f0acf2bf44251f9",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "after": {
+                "description": "Opaque: where the previous page ended",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
               "run_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -1693,17 +1777,38 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:b951097eac37a63eaf4190d589cddf1d37e95e0e28c67125f484f021679164bf",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "Opaque: where the previous page ended",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "since_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "until_ms": {
+                "description": "Unix time in milliseconds; after since_ms",
+                "minimum": 1,
+                "type": "integer"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1730,17 +1835,16 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:f4b840a2074962527819348885e9b9d2bdb479eb2777ed1da9bd25e30bc27e6e",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1778,7 +1882,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Request cancellation of a playbook run",
       "target": {
         "rule": "subject"
       }
@@ -1806,7 +1910,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Start a run of the active playbook on a binding",
       "target": {
         "rule": "subject"
       }
@@ -1823,17 +1927,28 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:b2e7e54ade9485591ecc8f865f270a362ed2484a02d9a4c4340bc50dc19774bd",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -1844,16 +1959,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {},
             "required": [],
             "type": "object"
@@ -1881,16 +1990,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {},
             "required": [],
             "type": "object"
@@ -1928,7 +2031,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Answer an agent's question to the owner",
       "target": {
         "rule": "subject"
       }
@@ -1988,17 +2091,34 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:afdc3e7812472caff992ae8d7794bb7b07d78c21d34b12ae94f6b2a7d9e9ee22",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "state": {
+                "default": "open",
+                "enum": [
+                  "open",
+                  "closed"
+                ]
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -2046,16 +2166,10 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:13ccc9498b0e4a75d90e52943d6c8878fd45695f93abf797ac937101fd0d047d",
+          "params_digest": "sha256:ba93d7227ee3f4ef5ade2ad0c225b86691b6f7a3629b1945d5cb511ee4815f7e",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "decision_id": {
                 "maxLength": 128,
@@ -2101,7 +2215,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Comment on a result revision",
       "target": {
         "rule": "subject"
       }
@@ -2118,17 +2232,22 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:d3ecdb2cd675abfa7c4e6ad4ba4b87e7658ecec61275b733778f639a3859cb2f",
+          "params_digest": "sha256:0e5f64676bf5c8f510e9a020528aa5cac26deb3d3c4dea94e04d6632255f2ae8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
               "result_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -2169,16 +2288,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:d3ecdb2cd675abfa7c4e6ad4ba4b87e7658ecec61275b733778f639a3859cb2f",
+          "params_digest": "sha256:cb6374690ea58e94849a65d4dcf17e7d02fca207074ca9bc38dd5ff5a2862f55",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "result_id": {
                 "maxLength": 128,
@@ -2230,7 +2343,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Waive a result's missing evidence, with a reason",
       "target": {
         "rule": "subject"
       }
@@ -2247,17 +2360,65 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:a7a40152504de3d5ea69a325f2885514cccfb644e3543ffab6753d391a79842c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "media": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "image",
+                  "video",
+                  "none"
+                ]
+              },
+              "mode": {
+                "default": "latest",
+                "enum": [
+                  "latest",
+                  "needs_review",
+                  "following"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "scope": {
+                "description": "project needs project_id",
+                "enum": [
+                  "all_authorized",
+                  "project"
+                ]
+              },
+              "since_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "task_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "until_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -2294,7 +2455,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Follow or unfollow a result",
       "target": {
         "rule": "subject"
       }
@@ -2311,17 +2472,32 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "The last result of the previous page",
+                "format": "uuid",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -2349,16 +2525,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:d3ecdb2cd675abfa7c4e6ad4ba4b87e7658ecec61275b733778f639a3859cb2f",
+          "params_digest": "sha256:cb6374690ea58e94849a65d4dcf17e7d02fca207074ca9bc38dd5ff5a2862f55",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "result_id": {
                 "maxLength": 128,
@@ -2400,17 +2570,20 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:d3ecdb2cd675abfa7c4e6ad4ba4b87e7658ecec61275b733778f639a3859cb2f",
+          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
               "result_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -2452,17 +2625,43 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:401056184500134c1eb74562c8a0f0a0a9317d91deb6999cda126e565f94c4df",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "order": {
+                "default": "decision",
+                "description": "impact needs state open",
+                "enum": [
+                  "decision",
+                  "impact"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "state": {
+                "default": "open",
+                "enum": [
+                  "open",
+                  "closed"
+                ]
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -2490,16 +2689,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:13ccc9498b0e4a75d90e52943d6c8878fd45695f93abf797ac937101fd0d047d",
+          "params_digest": "sha256:ba93d7227ee3f4ef5ade2ad0c225b86691b6f7a3629b1945d5cb511ee4815f7e",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "decision_id": {
                 "maxLength": 128,
@@ -2535,21 +2728,31 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:00ad32430bb944f6f3b7dfb9cfa558296b5c0b752e8db744597e1b66c007f8b7",
+          "params_digest": "sha256:dd32348ea5789b0299dea36cc39c7d394ecd1c64a20405fc398a0af111ea2f8a",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "after_sequence": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
               "attempt_id": {
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
+              },
+              "limit": {
+                "default": 16,
+                "maximum": 16,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "through_sequence": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [
@@ -2580,17 +2783,28 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:b2e7e54ade9485591ecc8f865f270a362ed2484a02d9a4c4340bc50dc19774bd",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -2628,7 +2842,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Send a message to a running agent session's mailbox",
       "target": {
         "rule": "own"
       }
@@ -2655,7 +2869,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Nudge a running agent session with a message, delivered at its next safe boundary",
       "target": {
         "rule": "subject"
       }
@@ -2672,17 +2886,16 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:3c89e0099931c916e966bcf5c882645a53960ab1b27c68a499b3bfdf833c3dfb",
+          "params_digest": "sha256:5da66d872db61d2d42edb8f0d9c840e0e95a14749ed9a35611bcce448ab7a128",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              },
               "session_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -2717,17 +2930,16 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:3c89e0099931c916e966bcf5c882645a53960ab1b27c68a499b3bfdf833c3dfb",
+          "params_digest": "sha256:5da66d872db61d2d42edb8f0d9c840e0e95a14749ed9a35611bcce448ab7a128",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "scope": {
+                "default": "all_authorized",
+                "pattern": "^(all_authorized|project:[0-9a-f-]{36})$",
+                "type": "string"
+              },
               "session_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -2762,16 +2974,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:00ad32430bb944f6f3b7dfb9cfa558296b5c0b752e8db744597e1b66c007f8b7",
+          "params_digest": "sha256:432ef672133f082728574353773c15bdde95b05ca57012b9853827a1bf59eb58",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "attempt_id": {
                 "maxLength": 128,
@@ -2818,7 +3024,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Send a message to the supervisor conversation",
       "target": {
         "rule": "own"
       }
@@ -2846,7 +3052,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Turn the owner's availability switch on or off",
       "target": {
         "rule": "subject"
       }
@@ -2873,7 +3079,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Cancel a task and stop any attempt holding it",
       "target": {
         "rule": "subject"
       }
@@ -3248,6 +3454,33 @@
     {
       "cli": [
         "task",
+        "delete"
+      ],
+      "grant": "task.delete",
+      "kind": "mutation",
+      "name": "task.delete",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:b21e28bd480efb51d5734ae10a83cf15cd136fdc2095803245770883cbb5d7ca",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.delete"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Delete a task and its relationships; its history is kept",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "dependency",
         "add"
       ],
@@ -3279,7 +3512,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Make one task block another",
       "target": {
         "rule": "subject"
       }
@@ -3318,7 +3551,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Remove a blocking dependency between two tasks",
       "target": {
         "rule": "subject"
       }
@@ -3356,7 +3589,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Edit a task's title, body, acceptance criteria or labels",
       "target": {
         "rule": "subject"
       }
@@ -3415,17 +3648,17 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:e4ca7510bc94f7264d7580b2b4d655c6d42ca92ac140d86ccee012c8513cd038",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "limit": {
+                "default": 63,
+                "maximum": 63,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -3450,17 +3683,17 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:e4ca7510bc94f7264d7580b2b4d655c6d42ca92ac140d86ccee012c8513cd038",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "limit": {
+                "default": 63,
+                "maximum": 63,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -3553,17 +3786,16 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:ad7085e7cb8ccf75fecda7f1a9b834e8366ea463dbce8ed07df5811d9b131db6",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -3588,17 +3820,16 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:ad7085e7cb8ccf75fecda7f1a9b834e8366ea463dbce8ed07df5811d9b131db6",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
               "project_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -3640,19 +3871,30 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_digest": "sha256:5e03e475376708a8328a289ba1e68d1c6eeb8b503b61074c79ae749a776524e8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "q": {
+                "description": "Text to match; not blank, no control characters",
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               }
@@ -3669,19 +3911,30 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:b4c1595be719f4ffd396989f3c40e8d4a77df5bc35b67dc5f66e424669b4f741",
+          "params_digest": "sha256:5e03e475376708a8328a289ba1e68d1c6eeb8b503b61074c79ae749a776524e8",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 64,
+                "minimum": 1,
+                "type": "integer"
+              },
               "project_id": {
                 "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "q": {
+                "description": "Text to match; not blank, no control characters",
+                "maxLength": 256,
                 "minLength": 1,
                 "type": "string"
               }
@@ -3715,17 +3968,33 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:05df878e3c6dc5040c7e5d9ca82ae4b0cc3a935d0b8c7af148e57b7800775b8b",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "The last project of the previous page; not with project_id",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_limit": {
+                "default": 4,
+                "maximum": 8,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "task_limit": {
+                "default": 16,
+                "maximum": 32,
+                "minimum": 1,
+                "type": "integer"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -3773,7 +4042,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Set a task's priority (higher runs first)",
       "target": {
         "rule": "subject"
       }
@@ -3800,7 +4069,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Release a task whose attempt has settled for a replacement attempt",
       "target": {
         "rule": "subject"
       }
@@ -3848,16 +4117,10 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -3883,16 +4146,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -3935,16 +4192,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -3970,16 +4221,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -4022,16 +4267,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -4057,16 +4296,10 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:c5436209c157f6c68f3279e00241f53410369452254cfa885ece32eb1e464c85",
+          "params_digest": "sha256:6d20f94ae0de624fdac6f3a8ef486cb8a311b55dcd7b0864b654e10ee683279c",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "project_id": {
                 "maxLength": 128,
@@ -4109,17 +4342,20 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:72d823fbb28c05966fab1aa1671e7ab3d779a4e0fc02e05d729ba48fc272f40c",
+          "params_digest": "sha256:22a5a64cc0c574711586b7fa6b1d1b17651ad76fe92474e5aaf2991bf8d4ad34",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "after_sequence": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "subscription_id": {
+                "format": "uuid",
+                "type": "string"
+              },
               "terminal_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -4127,7 +4363,9 @@
               }
             },
             "required": [
-              "terminal_id"
+              "terminal_id",
+              "subscription_id",
+              "after_sequence"
             ],
             "type": "object"
           },
@@ -4154,16 +4392,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:71df13b13b7c2e222fd6a703801e919afc0c0ee5b18d38b5e7f51bf8c19104dc",
+          "params_digest": "sha256:edcc07185aa861f2aadb3fe17131f354016a356b56771c93baac877f7c0961cd",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "operation_id": {
                 "maxLength": 128,
@@ -4205,16 +4437,10 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:72d823fbb28c05966fab1aa1671e7ab3d779a4e0fc02e05d729ba48fc272f40c",
+          "params_digest": "sha256:040ef208ab2a66700f3c602468ebee8d96536b20d2ed97d704604d6cee716a45",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "terminal_id": {
                 "maxLength": 128,
@@ -4250,17 +4476,20 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:72d823fbb28c05966fab1aa1671e7ab3d779a4e0fc02e05d729ba48fc272f40c",
+          "params_digest": "sha256:22a5a64cc0c574711586b7fa6b1d1b17651ad76fe92474e5aaf2991bf8d4ad34",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
+              "after_sequence": {
+                "maximum": 9223372036854775807,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "subscription_id": {
+                "format": "uuid",
+                "type": "string"
+              },
               "terminal_id": {
                 "maxLength": 128,
                 "minLength": 1,
@@ -4268,7 +4497,9 @@
               }
             },
             "required": [
-              "terminal_id"
+              "terminal_id",
+              "subscription_id",
+              "after_sequence"
             ],
             "type": "object"
           },
@@ -4305,7 +4536,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Resolve a result comment thread, naming the follow-up revision and a reason",
       "target": {
         "rule": "subject"
       }
@@ -4388,17 +4619,16 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:269657f4c21d6ee908981a2774ca899b916501a5e791a9beebf1856c97949e85",
+          "params_digest": "sha256:f4b840a2074962527819348885e9b9d2bdb479eb2777ed1da9bd25e30bc27e6e",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
             },
-            "description": "Path params as named; every other param is passed as a query string value.",
-            "properties": {},
             "required": [],
             "type": "object"
           },
@@ -4473,16 +4703,10 @@
         },
         "owner": {
           "body": "query",
-          "params_digest": "sha256:abc32a4c5d82fd011dbd30b12461081f4955fef9002c47c9b231d267d378f422",
+          "params_digest": "sha256:766d83c6aa610985316424cda7c08f4e3c75d0be07fd148ccc5b09c54a30c753",
           "params_schema": {
-            "additionalProperties": {
-              "type": [
-                "string",
-                "integer",
-                "boolean"
-              ]
-            },
-            "description": "Path params as named; every other param is passed as a query string value.",
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "wait_id": {
                 "maxLength": 128,
@@ -4579,7 +4803,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Stop a machine taking new work and let running attempts finish",
       "target": {
         "rule": "subject"
       }
@@ -4606,7 +4830,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Revoke every node of a machine (idempotent)",
       "target": {
         "rule": "subject"
       }
@@ -4633,7 +4857,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Let a machine take work again",
       "target": {
         "rule": "subject"
       }
@@ -4660,7 +4884,7 @@
           }
         }
       },
-      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "summary": "Stop a machine and hand off the attempts running on it",
       "target": {
         "rule": "subject"
       }

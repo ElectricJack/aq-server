@@ -244,11 +244,23 @@ operation ID. Inspect that ID with `operations show`; this only calls
 `GET /api/v1/operations/{id}`. An absent operation does not prove non-admission.
 The CLI never resends a mutation or switches to a legacy write route.
 
-The current action union offers task creation, decision response and supervisor
-message enqueue. `tasks cancel`, `tasks retry`, `workers revoke ID`,
-`workers enroll`, and `projects onboard` return `unsupported` without making
-HTTP requests. Adding their domain implementations belongs to their owning
-tasks; this CLI does not route around their absence.
+The owner groups send task creation, task cancel and retry, decision response,
+worker revocation and supervisor message enqueue through the action union.
+
+- `tasks cancel ID --project P [--revision R]` and `tasks retry ID --project P
+  [--revision R]` send `task.cancel` and `task.retry`. `R` is the task version
+  the change expects. Without it the CLI first reads the task
+  (`GET /api/human/projects/{P}/tasks/{ID}`) and sends the version it saw; the
+  server compares it again, so a task that changed in between is a conflict.
+- `workers revoke MACHINE` sends `worker.revoke`. `MACHINE` is a machine key
+  (the `id` of a machine in `run dashboard.swarm`; `workers list` shows node
+  IDs, not keys), or the node ID of a legacy node that belongs to no service
+  machine (sent as `node:<uuid>`). The server refuses a node of a service
+  machine and asks for the machine.
+
+`workers enroll` and `projects onboard` return `unsupported` without making
+HTTP requests: no action kind serves them, and this CLI does not route around
+their absence.
 
 The published `human-supervisor-conversation-1` foundation has human-only
 history and explicitly unavailable runtime. Consequently `chat --once` currently
