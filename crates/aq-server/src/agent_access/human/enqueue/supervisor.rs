@@ -132,10 +132,18 @@ fn registry(state: &AppState, p: SupervisorPrincipal) -> ApiResult<Registry> {
         p.clone(),
     )))?;
     use super::super::graph_actions::{
-        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize,
+        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRouteClear, TaskRouteSet,
     };
     r.register(GraphAction::<TaskEdit>::for_supervisor(state, p.clone()))?;
     r.register(GraphAction::<TaskReprioritize>::for_supervisor(
+        state,
+        p.clone(),
+    ))?;
+    r.register(GraphAction::<TaskRouteSet>::for_supervisor(
+        state,
+        p.clone(),
+    ))?;
+    r.register(GraphAction::<TaskRouteClear>::for_supervisor(
         state,
         p.clone(),
     ))?;
