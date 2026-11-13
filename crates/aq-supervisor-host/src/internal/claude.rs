@@ -1,17 +1,21 @@
 //! One internal task on a logged-in Claude Code: `claude -p` with every
 //! built-in tool removed (`--tools ""`), in an empty directory, the prompt on
-//! stdin, the answer from the `--output-format json` result object. The setup
-//! token reaches the native only in its environment and is never written to
-//! disk, so nothing is copied back.
+//! stdin, the answer from the `--output-format json` result object. Agent
+//! work instead gets the file tools and a shell limited to
+//! [`agent::SHELL_EXECUTABLES`], confined to its workspace, with its event
+//! stream kept as the transcript and its answer read from the outcome file.
+//! The setup token reaches the native only in its environment and is never
+//! written to disk, so nothing is copied back.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Session, clip, execute, failure, in_run_dirs, unavailable,
+    DETAIL_BYTES, Failure, Harness, Run, agent, clip, execute, execute_into, failure, in_run_dirs,
+    unavailable,
 };
 use crate::{
     config::protected_read,
     subscription::{Identity, native_command},
 };
 use aq_intelligence_config::material::normalize_claude_token;
-use aq_internal_work::{Claimed, Reason, Usage, validate};
+use aq_internal_work::{Reason, Usage, validate};
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -36,26 +40,18 @@ const ENVIRONMENT: [(&str, &str); 5] = [
 /// `claude --help` lists for `--effort`.
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// Runs `claimed` once on the Claude login of `h` in `session`.
+/// Runs `run`'s task once on the Claude login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
 pub(crate) async fn claude(
     h: &Harness,
     homes: &Path,
     scratch: &Path,
-    claimed: &Claimed,
-    identity: Identity,
-    session: &Session,
+    run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(
-        h,
-        homes,
-        scratch,
-        identity,
-        async |executable, home, cwd| {
-            attempt(h, executable, home, cwd, claimed, identity, session).await
-        },
-    )
+    in_run_dirs(h, homes, scratch, run, async |executable, home, cwd| {
+        attempt(h, executable, home, cwd, run).await
+    })
     .await
 }
 
@@ -64,10 +60,14 @@ async fn attempt(
     executable: &std::fs::File,
     home: &Path,
     cwd: &Path,
-    claimed: &Claimed,
-    identity: Identity,
-    session: &Session,
+    run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
+    let Run {
+        claimed,
+        identity,
+        session,
+        ..
+    } = run;
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let token = protected_read(&h.secret_file, 65536)
         .map(Zeroizing::new)
@@ -79,7 +79,12 @@ async fn attempt(
     write_settings(&settings, home, identity).map_err(|_| setup())?;
     let candidate = &claimed.candidate;
     let effort = candidate.reasoning.as_deref();
-    let args = arguments(&candidate.model, effort, &settings).ok_or_else(setup)?;
+    let work = claimed.request.agent.as_ref();
+    let args = match work {
+        Some(work) => agent_arguments(&candidate.model, effort, &settings, work.max_turns),
+        None => arguments(&candidate.model, effort, &settings),
+    };
+    let args = args.ok_or_else(setup)?;
     let mut command = native_command(executable, args, home, cwd, identity);
     if effort == Some("off") {
         command.env("MAX_THINKING_TOKENS", "0");
@@ -95,8 +100,38 @@ async fn attempt(
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
+    let redact = |text: &str| text.replace(secret, agent::REDACTED);
+    if work.is_some() {
+        let prompt = validate::agent_prompt(&claimed.request);
+        let (mut transcript, mut result) = (agent::Transcript::default(), None);
+        let mut each = |line: &[u8]| match serde_json::from_slice::<Value>(line) {
+            Ok(event) if event["type"] == "result" => result = Some(event),
+            Ok(event) => transcript.claude(&event),
+            Err(_) => {}
+        };
+        let mut lines = agent::Lines::default();
+        let ran = execute_into(command, prompt, session, &mut |chunk| {
+            lines.feed(chunk, &mut each)
+        })
+        .await;
+        lines.end(&mut each);
+        run.keep(transcript.finish(|text| Some(redact(text))));
+        let status =
+            ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
+        // The harness's own failure counts only when there is no outcome.
+        let failed = match &result {
+            Some(result) => outcome(status, result.to_string().as_bytes(), redact).err(),
+            None if status.success() => None,
+            None => Some((
+                Reason::ProviderError,
+                format!("native exited with {status}"),
+            )),
+        };
+        let limit = claimed.request.max_output_bytes;
+        let reply = agent::conclude(cwd, limit, failed, |text| Some(redact(&text)))?;
+        return Ok((reply, result.as_ref().and_then(usage)));
+    }
     let ran = execute(command, validate::prompt(&claimed.request), session).await;
-    let redact = |text: &str| text.replace(secret, "[credential redacted]");
     match ran {
         Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
         Ok((status, stdout)) => outcome(status, &stdout, redact),
@@ -133,6 +168,43 @@ fn arguments(model: &str, effort: Option<&str>, settings: &Path) -> Option<Vec<S
     if let Some(effort) = effort.filter(|e| EFFORTS.contains(e)) {
         args.extend(["--effort".into(), effort.into()]);
     }
+    Some(args)
+}
+
+/// The arguments of agent work: those of [`arguments`] with the event stream
+/// as output, and in place of no tools the file tools and a shell that may
+/// run only [`agent::SHELL_EXECUTABLES`]. `--restricted` confines the file
+/// tools to the workspace, `dontAsk` refuses whatever is not allowed (nobody
+/// is there to ask), the web tools are refused outright, and the agent stops
+/// after `max_turns` turns.
+fn agent_arguments(
+    model: &str,
+    effort: Option<&str>,
+    settings: &Path,
+    max_turns: u32,
+) -> Option<Vec<String>> {
+    let mut args = arguments(model, effort, settings)?;
+    let format = args.iter().position(|a| a == "--output-format")?;
+    args[format + 1] = "stream-json".into();
+    args.insert(format + 2, "--verbose".into());
+    let tools = args.iter().position(|a| a == "--tools")?;
+    let file_tools = ["Read", "Write", "Edit", "Glob", "Grep"];
+    let shell = agent::SHELL_EXECUTABLES.map(|name| format!("Bash({name}:*)"));
+    let agent = [
+        "--restricted".to_owned(),
+        "--permission-mode".into(),
+        "dontAsk".into(),
+        "--tools".into(),
+        format!("Bash,{}", file_tools.join(",")),
+        "--allowedTools".into(),
+    ]
+    .into_iter()
+    .chain(shell)
+    .chain(file_tools.map(String::from))
+    .chain(["--disallowedTools", "WebFetch", "WebSearch", "--max-turns"].map(String::from))
+    .chain([max_turns.to_string()]);
+    // In place of `--tools ""`.
+    args.splice(tools..tools + 2, agent);
     Some(args)
 }
 
@@ -189,8 +261,13 @@ fn outcome(
         return Err((reason, detail));
     }
     let reply = text.ok_or_else(|| failure(Reason::ProviderError, "native final reply missing"))?;
-    let usage = &object["usage"];
-    let usage = match (
+    Ok((redact(reply), usage(&object)))
+}
+
+/// The usage a result object reports, if it reports both counts.
+fn usage(result: &Value) -> Option<Usage> {
+    let usage = &result["usage"];
+    match (
         usage["input_tokens"].as_u64(),
         usage["output_tokens"].as_u64(),
     ) {
@@ -199,6 +276,5 @@ fn outcome(
             output_tokens,
         }),
         _ => None,
-    };
-    Ok((redact(reply), usage))
+    }
 }

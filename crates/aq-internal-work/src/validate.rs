@@ -22,6 +22,17 @@ pub fn prompt(request: &Request) -> String {
     )
 }
 
+/// What an agent is told when it starts: the instructions, the input when
+/// there is one (its files carry the rest), then where it works and how it
+/// ends.
+pub fn agent_prompt(request: &Request) -> String {
+    let ending = "Your workspace is the current directory; finish with `aq-playbooks save`, `ask` or `unable`.";
+    match request.input.trim().is_empty() {
+        true => format!("{}\n\n{ending}", request.instructions),
+        false => format!("{}\n\n{}\n\n{ending}", request.instructions, request.input),
+    }
+}
+
 /// Checks the model's raw text against the shape and returns the answer.
 ///
 /// The error names the first violation; it carries at most 200 bytes of the

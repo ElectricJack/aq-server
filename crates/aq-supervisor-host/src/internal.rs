@@ -1,8 +1,12 @@
 //! `internal` mode (spec 0012 §4, §6): claims internal tasks whose current
 //! candidate is a logged-in agent and runs each once, non-interactively.
 //!
+//! Agent work (spec 0013 §4.2) runs the harness with tools in a workspace
+//! holding the request's files until it writes its outcome ([`agent`]).
+//!
 //! Internal work takes no worker slot and is outside swarm admission: nothing
 //! here reads swarm settings or admits a supervisor generation.
+mod agent;
 mod claude;
 mod codex;
 
@@ -12,7 +16,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use aq_internal_work::{
-    Claimed, DEADLINE_PASSED, MIN_CANDIDATE_BUDGET_MS, Reason, Usage, Way, store, validate,
+    Claimed, DEADLINE_PASSED, MIN_CANDIDATE_BUDGET_MS, Reason, Usage, store, validate,
 };
 use aq_session_protocol::Digest;
 use serde::Deserialize;
@@ -241,6 +245,11 @@ fn is_run_dir(name: &std::ffi::OsStr) -> bool {
 /// until it has ended, its refresh copied back included, so the next Codex
 /// run, even the same task's fallback, copies in the newest login.
 ///
+/// At most one agent run is in progress at a time, so one of the
+/// [`MAX_RUNS`] slots always serves answer tasks: while one runs, only answer
+/// tasks are claimed. A Codex agent run holds the Codex login like any Codex
+/// run, for its whole duration.
+///
 /// Once `keep_going` returns false, or an error, it claims nothing more and
 /// returns that when the runs in progress have ended.
 pub async fn serve(
@@ -250,6 +259,7 @@ pub async fn serve(
     mut keep_going: impl FnMut() -> Result<bool>,
 ) -> Result<()> {
     let codex_login = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+    let agent_slot = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let mut runs = tokio::task::JoinSet::new();
     loop {
         let mut claimed = false;
@@ -258,14 +268,17 @@ pub async fn serve(
             pass_busy_codex(&pool, &runner).await;
         }
         if runs.len() < MAX_RUNS {
-            match claim(&config, &pool, &runner, now_ms()?, codex.is_some()).await {
+            let agent = agent_slot.clone().try_acquire_owned().ok();
+            let free = (codex.is_some(), agent.is_some());
+            match claim(&config, &pool, &runner, now_ms()?, free).await {
                 Ok(Some(job)) => {
                     let is_codex = job.claimed.candidate.harness.as_deref() == Some("codex");
                     let login = codex.filter(|_| is_codex);
+                    let agent = agent.filter(|_| job.claimed.request.agent.is_some());
                     let (config, pool) = (config.clone(), pool.clone());
                     runs.spawn(async move {
                         let ended = finish(job, &config, &pool).await;
-                        drop(login);
+                        drop((login, agent));
                         ended
                     });
                     claimed = true;
@@ -368,7 +381,7 @@ pub async fn tick(
     runner: &str,
     now_ms: i64,
 ) -> Result<bool> {
-    let Some(job) = claim(config, pool, runner, now_ms, true).await? else {
+    let Some(job) = claim(config, pool, runner, now_ms, (true, true)).await? else {
         return Ok(false);
     };
     finish(job, config, pool).await?;
@@ -376,13 +389,14 @@ pub async fn tick(
 }
 
 /// Claims the next queued login task for a harness this host has
-/// configured; for Codex only when `codex` (its login is free).
+/// configured; for Codex only when `codex` (its login is free), and agent
+/// work only when `agents` (no agent runs here now).
 async fn claim(
     config: &InternalConfig,
     pool: &PgPool,
     runner: &str,
     now_ms: i64,
-    codex: bool,
+    (codex, agents): (bool, bool),
 ) -> Result<Option<Job>> {
     let codex = config.codex.as_ref().filter(|_| codex);
     let configured: Vec<&str> = [("codex", codex), ("claude", config.claude.as_ref())]
@@ -394,7 +408,7 @@ async fn claim(
     }
     // At `now_ms`: the claim records it as `claimed_at_ms`.
     let started = Instant::now();
-    let claimed = store::claim(pool, Way::Login, &configured, runner, now_ms).await?;
+    let claimed = store::claim_login(pool, &configured, agents, runner, now_ms).await?;
     Ok(claimed.map(|claimed| Job {
         claimed,
         now_ms,
@@ -416,7 +430,8 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
     let stop_after = u64::try_from(claimed.stop_at_ms() - now_ms).unwrap_or(0);
     let stop_at = started + Duration::from_millis(stop_after);
     let session = Session::new(stop_at);
-    let run = run_candidate(config, &claimed, &session);
+    let transcript = Transcript::default();
+    let run = run_candidate(config, &claimed, &session, &transcript);
     tokio::pin!(run);
     let ran = tokio::select! {
         biased;
@@ -448,8 +463,10 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
         };
         // The report is polled first and does not wait for the run to end.
         let (reported, ()) = tokio::join!(report, end);
+        keep_transcript(pool, &claimed, &transcript).await;
         return reported;
     };
+    keep_transcript(pool, &claimed, &transcript).await;
     let request = &claimed.request;
     let checked = result.and_then(|(raw, usage)| {
         validate::answer(&request.answer, &raw, request.max_output_bytes)
@@ -478,22 +495,46 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
     }
 }
 
+/// Where an agent run leaves its clipped, redacted transcript for
+/// [`keep_transcript`]; it stays empty for an answer run.
+type Transcript = std::sync::Mutex<Option<serde_json::Value>>;
+
+/// Stores the transcript an agent run left, once the run has ended (also
+/// after a timeout, when its native was killed).
+async fn keep_transcript(pool: &PgPool, claimed: &Claimed, transcript: &Transcript) {
+    let events = transcript
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    let Some(events) = events else { return };
+    let (id, index) = (claimed.id, claimed.candidate_index);
+    if record(store::save_transcript(pool, id, index, &events))
+        .await
+        .is_err()
+    {
+        eprintln!("internal work: a transcript was not recorded");
+    }
+}
+
 /// Runs `claimed` on the harness its candidate names, in `session`.
 async fn run_candidate(
     config: &InternalConfig,
     claimed: &Claimed,
     session: &Session,
+    transcript: &Transcript,
 ) -> Result<(String, Option<Usage>), Failure> {
     let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
     let harness = claimed.candidate.harness.as_deref();
+    let run = Run {
+        claimed,
+        identity,
+        session,
+        transcript,
+    };
     match (harness, &config.codex, &config.claude) {
         _ if claimed.budget_ms() == 0 => Err(failure(Reason::DeadlineExceeded, DEADLINE_PASSED)),
-        (Some("codex"), Some(h), _) => {
-            codex::codex(h, homes, scratch, claimed, identity, session).await
-        }
-        (Some("claude"), _, Some(h)) => {
-            claude::claude(h, homes, scratch, claimed, identity, session).await
-        }
+        (Some("codex"), Some(h), _) => codex::codex(h, homes, scratch, run).await,
+        (Some("claude"), _, Some(h)) => claude::claude(h, homes, scratch, run).await,
         _ => Err(failure(
             Reason::ProviderUnavailable,
             "no runner for this harness on this host",
@@ -508,22 +549,42 @@ const STDOUT_BYTES: usize = 8 * 1024 * 1024;
 
 type Failure = (Reason, String);
 
+/// What a harness runner is given for one attempt.
+#[derive(Clone, Copy)]
+struct Run<'a> {
+    claimed: &'a Claimed,
+    identity: Identity,
+    session: &'a Session,
+    transcript: &'a Transcript,
+}
+
+impl Run<'_> {
+    /// Leaves an agent run's transcript for [`keep_transcript`].
+    fn keep(&self, events: Option<serde_json::Value>) {
+        *self
+            .transcript
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = events;
+    }
+}
+
 fn failure(reason: Reason, detail: &str) -> Failure {
     (reason, detail.into())
 }
 
 /// Checks the run directories' parents and the native of `h`, makes a fresh
 /// private home under `homes` and an empty working directory under `scratch`
-/// (owned by the native's user), and runs `attempt` with the verified
-/// executable, the home and the directory. Both are removed afterwards,
-/// whatever the outcome.
+/// (owned by the native's user), writes agent work's files into the
+/// directory, and runs `attempt` with the verified executable, the home and
+/// the directory. Both are removed afterwards, whatever the outcome.
 async fn in_run_dirs<T>(
     h: &Harness,
     homes: &Path,
     scratch: &Path,
-    identity: Identity,
+    run: Run<'_>,
     attempt: impl AsyncFnOnce(&std::fs::File, &Path, &Path) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
+    let identity = run.identity;
     for parent in [homes, scratch] {
         private_parent(parent, identity)
             .map_err(|_| failure(Reason::ProviderError, "internal work directories rejected"))?;
@@ -537,6 +598,16 @@ async fn in_run_dirs<T>(
         .map_err(|_| failure(Reason::ProviderError, "native run could not be prepared"));
     // Removed however this ends, a panic included.
     let _dirs = RunDirs([&home, &cwd]);
+    let work = run.claimed.request.agent.as_ref();
+    let made = made.and_then(|()| match work {
+        Some(work) => agent::materialize(&cwd, work, identity).map_err(|_| {
+            failure(
+                Reason::ProviderError,
+                "agent workspace could not be prepared",
+            )
+        }),
+        None => Ok(()),
+    });
     match made {
         Ok(()) => attempt(&executable, &home, &cwd).await,
         Err(failure) => Err(failure),
@@ -672,6 +743,24 @@ async fn execute(
     prompt: String,
     session: &Session,
 ) -> std::io::Result<(std::process::ExitStatus, Vec<u8>)> {
+    let mut bytes = Vec::new();
+    let status = execute_into(command, prompt, session, &mut |chunk| {
+        // Past the limit the rest is drained unread.
+        let room = STDOUT_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&chunk[..chunk.len().min(room)]);
+    })
+    .await?;
+    Ok((status, bytes))
+}
+
+/// [`execute`], handing each piece of stdout to `out` as it arrives instead
+/// of collecting it, so an agent's long event stream is read whole.
+async fn execute_into(
+    command: std::process::Command,
+    prompt: String,
+    session: &Session,
+    out: &mut (dyn FnMut(&[u8]) + Send),
+) -> std::io::Result<std::process::ExitStatus> {
     let mut command = tokio::process::Command::from(command);
     command.kill_on_drop(true);
     let mut child = session.spawn(&mut command)?;
@@ -684,7 +773,7 @@ async fn execute(
         }
     };
     tokio::pin!(write);
-    let (mut bytes, mut chunk) = (Vec::new(), vec![0u8; 64 * 1024]);
+    let mut chunk = vec![0u8; 64 * 1024];
     let (mut written, mut status, mut drain_until) = (false, None, None);
     while status.is_none() || stdout.is_some() {
         let drained =
@@ -693,11 +782,7 @@ async fn execute(
             () = &mut write, if !written => written = true,
             read = read_some(&mut stdout, &mut chunk), if stdout.is_some() => match read {
                 Ok(0) | Err(_) => stdout = None,
-                Ok(n) => {
-                    // Past the limit the rest is drained unread.
-                    let room = STDOUT_BYTES.saturating_sub(bytes.len());
-                    bytes.extend_from_slice(&chunk[..n.min(room)]);
-                }
+                Ok(n) => out(&chunk[..n]),
             },
             exited = child.wait(), if status.is_none() => {
                 session.kill();
@@ -708,8 +793,7 @@ async fn execute(
             () = drained, if drain_until.is_some() => break,
         }
     }
-    let status = status.expect("the loop ends only after the native has exited");
-    Ok((status, bytes))
+    Ok(status.expect("the loop ends only after the native has exited"))
 }
 
 /// The next bytes of `out`; none once it is closed.

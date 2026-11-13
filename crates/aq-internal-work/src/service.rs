@@ -48,6 +48,8 @@ pub fn settings_choices(
 pub const API_CONCURRENCY: usize = 4;
 /// How long API attempts in flight at stop get to record what they got.
 pub const STOP_DRAIN: Duration = Duration::from_secs(3);
+/// The failure detail of an API candidate of agent work.
+pub const AGENT_NEEDS_LOGIN: &str = "agent work runs only on a logged-in harness";
 
 pub struct Service {
     pool: PgPool,
@@ -243,6 +245,9 @@ impl Service {
         let (pool, now) = (&self.pool, &self.now);
         let result = if claimed.budget_ms() == 0 {
             Err((Reason::DeadlineExceeded, DEADLINE_PASSED.to_owned()))
+        } else if claimed.request.agent.is_some() {
+            // An API call is one prompt; agent work needs a harness with tools.
+            Err((Reason::ProviderUnavailable, AGENT_NEEDS_LOGIN.to_owned()))
         } else {
             // ApiBackend stops at the task deadline; this stops at the
             // candidate budget, counted from the claim, so the failure is

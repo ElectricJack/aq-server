@@ -1,51 +1,54 @@
 //! One internal task on a logged-in Codex: `codex exec` in a read-only
 //! sandbox and an empty directory, the prompt on stdin, the answer from
 //! `--output-last-message`. The Codex CLI has no switch that removes its
-//! shell tool, so this is what "tools off" means for Codex.
+//! shell tool, so this is what "tools off" means for Codex. Agent work runs
+//! in a workspace-write sandbox without network instead, in the workspace
+//! holding its files, with its event stream kept as the transcript and its
+//! answer read from the outcome file.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Session, clip, execute, failure, in_run_dirs, unavailable,
+    DETAIL_BYTES, Failure, Harness, Run, agent, clip, execute, execute_into, failure, in_run_dirs,
+    unavailable,
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
     redact_login, service_tier, stage_login,
 };
-use aq_internal_work::{Claimed, Reason, Usage, validate};
+use aq_internal_work::{Reason, Usage, validate};
 use serde_json::Value;
-use std::path::Path;
+use std::{path::Path, process::ExitStatus};
 use zeroize::Zeroizing;
 
-/// Runs `claimed` once on the Codex login of `h` in `session`.
+/// Runs `run`'s task once on the Codex login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
 pub(crate) async fn codex(
     h: &Harness,
     homes: &Path,
     scratch: &Path,
-    claimed: &Claimed,
-    identity: Identity,
-    session: &Session,
+    run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(
-        h,
-        homes,
-        scratch,
-        identity,
-        async |executable, home, cwd| {
-            attempt(h, executable, home, cwd, claimed, identity, session).await
-        },
-    )
+    in_run_dirs(h, homes, scratch, run, async |executable, home, cwd| {
+        attempt(h, executable, home, cwd, run).await
+    })
     .await
 }
+
+/// The `--config` override that keeps an agent's sandbox off the network.
+const NO_NETWORK: &str = "sandbox_workspace_write.network_access=false";
 
 async fn attempt(
     h: &Harness,
     executable: &std::fs::File,
     home: &Path,
     cwd: &Path,
-    claimed: &Claimed,
-    identity: Identity,
-    session: &Session,
+    run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
+    let Run {
+        claimed,
+        identity,
+        session,
+        ..
+    } = run;
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let auth = stage_login(&h.secret_file, home, identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
@@ -61,18 +64,43 @@ async fn attempt(
     };
     let output = home.join("last-message.txt");
     let candidate = &claimed.candidate;
-    let args = exec_arguments("read-only", &candidate.model, cwd, &output).map_err(|_| setup())?;
+    let agent = claimed.request.agent.is_some();
+    let sandbox = if agent {
+        "workspace-write"
+    } else {
+        "read-only"
+    };
+    let args = exec_arguments(sandbox, &candidate.model, cwd, &output).map_err(|_| setup())?;
     // The model choice's effort; without one Codex keeps its default.
     let mut overrides = exec_overrides(candidate.reasoning.as_deref());
     let tier = service_tier(&candidate.options)
         .map_err(|_| failure(Reason::ProviderError, "unsupported service tier"))?;
     overrides.extend(tier);
+    overrides.extend(agent.then(|| NO_NETWORK.to_owned()));
     let args = exec_finish(args, overrides);
     let mut command = native_command(executable, args, home, cwd, identity);
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let ran = execute(command, validate::prompt(&claimed.request), session).await;
+    let (mut events, mut transcript) = (Events::default(), agent::Transcript::default());
+    let ran = if agent {
+        let prompt = validate::agent_prompt(&claimed.request);
+        let mut each = |line: &[u8]| {
+            if let Ok(event) = serde_json::from_slice::<Value>(line) {
+                events.line(&event);
+                transcript.codex(&event);
+            }
+        };
+        let mut lines = agent::Lines::default();
+        let ran = execute_into(command, prompt, session, &mut |chunk| {
+            lines.feed(chunk, &mut each)
+        })
+        .await;
+        lines.end(&mut each);
+        ran.map(|status| (status, Vec::new()))
+    } else {
+        execute(command, validate::prompt(&claimed.request), session).await
+    };
     #[cfg(feature = "test-support")]
     {
         use std::sync::atomic::Ordering::SeqCst;
@@ -94,32 +122,29 @@ async fn attempt(
         .collect();
     // Without a redaction nothing of the native's text leaves this function.
     let redact = |text: String| redact_login(text, &documents).ok();
-    match ran {
-        Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
-        Ok((status, stdout)) => {
-            let events = Events::parse(&stdout);
-            if !status.success() {
-                let reason = if events.unavailable {
-                    Reason::ProviderUnavailable
-                } else {
-                    Reason::ProviderError
-                };
-                let detail = match events.last_error {
-                    Some(message) => redact(message)
-                        .map(|text| clip(text, DETAIL_BYTES))
-                        .unwrap_or_else(|| "native failed; its message was withheld".into()),
-                    None => format!("native exited with {status}"),
-                };
-                return Err((reason, detail));
-            }
-            let reply = read_reply(&output, identity.run_as)
-                .map_err(|_| failure(Reason::ProviderError, "native final reply missing"))?;
-            let reply = redact(reply).ok_or_else(|| {
-                failure(Reason::ProviderError, "native reply could not be redacted")
-            })?;
-            Ok((reply, events.usage))
-        }
+    if agent {
+        run.keep(transcript.finish(|text| redact(text.to_owned())));
     }
+    let (status, stdout) =
+        ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
+    if !agent {
+        events = Events::parse(&stdout);
+    }
+    let failed = (!status.success()).then(|| events.failure(status, redact));
+    if agent {
+        // The harness's own failure counts only when there is no outcome.
+        let limit = claimed.request.max_output_bytes;
+        let reply = agent::conclude(cwd, limit, failed, redact)?;
+        return Ok((reply, events.usage));
+    }
+    if let Some(failed) = failed {
+        return Err(failed);
+    }
+    let reply = read_reply(&output, identity.run_as)
+        .map_err(|_| failure(Reason::ProviderError, "native final reply missing"))?;
+    let reply = redact(reply)
+        .ok_or_else(|| failure(Reason::ProviderError, "native reply could not be redacted"))?;
+    Ok((reply, events.usage))
 }
 
 /// Copies the run's login back to the login file ([`copy_back`]) and removes
@@ -176,35 +201,55 @@ impl Events {
     fn parse(stdout: &[u8]) -> Events {
         let mut events = Events::default();
         for line in stdout.split(|b| *b == b'\n') {
-            let Ok(event) = serde_json::from_slice::<Value>(line) else {
-                continue;
-            };
-            let message = match event["type"].as_str() {
-                Some("turn.completed") => {
-                    let usage = &event["usage"];
-                    if let (Some(input), Some(output)) = (
-                        usage["input_tokens"].as_u64(),
-                        usage["output_tokens"].as_u64(),
-                    ) {
-                        events.usage = Some(Usage {
-                            input_tokens: input,
-                            output_tokens: output,
-                        });
-                    }
-                    None
-                }
-                Some("error") => event["message"].as_str(),
-                Some("turn.failed") => event["error"]["message"].as_str(),
-                Some("item.completed") if event["item"]["type"] == "error" => {
-                    event["item"]["message"].as_str()
-                }
-                _ => None,
-            };
-            if let Some(message) = message {
-                events.unavailable |= unavailable(message);
-                events.last_error = Some(message.to_owned());
+            if let Ok(event) = serde_json::from_slice::<Value>(line) {
+                events.line(&event);
             }
         }
         events
+    }
+
+    /// The failure of a run that exited with `status`: a login or usage-limit
+    /// problem is unavailable, anything else an error. The last error message
+    /// leaves only through `redact`.
+    fn failure(&self, status: ExitStatus, redact: impl Fn(String) -> Option<String>) -> Failure {
+        let reason = match self.unavailable {
+            true => Reason::ProviderUnavailable,
+            false => Reason::ProviderError,
+        };
+        let detail = match &self.last_error {
+            Some(message) => redact(message.clone())
+                .map(|text| clip(text, DETAIL_BYTES))
+                .unwrap_or_else(|| "native failed; its message was withheld".into()),
+            None => format!("native exited with {status}"),
+        };
+        (reason, detail)
+    }
+
+    fn line(&mut self, event: &Value) {
+        let message = match event["type"].as_str() {
+            Some("turn.completed") => {
+                let usage = &event["usage"];
+                if let (Some(input), Some(output)) = (
+                    usage["input_tokens"].as_u64(),
+                    usage["output_tokens"].as_u64(),
+                ) {
+                    self.usage = Some(Usage {
+                        input_tokens: input,
+                        output_tokens: output,
+                    });
+                }
+                None
+            }
+            Some("error") => event["message"].as_str(),
+            Some("turn.failed") => event["error"]["message"].as_str(),
+            Some("item.completed") if event["item"]["type"] == "error" => {
+                event["item"]["message"].as_str()
+            }
+            _ => None,
+        };
+        if let Some(message) = message {
+            self.unavailable |= unavailable(message);
+            self.last_error = Some(message.to_owned());
+        }
     }
 }

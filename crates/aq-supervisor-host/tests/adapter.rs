@@ -135,6 +135,7 @@ mod internal {
             max_output_bytes: 4096,
             escalate: false,
             profile_override: None,
+            agent: None,
         }
     }
 
@@ -1442,5 +1443,565 @@ sleep 0.5
         let usage = row.usage.unwrap();
         assert_eq!((usage.input_tokens, usage.output_tokens), (13, 9));
         assert!(!f.tick().await, "nothing else is queued");
+    }
+
+    /// The outcome every agent fake saves, as `aq-playbooks save` would.
+    const OUTCOME: &str = r#"{"kind":"saved","note":"done"}"#;
+
+    /// Agent work: a workspace with two files, an outcome checked against a
+    /// schema, and a host-wide deadline of a minute.
+    fn agent_request() -> Request {
+        Request {
+            purpose: Purpose::PlaybookCompilation,
+            instructions: "Turn the document into a playbook.".into(),
+            input: String::new(),
+            answer: AnswerShape::Json {
+                schema: json!({"type": "object", "required": ["kind"],
+                    "properties": {"kind": {"enum": ["saved", "question", "unable"]}}}),
+            },
+            blocking: false,
+            affected: Affected {
+                kind: "playbook_source".into(),
+                id: "routing".into(),
+                project_id: None,
+            },
+            agent: Some(aq_internal_work::AgentWork {
+                files: [
+                    ("doc.md".to_string(), "# Routing\nSay yes.".to_string()),
+                    ("guide/language.md".to_string(), "The language.".to_string()),
+                ]
+                .into(),
+                max_turns: 7,
+            }),
+            ..request()
+        }
+    }
+
+    /// Shell that records the workspace (`$rec/<name>.tree`, the files'
+    /// paths, and `<name>.doc`) and then saves [`OUTCOME`].
+    fn saving(name: &str) -> String {
+        format!(
+            "find . -type f | sort > \"$rec/{name}.tree\"\ncat doc.md > \"$rec/{name}.doc\"\n\
+             mkdir -p out\nprintf '%s' '{OUTCOME}' > out/outcome.json"
+        )
+    }
+
+    fn left_in(f: &Fixture, dir: &str) -> Vec<std::fs::DirEntry> {
+        std::fs::read_dir(f.root().join(dir))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// Spec 0013 §4.2: the agent works in a fresh workspace per candidate
+    /// holding only the request's files, and its answer is the outcome file
+    /// it saved, checked like any answer.
+    #[tokio::test]
+    async fn an_agent_run_gets_its_files_in_the_scratch_directory_and_its_outcome_is_the_answer() {
+        // Codex leaves a file of its own and no outcome; Claude saves.
+        let codex = format!(
+            "{}\nrm out/outcome.json\ntouch codex-was-here",
+            saving("codex")
+        );
+        let f = Fixture::with_claude(&codex, &saving("claude")).await;
+        let id = f
+            .submit_request(&agent_request(), &[codex_candidate(), claude_candidate()])
+            .await;
+        assert!(f.tick().await);
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(row.answer, Some(serde_json::from_str(OUTCOME).unwrap()));
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::InvalidOutput)
+        );
+        assert_eq!(
+            row.attempts[0].detail,
+            "the agent ended without saving, asking or giving up"
+        );
+        for name in ["codex", "claude"] {
+            let tree = std::fs::read_to_string(f.rec(&format!("{name}.tree"))).unwrap();
+            assert_eq!(tree, "./doc.md\n./guide/language.md\n", "{name}");
+            let doc = std::fs::read_to_string(f.rec(&format!("{name}.doc"))).unwrap();
+            assert_eq!(doc, "# Routing\nSay yes.");
+        }
+        let prompt = validate::agent_prompt(&agent_request());
+        assert_eq!(std::fs::read_to_string(f.rec("stdin")).unwrap(), prompt);
+        assert_eq!(f.claude_rec("stdin"), prompt);
+        assert!(prompt.ends_with("finish with `aq-playbooks save`, `ask` or `unable`."));
+        let codex_cwd = std::fs::read_to_string(f.rec("pwd")).unwrap();
+        assert_ne!(
+            codex_cwd,
+            f.claude_rec("pwd"),
+            "each candidate has its own workspace"
+        );
+        for dir in ["scratch", "homes"] {
+            assert!(left_in(&f, dir).is_empty(), "{dir} keeps a run directory");
+        }
+    }
+
+    /// Review Focus 4: an agent that ends without an outcome, or with one
+    /// that is malformed, too large, outside the schema or reached through a
+    /// link, fails its candidate as invalid output and answers nothing.
+    #[tokio::test]
+    async fn an_agent_that_ends_without_an_outcome_fails_the_run_and_changes_nothing() {
+        // The model names the case; doc.md holds a valid outcome, so a
+        // followed link would answer.
+        let behaviour = "mkdir out\ncase \" $* \" in\n\
+             *\" m-none \"*) ;;\n\
+             *\" m-prose \"*) printf 'I saved it.' > out/outcome.json;;\n\
+             *\" m-large \"*) head -c 5000 /dev/zero | tr '\\0' ' ' > out/outcome.json;;\n\
+             *\" m-schema \"*) printf '%s' '{\"kind\":\"other\"}' > out/outcome.json;;\n\
+             *\" m-link \"*) ln -s ../doc.md out/outcome.json;;\n\
+             *\" m-dir-link \"*) rmdir out; mkdir elsewhere; cp doc.md elsewhere/outcome.json; \
+             ln -s elsewhere out;;\n\
+             *\" m-fifo \"*) mkfifo out/outcome.json;;\n\
+             esac";
+        let f = Fixture::new(behaviour).await;
+        let mut request = agent_request();
+        if let Some(work) = request.agent.as_mut() {
+            work.files.insert("doc.md".into(), OUTCOME.into());
+        }
+        for (model, detail) in [
+            (
+                "m-none",
+                "the agent ended without saving, asking or giving up",
+            ),
+            ("m-prose", "output is not JSON"),
+            (
+                "m-large",
+                "the outcome file is 5000 bytes, over the limit of 4096",
+            ),
+            ("m-schema", "output violates the schema"),
+            (
+                "m-link",
+                "the outcome path out/outcome.json is a link or not a file",
+            ),
+            (
+                "m-dir-link",
+                "the outcome path out/outcome.json is a link or not a file",
+            ),
+            (
+                "m-fifo",
+                "the outcome path out/outcome.json is not a regular file",
+            ),
+        ] {
+            let candidate = Candidate {
+                model: model.into(),
+                ..codex_candidate()
+            };
+            let id = f.submit_request(&request, &[candidate]).await;
+            assert!(f.tick().await, "{model}");
+            let row = f.row(id).await;
+            assert_eq!(row.status, "failed", "{model}");
+            assert_eq!(
+                row.reason,
+                Some(aq_internal_work::Reason::InvalidOutput),
+                "{model}"
+            );
+            assert!(row.answer.is_none(), "{model}");
+            let got = row.detail.unwrap();
+            assert!(got.starts_with(detail), "{model}: {got}");
+            assert!(left_in(&f, "scratch").is_empty(), "{model}");
+        }
+    }
+
+    /// The Claude agent gets the file tools and a shell that may run only
+    /// the engine CLI, no web tools, a turn limit, the event stream as
+    /// output, and its file tools confined to the workspace.
+    #[tokio::test]
+    async fn the_claude_agent_argv_allows_only_the_engine_cli_in_bash() {
+        let f = Fixture::with_claude("exit 1", &saving("claude")).await;
+        let candidate = with_effort(claude_candidate(), Some("high"), &[]);
+        let id = f.submit_request(&agent_request(), &[candidate]).await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(id).await.status, "answered");
+        let home = PathBuf::from(&f.claude_env()["HOME"]);
+        let settings = home.join("settings.json");
+        assert_eq!(
+            f.claude_argv(),
+            [
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--input-format",
+                "text",
+                "--model",
+                "claude-fixture",
+                "--setting-sources",
+                "user",
+                "--settings",
+                settings.to_str().unwrap(),
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--disable-slash-commands",
+                "--restricted",
+                "--permission-mode",
+                "dontAsk",
+                "--tools",
+                "Bash,Read,Write,Edit,Glob,Grep",
+                "--allowedTools",
+                "Bash(aq-playbooks:*)",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "--disallowedTools",
+                "WebFetch",
+                "WebSearch",
+                "--max-turns",
+                "7",
+                "--effort",
+                "high",
+            ]
+        );
+    }
+
+    /// The Codex agent may write its workspace, and nothing reaches the
+    /// network from its sandbox; its shell inherits no environment.
+    #[tokio::test]
+    async fn the_codex_agent_runs_in_a_workspace_write_sandbox_without_network() {
+        let f = Fixture::new(&saving("codex")).await;
+        let id = f
+            .submit_request(&agent_request(), &[codex_candidate()])
+            .await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(id).await.status, "answered");
+        let argv = f.argv();
+        let after = |flag: &str| {
+            let i = argv.iter().position(|a| a == flag).unwrap();
+            argv[i + 1].clone()
+        };
+        assert_eq!(after("--sandbox"), "workspace-write");
+        let configs: Vec<&String> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--config")
+            .map(|pair| &pair[1])
+            .collect();
+        assert!(
+            configs.contains(&&"sandbox_workspace_write.network_access=false".to_string()),
+            "{argv:?}"
+        );
+        assert!(configs.contains(&&"shell_environment_policy.inherit=\"none\"".to_string()));
+        assert!(configs.contains(&&"approval_policy=\"never\"".to_string()));
+        let cwd = PathBuf::from(after("--cd"));
+        assert_eq!(cwd.parent().unwrap(), f.root().join("scratch"));
+        assert_eq!(argv.last().unwrap(), "-");
+        // An answer task keeps the read-only sandbox.
+        f.submit(&[codex_candidate()]).await;
+        std::fs::remove_file(f.rec("argv")).unwrap();
+        assert!(f.tick().await);
+        let argv = f.argv();
+        assert!(
+            argv.windows(2)
+                .any(|p| p[0] == "--sandbox" && p[1] == "read-only")
+        );
+        assert!(!argv.iter().any(|a| a.contains("sandbox_workspace_write")));
+    }
+
+    /// The harness gets its own login and nothing of the host's: no
+    /// database URL, no AQ credential, none of the host's environment, and
+    /// no file but the request's in its workspace.
+    #[tokio::test]
+    async fn the_agent_environment_has_no_database_url_or_server_credential() {
+        // This test process has the test database's URL in its environment.
+        assert!(std::env::var_os("DATABASE_URL").is_some());
+        let codex = format!(
+            "cat /proc/$$/environ > \"$rec/codex.env\"\n{}",
+            saving("codex")
+        );
+        let f = Fixture::with_claude(&codex, &saving("claude")).await;
+        for candidate in [codex_candidate(), claude_candidate()] {
+            let id = f.submit_request(&agent_request(), &[candidate]).await;
+            assert!(f.tick().await);
+            assert_eq!(f.row(id).await.status, "answered");
+        }
+        let codex_env: BTreeMap<String, String> = std::fs::read_to_string(f.rec("codex.env"))
+            .unwrap()
+            .split('\0')
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let (key, value) = entry.split_once('=').unwrap();
+                (key.to_owned(), value.to_owned())
+            })
+            .collect();
+        let keys: Vec<&str> = codex_env.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["CODEX_HOME", "HOME", "PATH"]);
+        assert_eq!(codex_env["PATH"], "/usr/local/bin:/usr/bin:/bin");
+        let claude_env = f.claude_env();
+        let keys: Vec<&str> = claude_env.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_CONFIG_DIR",
+                "DISABLE_AUTOUPDATER",
+                "DISABLE_ERROR_REPORTING",
+                "DISABLE_TELEMETRY",
+                "HOME",
+                "PATH",
+            ]
+        );
+        for (name, env) in [("codex", &codex_env), ("claude", &claude_env)] {
+            for value in env.values() {
+                assert!(!value.contains("postgres"), "{name}: {value}");
+            }
+            let tree = std::fs::read_to_string(f.rec(&format!("{name}.tree"))).unwrap();
+            assert_eq!(tree, "./doc.md\n./guide/language.md\n", "{name}");
+        }
+        let argv = format!("{:?}{:?}", f.argv(), f.claude_argv());
+        assert!(!argv.contains("postgres") && !argv.contains("DATABASE_URL"));
+    }
+
+    /// Spawns the host's claim loop.
+    fn serving(f: &Fixture) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)))
+    }
+
+    /// Fake Claude: agent work (stream-json output) signals start, counts
+    /// itself in `$rec/agents` and hangs; an answer task answers.
+    fn claude_agent_hangs() -> String {
+        format!(
+            "case \" $* \" in *\" stream-json \"*) echo x >> \"$rec/agents\"; \
+             touch \"$rec/started\"; sleep 30;; esac\n{}",
+            claude_printing(&claude_result(false, ANSWER), 0)
+        )
+    }
+
+    /// At most one agent run per host, so one of the two slots always
+    /// serves answer tasks: a second agent task waits, an answer task runs.
+    #[tokio::test]
+    async fn only_one_agent_run_holds_a_slot_and_answer_runs_keep_the_other() {
+        let f = Fixture::with_claude("exit 1", &claude_agent_hangs()).await;
+        let long = Request {
+            deadline_ms: 1_800_000,
+            ..agent_request()
+        };
+        let first = f.submit_request(&long, &[claude_candidate()]).await;
+        let second = f.submit_request(&long, &[claude_candidate()]).await;
+        let host = serving(&f);
+        f.started().await;
+        let judgment = f.submit(&[claude_candidate()]).await;
+        let row = answered_within(&f, judgment, 10).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (first, second) = (f.row(first).await, f.row(second).await);
+        let agents = std::fs::read_to_string(f.rec("agents")).unwrap();
+        host.abort();
+        assert_eq!(row.attempts.len(), 1);
+        assert_eq!(first.status, "running");
+        assert_eq!(
+            (second.status.as_str(), second.attempts.len()),
+            ("queued", 0)
+        );
+        assert_eq!(agents, "x\n", "a second agent run started");
+    }
+
+    /// The owner's requirement on the Codex lock: a blocking 60 s judgment
+    /// queued while a 30 minute Codex agent run holds the login skips Codex
+    /// at once and is answered by Claude.
+    #[tokio::test]
+    async fn a_blocking_judgment_during_a_long_codex_agent_run_is_answered_by_claude() {
+        let hanging = "touch \"$rec/started\"\nsleep 30";
+        let answers = claude_printing(&claude_result(false, ANSWER), 0);
+        let f = Fixture::with_claude(hanging, &answers).await;
+        let long = Request {
+            deadline_ms: 1_800_000,
+            ..agent_request()
+        };
+        let agent = f.submit_request(&long, &[codex_candidate()]).await;
+        let host = serving(&f);
+        f.started().await;
+        let judgment = f.submit(&[codex_candidate(), claude_candidate()]).await;
+        let row = answered_within(&f, judgment, 10).await;
+        let agent = f.row(agent).await;
+        host.abort();
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::LoginBusy)
+        );
+        assert_eq!(row.attempts[1].provider, "anthropic");
+        assert_eq!(agent.status, "running");
+    }
+
+    /// A Codex agent run would hold the login for up to 30 minutes, so it
+    /// is not started while a blocking task that ends on Codex waits (here
+    /// on an API candidate first); once that task has had Codex, it runs.
+    #[tokio::test]
+    async fn a_codex_agent_run_waits_while_a_blocking_codex_only_task_is_queued() {
+        let behaviour = format!(
+            "case \" $* \" in *\" workspace-write \"*) {};; *) {};; esac",
+            saving("codex"),
+            answering()
+        );
+        let f = Fixture::new(&behaviour).await;
+        let agent = f
+            .submit_request(&agent_request(), &[codex_candidate()])
+            .await;
+        let blocking = f.submit(&[api_candidate(), codex_candidate()]).await;
+        assert!(!f.tick().await, "the agent task was claimed");
+        assert_eq!(f.row(agent).await.status, "queued");
+        // The server's API candidate fails; the task moves on to Codex.
+        let on_api = store::claim(&f.pool, Way::Api, &[], "server", now_ms())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(on_api.id, blocking);
+        let failed = aq_internal_work::Reason::ProviderError;
+        store::fail_candidate(&f.pool, blocking, 0, failed, "down", now_ms())
+            .await
+            .unwrap();
+        assert!(f.tick().await);
+        assert_eq!(f.row(blocking).await.status, "answered");
+        assert_eq!(f.row(agent).await.status, "queued");
+        assert!(f.tick().await);
+        let row = f.row(agent).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+    }
+
+    /// The transcript store of one task, by candidate.
+    async fn transcripts(f: &Fixture, id: uuid::Uuid) -> Vec<(u32, serde_json::Value)> {
+        store::transcripts(&f.pool, id).await.unwrap()
+    }
+
+    /// What each candidate's agent did is kept: tool calls and results and
+    /// the agent's text, each item at most 2 KiB, at most 256 KiB in all,
+    /// with the login's secrets redacted, then the outcome.
+    #[tokio::test]
+    async fn the_transcript_is_kept_clipped_and_redacted() {
+        let events = [
+            json!({"type": "system", "subtype": "init", "tools": ["Bash"]}),
+            json!({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "My token is @TOKEN@."},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                    "input": {"command": "aq-playbooks check"}}]}}),
+            json!({"type": "user", "message": {"content": [{"type": "tool_result",
+                "tool_use_id": "t1", "is_error": true,
+                "content": format!("@TOKEN@ {}", "e".repeat(5000))}]}}),
+        ];
+        let lines: Vec<String> = events.iter().map(|e| e.to_string()).collect();
+        let long = json!({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "y".repeat(3000)}]}});
+        let claude = format!(
+            "{}\ni=0\nwhile [ $i -lt 200 ]; do printf '%s\\n' '{long}'; i=$((i+1)); done\n\
+             printf '%s\\n' '{}'\n{}",
+            claude_printing(&lines.join("\n"), 0).replace("\nexit 0", ""),
+            claude_result(false, "saved"),
+            saving("claude"),
+        );
+        let codex = format!(
+            "echo '{}'\necho '{}'\n{}",
+            json!({"type": "item.completed", "item": {"type": "command_execution",
+                "command": "aq-playbooks facts", "aggregated_output": "access-A refresh-A",
+                "exit_code": 0, "status": "completed"}}),
+            json!({"type": "item.completed", "item": {"type": "agent_message",
+                "text": "I read id-A."}}),
+            saving("codex")
+        );
+        let f = Fixture::with_claude(&codex, &claude).await;
+        let id = f
+            .submit_request(&agent_request(), &[claude_candidate()])
+            .await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        let kept = transcripts(&f, id).await;
+        assert_eq!(kept.len(), 1);
+        let (index, events) = &kept[0];
+        assert_eq!(*index, 0);
+        let text = events.to_string();
+        assert!(text.len() <= 262_144, "{}", text.len());
+        assert!(!text.contains(CLAUDE_TOKEN));
+        let items = events.as_array().unwrap();
+        for item in items {
+            assert!(item.to_string().len() <= 2048, "{item}");
+        }
+        assert_eq!(
+            items[0],
+            json!({"kind": "text", "text": "My token is [credential redacted]."})
+        );
+        assert_eq!(
+            items[1],
+            json!({"kind": "tool", "tool": "Bash", "input": "{\"command\":\"aq-playbooks check\"}"})
+        );
+        assert_eq!(
+            (items[2]["kind"].clone(), items[2]["error"].clone()),
+            (json!("result"), json!(true))
+        );
+        assert_eq!(items[2]["clipped"], true);
+        assert!(
+            items[2]["output"]
+                .as_str()
+                .unwrap()
+                .starts_with("[credential redacted] eee")
+        );
+        assert_eq!(items.last().unwrap(), &json!({"kind": "clipped"}));
+        assert!(items.len() > 100, "{}", items.len());
+
+        let id = f
+            .submit_request(&agent_request(), &[codex_candidate()])
+            .await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(id).await.status, "answered");
+        let kept = transcripts(&f, id).await;
+        assert_eq!(
+            kept[0].1,
+            json!([
+                {"kind": "tool", "tool": "shell", "input": "aq-playbooks facts"},
+                {"kind": "result", "output": "[credential redacted] [credential redacted]",
+                    "error": false},
+                {"kind": "text", "text": "I read [credential redacted]."},
+            ])
+        );
+    }
+
+    /// An agent run stopped at its budget is killed with its whole process
+    /// group, its refreshed Codex login is still copied back, its workspace
+    /// is removed, and its attempt says it did not finish; what it did up to
+    /// then is kept.
+    #[tokio::test]
+    async fn a_timed_out_agent_run_is_killed_its_login_copied_back_and_its_workspace_removed() {
+        let behaviour = format!(
+            "printf '%s' '{}' > \"$CODEX_HOME/auth.json\"\n\
+             echo '{}'\nsleep 30 &\necho $! > \"$rec/grandchild\"\nsleep 30",
+            login("B"),
+            json!({"type": "item.completed", "item": {"type": "agent_message",
+                "text": "checking"}}),
+        );
+        let f = Fixture::new(&behaviour).await;
+        let short = Request {
+            deadline_ms: 3_000,
+            ..agent_request()
+        };
+        let id = f.submit_request(&short, &[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.reason, Some(aq_internal_work::Reason::DeadlineExceeded));
+        assert_eq!(row.attempts[0].detail, "codex did not finish within 3 s");
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("B"));
+        for dir in ["scratch", "homes"] {
+            assert!(left_in(&f, dir).is_empty(), "{dir} keeps a run directory");
+        }
+        let pid = std::fs::read_to_string(f.rec("grandchild")).unwrap();
+        let stat = format!("/proc/{}/stat", pid.trim());
+        let mut alive = true;
+        for _ in 0..100 {
+            // Gone, or a zombie waiting for its reaper.
+            alive = std::fs::read_to_string(&stat)
+                .is_ok_and(|s| !s[s.rfind(')').unwrap()..].starts_with(") Z"));
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!alive, "the grandchild still runs");
+        let kept = transcripts(&f, id).await;
+        assert_eq!(kept[0].1, json!([{"kind": "text", "text": "checking"}]));
     }
 }

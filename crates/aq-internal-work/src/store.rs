@@ -179,8 +179,8 @@ async fn insert(
     sqlx::query(
         "INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,
              created_at_ms,finished_at_ms,reason,detail,affected_kind,affected_id,project_id,escalate,
-             retry_of,supervisor_attempts)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+             retry_of,supervisor_attempts,workspace_kind)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
     )
     .bind(id)
     .bind(to_text(&request.purpose))
@@ -199,13 +199,75 @@ async fn insert(
     .bind(request.escalate)
     .bind(lineage.map(|l| l.retry_of))
     .bind(lineage.map_or(0, |l| l.supervisor_attempts))
+    .bind(if request.agent.is_some() { "agent" } else { "none" })
     .execute(pool)
     .await?;
     Ok(id)
 }
 
+/// [`claim`] for a login host, which takes an agent task only when `agents`
+/// (it runs no agent now), so that one of its slots always serves answer
+/// tasks.
+pub async fn claim_login(
+    pool: &PgPool,
+    harnesses: &[&str],
+    agents: bool,
+    runner: &str,
+    now_ms: i64,
+) -> Result<Option<Claimed>> {
+    claim_next(pool, Way::Login, harnesses, agents, runner, now_ms).await
+}
+
+/// Stores what candidate `candidate` of task `task` did as an agent: the
+/// host's clipped and redacted `events`, a JSON array of at most
+/// [`TRANSCRIPT_BYTES`]. A candidate runs once, so its first transcript is
+/// kept and a later one ignored.
+pub async fn save_transcript(
+    pool: &PgPool,
+    task: Uuid,
+    candidate: u32,
+    events: &Value,
+) -> Result<()> {
+    let bytes = events.to_string().len();
+    if !events.is_array() || bytes > TRANSCRIPT_BYTES {
+        return Err(Error::Invalid(
+            "a transcript is a JSON array of at most 256 KiB".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO internal_task_transcripts(task_id,candidate_index,events,bytes)
+         VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+    )
+    .bind(task)
+    .bind(i32::try_from(candidate).map_err(|_| Error::Corrupt)?)
+    .bind(events)
+    .bind(bytes as i32)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Each candidate's transcript of task `task`, in candidate order.
+pub async fn transcripts(pool: &PgPool, task: Uuid) -> Result<Vec<(u32, Value)>> {
+    let rows: Vec<(i32, Value)> = sqlx::query_as(
+        "SELECT candidate_index,events FROM internal_task_transcripts
+         WHERE task_id=$1 ORDER BY candidate_index",
+    )
+    .bind(task)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|(index, events)| Ok((u32::try_from(index).map_err(|_| Error::Corrupt)?, events)))
+        .collect()
+}
+
 /// Takes the next queued task whose current candidate is served `way` (for
 /// [`Way::Login`], by one of `harnesses`): blocking tasks first, then oldest.
+///
+/// A Codex agent run holds the Codex login for up to 30 minutes, so an agent
+/// task whose current candidate is Codex is taken only while no blocking
+/// answer task ends on Codex: none is queued, or running on an earlier
+/// candidate it may fail over from, with Codex as its last candidate.
 pub async fn claim(
     pool: &PgPool,
     way: Way,
@@ -213,12 +275,32 @@ pub async fn claim(
     runner: &str,
     now_ms: i64,
 ) -> Result<Option<Claimed>> {
+    claim_next(pool, way, harnesses, true, runner, now_ms).await
+}
+
+async fn claim_next(
+    pool: &PgPool,
+    way: Way,
+    harnesses: &[&str],
+    agents: bool,
+    runner: &str,
+    now_ms: i64,
+) -> Result<Option<Claimed>> {
     let row = sqlx::query(
         "WITH next AS (
-             SELECT id FROM internal_tasks
+             SELECT id FROM internal_tasks a
              WHERE status='queued'
                AND candidates->candidate_index->>'way'=$1
                AND ($1<>'login' OR candidates->candidate_index->>'harness'=ANY($2))
+               AND ($5 OR workspace_kind<>'agent')
+               AND NOT (workspace_kind='agent'
+                   AND candidates->candidate_index->>'harness'='codex'
+                   AND EXISTS(SELECT 1 FROM internal_tasks b
+                       WHERE b.blocking AND b.workspace_kind<>'agent' AND b.id<>a.id
+                         AND (b.status='queued' OR b.status='running'
+                              AND b.candidate_index+1 < jsonb_array_length(b.candidates))
+                         AND b.candidates->-1->>'way'='login'
+                         AND b.candidates->-1->>'harness'='codex'))
              ORDER BY blocking DESC, created_at_ms, id
              LIMIT 1
              FOR UPDATE SKIP LOCKED)
@@ -230,6 +312,7 @@ pub async fn claim(
     .bind(harnesses)
     .bind(runner)
     .bind(now_ms)
+    .bind(agents)
     .fetch_optional(pool)
     .await?;
     row.as_ref()
@@ -446,12 +529,16 @@ async fn fail_held(
 }
 
 /// [`candidate_budget_ms`] of a row's current attempt, in SQL over its
-/// columns; `$2` is [`MIN_CANDIDATE_BUDGET_MS`]. Integer division truncates
-/// toward zero in both. NULL without a `claimed_at_ms`, which only a claim
-/// sets; the sweep then falls back to the task deadline.
-const BUDGET_SQL: &str = "GREATEST(0, LEAST(deadline_at_ms-claimed_at_ms,
-    GREATEST($2, (deadline_at_ms-claimed_at_ms)
-        / GREATEST(jsonb_array_length(candidates)-candidate_index, 1))))";
+/// columns, or [`agent_candidate_budget_ms`] for agent work; `$2` is
+/// [`MIN_CANDIDATE_BUDGET_MS`] and `$4` [`AGENT_FALLBACK_RESERVE_MS`].
+/// Integer division truncates toward zero in both. NULL without a
+/// `claimed_at_ms`, which only a claim sets; the sweep then falls back to the
+/// task deadline.
+const BUDGET_SQL: &str = "GREATEST(0, LEAST(deadline_at_ms-claimed_at_ms, CASE
+    WHEN workspace_kind='agent' THEN GREATEST($4, deadline_at_ms-claimed_at_ms
+        - $4*GREATEST(jsonb_array_length(candidates)-candidate_index-1, 0))
+    ELSE GREATEST($2, (deadline_at_ms-claimed_at_ms)
+        / GREATEST(jsonb_array_length(candidates)-candidate_index, 1)) END))";
 
 /// Ends tasks whose deadline or runner is gone and returns how many it
 /// changed. A `running` task whose runner has not reported within its
@@ -469,6 +556,7 @@ pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {
     .bind(now_ms)
     .bind(MIN_CANDIDATE_BUDGET_MS)
     .bind(SWEEP_GRACE_MS)
+    .bind(AGENT_FALLBACK_RESERVE_MS)
     .fetch_all(pool)
     .await?;
     let mut changed = 0;

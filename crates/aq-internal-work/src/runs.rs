@@ -55,9 +55,20 @@ struct Run {
     diagnosis: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_of: Option<Uuid>,
+    /// What each candidate's agent did; only the read of one run has it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    transcripts: Vec<Transcript>,
 }
 
-fn run(row: Row) -> Value {
+#[derive(Serialize)]
+struct Transcript {
+    candidate_index: u32,
+    events: Value,
+}
+
+/// `row` as the dashboard shows it, with the `transcripts` of its agent
+/// candidates (none in a list).
+fn run(row: Row, transcripts: Vec<(u32, Value)>) -> Value {
     let outcome = row.outcome();
     let mut run = Run {
         id: row.id,
@@ -84,6 +95,13 @@ fn run(row: Row) -> Value {
         escalation: row.escalation,
         diagnosis: row.diagnosis,
         retry_of: row.retry_of,
+        transcripts: transcripts
+            .into_iter()
+            .map(|(candidate_index, events)| Transcript {
+                candidate_index,
+                events,
+            })
+            .collect(),
     };
     if let Some(Outcome::Answered {
         answer,
@@ -148,7 +166,7 @@ pub async fn list(pool: &PgPool, q: Query) -> Result<Value> {
         .last()
         .filter(|_| more)
         .map(|r| format!("{}:{}", r.created_at_ms, r.id));
-    let runs: Vec<Value> = rows.into_iter().map(run).collect();
+    let runs: Vec<Value> = rows.into_iter().map(|row| run(row, Vec::new())).collect();
     Ok(json!({"runs": runs, "next_cursor": next}))
 }
 
@@ -156,5 +174,5 @@ pub async fn read(pool: &PgPool, id: Uuid) -> Result<Value> {
     let row = store::get(pool, id)
         .await?
         .ok_or_else(|| Error::NotFound("Internal run not found".into()))?;
-    Ok(run(row))
+    Ok(run(row, store::transcripts(pool, id).await?))
 }

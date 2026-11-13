@@ -180,6 +180,7 @@ fn failed_run() -> Work {
         max_output_bytes: 4_096,
         escalate: true,
         profile_override: None,
+        agent: None,
     }
 }
 

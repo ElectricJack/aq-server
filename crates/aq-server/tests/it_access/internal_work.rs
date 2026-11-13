@@ -2,7 +2,8 @@
 //! per task, failover across the candidate list, and late runners ignored.
 use aq_internal_work::{
     Affected, AnswerShape, ApiBackend, ApiEndpoint, Candidate, Claimed, Outcome, Purpose, Reason,
-    Request, SWEEP_GRACE_MS, Usage, Way, candidate_budget_ms, store, validate,
+    Request, SWEEP_GRACE_MS, Usage, Way, agent_candidate_budget_ms, candidate_budget_ms, store,
+    validate,
 };
 use aq_server::test_support::TestDb;
 use serde_json::json;
@@ -34,6 +35,7 @@ fn request(blocking: bool) -> Request {
         max_output_bytes: 4_096,
         escalate: true,
         profile_override: None,
+        agent: None,
     }
 }
 
@@ -596,6 +598,226 @@ async fn passing_over_past_the_deadline_fails_the_task_as_queued_past_its_deadli
         Some("deadline passed before a runner took the task")
     );
     assert!(row.attempts.is_empty());
+}
+
+/// A request for agent work (spec 0013 §4.2): files in a workspace, an
+/// outcome file as the answer, up to 30 minutes.
+fn agent_request(blocking: bool) -> Request {
+    Request {
+        purpose: Purpose::PlaybookCompilation,
+        answer: AnswerShape::Json {
+            schema: json!({"type": "object", "required": ["kind"]}),
+        },
+        deadline_ms: 1_800_000,
+        max_output_bytes: 1_048_576,
+        agent: Some(aq_internal_work::AgentWork {
+            files: [("doc.md".to_string(), "# Doc".to_string())].into(),
+            max_turns: 200,
+        }),
+        ..request(blocking)
+    }
+}
+
+/// An agent task is stored with workspace kind `agent`; a request stored
+/// before agent work existed (no `agent` key) still decodes as `none` work.
+#[tokio::test]
+async fn agent_tasks_have_the_agent_workspace_kind_and_older_rows_still_decode() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let agent = store::submit(
+        &pool,
+        &agent_request(false),
+        &[login("openai", "codex")],
+        NOW,
+    )
+    .await
+    .unwrap();
+    let plain = store::submit(&pool, &request(false), &[login("openai", "codex")], NOW)
+        .await
+        .unwrap();
+    let row = store::get(&pool, agent).await.unwrap().unwrap();
+    assert_eq!(row.workspace_kind, "agent");
+    assert_eq!(row.request.agent, agent_request(false).agent);
+    sqlx::query("UPDATE internal_tasks SET request=request-'agent' WHERE id=$1")
+        .bind(plain)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let row = store::get(&pool, plain).await.unwrap().unwrap();
+    assert_eq!(row.workspace_kind, "none");
+    assert!(row.request.agent.is_none());
+    let refused = sqlx::query("UPDATE internal_tasks SET workspace_kind='repository' WHERE id=$1")
+        .bind(plain)
+        .execute(&pool)
+        .await;
+    assert!(refused.is_err(), "only none and agent are workspace kinds");
+}
+
+/// The sweep's SQL gives agent work the same budget as
+/// [`agent_candidate_budget_ms`]: five minutes kept for each later candidate.
+#[tokio::test]
+async fn the_sweep_and_agent_candidate_budget_ms_agree_on_every_budget() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    for (remaining, index, count) in [
+        (1_800_000, 0, 2),
+        (400_000, 0, 2),
+        (1_500_000, 1, 2),
+        (1_800_000, 0, 3),
+        (1_800_000, 0, 1),
+        (200_000, 0, 2),
+        (0, 0, 2),
+        (-10_000, 1, 2),
+    ] {
+        let candidates = vec![login("openai", "codex"); count];
+        let id = store::submit(&pool, &agent_request(false), &candidates, NOW)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE internal_tasks SET status='running', runner='r', claimed_at_ms=$2,
+                 deadline_at_ms=$3, candidate_index=$4 WHERE id=$1",
+        )
+        .bind(id)
+        .bind(NOW)
+        .bind(NOW + remaining)
+        .bind(index as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let budget = agent_candidate_budget_ms(NOW + remaining, NOW, index, count);
+        let case = format!("remaining {remaining}, candidate {index} of {count}: budget {budget}");
+        let held = |row: store::Row| row.status == "running" && row.candidate_index == index;
+        let last_moment = NOW + budget + SWEEP_GRACE_MS;
+        store::sweep(&pool, last_moment).await.unwrap();
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert!(held(row), "swept too early; {case}");
+        store::sweep(&pool, last_moment + 1).await.unwrap();
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert!(!held(row), "not swept; {case}");
+    }
+}
+
+/// A login host that runs an agent already claims only answer tasks; one
+/// that runs none takes the agent task in its turn.
+#[tokio::test]
+async fn a_host_running_an_agent_claims_only_answer_tasks() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let claude = [login("anthropic", "claude")];
+    let agent = store::submit(&pool, &agent_request(true), &claude, NOW)
+        .await
+        .unwrap();
+    let answer = store::submit(&pool, &request(false), &claude, NOW + 1)
+        .await
+        .unwrap();
+    let claim = |agents| store::claim_login(&pool, &["claude"], agents, "host", NOW + 2);
+    assert_eq!(claim(false).await.unwrap().unwrap().id, answer);
+    assert!(
+        claim(false).await.unwrap().is_none(),
+        "the agent task waits"
+    );
+    assert_eq!(claim(true).await.unwrap().unwrap().id, agent);
+}
+
+/// A Codex agent run holds the Codex login for up to 30 minutes, so it is
+/// not claimed while a blocking answer task that ends on Codex is waiting
+/// (queued, or running on an earlier candidate it may fail over from).
+/// Other agent tasks and tasks with a later non-Codex candidate do not hold
+/// it back.
+#[tokio::test]
+async fn a_codex_agent_task_is_not_claimed_while_a_blocking_task_ends_on_codex() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let agent = store::submit(
+        &pool,
+        &agent_request(false),
+        &[login("openai", "codex")],
+        NOW,
+    )
+    .await
+    .unwrap();
+    let claim = || store::claim_login(&pool, &["codex"], true, "host", NOW + 5);
+    // Neither of these ends on Codex, and another agent task never counts.
+    store::submit(
+        &pool,
+        &request(true),
+        &[login("openai", "codex"), api("anthropic")],
+        NOW,
+    )
+    .await
+    .unwrap();
+    // Served by the server's API loop first, then by this host's Codex.
+    let ends_on_codex = [api("anthropic"), login("openai", "codex")];
+    let waiting = store::submit(&pool, &request(true), &ends_on_codex, NOW + 1)
+        .await
+        .unwrap();
+    store::submit(&pool, &agent_request(true), &ends_on_codex, NOW + 2)
+        .await
+        .unwrap();
+    // The blocking answer task ahead of it is claimed first; take it away.
+    let first = claim().await.unwrap().unwrap();
+    assert_ne!(first.id, agent, "a blocking answer task is claimed first");
+    assert!(claim().await.unwrap().is_none(), "the agent task must wait");
+    let on_api = store::claim(&pool, Way::Api, &[], "server", NOW + 6)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(on_api.id, waiting);
+    assert!(
+        claim().await.unwrap().is_none(),
+        "it may still fail over to Codex"
+    );
+    store::complete(
+        &pool,
+        waiting,
+        0,
+        &json!({"choice": "small"}),
+        None,
+        NOW + 7,
+    )
+    .await
+    .unwrap();
+    assert_eq!(claim().await.unwrap().unwrap().id, agent);
+}
+
+/// A transcript is kept once per candidate and bounded in the database too.
+#[tokio::test]
+async fn a_transcript_is_kept_once_per_candidate_and_bounded() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let id = store::submit(
+        &pool,
+        &agent_request(false),
+        &[login("openai", "codex")],
+        NOW,
+    )
+    .await
+    .unwrap();
+    let first = json!([{"kind": "text", "text": "reading the document"}]);
+    store::save_transcript(&pool, id, 0, &first).await.unwrap();
+    store::save_transcript(&pool, id, 0, &json!([]))
+        .await
+        .unwrap();
+    store::save_transcript(&pool, id, 1, &json!([]))
+        .await
+        .unwrap();
+    let kept = store::transcripts(&pool, id).await.unwrap();
+    assert_eq!(kept, [(0, first.clone()), (1, json!([]))]);
+    let bytes: i32 = sqlx::query_scalar(
+        "SELECT bytes FROM internal_task_transcripts WHERE task_id=$1 AND candidate_index=0",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(bytes as usize, first.to_string().len());
+    let huge = json!(["x".repeat(aq_internal_work::TRANSCRIPT_BYTES)]);
+    assert!(store::save_transcript(&pool, id, 2, &huge).await.is_err());
+    assert!(
+        store::save_transcript(&pool, id, 3, &json!({}))
+            .await
+            .is_err()
+    );
 }
 
 /// Candidate resolution (spec 0012 §5, §6): pure, so plain tests.
@@ -1516,6 +1738,29 @@ mod service {
         assert!(f.anthropic.lock().unwrap().bodies.is_empty());
     }
 
+    /// An API call is one prompt, so agent work fails its API candidates over
+    /// without calling the provider.
+    #[tokio::test]
+    async fn agent_work_is_never_sent_to_an_api_candidate() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let _stop = start(&f.work);
+        let id = f.work.submit(super::agent_request(true)).await.unwrap();
+        match wait(&f.work, id).await {
+            Outcome::Failed {
+                reason, attempts, ..
+            } => {
+                assert_eq!(reason, Reason::ProviderUnavailable);
+                assert_eq!(attempts.len(), 2);
+                for attempt in attempts {
+                    assert_eq!(attempt.detail, aq_internal_work::service::AGENT_NEEDS_LOGIN);
+                }
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+        assert!(f.openai.lock().unwrap().bodies.is_empty());
+        assert!(f.anthropic.lock().unwrap().bodies.is_empty());
+    }
+
     #[tokio::test]
     async fn invalid_output_from_the_first_candidate_falls_to_the_second() {
         let f = fixture("I would say small.", LARGE, CredentialKind::ApiKey).await;
@@ -2211,6 +2456,33 @@ enabled=true
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// The run read shows what each candidate's agent did; the list does not.
+    #[tokio::test]
+    async fn the_run_read_includes_each_candidates_transcript() {
+        let db = TestDb::create().await;
+        let app = app(&db, "owner@localhost").await;
+        let pool = db.pool().await;
+        let candidates = [login("openai", "codex"), login("anthropic", "claude")];
+        let id = store::submit(&pool, &agent_request(false), &candidates, NOW)
+            .await
+            .unwrap();
+        let steps = json!([{"kind": "tool", "tool": "Bash", "input": "aq-playbooks check"}]);
+        store::save_transcript(&pool, id, 1, &steps).await.unwrap();
+        store::save_transcript(&pool, id, 0, &json!([]))
+            .await
+            .unwrap();
+        let (status, run) =
+            call(&app, "GET", &format!("/api/internal-work/runs/{id}"), false).await;
+        assert_eq!(status, StatusCode::OK, "{run}");
+        assert_eq!(
+            run["transcripts"],
+            json!([{"candidate_index": 0, "events": []},
+                {"candidate_index": 1, "events": steps}])
+        );
+        let (_, all) = call(&app, "GET", "/api/internal-work/runs", false).await;
+        assert!(all["runs"][0].get("transcripts").is_none(), "{all}");
     }
 
     #[tokio::test]

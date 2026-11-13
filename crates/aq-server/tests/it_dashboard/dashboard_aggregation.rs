@@ -721,6 +721,7 @@ async fn owner_escalated_internal_run_is_an_attention_item_pointing_at_the_affec
         max_output_bytes: 4_096,
         escalate: true,
         profile_override: None,
+        agent: None,
     };
     let failed = store::submit(&pool, &work, &[], 1_000).await.unwrap();
     // With a supervisor only: not the owner's yet.
@@ -804,6 +805,7 @@ fn internal_request(
         max_output_bytes: 4_096,
         escalate: true,
         profile_override: None,
+        agent: None,
     }
 }
 
@@ -817,7 +819,7 @@ async fn owner_escalated_internal_runs_are_never_dropped() {
     let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
     let pool = f.db.pool().await;
-    let policy = internal_request("routing_policy", "7", None);
+    let policy = internal_request("playbook_source", "routing", None);
     let policy = store::submit(&pool, &policy, &[], 1_000).await.unwrap();
     let operation = internal_request("playbook_operation", &Uuid::new_v4().to_string(), None);
     let operation = store::submit(&pool, &operation, &[], 1_000).await.unwrap();
@@ -846,7 +848,7 @@ async fn owner_escalated_internal_runs_are_never_dropped() {
         shown["subject"],
         json!({"type": "internal_run", "id": policy})
     );
-    assert_eq!(shown["impact"], "Routing policy, revision 7");
+    assert_eq!(shown["impact"], "Playbook source routing");
     assert_eq!(shown["reason"], "no working model");
     assert!(shown["project"].is_null());
     let shown = item(operation);

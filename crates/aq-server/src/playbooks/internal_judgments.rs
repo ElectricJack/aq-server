@@ -43,6 +43,7 @@ impl JudgmentProvider for InternalJudgments {
             max_output_bytes: r.rationale_max_bytes.saturating_add(4096),
             escalate: false,
             profile_override: None,
+            agent: None,
         };
         let (answer, provider, model, usage) = match self.work.run(request).await {
             Ok(Outcome::Answered {

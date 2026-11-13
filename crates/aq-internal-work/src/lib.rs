@@ -27,6 +27,24 @@ pub const MAX_INSTRUCTIONS_BYTES: usize = 256 * 1024;
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 /// Allowed `Request::deadline_ms`, counted from submission.
 pub const DEADLINE_MS: std::ops::RangeInclusive<u64> = 1_000..=900_000;
+/// Allowed `Request::deadline_ms` of agent work ([`Request::agent`]).
+pub const AGENT_DEADLINE_MS: std::ops::RangeInclusive<u64> = 1_000..=1_800_000;
+/// Allowed [`AgentWork::max_turns`].
+pub const AGENT_MAX_TURNS: std::ops::RangeInclusive<u32> = 1..=400;
+/// Most files [`AgentWork::files`] may hold.
+pub const AGENT_MAX_FILES: usize = 256;
+/// Most bytes of [`AgentWork::files`], paths and contents together.
+pub const AGENT_FILES_BYTES: usize = 1024 * 1024;
+/// The file in the workspace an agent's answer is read from; it is the raw
+/// answer `validate::answer` checks, at most `Request::max_output_bytes`.
+pub const AGENT_OUTCOME: &str = "out/outcome.json";
+/// What an agent candidate leaves for each later candidate of its task, and
+/// the smallest agent candidate budget unless less time is left.
+pub const AGENT_FALLBACK_RESERVE_MS: i64 = 300_000;
+/// Most bytes of one candidate's stored transcript (its JSON array).
+pub const TRANSCRIPT_BYTES: usize = 262_144;
+/// Most bytes of one transcript item (its JSON object).
+pub const TRANSCRIPT_ITEM_BYTES: usize = 2048;
 /// Allowed `Request::max_output_bytes`.
 pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
 /// The smallest candidate budget, unless less time is left to the deadline.
@@ -58,6 +76,25 @@ pub fn candidate_budget_ms(
     let left = count.saturating_sub(i64::from(candidate_index)).max(1);
     remaining
         .min(MIN_CANDIDATE_BUDGET_MS.max(remaining / left))
+        .max(0)
+}
+
+/// [`candidate_budget_ms`] for agent work: the time left to the task
+/// deadline less [`AGENT_FALLBACK_RESERVE_MS`] for each later candidate, at
+/// least [`AGENT_FALLBACK_RESERVE_MS`], and never more than is left. So a
+/// fallback still gets five minutes. [`store::sweep`] computes the same in SQL.
+pub fn agent_candidate_budget_ms(
+    deadline_at_ms: i64,
+    claimed_at_ms: i64,
+    candidate_index: u32,
+    candidate_count: usize,
+) -> i64 {
+    let remaining = deadline_at_ms.saturating_sub(claimed_at_ms);
+    let count = i64::try_from(candidate_count).unwrap_or(i64::MAX);
+    let later = count.saturating_sub(i64::from(candidate_index) + 1).max(0);
+    let reserved = later.saturating_mul(AGENT_FALLBACK_RESERVE_MS);
+    remaining
+        .min(AGENT_FALLBACK_RESERVE_MS.max(remaining.saturating_sub(reserved)))
         .max(0)
 }
 
@@ -142,8 +179,8 @@ pub struct Affected {
 }
 
 impl Affected {
-    /// The item in words, from its kind and id alone: "Routing policy,
-    /// revision 7", "Playbook operation <id>".
+    /// The item in words, from its kind and id alone: "Playbook source
+    /// routing", "Playbook operation <id>".
     pub fn describe(kind: &str, id: &str) -> String {
         let words = kind.replace('_', " ");
         let mut chars = words.chars();
@@ -153,10 +190,7 @@ impl Affected {
             .flat_map(char::to_uppercase)
             .collect();
         text.push_str(chars.as_str());
-        match kind {
-            "routing_policy" => format!("{text}, revision {id}"),
-            _ => format!("{text} {id}"),
-        }
+        format!("{text} {id}")
     }
 }
 
@@ -179,6 +213,56 @@ pub struct Request {
     pub escalate: bool,
     /// Intelligence profile id; `None` uses Settings.
     pub profile_override: Option<String>,
+    /// Run as an agent with tools in a workspace holding these files, until
+    /// it writes [`AGENT_OUTCOME`]; `None` is one prompt with tools off.
+    #[serde(default)]
+    pub agent: Option<AgentWork>,
+}
+
+/// Work done by an agent in a scratch workspace (spec 0013 §4.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentWork {
+    /// Workspace files by relative path (`/`-separated, no `.` or `..`
+    /// segment), at most [`AGENT_MAX_FILES`] of at most [`AGENT_FILES_BYTES`].
+    pub files: BTreeMap<String, String>,
+    /// Within [`AGENT_MAX_TURNS`].
+    pub max_turns: u32,
+}
+
+impl AgentWork {
+    fn validate(&self) -> Result<()> {
+        if !AGENT_MAX_TURNS.contains(&self.max_turns) {
+            return Err(invalid("agent max_turns must be between 1 and 400"));
+        }
+        if self.files.len() > AGENT_MAX_FILES {
+            return Err(invalid("agent work has more than 256 files"));
+        }
+        let bytes: usize = self.files.iter().map(|(p, c)| p.len() + c.len()).sum();
+        if bytes > AGENT_FILES_BYTES {
+            return Err(invalid("agent files exceed 1 MiB"));
+        }
+        for path in self.files.keys() {
+            if !workspace_path(path) || path == AGENT_OUTCOME {
+                return Err(invalid("agent file paths must be relative workspace paths"));
+            }
+            // A file cannot also be the directory of another.
+            let mut ancestors = path.match_indices('/').map(|(at, _)| &path[..at]);
+            if ancestors.any(|dir| self.files.contains_key(dir)) {
+                return Err(invalid("an agent file path is also a directory"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `path` names a file inside a workspace: relative, `/`-separated
+/// segments that are neither empty, `.` nor `..`, and no NUL.
+pub fn workspace_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\0')
+        && path
+            .split('/')
+            .all(|segment| !matches!(segment, "" | "." | ".."))
 }
 
 impl Request {
@@ -190,13 +274,23 @@ impl Request {
         if self.input.len() > MAX_INPUT_BYTES {
             return Err(invalid("input exceeds 1 MiB"));
         }
-        if !DEADLINE_MS.contains(&self.deadline_ms) {
-            return Err(invalid("deadline_ms must be between 1000 and 900000"));
+        let deadlines = match &self.agent {
+            Some(_) => AGENT_DEADLINE_MS,
+            None => DEADLINE_MS,
+        };
+        if !deadlines.contains(&self.deadline_ms) {
+            let (low, high) = deadlines.into_inner();
+            return Err(Error::Invalid(format!(
+                "deadline_ms must be between {low} and {high}"
+            )));
         }
         if !MAX_OUTPUT_BYTES.contains(&self.max_output_bytes) {
             return Err(invalid("max_output_bytes must be between 1 and 1048576"));
         }
-        Ok(())
+        match &self.agent {
+            Some(agent) => agent.validate(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -304,10 +398,15 @@ pub struct Claimed {
 }
 
 impl Claimed {
-    /// This attempt's [`candidate_budget_ms`].
+    /// This attempt's [`candidate_budget_ms`], or [`agent_candidate_budget_ms`]
+    /// for agent work.
     pub fn budget_ms(&self) -> i64 {
         let (index, count) = (self.candidate_index, self.candidate_count);
-        candidate_budget_ms(self.deadline_at_ms, self.claimed_at_ms, index, count)
+        let budget = match self.request.agent {
+            Some(_) => agent_candidate_budget_ms,
+            None => candidate_budget_ms,
+        };
+        budget(self.deadline_at_ms, self.claimed_at_ms, index, count)
     }
 
     /// When the runner stops this attempt and reports it, in Unix
@@ -317,10 +416,14 @@ impl Claimed {
     }
 
     /// The failure detail of an attempt stopped at [`Claimed::stop_at_ms`]:
-    /// "`who` did not answer within N s".
+    /// "`who` did not answer within N s", or "did not finish" for agent work.
     pub fn unanswered(&self, who: &str) -> String {
         let waited_ms = runner_budget_ms(self.budget_ms()).max(0);
-        format!("{who} did not answer within {} s", (waited_ms + 999) / 1000)
+        let verb = match self.request.agent {
+            Some(_) => "finish",
+            None => "answer",
+        };
+        format!("{who} did not {verb} within {} s", (waited_ms + 999) / 1000)
     }
 }
 
@@ -360,6 +463,114 @@ mod tests {
                 "remaining {remaining}, candidate {index} of {count}"
             );
         }
+    }
+
+    #[test]
+    fn agent_budget_keeps_five_minutes_for_each_later_candidate() {
+        for (remaining, index, count, budget) in [
+            (1_800_000, 0, 2, 1_500_000),
+            (400_000, 0, 2, 300_000),
+            // The last candidate gets everything left.
+            (1_500_000, 1, 2, 1_500_000),
+            (1_800_000, 0, 3, 1_200_000),
+            (1_800_000, 0, 1, 1_800_000),
+            // The floor, but never more than is left.
+            (200_000, 0, 2, 200_000),
+            (0, 0, 2, 0),
+            (-10_000, 1, 2, 0),
+        ] {
+            let claimed_at_ms = 1_000_000;
+            let deadline_at_ms = claimed_at_ms + remaining;
+            assert_eq!(
+                agent_candidate_budget_ms(deadline_at_ms, claimed_at_ms, index, count),
+                budget,
+                "remaining {remaining}, candidate {index} of {count}"
+            );
+        }
+    }
+
+    fn agent_request(files: &[(&str, &str)], max_turns: u32, deadline_ms: u64) -> Request {
+        Request {
+            purpose: Purpose::PlaybookCompilation,
+            instructions: "Write the playbook.".into(),
+            input: String::new(),
+            answer: AnswerShape::Json {
+                schema: serde_json::json!({"type": "object"}),
+            },
+            blocking: false,
+            affected: Affected {
+                kind: "playbook_source".into(),
+                id: "routing".into(),
+                project_id: None,
+            },
+            deadline_ms,
+            max_output_bytes: 1_048_576,
+            escalate: true,
+            profile_override: None,
+            agent: Some(AgentWork {
+                files: files
+                    .iter()
+                    .map(|(path, text)| (path.to_string(), text.to_string()))
+                    .collect(),
+                max_turns,
+            }),
+        }
+    }
+
+    #[test]
+    fn agent_work_allows_thirty_minutes_and_bounds_its_files() {
+        let ok = agent_request(
+            &[("doc.md", "# Doc"), ("guide/language.md", "x")],
+            200,
+            1_800_000,
+        );
+        assert!(ok.validate().is_ok());
+        let answer_only = Request {
+            agent: None,
+            ..ok.clone()
+        };
+        assert!(answer_only.validate().is_err(), "900 s is the answer limit");
+        for (bad, why) in [
+            (agent_request(&[], 200, 1_800_001), "deadline"),
+            (agent_request(&[], 0, 60_000), "no turns"),
+            (agent_request(&[], 401, 60_000), "too many turns"),
+            (agent_request(&[("/etc/passwd", "")], 1, 60_000), "absolute"),
+            (agent_request(&[("a/../../b", "")], 1, 60_000), "dot dot"),
+            (agent_request(&[("./a", "")], 1, 60_000), "dot"),
+            (agent_request(&[("a//b", "")], 1, 60_000), "empty segment"),
+            (agent_request(&[("", "")], 1, 60_000), "empty"),
+            (agent_request(&[("a\0b", "")], 1, 60_000), "NUL"),
+            (
+                agent_request(&[(AGENT_OUTCOME, "{}")], 1, 60_000),
+                "outcome",
+            ),
+            (
+                agent_request(&[("a", ""), ("a/b", "")], 1, 60_000),
+                "file and dir",
+            ),
+        ] {
+            assert!(bad.validate().is_err(), "{why}");
+        }
+        let big = "x".repeat(AGENT_FILES_BYTES);
+        assert!(
+            agent_request(&[("big", &big)], 1, 60_000)
+                .validate()
+                .is_err()
+        );
+        let many: Vec<(String, String)> = (0..=AGENT_MAX_FILES)
+            .map(|i| (format!("f{i}"), String::new()))
+            .collect();
+        let many: Vec<(&str, &str)> = many.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        assert!(agent_request(&many, 1, 60_000).validate().is_err());
+        assert!(agent_request(&many[1..], 1, 60_000).validate().is_ok());
+    }
+
+    #[test]
+    fn a_stored_request_without_agent_work_still_decodes() {
+        let mut stored = serde_json::to_value(agent_request(&[], 1, 60_000)).unwrap();
+        stored.as_object_mut().unwrap().remove("agent");
+        let request: Request = serde_json::from_value(stored).unwrap();
+        assert!(request.agent.is_none());
     }
 
     #[test]

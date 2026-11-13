@@ -144,8 +144,9 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   device, inode, size, mtime or ctime change.
 - A config change, or a config file the host can no longer accept, takes effect
   only after the runs in progress have ended (each within its task deadline, at
-  most 900 s): the host stops claiming, lets them finish and copy their logins
-  back, then exits (with the error, if the file was refused) to be restarted.
+  most 900 s, or 1 800 s for agent work): the host stops claiming, lets them
+  finish and copy their logins back, then exits (with the error, if the file
+  was refused) to be restarted.
 
 ## One Codex run per login
 
@@ -166,6 +167,48 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   rarely has time to run: the first candidate takes all but a second of a
   deadline under 60 s, and the second waits for the first's copy-back. Put a
   candidate of another harness or an API candidate after a Codex one.
+
+## Agent work
+
+A request with `agent` work (spec 0013 §4.2) runs the harness with tools in a
+workspace instead of as one prompt. Its task row has `workspace_kind = 'agent'`.
+
+- **Workspace.** A fresh directory under `scratch` per candidate, holding only
+  the request's files (relative paths, at most 256 files and 1 MiB). It is
+  removed when the candidate ends, however it ends.
+- **Answer.** The file `out/outcome.json` in the workspace, opened without
+  following links and at most the request's `max_output_bytes`, then checked
+  against the request's answer schema like any answer. No outcome, a link, a
+  file that is too large or malformed fails the candidate as `invalid_output`
+  ("the agent ended without saving, asking or giving up" when there is none).
+- **Claude tools:** `--restricted --permission-mode dontAsk --tools
+  Bash,Read,Write,Edit,Glob,Grep --allowedTools "Bash(aq-playbooks:*)" Read
+  Write Edit Glob Grep --disallowedTools WebFetch WebSearch --max-turns N`, with
+  `--output-format stream-json --verbose`. `--max-turns` is accepted but not
+  listed in `--help` of Claude Code 2.1.323. Confirm the flags against the
+  mounted binary before deploying.
+- **Codex:** `--sandbox workspace-write` with
+  `sandbox_workspace_write.network_access=false`; its shell inherits no
+  environment. Codex has no turn limit.
+- **Environment.** As for answer runs: cleared, the login only, `PATH`
+  `/usr/local/bin:/usr/bin:/bin` (the engine CLI lives in `/usr/local/bin`).
+  No database URL and no AQ credential reach the harness.
+- **One agent at a time.** A host runs at most one agent run, so one of its
+  two slots always serves answer tasks. A Codex agent run holds the Codex login
+  for its whole run (up to 30 min), and it is claimed only while no blocking
+  answer task ends on Codex. While it runs, blocking tasks with a later
+  candidate skip Codex (`login_busy`); a task whose only candidate is Codex
+  waits. Prefer a Claude-first profile for `playbook_compilation`.
+- **Time.** Agent deadlines may be up to 1 800 000 ms. A candidate's budget is
+  what is left less 300 s for each later candidate, at least 300 s. At the stop
+  the whole process group is killed, a Codex login is still copied back, and
+  the attempt says "`<harness>` did not finish within N s".
+- **Transcript.** Each candidate's tool calls, tool results and text are kept
+  in `internal_task_transcripts` (items at most 2 KiB, at most 256 KiB per
+  candidate, the login's secrets redacted) and shown in the run read.
+  `internal work: a transcript was not recorded` means that write failed.
+- **Deploy order.** Migrate the server (0123) before starting a host that
+  runs agent work.
 
 ## Time limits
 
