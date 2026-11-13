@@ -39,6 +39,18 @@ pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> 
         .collect()
 }
 
+/// A fixed label for an error's kind, for logs: never the variant's payload.
+fn error_class(error: &AppError) -> &'static str {
+    match error {
+        AppError::Conflict(_) => "conflict",
+        AppError::BadRequest(_) => "bad_request",
+        AppError::NotFound(_) => "not_found",
+        AppError::Busy => "busy",
+        AppError::Internal => "internal",
+        _ => "other",
+    }
+}
+
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
 /// the attached execution for one task.
 pub(super) async fn work(
@@ -93,7 +105,9 @@ pub(super) async fn work(
     match crate::routing::view(&s, &a.record, id, &raw["node"], ready).await {
         Ok(Some(routing)) => data["routing"] = routing,
         Ok(None) => {}
-        Err(error) => tracing::warn!(task = %id, ?error, "task routing view omitted"),
+        Err(error) => {
+            tracing::warn!(task = %id, class = error_class(&error), "task routing view omitted")
+        }
     }
     finish(&s, &r, a, data).await
 }
