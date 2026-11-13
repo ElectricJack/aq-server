@@ -481,10 +481,14 @@ async fn supervisor_reads_and_switches_routing_through_the_admin_nest() {
         body,
         json!({"enabled": false, "active": null, "latest": null})
     );
-    // Routing turns on only once a policy has compiled, for a supervisor as for the owner.
+    // Routing turns on only once a routing playbook is active, for a supervisor as for the owner.
     let on = Some(json!({"enabled": true}));
-    let (status, _) = a.supervisor("POST", ROUTING, on).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, refused) = a.supervisor("POST", ROUTING, on).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(
+        refused["message"],
+        "Routing can be turned on once a routing playbook is active"
+    );
     let off = Some(json!({"enabled": false}));
     let (status, body) = a.supervisor("POST", ROUTING, off).await;
     assert_eq!(

@@ -14,6 +14,7 @@ mod common;
 
 mod migration_catalog;
 mod result_origin_migration;
+mod routing_policies_migration;
 mod row_retention;
 mod schema26_27;
 mod schema28_closure;

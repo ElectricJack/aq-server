@@ -106,6 +106,25 @@ impl Options {
     }
 }
 
+/// A profile's offers: each (provider, harness) pair its candidates list, once,
+/// in candidate order. Whether a worker is qualified for a harness now is not
+/// asked: that is placement's question (owner, 2026-11-13).
+pub fn offers<'a>(candidates: impl IntoIterator<Item = (&'a str, &'a [String])>) -> Vec<Offer> {
+    let mut out: Vec<Offer> = Vec::new();
+    for (provider, harnesses) in candidates {
+        for harness in harnesses {
+            let offer = Offer {
+                provider: provider.into(),
+                harness: harness.clone(),
+            };
+            if !out.contains(&offer) {
+                out.push(offer);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +214,29 @@ mod tests {
             json!({"classes": {"standard-high": [{"provider": "anthropic", "harness": "claude"}]}})
         );
         assert_eq!(serde_json::from_value::<Options>(value).unwrap(), options);
+    }
+
+    #[test]
+    fn offers_keep_every_listed_harness_once_in_candidate_order() {
+        let a = vec!["claude".to_string(), "cursor".to_string()];
+        let b = vec!["codex".to_string(), "claude".to_string()];
+        let candidates = [
+            ("anthropic", a.as_slice()),
+            ("openai", b.as_slice()),
+            ("anthropic", a.as_slice()),
+        ];
+        let pairs: Vec<(String, String)> = offers(candidates)
+            .into_iter()
+            .map(|o| (o.provider, o.harness))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("anthropic".to_string(), "claude".to_string()),
+                ("anthropic".to_string(), "cursor".to_string()),
+                ("openai".to_string(), "codex".to_string()),
+                ("openai".to_string(), "claude".to_string()),
+            ]
+        );
     }
 }

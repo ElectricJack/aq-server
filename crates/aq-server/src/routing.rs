@@ -5,10 +5,13 @@ use crate::{
     AppState,
     agent_access::{self, human::graph_actions::current},
     error::{AppError, db},
+    profile_catalog::settings::error as settings_error,
 };
-pub mod compile;
 mod http;
-use aq_routing::{Class, CompactRoute, Placement, Route, Source};
+use aq_routing::{
+    Class, CompactRoute, Placement, Route, Source,
+    classify::{self, Options},
+};
 pub use aq_routing::{StoredRoute, Written};
 pub(crate) use http::{admin_routes, settings_routes, view};
 use serde_json::json;
@@ -150,23 +153,47 @@ pub async fn enabled(pool: &PgPool) -> Result<bool, AppError> {
         .map_err(db)
 }
 
-/// Routing turns on only while a compiled policy is active.
+/// Routing turns on only while a routing playbook is active (spec 0013 §7). None can be active
+/// until playbook authoring lands, so turning it on is refused; turning it off always works.
 pub async fn set_enabled(pool: &PgPool, on: bool) -> Result<(), AppError> {
-    let changed = sqlx::query(
-        "UPDATE routing_state s SET enabled=$1 WHERE singleton AND (NOT $1 OR EXISTS(
-           SELECT 1 FROM routing_policies p WHERE p.digest=s.active_policy_digest AND p.status='active'))",
-    )
-    .bind(on)
-    .execute(pool)
-    .await
-    .map_err(db)?
-    .rows_affected();
-    if changed == 0 {
+    if on {
         return Err(AppError::Conflict(
-            "Routing can be turned on once a routing policy has compiled".into(),
+            "Routing can be turned on once a routing playbook is active".into(),
         ));
     }
+    sqlx::query("UPDATE routing_state SET enabled=FALSE WHERE singleton")
+        .execute(pool)
+        .await
+        .map_err(db)?;
     Ok(())
+}
+
+/// What Settings offers: each class with an assigned profile in the active catalog, and every
+/// (provider, harness) pair of that profile's candidates. Worker qualification is not read: a
+/// route may name what no worker can run now, and placement makes such a route wait.
+pub async fn options(state: &AppState) -> Result<Options, AppError> {
+    let (_, digest) = crate::project_bindings::active_catalog(state).await?;
+    let Some(digest) = digest else {
+        return Ok(Options::default());
+    };
+    let catalog = crate::project_bindings::catalog(state, &digest).await?;
+    let pool = &state.store.pool;
+    let (document, _, _) = aq_profile_settings::structure::document(pool)
+        .await
+        .map_err(settings_error)?;
+    let profiles = &catalog.artifact().catalog.intelligence;
+    let mut options = Options::default();
+    for a in &document.assignments {
+        let class = format!("{}-{}", a.parent_id, a.effort).parse::<Class>();
+        let profile =
+            (profiles.iter()).find(|p| p.id == a.profile_id && p.automatic_routing != Some(true));
+        if let (Ok(class), Some(profile)) = (class, profile) {
+            let candidates =
+                (profile.candidates.iter()).map(|c| (c.provider.as_str(), c.harnesses.as_slice()));
+            options.classes.insert(class, classify::offers(candidates));
+        }
+    }
+    Ok(options)
 }
 
 /// The profile Settings assigns to the class's parent and effort, as `id@version`.
@@ -178,7 +205,7 @@ pub async fn class_profile(
 ) -> Result<Option<String>, AppError> {
     let (document, _, _) = aq_profile_settings::structure::document(pool)
         .await
-        .map_err(crate::profile_catalog::settings::error)?;
+        .map_err(settings_error)?;
     let Some(assignment) = document
         .assignments
         .iter()

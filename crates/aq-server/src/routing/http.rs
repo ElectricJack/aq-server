@@ -23,12 +23,20 @@ pub(crate) fn settings_routes() -> Router<AppState> {
     Router::new().route("/api/settings/intelligence/routing", policy)
 }
 
-/// `GET /api/settings/intelligence/routing`: the switch, the active policy and the latest compile.
+/// `GET /api/settings/intelligence/routing`: the switch. No routing playbook can be active yet,
+/// so `active` and `latest` are null (the shape the dashboard reads).
 async fn policy(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
 ) -> Result<Json<Value>, AppError> {
-    super::compile::view(&state).await.map(Json)
+    switch_view(&state).await
+}
+
+async fn switch_view(state: &AppState) -> Result<Json<Value>, AppError> {
+    let enabled = enabled(&state.store.pool).await?;
+    Ok(Json(
+        json!({"enabled": enabled, "active": null, "latest": null}),
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -37,14 +45,15 @@ struct Switch {
     enabled: bool,
 }
 
-/// `POST /api/settings/intelligence/routing` with `{enabled}`; on only while a policy is active.
+/// `POST /api/settings/intelligence/routing` with `{enabled}`; on only while a routing
+/// playbook is active.
 async fn switch(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
     Json(switch): Json<Switch>,
 ) -> Result<Json<Value>, AppError> {
     super::set_enabled(&state.store.pool, switch.enabled).await?;
-    super::compile::view(&state).await.map(Json)
+    switch_view(&state).await
 }
 
 /// `GET /api/tasks/{id}/routes`: every route the task has had, newest first, with its reasons

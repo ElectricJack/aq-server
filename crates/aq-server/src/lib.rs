@@ -510,7 +510,6 @@ async fn run_with_listeners_and_dashboard(
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
     let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
     let internal_work_task = tokio::spawn(state.internal_work.clone().serve(rx.clone()));
-    let compile_task = tokio::spawn(routing::compile::serve(state.clone(), rx.clone()));
     tokio::spawn(async move {
         shutdown.await;
         let _ = tx.send(true);
@@ -562,8 +561,6 @@ async fn run_with_listeners_and_dashboard(
     let _ = stall_task.await;
     internal_work_task.abort();
     let _ = internal_work_task.await;
-    compile_task.abort();
-    let _ = compile_task.await;
     let policy_shutdown = match policy_runtime {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),

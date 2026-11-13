@@ -1,6 +1,9 @@
 //! Route storage on the task graph, route history and the routing switch
 //! (spec 0011 §3, §4), against a minimal fake Graph service.
-use aq_routing::{Class, CompactRoute, ProviderIntent, Route, RouteReason, Source};
+use aq_routing::{
+    Class, CompactRoute, ProviderIntent, Route, RouteReason, Source,
+    classify::{Offer, Options},
+};
 use aq_server::{
     AppState,
     agent_access::{AgentAccessConfig, Runtime},
@@ -17,10 +20,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{TimeZone, Utc};
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 const NOW_MS: i64 = 1_000_000;
@@ -418,36 +423,118 @@ async fn class_profile_follows_structure_assignments_and_is_none_for_an_unassign
     assert_eq!(profile("complex-high").await.as_deref(), Some("careful@3"));
 }
 
-#[tokio::test]
-async fn routing_cannot_be_enabled_without_an_active_policy() {
-    let e = setup().await;
-    let pool = &e.pool;
-    assert!(!routing::enabled(pool).await.unwrap());
-    assert!(matches!(
-        routing::set_enabled(pool, true).await,
-        Err(AppError::Conflict(_))
-    ));
-    sqlx::query(
-        "INSERT INTO routing_policies(structure_revision,source_digest,digest,status,created_at_ms)
-         VALUES(1,'sha256:s','d1','failed',1)",
+const ROUTING: &str = "/api/settings/intelligence/routing";
+
+/// Bootstraps the owner, so the admin router admits the dev login.
+async fn owner(e: &Env) {
+    let now = Utc.timestamp_millis_opt(NOW_MS).unwrap();
+    let store = &e.state.store;
+    let _ = store
+        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
+        .await;
+}
+
+/// The owner's admin router over `e`'s state.
+async fn owner_app(e: &Env) -> Router {
+    owner(e).await;
+    aq_server::build_admin_router(e.state.clone())
+}
+
+async fn call(app: &Router, method: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let request = axum::http::Request::builder()
+        .uri(ROUTING)
+        .method(method)
+        .header("X-AQ-Request", "1")
+        .header("content-type", "application/json");
+    let body = body.map_or_else(axum::body::Body::empty, |b| b.to_string().into());
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
-    .execute(pool)
+}
+
+/// Spec 0013 §7: the switch needs an active routing playbook. None can be active yet (the
+/// decision table is retired), so turning routing on is refused; turning it off always works.
+#[tokio::test]
+async fn routing_cannot_be_switched_on_without_a_routing_playbook() {
+    let e = setup().await;
+    let app = owner_app(&e).await;
+    let (status, body) = call(&app, "POST", Some(json!({"enabled": true}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["message"],
+        "Routing can be turned on once a routing playbook is active"
+    );
+    assert!(!routing::enabled(&e.pool).await.unwrap());
+    let off = json!({"enabled": false, "active": null, "latest": null});
+    assert_eq!(call(&app, "GET", None).await, (StatusCode::OK, off.clone()));
+    // A switch left on by an earlier build is turned off.
+    sqlx::query("UPDATE routing_state SET enabled=TRUE")
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&app, "GET", None).await;
+    assert_eq!(
+        (status, body["enabled"].clone()),
+        (StatusCode::OK, json!(true))
+    );
+    let turned_off = call(&app, "POST", Some(json!({"enabled": false}))).await;
+    assert_eq!(turned_off, (StatusCode::OK, off));
+    assert!(!routing::enabled(&e.pool).await.unwrap());
+}
+
+/// Spec 0013 §4.2: what Settings offers is each assigned class (never the router) with every
+/// (provider, harness) pair its profile lists, once each. No harness is qualified on a worker
+/// here: qualification is placement's question, not what is offered (a309a837).
+#[tokio::test]
+async fn options_offer_each_assigned_class_every_pair_its_profile_lists() {
+    let e = setup().await;
+    assert_eq!(
+        routing::options(&e.state).await.unwrap(),
+        Options::default()
+    );
+    owner(&e).await;
+    let catalog = catalog();
+    sqlx::query(
+        "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
+         SELECT $1,$2,id,0 FROM users LIMIT 1",
+    )
+    .bind(catalog.digest())
+    .bind(catalog.canonical_bytes().unwrap())
+    .execute(&e.pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE routing_state SET active_policy_digest='d1'")
-        .execute(pool)
+    sqlx::query("UPDATE profile_catalog_registry SET revision=1,active_digest=$1")
+        .bind(catalog.digest())
+        .execute(&e.pool)
         .await
         .unwrap();
-    assert!(routing::set_enabled(pool, true).await.is_err());
-    assert!(!routing::enabled(pool).await.unwrap());
-    sqlx::query(
-        "UPDATE routing_policies SET status='active',compiled='{}',finished_at_ms=2 WHERE digest='d1'",
+    assign(
+        &e.pool,
+        1,
+        json!([
+            {"profile_id":"careful","parent_id":"standard","effort":"high"},
+            {"profile_id":"router","parent_id":"deep","effort":"max"},
+            {"profile_id":"missing","parent_id":"simple","effort":"low"},
+        ]),
     )
-        .execute(pool)
-        .await
-        .unwrap();
-    routing::set_enabled(pool, true).await.unwrap();
-    assert!(routing::enabled(pool).await.unwrap());
-    routing::set_enabled(pool, false).await.unwrap();
-    assert!(!routing::enabled(pool).await.unwrap());
+    .await;
+    let offer = |harness: &str| Offer {
+        provider: "configuration-required".into(),
+        harness: harness.into(),
+    };
+    let listed = ["codex", "claude-code", "gemini", "opencode"].map(offer);
+    assert_eq!(
+        routing::options(&e.state).await.unwrap(),
+        Options {
+            classes: BTreeMap::from([(class("standard-high"), listed.to_vec())]),
+        }
+    );
 }

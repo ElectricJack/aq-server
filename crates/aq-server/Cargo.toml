@@ -103,7 +103,6 @@ tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
 aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }
 aq-server = { path = ".", features = ["test-support"] }
-aq-routing = { path = "../aq-routing", features = ["fixtures"] }
 http-body-util.workspace = true
 rsa.workspace = true
 tempfile.workspace = true
