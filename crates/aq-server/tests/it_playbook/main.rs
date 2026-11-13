@@ -21,6 +21,7 @@ mod codex_finite_provider;
 #[allow(clippy::module_inception)]
 mod codex_runtime_recipe;
 mod playbook_activation;
+mod playbook_authoring;
 mod playbook_bridge;
 mod playbook_contract;
 mod playbook_findings_triggers;

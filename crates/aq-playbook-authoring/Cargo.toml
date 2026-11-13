@@ -1,0 +1,16 @@
+[package]
+name = "aq-playbook-authoring"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+aq-internal-work = { path = "../aq-internal-work" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true

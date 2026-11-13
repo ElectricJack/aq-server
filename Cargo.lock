@@ -470,6 +470,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-playbook-authoring"
+version = "0.1.0"
+dependencies = [
+ "aq-internal-work",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
@@ -742,6 +757,7 @@ dependencies = [
  "aq-observation-admission",
  "aq-observation-api",
  "aq-phase-terminal-protocol",
+ "aq-playbook-authoring",
  "aq-playbook-domain",
  "aq-playbook-host",
  "aq-playbooks-compiler",
