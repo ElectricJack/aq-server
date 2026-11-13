@@ -57,8 +57,11 @@ fn harness(name: &str) -> InstalledHarness {
     }
 }
 
-/// An OpenAI API key for internal work; Claude, Codex, Gemini and OpenCode qualified.
-fn registry() -> Arc<LoadedRegistry> {
+/// Every harness the reference profiles list except Cursor.
+const QUALIFIED: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
+
+/// An OpenAI API key for internal work, and `qualified` the harnesses qualified on a worker.
+fn registry(qualified: &[&str]) -> Arc<LoadedRegistry> {
     let credential = AuthorizedCredential {
         profile: artifact("openai-key"),
         provider: "openai".into(),
@@ -83,9 +86,7 @@ fn registry() -> Arc<LoadedRegistry> {
             secret_file: None,
             delivery_mode: None,
         }],
-        qualified_harnesses: ["claude", "codex", "gemini", "opencode"]
-            .map(harness)
-            .to_vec(),
+        qualified_harnesses: qualified.iter().map(|h| harness(h)).collect(),
     };
     Arc::new(config.load().unwrap())
 }
@@ -163,6 +164,12 @@ impl Env {
     /// A server whose internal work answers `replies` in turn; with `serving` false its loop
     /// is not running and its waiters poll once an hour, so a compile stays queued.
     async fn new(replies: Vec<Value>, serving: bool) -> Self {
+        Self::qualified(replies, serving, &QUALIFIED).await
+    }
+
+    /// [`Env::new`] with only `qualified` harnesses qualified on a worker. Internal work keeps
+    /// its own registry, with Codex, so the compile itself still has a model.
+    async fn qualified(replies: Vec<Value>, serving: bool, qualified: &[&str]) -> Self {
         let db = TestDb::create().await;
         let store = db.store().await;
         store
@@ -201,7 +208,7 @@ impl Env {
         std::fs::write(&secret, "sk-test-secret-value\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let server = Self::server(&db, &secret, replies, serving).await;
+        let server = Self::server(&db, &secret, replies, serving, qualified).await;
         Env {
             db,
             pool,
@@ -215,9 +222,10 @@ impl Env {
         secret: &std::path::Path,
         replies: Vec<Value>,
         serving: bool,
+        qualified: &[&str],
     ) -> Server {
         let (endpoint, seen) = fake_api::serve_each(200, replies).await;
-        let registry = registry();
+        let registry = registry(&QUALIFIED);
         let work = InternalWork::new(
             db.pool().await,
             aq_server::system_clock(),
@@ -250,7 +258,7 @@ enabled=true
 "#,
         )
         .unwrap();
-        config.intelligence = Some(registry);
+        config.intelligence = Some(self::registry(qualified));
         let state = AppState {
             internal_work: work.clone(),
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),
@@ -276,7 +284,7 @@ enabled=true
     /// runs and answers `replies`, and whose compile resumer runs.
     async fn restart(&mut self, replies: Vec<Value>) {
         let secret = self.dir.path().join("key");
-        self.server = Self::server(&self.db, &secret, replies, true).await;
+        self.server = Self::server(&self.db, &secret, replies, true, &QUALIFIED).await;
         let (_, rx) = (&self.server._stop, self.server._stop.subscribe());
         tokio::spawn(routing::compile::serve(self.server.state.clone(), rx));
     }
@@ -678,8 +686,11 @@ async fn a_retried_compile_is_recorded_and_takes_effect() {
     assert_eq!(routing::compile::resume(&e.server.state).await.unwrap(), 0);
 }
 
+/// What a policy may name is what the assigned profiles list, whether or not a worker is
+/// qualified for it now (owner, 2026-11-13): Cursor is listed by Standard, high and qualified
+/// nowhere.
 #[tokio::test]
-async fn options_list_only_assigned_classes_and_qualified_harnesses() {
+async fn options_list_only_assigned_classes_and_every_harness_their_profiles_list() {
     let e = Env::new(vec![fake_api::completed("{}")], false).await;
     e.save(
         SOURCE,
@@ -690,10 +701,81 @@ async fn options_list_only_assigned_classes_and_qualified_harnesses() {
     let reference = fixtures::options();
     let classes: Vec<String> = options.classes.keys().map(|c| c.to_string()).collect();
     assert_eq!(classes, ["standard-high", "complex-high"]);
-    for (class, offers) in &options.classes {
-        assert_eq!(offers, &reference.classes[class], "{class}");
-        assert!(!offers.iter().any(|o| o.harness == "cursor"));
-    }
+    let complex: aq_routing::Class = "complex-high".parse().unwrap();
+    assert_eq!(options.classes[&complex], reference.classes[&complex]);
+    let standard: aq_routing::Class = "standard-high".parse().unwrap();
+    let mut listed = reference.classes[&standard].clone();
+    listed.push(aq_routing::classify::Offer {
+        provider: "cursor-ai".into(),
+        harness: "cursor".into(),
+    });
+    assert_eq!(options.classes[&standard], listed);
+}
+
+/// With only Claude qualified on a worker, Settings still offers every harness and provider the
+/// assigned profiles list, and a policy naming Codex compiles and takes effect. Whether a worker
+/// can serve Codex now is placement's question.
+#[tokio::test]
+async fn a_policy_may_name_a_harness_a_profile_lists_that_no_worker_is_qualified_for() {
+    let (reference, _) = fixtures::reference();
+    assert!(
+        serde_json::to_string(&reference)
+            .unwrap()
+            .contains("\"codex\""),
+        "the reference policy names Codex"
+    );
+    let e = Env::qualified(vec![answer(&reference, &[])], true, &["claude"]).await;
+    e.save(SOURCE, None).await;
+    let body = e.settled().await;
+    assert_eq!(body["latest"]["status"], "active", "{body}");
+    assert_eq!(body["latest"]["problems"], json!([]));
+    assert_eq!(body["active"]["digest"], policy::digest(&reference));
+    assert_eq!(body["active"]["problems"], json!([]));
+    let request: Value = sqlx::query_scalar("SELECT request FROM internal_tasks WHERE id=$1")
+        .bind(e.compiles().await[0].0)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    let input = request["input"].as_str().unwrap();
+    let offers = input.split("# What Settings offers").nth(1).unwrap();
+    let offers = offers.split("# The levels").next().unwrap();
+    assert!(
+        offers.contains(
+            "- deep-high (Deep, high effort): claude (provider anthropic), codex (provider openai)"
+        ),
+        "{offers}"
+    );
+    assert!(
+        offers.contains("Harnesses: claude (Claude), codex (Codex), cursor (Cursor), gemini"),
+        "{offers}"
+    );
+    assert!(offers.contains("openai (OpenAI)"), "{offers}");
+    assert!(!offers.contains("qualified"), "{offers}");
+}
+
+/// A name no assigned profile lists is still refused, even when a worker is qualified for it.
+#[tokio::test]
+async fn a_policy_naming_a_harness_no_assigned_profile_lists_is_refused() {
+    let (reference, _) = fixtures::reference();
+    let mut qualified = QUALIFIED.to_vec();
+    qualified.push("plotter");
+    let e = Env::qualified(vec![answer(&reference, &[])], false, &qualified).await;
+    e.save(SOURCE, None).await;
+    let task = e.compiles().await[0].0;
+    let mut naming = reference.clone();
+    naming.kinds.get_mut("docs").unwrap().prefer_harnesses = vec!["plotter".into()];
+    routing::compile::completed(&e.server.state, task, &answered(&naming))
+        .await
+        .unwrap();
+    let body = e.routing().await;
+    assert_eq!(body["latest"]["status"], "failed", "{body}");
+    assert_eq!(
+        body["latest"]["problems"],
+        json!([{"path": "kinds.docs.prefer_harnesses[0]",
+            "message": "harness \"plotter\" is not offered by any assigned profile"}])
+    );
+    assert_eq!(body["active"], Value::Null);
+    assert_eq!(e.active_digest().await, None);
 }
 
 #[tokio::test]

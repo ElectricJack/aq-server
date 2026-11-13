@@ -18,7 +18,7 @@ use aq_routing::{
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, types::Json};
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// How often [`serve`] looks for finished compiles nobody recorded.
@@ -29,8 +29,9 @@ const KIND: &str = "routing_policy";
 const GRACE_MS: i64 = 30_000;
 const UNMATCHED: &str = "The compile result could not be matched to a save";
 
-/// What Settings offers: each class with an assigned profile in the active catalog, and the
-/// (provider, harness) pairs of that profile's candidates whose harness is qualified.
+/// What Settings offers: each class with an assigned profile in the active catalog, and every
+/// (provider, harness) pair of that profile's candidates. Worker qualification is not read: a
+/// policy may name what no worker can run now, and placement makes such a route wait.
 pub async fn options(state: &AppState) -> Result<Options, AppError> {
     let (_, digest) = crate::project_bindings::active_catalog(state).await?;
     let Some(digest) = digest else {
@@ -39,10 +40,6 @@ pub async fn options(state: &AppState) -> Result<Options, AppError> {
     let catalog = crate::project_bindings::catalog(state, &digest).await?;
     let pool = &state.store.pool;
     let (document, _, _) = structure::document(pool).await.map_err(settings_error)?;
-    let registries = state.config.intelligence.iter();
-    let qualified: BTreeSet<&str> = (registries.flat_map(|r| &r.config.qualified_harnesses))
-        .map(|h| h.harness.as_str())
-        .collect();
     let profiles = &catalog.artifact().catalog.intelligence;
     let mut options = Options::default();
     for a in &document.assignments {
@@ -52,9 +49,7 @@ pub async fn options(state: &AppState) -> Result<Options, AppError> {
         if let (Ok(class), Some(profile)) = (class, profile) {
             let candidates =
                 (profile.candidates.iter()).map(|c| (c.provider.as_str(), c.harnesses.as_slice()));
-            options
-                .classes
-                .insert(class, source::offers(candidates, &qualified));
+            options.classes.insert(class, source::offers(candidates));
         }
     }
     Ok(options)

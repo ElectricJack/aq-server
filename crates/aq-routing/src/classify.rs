@@ -82,14 +82,16 @@ pub fn schema(allowed_kinds: &[String], allowed_classes: &[Class]) -> Value {
     })
 }
 
-/// What Settings currently offers: only classes with an assigned profile.
+/// What Settings currently offers: only classes with an assigned profile, each
+/// with every pair its profile lists.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
     pub classes: BTreeMap<Class, Vec<Offer>>,
 }
 
-/// One qualified candidate harness of a class's profile.
+/// One (provider, harness) pair a class's profile lists among its candidates,
+/// whether or not a worker is qualified for that harness now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Offer {

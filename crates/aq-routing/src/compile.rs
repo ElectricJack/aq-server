@@ -17,7 +17,7 @@ pub const COMPILER_INSTRUCTIONS: &str = r#"You compile an owner's routing policy
 
 The owner wrote the policy in plain language, the way one engineer describes routing to another. AQ's planner is deterministic: for each task it reads your structure, the task's own fields and one classification of the task by a model, and produces the task's route: the level of model the task requires and which harnesses and providers may serve it. You write the structure once, when the owner saves the policy. You never route a task.
 
-The input has three parts: the owner's policy; "What Settings offers", the levels that have an assigned profile and, for each, the harnesses (the agent programs) and providers (the model vendors) that can take work there; and how Settings describes the four levels.
+The input has three parts: the owner's policy; "What Settings offers", the levels that have an assigned profile and, for each, the harnesses (the agent programs) and providers (the model vendors) its profile lists, whether or not a worker can run them right now; and how Settings describes the four levels.
 
 Answer with one JSON object: {"policy": <the structure>, "unresolved": [<sentences>]}. Optional fields may be left out, except narrow on each kind (see step 2).
 
@@ -232,7 +232,8 @@ pub fn input(source: &str, options: &Options, parents: &[(String, String)]) -> S
     out.push_str(source);
     out.push_str(
         "\n\n# What Settings offers\n\nThe levels with an assigned profile, and the harnesses \
-         that can take work at each, with their providers:\n\n",
+         each one's profile lists, with their providers. The policy may name any of them, even \
+         one no worker can run right now; work routed to it waits until one can:\n\n",
     );
     for (class, offers) in &options.classes {
         let who: Vec<String> = offers
@@ -245,7 +246,7 @@ pub fn input(source: &str, options: &Options, parents: &[(String, String)]) -> S
             })
             .collect();
         let who = if who.is_empty() {
-            "no qualified harness at the moment".to_string()
+            "its profile lists no harness".to_string()
         } else {
             who.join(", ")
         };
@@ -334,15 +335,13 @@ pub fn source_digest(source: &str) -> String {
     format!("sha256:{hex}")
 }
 
-/// A profile's offers: each (provider, harness) pair of its candidates whose
-/// harness is in `qualified`, once, in candidate order.
-pub fn offers<'a>(
-    candidates: impl IntoIterator<Item = (&'a str, &'a [String])>,
-    qualified: &BTreeSet<&str>,
-) -> Vec<Offer> {
+/// A profile's offers: each (provider, harness) pair its candidates list, once,
+/// in candidate order. Whether a worker is qualified for a harness now is not
+/// asked: that is placement's question, not the policy's (owner, 2026-11-13).
+pub fn offers<'a>(candidates: impl IntoIterator<Item = (&'a str, &'a [String])>) -> Vec<Offer> {
     let mut out: Vec<Offer> = Vec::new();
     for (provider, harnesses) in candidates {
-        for harness in harnesses.iter().filter(|h| qualified.contains(h.as_str())) {
+        for harness in harnesses {
             let offer = Offer {
                 provider: provider.into(),
                 harness: harness.clone(),
@@ -513,6 +512,11 @@ mod tests {
             "- deep-high (Deep, high effort): claude (provider anthropic), codex (provider openai)"
         ));
         assert!(!offers.contains("simple-medium"));
+        assert!(
+            offers.contains("even one no worker can run right now"),
+            "{offers}"
+        );
+        assert!(!offers.contains("qualified"), "{offers}");
         assert!(offers.contains("Providers: anthropic (Anthropic), google (Google), ollama (local models), openai (OpenAI)."), "{offers}");
         assert!(
             offers.contains(
@@ -706,8 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn offers_keep_qualified_harnesses_once_in_candidate_order() {
-        let qualified: BTreeSet<&str> = ["claude", "codex"].into();
+    fn offers_keep_every_listed_harness_once_in_candidate_order() {
         let a = vec!["claude".to_string(), "cursor".to_string()];
         let b = vec!["codex".to_string(), "claude".to_string()];
         let candidates = [
@@ -715,7 +718,7 @@ mod tests {
             ("openai", b.as_slice()),
             ("anthropic", a.as_slice()),
         ];
-        let pairs: Vec<(String, String)> = offers(candidates, &qualified)
+        let pairs: Vec<(String, String)> = offers(candidates)
             .into_iter()
             .map(|o| (o.provider, o.harness))
             .collect();
@@ -723,6 +726,7 @@ mod tests {
             pairs,
             [
                 ("anthropic".to_string(), "claude".to_string()),
+                ("anthropic".to_string(), "cursor".to_string()),
                 ("openai".to_string(), "codex".to_string()),
                 ("openai".to_string(), "claude".to_string()),
             ]
