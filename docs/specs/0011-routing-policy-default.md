@@ -20,15 +20,21 @@ Start from what kind of work it is, then adjust for risk.
   Complex, high effort.
 - Research is Standard, high effort, unless it is clearly harder, in which
   case it is Complex, high effort.
-- Deep is only for analysis, planning or spec writing that needs advanced
-  mathematics or unusually hard reasoning. A big task is not a Deep task, and
-  neither is a risky one.
+- Deep, high effort, is only for analysis, planning, spec writing, design or
+  review that needs advanced mathematics or unusually hard reasoning. A big
+  task is not a Deep task, and neither is a risky one. Whether a task needs
+  that is your judgement of the task itself, not of how it was labelled.
+- Analysis that doesn't need Deep is Standard, high effort.
 
 If whoever filed the task asked for a level, respect it, but don't go above
 Standard for tests, docs, chores and syncs, or above Complex for ordinary
-implementation work.
+implementation work. Asking for Deep is not enough to get it: the task still
+has to need it by the rule above, and otherwise it gets Complex, high effort.
+If the level asked for isn't available, use the nearest available level below
+it, but never below what the other rules here give.
 
-A bug fix that has already failed once for a real reason moves up to Complex.
+A bug fix that has already failed once for a real reason moves up to Complex,
+high effort.
 Failed verification or the agent giving up count. An outage, a lost worker or
 review feedback on finished work do not.
 
@@ -68,8 +74,7 @@ priority to choose anything. Priority only orders the queue.
   take them.
 - Art and visual design go to Codex, and wait for it rather than going
   elsewhere.
-- Keep the Deep Claude models for design, review and deep analysis. Don't
-  spend them on escalated bug fixes.
+- Never spend Deep on bug fixes, escalated or not.
 - Repairs to a failed integration or build never go to a local model.
 
 "Narrow" means the requirements are settled and the files to change are named
@@ -79,8 +84,9 @@ the result. Work that needs manual or end-to-end verification is not covered.
 ## When it goes wrong
 
 - If the risk or the kind of work can't be worked out, don't block the task.
-  Route it as medium risk at Standard, high effort, on Claude or Codex, and
-  say that the risk was assumed.
+  Use what is known. An unknown risk counts as medium, and you say that it
+  was assumed. An unknown kind gets at least Standard, high effort. A risk
+  that is known still applies in full. Keep the task on Claude or Codex.
 - If nothing allowed can take the task right now, hold it until something can.
   That is a wait, not a failure.
 - If nothing allowed could ever take it, leave it unrouted and visible, say
