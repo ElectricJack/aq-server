@@ -294,6 +294,25 @@ enabled=true
         saved
     }
 
+    /// Saves `markdown` with every reference class assigned, without the server adapter: the
+    /// save commits and no compile is requested, as when the request is late or lost.
+    async fn save_without_compiling(&self, markdown: &str) -> Value {
+        let snapshot = call(&self.server.app, INTELLIGENCE_STRUCTURE, None, false)
+            .await
+            .1;
+        let mut request = structure_request(&snapshot);
+        request["routing_markdown"] = json!(markdown);
+        request["assignments"] = assignments(&fixtures::ASSIGNED_CLASSES);
+        let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email='owner@localhost'")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
+        let request = serde_json::from_value(request).unwrap();
+        aq_profile_settings::structure::save(&self.pool, owner, request)
+            .await
+            .unwrap()
+    }
+
     async fn routing(&self) -> Value {
         let (status, body) = call(&self.server.app, ROUTING, None, false).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -703,4 +722,172 @@ async fn get_routing_reports_active_problems_when_an_assignment_the_active_polic
         "{problems:?}"
     );
     assert!(problems.iter().any(|p| p["path"] == "kinds.spec.max_class"));
+}
+
+#[tokio::test]
+async fn compiles_finishing_in_order_activate_only_the_newer_policy() {
+    let (older, _) = fixtures::reference();
+    let mut newer = older.clone();
+    newer.classifier_instructions.push_str(" Answer briefly.");
+    let e = Env::new(vec![answer(&older, &[])], false).await;
+    e.save(SOURCE, None).await;
+    e.save("# Routing\n\nEverything is Standard.\n", None).await;
+    let compiles = e.compiles().await;
+    let state = &e.server.state;
+    // The older text was replaced before its compile finished, so it never takes effect.
+    routing::compile::completed(state, compiles[0].0, &answered(&older))
+        .await
+        .unwrap();
+    assert_eq!(e.active_digest().await, None);
+    assert_eq!(e.routing().await["active"], Value::Null);
+    routing::compile::completed(state, compiles[1].0, &answered(&newer))
+        .await
+        .unwrap();
+    assert_eq!(e.active_digest().await, Some(policy::digest(&newer)));
+    let body = e.routing().await;
+    assert_eq!(body["active"]["structure_revision"], 2, "{body}");
+}
+
+#[tokio::test]
+async fn a_markdown_save_followed_at_once_by_an_assignments_only_save_still_compiles_the_new_text()
+{
+    let (reference, _) = fixtures::reference();
+    let e = Env::new(vec![answer(&reference, &[])], false).await;
+    // The Markdown save commits; its compile request comes late.
+    assert_eq!(e.save_without_compiling(SOURCE).await["revision"], "1");
+    // Before it, a save of assignments alone, which compiles nothing itself.
+    let without_deep: Vec<&str> = (fixtures::ASSIGNED_CLASSES.iter().copied())
+        .filter(|c| !c.starts_with("deep-"))
+        .collect();
+    e.save(SOURCE, Some(assignments(&without_deep))).await;
+    assert!(e.compiles().await.is_empty());
+    let task = routing::compile::requested(&e.server.state, 1, SOURCE)
+        .await
+        .unwrap();
+    let compiles = e.compiles().await;
+    assert_eq!(compiles.len(), 1, "the new text is compiled");
+    assert_eq!(Some(compiles[0].0), task);
+    assert_eq!(compiles[0].1, "2", "at the current revision");
+    let digest: String =
+        sqlx::query_scalar("SELECT source_digest FROM routing_policies WHERE internal_task_id=$1")
+            .bind(compiles[0].0)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(digest, aq_routing::compile::source_digest(SOURCE));
+    // When a later save changed the text itself, that save compiles it instead.
+    e.save("# Routing\n\nEverything is Standard.\n", None).await;
+    assert_eq!(e.compiles().await.len(), 2);
+    let late = routing::compile::requested(&e.server.state, 1, SOURCE)
+        .await
+        .unwrap();
+    assert_eq!(late, None);
+    assert_eq!(e.compiles().await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_compile_recorded_but_never_submitted_is_submitted_after_a_restart() {
+    let (reference, _) = fixtures::reference();
+    let mut e = Env::new(vec![answer(&reference, &[])], false).await;
+    e.save_without_compiling(SOURCE).await;
+    // The server stopped between recording a compile and submitting it; an older stranded
+    // compile's text has since been replaced.
+    let long_ago = Utc::now().timestamp_millis() - 60_000;
+    sqlx::query(
+        "INSERT INTO routing_policies(structure_revision,source_digest,status,created_at_ms)
+         VALUES(1,$1,'compiling',$2),(0,'sha256:replaced','compiling',$2)",
+    )
+    .bind(aq_routing::compile::source_digest(SOURCE))
+    .bind(long_ago)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    e.restart(vec![answer(&reference, &[])]).await;
+    let body = e.settled().await;
+    assert_eq!(body["latest"]["status"], "active", "{body}");
+    assert_eq!(body["latest"]["structure_revision"], 1);
+    assert_eq!(body["active"]["digest"], policy::digest(&reference));
+    let compiles = e.compiles().await;
+    assert_eq!(compiles.len(), 1, "{compiles:?}");
+    assert_eq!(body["latest"]["internal_task_id"], json!(compiles[0].0));
+    let replaced: String =
+        sqlx::query_scalar("SELECT status FROM routing_policies WHERE structure_revision=0")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(replaced, "superseded");
+}
+
+#[tokio::test]
+async fn a_finished_compile_no_save_matches_is_recorded_failed_once() {
+    let (reference, _) = fixtures::reference();
+    let e = Env::new(vec![answer(&reference, &[])], true).await;
+    let state = &e.server.state;
+    let request = aq_internal_work::Request {
+        purpose: aq_internal_work::Purpose::PlaybookCompilation,
+        instructions: "Compile.".into(),
+        input: "# Routing".into(),
+        answer: aq_internal_work::AnswerShape::Json {
+            schema: json!({"type": "object"}),
+        },
+        blocking: false,
+        affected: aq_internal_work::Affected {
+            kind: "routing_policy".into(),
+            id: "7".into(),
+            project_id: None,
+        },
+        deadline_ms: 60_000,
+        max_output_bytes: 262_144,
+        escalate: false,
+        profile_override: None,
+    };
+    let task = state.internal_work.submit(request).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(20), state.internal_work.wait(task));
+    assert!(matches!(
+        outcome.await.unwrap().unwrap(),
+        Outcome::Answered { .. }
+    ));
+    // Within the grace, a task with no row may be one whose save is still recording it.
+    assert_eq!(routing::compile::resume(state).await.unwrap(), 0);
+    sqlx::query("UPDATE internal_tasks SET created_at_ms=created_at_ms-60000 WHERE id=$1")
+        .bind(task)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(routing::compile::resume(state).await.unwrap(), 1);
+    let (status, revision, error): (String, i64, String) = sqlx::query_as(
+        "SELECT status,structure_revision,error FROM routing_policies WHERE internal_task_id=$1",
+    )
+    .bind(task)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!((status.as_str(), revision), ("failed", 7));
+    assert_eq!(error, "The compile result could not be matched to a save");
+    assert_eq!(
+        routing::compile::resume(state).await.unwrap(),
+        0,
+        "handled once"
+    );
+    assert_eq!(e.active_digest().await, None);
+}
+
+#[tokio::test]
+async fn an_answer_past_the_unresolved_bounds_fails_with_a_bounded_error() {
+    let (reference, _) = fixtures::reference();
+    let long = "é".repeat(2000);
+    let sentences: Vec<&str> = (0..80).map(|_| long.as_str()).collect();
+    let e = Env::new(vec![answer(&reference, &sentences)], true).await;
+    e.save(SOURCE, None).await;
+    let body = e.settled().await;
+    let latest = &body["latest"];
+    assert_eq!(latest["status"], "failed", "{body}");
+    let error = latest["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("The compile did not finish (invalid output)"),
+        "{error}"
+    );
+    assert!(error.len() <= aq_routing::compile::ERROR_MAX_BYTES);
+    assert_eq!(latest["unresolved"], json!([]));
+    assert_eq!(body["active"], Value::Null);
 }

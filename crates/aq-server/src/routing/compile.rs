@@ -24,6 +24,10 @@ use uuid::Uuid;
 /// How often [`serve`] looks for finished compiles nobody recorded.
 const RESUME_EVERY: Duration = Duration::from_secs(5);
 const KIND: &str = "routing_policy";
+/// How long a compile may be recorded without its internal task, or an internal task finish
+/// without its row, before [`resume`] treats it as stranded.
+const GRACE_MS: i64 = 30_000;
+const UNMATCHED: &str = "The compile result could not be matched to a save";
 
 /// What Settings offers: each class with an assigned profile in the active catalog, and the
 /// (provider, harness) pairs of that profile's candidates whose harness is qualified.
@@ -60,42 +64,57 @@ fn now_ms(state: &AppState) -> i64 {
     (state.clock)().timestamp_millis()
 }
 
-/// Submits the compile of the routing Markdown saved at `structure_revision` and records it as
-/// compiling. `None` when a newer save has replaced that revision (it compiles itself), or when
-/// nothing could be submitted, which is recorded as a failed compile.
+/// Starts the compile of the routing Markdown `source`, saved at `structure_revision`. When a
+/// later save kept that text (it changed only assignments or descriptions), the current revision
+/// is compiled; when a later save changed the text itself, that save compiles it and this is
+/// `None`. The compile is recorded before it is submitted, so a crash in between leaves a row
+/// [`resume`] submits again. Also `None` when nothing could be submitted, recorded as failed.
 pub async fn requested(
     state: &AppState,
     structure_revision: u64,
+    source: &str,
 ) -> Result<Option<Uuid>, AppError> {
     let pool = &state.store.pool;
     let (document, revision, _) = structure::document(pool).await.map_err(settings_error)?;
-    if revision != structure_revision {
+    let digest = source::source_digest(&document.routing_markdown);
+    if revision != structure_revision && digest != source::source_digest(source) {
         return Ok(None);
     }
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO routing_policies(structure_revision,source_digest,status,created_at_ms)
+         VALUES($1,$2,'compiling',$3) RETURNING id",
+    )
+    .bind(revision as i64)
+    .bind(&digest)
+    .bind(now_ms(state))
+    .fetch_one(pool)
+    .await
+    .map_err(db)?;
+    submit(state, id, revision, &document).await
+}
+
+/// Submits the compile of row `id`, the routing Markdown of `document` at `revision`, and records
+/// its internal task; when nothing can be submitted the row is failed with the reason.
+async fn submit(
+    state: &AppState,
+    id: i64,
+    revision: u64,
+    document: &structure::Document,
+) -> Result<Option<Uuid>, AppError> {
+    let pool = &state.store.pool;
     let options = options(state).await?;
-    let source_digest = source::source_digest(&document.routing_markdown);
-    let insert = "INSERT INTO routing_policies(structure_revision,source_digest,internal_task_id,
-        status,error,created_at_ms,finished_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)";
-    let record = |task: Option<Uuid>, error: Option<&'static str>| {
-        let status = if error.is_some() {
-            "failed"
-        } else {
-            "compiling"
-        };
-        let now = now_ms(state);
-        sqlx::query(insert)
-            .bind(revision as i64)
-            .bind(&source_digest)
-            .bind(task)
-            .bind(status)
-            .bind(error)
-            .bind(now)
-            .bind(error.map(|_| now))
-            .execute(pool)
+    let fail = |error: &'static str| {
+        sqlx::query(
+            "UPDATE routing_policies SET status='failed',error=$2,finished_at_ms=$3 WHERE id=$1",
+        )
+        .bind(id)
+        .bind(error)
+        .bind(now_ms(state))
+        .execute(pool)
     };
     if options.classes.is_empty() {
         let error = "No level has an assigned profile in Settings, so there is nothing to route to";
-        record(None, Some(error)).await.map_err(db)?;
+        fail(error).await.map_err(db)?;
         return Ok(None);
     }
     let parents: Vec<(String, String)> = (document.parents.iter())
@@ -124,11 +143,16 @@ pub async fn requested(
         Err(error) => {
             tracing::warn!(?error, "routing policy compile not submitted");
             let error = "Internal work did not take the compile, so this version was not compiled";
-            record(None, Some(error)).await.map_err(db)?;
+            fail(error).await.map_err(db)?;
             return Ok(None);
         }
     };
-    record(Some(task), None).await.map_err(db)?;
+    sqlx::query("UPDATE routing_policies SET internal_task_id=$2 WHERE id=$1")
+        .bind(id)
+        .bind(task)
+        .execute(pool)
+        .await
+        .map_err(db)?;
     tokio::spawn(watch(state.clone(), task));
     Ok(Some(task))
 }
@@ -152,6 +176,7 @@ pub async fn completed(
     internal_task: Uuid,
     outcome: &Outcome,
 ) -> Result<(), AppError> {
+    // Read before the transaction: what Settings offers when the result arrives.
     let options = options(state).await?;
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     // One result at a time decides what routes.
@@ -182,7 +207,22 @@ pub async fn completed(
         .map_err(db)?
         {
             Some(row) => row,
-            None => return Ok(()),
+            None => {
+                // No save asked for it: recorded once, so it is not looked at again.
+                sqlx::query(
+                    "INSERT INTO routing_policies(structure_revision,source_digest,internal_task_id,
+                        status,error,created_at_ms,finished_at_ms)
+                     SELECT CASE WHEN affected_id ~ '^[0-9]{1,18}$' THEN affected_id::BIGINT ELSE 0 END,
+                        '',id,'failed',$2,created_at_ms,$3 FROM internal_tasks WHERE id=$1",
+                )
+                .bind(internal_task)
+                .bind(UNMATCHED)
+                .bind(now_ms(state))
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+                return tx.commit().await.map_err(db);
+            }
         },
     };
     let newer: bool = sqlx::query_scalar(
@@ -247,30 +287,63 @@ pub async fn active(pool: &PgPool) -> Result<Option<(Policy, String, u64)>, AppE
     Ok(row.map(|(policy, digest, revision)| (policy.0, digest, revision as u64)))
 }
 
-/// Records every finished compile that is not recorded yet: one whose waiter ended with the
-/// server, and a retry of a recorded compile. Returns how many it recorded.
+/// Submits every compile recorded but never submitted (the server stopped in between) once it
+/// is older than [`GRACE_MS`]; one whose text a later save replaced is superseded instead. Then
+/// records every finished compile not recorded yet: one whose waiter ended with the server, a
+/// retry of a recorded compile, and, after the grace, one no save matches. Returns how many
+/// compiles it handled.
 pub async fn resume(state: &AppState) -> Result<usize, AppError> {
     let pool = &state.store.pool;
+    let before = now_ms(state) - GRACE_MS;
+    let stranded: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id,structure_revision,source_digest FROM routing_policies
+         WHERE status='compiling' AND internal_task_id IS NULL AND created_at_ms<$1 ORDER BY id",
+    )
+    .bind(before)
+    .fetch_all(pool)
+    .await
+    .map_err(db)?;
+    let mut handled = stranded.len();
+    if !stranded.is_empty() {
+        let (document, _, _) = structure::document(pool).await.map_err(settings_error)?;
+        let current = source::source_digest(&document.routing_markdown);
+        for (id, revision, digest) in stranded {
+            if digest == current {
+                submit(state, id, revision as u64, &document).await?;
+                continue;
+            }
+            sqlx::query(
+                "UPDATE routing_policies SET status='superseded',finished_at_ms=$2,
+                    error='A later save replaced this text before it was compiled' WHERE id=$1",
+            )
+            .bind(id)
+            .bind(now_ms(state))
+            .execute(pool)
+            .await
+            .map_err(db)?;
+        }
+    }
     let tasks: Vec<Uuid> = sqlx::query_scalar(
         "SELECT t.id FROM internal_tasks t LEFT JOIN routing_policies p ON p.internal_task_id=t.id
          WHERE t.affected_kind=$1 AND t.purpose='playbook_compilation'
            AND t.status IN ('answered','failed')
-           AND (p.status='compiling' OR (p.id IS NULL AND t.retry_of IS NOT NULL))
+           AND (p.status='compiling'
+             OR (p.id IS NULL AND (t.retry_of IS NOT NULL OR t.created_at_ms<$2)))
          ORDER BY t.created_at_ms",
     )
     .bind(KIND)
+    .bind(before)
     .fetch_all(pool)
     .await
     .map_err(db)?;
-    let mut recorded = 0;
     for task in tasks {
         let outcome = aq_internal_work::store::get(pool, task).await?;
         if let Some(outcome) = outcome.and_then(|row| row.outcome()) {
             completed(state, task, &outcome).await?;
-            recorded += 1;
+            handled += 1;
         }
     }
-    Ok(recorded)
+    Ok(handled)
 }
 
 /// Runs [`resume`] now and every few seconds until `stop`.
@@ -289,20 +362,29 @@ pub async fn serve(state: AppState, mut stop: tokio::sync::watch::Receiver<bool>
 /// `GET /api/settings/intelligence/routing`: the switch, the active policy in words with what
 /// no longer validates against Settings now, and the latest compile.
 pub(crate) async fn view(state: &AppState) -> Result<Value, AppError> {
-    let pool = &state.store.pool;
-    let enabled = super::enabled(pool).await?;
+    let options = options(state).await?;
+    // One snapshot, so a compile finishing between the reads cannot show as latest but not active.
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    let enabled: bool = sqlx::query_scalar("SELECT enabled FROM routing_state WHERE singleton")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
     let active = sqlx::query_as::<_, (Value, Json<Policy>)>(
         "SELECT jsonb_build_object('digest',digest,'structure_revision',structure_revision,
             'summary',COALESCE(summary,'[]'),'created_at_ms',created_at_ms,
             'took_effect_at_ms',finished_at_ms), compiled
          FROM routing_policies WHERE status='active'",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db)?;
     let active = match active {
         Some((mut active, policy)) => {
-            active["problems"] = json!(validate(&policy.0, &options(state).await?));
+            active["problems"] = json!(validate(&policy.0, &options));
             active
         }
         None => Value::Null,
@@ -314,8 +396,9 @@ pub(crate) async fn view(state: &AppState) -> Result<Value, AppError> {
             'finished_at_ms',finished_at_ms)
          FROM routing_policies ORDER BY structure_revision DESC, id DESC LIMIT 1",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(db)?;
+    tx.commit().await.map_err(db)?;
     Ok(json!({"enabled": enabled, "active": active, "latest": latest}))
 }

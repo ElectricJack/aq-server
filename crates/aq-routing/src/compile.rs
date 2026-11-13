@@ -15,19 +15,19 @@ use crate::policy::{self, Policy, Problem};
 /// planner reads it; it contains no example policy.
 pub const COMPILER_INSTRUCTIONS: &str = r#"You compile an owner's routing policy into the structure AQ routes tasks with.
 
-The owner wrote the policy in plain language, the way one engineer describes routing to another. AQ's planner is deterministic: for each task it reads your structure, the task's own fields and one classification of the task by a model, and produces the task's route: the level of model it needs and who may take it. You write the structure once, when the owner saves the policy. You never route a task, and scheduling (which worker, machine or exact model, and when) happens after routing.
+The owner wrote the policy in plain language, the way one engineer describes routing to another. AQ's planner is deterministic: for each task it reads your structure, the task's own fields and one classification of the task by a model, and produces the task's route: the level of model the task requires and which harnesses and providers may serve it. You write the structure once, when the owner saves the policy. You never route a task.
 
 The input has three parts: the owner's policy; "What Settings offers", the levels that have an assigned profile and, for each, the harnesses (the agent programs) and providers (the model vendors) that can take work there; and how Settings describes the four levels.
 
-Answer with one JSON object: {"policy": <the structure>, "unresolved": [<sentences>]}. Optional fields may be left out.
+Answer with one JSON object: {"policy": <the structure>, "unresolved": [<sentences>]}. Optional fields may be left out, except narrow on each kind (see step 2).
 
 # Words used in the structure
 
 - A level is written parent-effort, for example "standard-high" for Standard, high effort. Parents are simple, standard, complex and deep; efforts are low, medium, high and max. Levels are ordered by parent, then effort. Use only the levels listed under What Settings offers.
 - Harnesses and providers are the ids listed under What Settings offers; use only those. Map the owner's words to them: the name of an agent or a vendor to its harness or provider, and "local model" to the local provider and the harness that serves it there.
 - A risk is low, medium, high or very_high.
-- Flags are facts the classifier reports about a task: narrow, test_verified and deep_reasoning. Their meaning comes from the owner's policy when it defines them; otherwise narrow means the requirements are settled and the files to change are known, test_verified means a test checks the result, and deep_reasoning means the work needs advanced reasoning.
-- Kind ids are short lowercase words. Use these where one fits the owner's words: feature, bugfix, refactor, test, docs, chore, sync, spec, design, plan, review, research, analysis, art. Otherwise make one with underscores. Lane ids are short lowercase words joined by hyphens that say what the lane is for.
+- Flags are facts the classifier reports about a task: narrow, test_verified and deep_reasoning. Their meaning comes from the owner's policy when it defines them; otherwise narrow means the scope is fixed and it is clear which files change, test_verified means an automated test will confirm the outcome, and deep_reasoning means the task demands exceptional reasoning.
+- Kind ids are short lowercase words. Use these where one fits the owner's words: analysis, art, bugfix, chore, design, docs, feature, plan, refactor, research, review, spec, sync, test. Otherwise make one with underscores. Lane ids are short lowercase words joined by hyphens that say what the lane is for.
 
 # The fields, in the order the planner applies them
 
@@ -38,14 +38,15 @@ version is 2.
 2. Starting level, from kinds.<kind>:
 - class: the level the kind starts at.
 - max_class: the highest level a task of this kind may start at; a level the task asks for, or the classifier answers, above it is lowered to it. When the policy caps what may be requested for a kind, that cap is max_class; when it is silent, use the highest offered level. class may not be above max_class.
-- escalate (or null): {after_failures, to_class}. Once the task has had after_failures failed attempts it starts at to_class. Only attempts that failed for a real reason are counted; outages, lost workers and stopped attempts never are. Until then a kind that escalates starts at class, whatever was asked.
-For a kind that does not escalate, the start is the level the task asked for, else the level the classifier answered, else class (when the task could not be classified). The classifier's level is used, so classifier_instructions must give each kind the same level as its class.
+- escalate (or null): {after_failures, to_class}. Once the task has had after_failures failed attempts it starts at to_class. Only failures charged to the work itself count; outages, lost workers and stopped attempts never do. Until then a kind that escalates starts at class, whatever was asked.
+- narrow: whether work of this kind may take a cheaper lane (step 5). Write it on every kind; left out, it is false.
+For a kind that does not escalate, the start is the level requested on the task, else the level the classifier answered, else class (when the task could not be classified). The classifier's level is used, so classifier_instructions must give each kind the same level as its class.
 
-3. Lane. kinds.<kind>.lane (or null) names a lane for all work of that kind. origins.<origin> describes tasks by where they came from: its lane (or null) applies to tasks whose kind has no lane, because a kind's lane always wins over an origin's, and narrow set to false keeps them off cheaper lanes (true or null does not). Use the origin repair for tasks that repair a failed integration or build; add another origin only when the policy names another source of tasks. Lanes are the list lanes, each with an id that kinds, origins and reservations refer to. A matched lane applies:
+3. Lane. kinds.<kind>.lane (or null) names a lane for all work of that kind. origins.<origin> describes tasks by where they came from: its lane (or null) applies to tasks whose kind has no lane, because a kind's lane always wins over an origin's, and narrow set to false keeps them off cheaper lanes (true or null does not). Use the origin repair for tasks AQ creates to fix something that broke when work was merged or checked; add another origin only when the policy names another source of tasks. Lanes are the list lanes, each with an id that kinds, origins and reservations refer to. A matched lane applies:
 - class (or null): sets the level, unless the task escalated.
 - harnesses and providers: the only ones that may take the task. Empty means no restriction.
 - prefer: harnesses tried first.
-- hold: true makes the task wait for its allowed harnesses rather than go elsewhere. Use it only when the policy says to wait.
+- hold: true means do not go to another harness or provider when the allowed one is busy; wait for it. Set it only when the policy says a kind of work must wait for a named agent or vendor rather than go elsewhere. That tasks wait while nothing is free is never a reason to set it.
 A lane with cheap false has no level map (classes), and requires and max_risk do nothing on it. It must restrict something (class, harnesses, providers, prefer or hold) unless a reservation names it.
 
 4. Risk. risk.<risk> applies to work at that risk:
@@ -54,7 +55,7 @@ A lane with cheap false has no level map (classes), and requires and max_risk do
 - harnesses: the only harnesses that may take it, narrowing the lane's list. Empty means no restriction.
 A risk with no entry has no floor and no restriction. Always include medium, because a task that cannot be classified is treated as medium risk; if the policy sets no floor for medium risk, use the lowest offered level and no harnesses.
 
-5. Cheaper lanes (cheap true). One is tried only when the task has no lane yet, its kind has narrow true, its origin does not have narrow false, and the task was classified. kinds.<kind>.narrow says whether work of the kind may take a cheaper lane. The planner takes the first cheaper lane, in list order, whose requires flags are all set, whose max_risk is at or above the task's risk, whose classes has the task's current level as a key, whose mapped level is not below the risk floor, and that has an offer at that level within its own lists. On it:
+5. Cheaper lanes (cheap true). One is tried just for a task that has no lane yet, whose kind has narrow true, whose origin does not have narrow false, and that was classified. The planner takes the first cheaper lane, in list order, whose requires flags are all set, whose max_risk is at or above the task's risk, whose classes has the task's current level as a key, whose mapped level is not below the risk floor, and that has an offer at that level within its own lists. On it:
 - classes maps each level the lane takes to the level the task moves to; map a level to itself to keep it.
 - harnesses, providers and prefer are as for any lane, but they replace the lists from the risk rule, so list everyone who may take such work, or leave them empty for anyone.
 - max_risk is required: the highest risk the lane takes.
@@ -65,25 +66,32 @@ A risk with no entry has no floor and no restriction. Always include medium, bec
 
 7. Reservations: reserved lists {classes, harness, only_lanes}: at those levels the harness is removed unless the task's lane is one of only_lanes. Use it when the policy keeps a harness at certain levels for certain work.
 
-8. If nothing offered at the final level is allowed, the task is left unrouted and the owner is told.
+Whatever the structure says, the planner also enforces: a Deep level is only for work the classifier flags deep_reasoning, and anything else at a Deep level runs at Complex, high effort; risk never raises work to Deep, so min_class and relax.class are never Deep levels; a cheaper lane needs max_risk and replaces the risk rule's lists; a kind's lane wins over an origin's; a lane that is not cheap has no level map. Provider load and task priority are never inputs.
 
-Whatever the structure says, the planner also enforces: a Deep level is only for work the classifier flags deep_reasoning, and anything else at a Deep level runs at Complex, high effort; risk never raises work to Deep, so min_class and relax.class are never Deep levels; a cheaper lane needs max_risk and replaces the risk rule's lists; a kind's lane wins over an origin's; a lane that is not cheap has no level map. How busy providers are and a task's priority are never inputs.
+# What AQ does whatever the structure says
+
+- It routes a task as soon as the task is ready, and routes it again after a retry or a reopen.
+- A task waits while nothing it is allowed to use is free. Waiting is normal and is not a failure.
+- A task that no allowed harness or provider could ever serve stays unrouted, with its reason recorded on it, and the owner is told.
+- Every route records the chosen level, the allowed harnesses and providers, and each reason the level changed.
+- AQ, not the policy, picks which machine and worker run the task, the exact model, and when it runs.
 
 # How to compile
 
 - Copy the owner's rules. Do not add a rule, and do not strengthen or weaken one. Every restriction in the structure must come from a sentence of the policy.
-- Where the policy states a preference ("first", "prefer", "should go to ... to save ..."), it is a preference: write it in prefer or prefer_harnesses, not as an allowlist, unless the policy also says who may not take that work.
+- Where the policy states a preference (words such as first, prefer or ideally), it is a preference: write it in prefer or prefer_harnesses, not as an allowlist, unless the policy also says who may not take that work.
 - Where the policy is silent, the structure stays permissive: no lane, empty lists, no reservation, max_class at the highest offered level, narrow true, and no risk entry other than medium.
 - Who may take work at a risk goes in risk.<risk>.harnesses. A rule for one kind of work goes in a lane that kind names. An exception for narrow or tested work goes in relax or in a cheaper lane.
 - A rule that limits everyone the policy does not name to some risks is written by listing, in risk.<risk>.harnesses for every higher risk, the harnesses the policy does allow there.
+- A sentence is expressed, and needs nothing written for it, when it asks for something under What AQ does whatever the structure says, when a field you have already written makes it true, when the planner's fixed rules already guarantee it, or when it keeps something away from work that cannot reach it anyway (for example keeping the deepest models off work whose level is capped below them).
 
 # classifier_instructions
 
-Write instructions for a model that classifies one task at a time. It answers the task's kind (one of your kind ids), the level it needs (one of the offered levels), its risk, the three flags, and short reasons. In the owner's terms, say: what each kind of work is and the level it needs (the same as its class, with any exception the policy gives); how to judge risk, with the areas the policy puts at each risk, how to choose when several apply, and what to answer when it cannot tell; when each flag is true; and when a Deep level applies. Never mention providers, harnesses, load or priority there: the classifier describes the task and never chooses who takes it.
+Write instructions for a model that classifies one task at a time. It answers the task's kind (one of your kind ids), the level it requires (one of the offered levels), its risk, the three flags, and short reasons. In the owner's terms, say: what each kind of work is and the level it requires (the same as its class, with any exception the policy gives); how to judge risk, with the areas the policy puts at each risk, how to choose when several apply, and what to answer when it cannot tell; when each flag is true; and when a Deep level applies. Never mention providers, harnesses, load or priority there: the classifier describes the task and never chooses who takes it.
 
 # What you cannot express
 
-If a sentence of the policy cannot be written with these fields, or names a level, harness or provider that Settings does not offer, leave it out of the structure and copy the sentence from the policy into unresolved. Do not resolve it by restricting more or less than the policy says. The answer must still be valid JSON that matches the schema. Do not list sentences that only explain or define. When everything is expressed, unresolved is [].
+unresolved is only for a rule that would change how tasks are routed and that no field can carry, and for a sentence that names a level, harness or provider Settings does not offer. Leave such a rule out of the structure and copy its sentence from the policy into unresolved, at most 50 sentences. Do not resolve it by restricting more or less than the policy says. Do not list a sentence that is expressed (see How to compile) or that only explains or defines. The answer must still be valid JSON that matches the schema. When everything is expressed, unresolved is [].
 "#;
 
 /// The compile answer: the policy, and the source sentences it could not express.
@@ -113,6 +121,15 @@ pub enum Compiled {
     },
 }
 
+/// Most sentences an answer may leave unresolved.
+pub const UNRESOLVED_MAX: usize = 50;
+/// Longest unresolved sentence, and longest stored problem path or message, in characters.
+pub const UNRESOLVED_MAX_CHARS: usize = 1024;
+/// Most validation problems stored for one compile.
+pub const PROBLEMS_MAX: usize = 100;
+/// Longest stored error text of a failed compile, in bytes.
+pub const ERROR_MAX_BYTES: usize = 16 * 1024;
+
 /// What a finished compile records.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recorded {
@@ -129,13 +146,25 @@ pub struct Recorded {
 /// error. A policy that checks against `options` is active, or superseded when
 /// a later revision has been submitted for compiling (`newer`); anything else
 /// failed, with each problem and unresolved sentence in the error.
+/// Whatever the model answers, no more than the bounds above is recorded.
 pub fn record(answer: Result<&Value, String>, options: &Options, newer: bool) -> Recorded {
-    let failed = |error: String, problems, unresolved| Recorded {
-        status: "failed",
-        valid: None,
-        error: Some(error),
-        problems,
-        unresolved,
+    let failed = |error: String, problems: Vec<Problem>, unresolved: Vec<String>| {
+        let problems: Vec<Problem> = (problems.into_iter().take(PROBLEMS_MAX))
+            .map(|p| Problem {
+                path: clip_chars(&p.path, UNRESOLVED_MAX_CHARS),
+                message: clip_chars(&p.message, UNRESOLVED_MAX_CHARS),
+            })
+            .collect();
+        let unresolved: Vec<String> = (unresolved.iter().take(UNRESOLVED_MAX))
+            .map(|s| clip_chars(s, UNRESOLVED_MAX_CHARS))
+            .collect();
+        Recorded {
+            status: "failed",
+            valid: None,
+            error: Some(clip_bytes(&error, ERROR_MAX_BYTES)),
+            problems,
+            unresolved,
+        }
     };
     match answer.map(|answer| check(answer, options)) {
         Err(error) => failed(error, vec![], vec![]),
@@ -158,6 +187,26 @@ pub fn record(answer: Result<&Value, String>, options: &Options, newer: bool) ->
     }
 }
 
+/// `text`, or its first characters and "…" within `max` characters.
+fn clip_chars(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max.saturating_sub(1)) {
+        Some((end, _)) if text.chars().count() > max => format!("{}…", &text[..end]),
+        _ => text.to_string(),
+    }
+}
+
+/// `text`, or its first characters and "…" within `max` bytes.
+fn clip_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max - '…'.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
 /// JSON Schema of the compile answer: `{"policy": <policy schema>, "unresolved": [string]}`.
 pub fn answer_schema(options: &Options) -> Value {
     let mut policy = policy::schema(options);
@@ -169,7 +218,8 @@ pub fn answer_schema(options: &Options) -> Value {
         "required": ["policy"],
         "properties": {
             "policy": policy,
-            "unresolved": {"type": "array", "items": {"type": "string"}},
+            "unresolved": {"type": "array", "maxItems": UNRESOLVED_MAX,
+                "items": {"type": "string", "maxLength": UNRESOLVED_MAX_CHARS}},
         }
     })
 }
@@ -356,25 +406,61 @@ mod tests {
         }
     }
 
+    /// The words of `text`, lowercased, without punctuation.
+    fn words(text: &str) -> Vec<String> {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect()
+    }
+
+    /// Every run of four consecutive words.
+    fn runs(text: &str) -> BTreeSet<String> {
+        words(text).windows(4).map(|w| w.join(" ")).collect()
+    }
+
     #[test]
-    fn the_instructions_contain_neither_the_reference_prose_nor_the_reference_policy() {
+    fn the_instructions_share_no_four_word_run_with_the_reference_prose_or_policy() {
+        // Ordinary phrases any description of routing would use. None is
+        // needed today; add one here only with a reason.
+        let allowed: BTreeSet<&str> = BTreeSet::new();
+        let instructions = runs(COMPILER_INSTRUCTIONS);
         let prose = include_str!("../../../docs/specs/0011-routing-policy-default.md");
-        let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-        let instructions = flat(COMPILER_INSTRUCTIONS);
-        for sentence in flat(prose).split(['.', ':']) {
-            let sentence = sentence.trim();
-            if sentence.len() >= 30 {
-                assert!(!instructions.contains(sentence), "{sentence}");
-            }
-        }
-        for sentence in flat(fixtures::CLASSIFIER_INSTRUCTIONS).split('.') {
-            let sentence = sentence.trim();
-            if sentence.len() >= 30 {
-                assert!(!instructions.contains(sentence), "{sentence}");
-            }
-        }
+        let mut reference = runs(prose);
+        reference.extend(runs(fixtures::CLASSIFIER_INSTRUCTIONS));
+        let shared: Vec<&String> = instructions
+            .intersection(&reference)
+            .filter(|run| !allowed.contains(run.as_str()))
+            .collect();
+        assert!(shared.is_empty(), "shared with the reference: {shared:?}");
         for lane in ["local-first", "local-medium-risk", "deep-analysis"] {
-            assert!(!instructions.contains(lane), "{lane}");
+            assert!(!COMPILER_INSTRUCTIONS.contains(lane), "{lane}");
+        }
+    }
+
+    #[test]
+    fn the_instructions_say_what_needs_no_field_and_when_hold_applies() {
+        let flat = COMPILER_INSTRUCTIONS
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for rule in [
+            "# What AQ does whatever the structure says",
+            "routes a task as soon as the task is ready, and routes it again after a retry or a reopen",
+            "Waiting is normal and is not a failure",
+            "stays unrouted, with its reason recorded on it, and the owner is told",
+            "Every route records",
+            "AQ, not the policy, picks which machine and worker run the task",
+            "A sentence is expressed, and needs nothing written for it",
+            "when the planner's fixed rules already guarantee it",
+            "keeps something away from work that cannot reach it anyway",
+            "unresolved is only for a rule that would change how tasks are routed and that no field can carry",
+            "hold: true means do not go to another harness or provider when the allowed one is busy; wait for it",
+            "That tasks wait while nothing is free is never a reason to set it",
+            "Write it on every kind; left out, it is false",
+        ] {
+            assert!(flat.contains(rule), "missing: {rule}");
         }
     }
 
@@ -390,7 +476,7 @@ mod tests {
         assert_eq!(s["properties"]["policy"], policy);
         assert_eq!(
             s["properties"]["unresolved"],
-            json!({"type": "array", "items": {"type": "string"}})
+            json!({"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 1024}})
         );
     }
 
@@ -553,6 +639,44 @@ mod tests {
                 unresolved: vec![],
             }
         );
+    }
+
+    #[test]
+    fn a_record_never_stores_more_than_its_bounds_whatever_the_model_answers() {
+        let (mut policy, options) = fixtures::reference();
+        let long = "é".repeat(5000);
+        let sentences: Vec<&str> = (0..80).map(|_| long.as_str()).collect();
+        let bounded = |r: &Recorded| {
+            assert!(r.unresolved.len() <= UNRESOLVED_MAX);
+            assert!(
+                r.unresolved
+                    .iter()
+                    .all(|s| s.chars().count() <= UNRESOLVED_MAX_CHARS)
+            );
+            assert!(r.problems.len() <= PROBLEMS_MAX);
+            for p in &r.problems {
+                assert!(p.path.chars().count() <= UNRESOLVED_MAX_CHARS);
+                assert!(p.message.chars().count() <= UNRESOLVED_MAX_CHARS);
+            }
+            assert!(r.error.as_ref().unwrap().len() <= ERROR_MAX_BYTES);
+        };
+        let r = record(Ok(&answer(&policy, &sentences)), &options, false);
+        assert_eq!(r.status, "failed");
+        assert_eq!(r.unresolved.len(), UNRESOLVED_MAX);
+        assert!(r.unresolved[0].ends_with('…'));
+        bounded(&r);
+        // Hundreds of problems, each naming a very long lane id.
+        for i in 0..300 {
+            let mut kind = policy.kinds["feature"].clone();
+            kind.lane = Some(format!("{long}{i}"));
+            policy.kinds.insert(format!("kind{i}"), kind);
+        }
+        let r = record(Ok(&answer(&policy, &[])), &options, false);
+        assert_eq!(r.problems.len(), PROBLEMS_MAX);
+        bounded(&r);
+        let r = record(Err("x".repeat(100_000)), &options, false);
+        bounded(&r);
+        assert!(r.error.unwrap().ends_with('…'));
     }
 
     #[test]

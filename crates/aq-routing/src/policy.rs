@@ -133,8 +133,8 @@ pub struct Problem {
 
 /// JSON Schema (draft 2020-12) of a [`Policy`], limited to the levels,
 /// harnesses and providers `options` offers.
-/// Fields with a serde default or an `Option` type are optional, and an
-/// `Option` may also be null. Every object refuses unknown fields, as the
+/// Fields with a serde default or an `Option` type are optional, except a
+/// kind's `narrow`, and an `Option` may also be null. Every object refuses unknown fields, as the
 /// types do.
 pub fn schema(options: &Options) -> Value {
     let classes: Vec<String> = options.classes.keys().map(Class::to_string).collect();
@@ -159,8 +159,10 @@ pub fn schema(options: &Options) -> Value {
         json!({"after_failures": {"type": "integer", "minimum": 0, "maximum": u32::MAX},
             "to_class": class}),
     );
+    // `narrow` is required here though serde defaults it: left out, a kind
+    // would silently be kept off cheaper lanes.
     let kind = object(
-        &["class", "max_class"],
+        &["class", "max_class", "narrow"],
         json!({"class": class, "max_class": class, "lane": nullable(text.clone()),
             "narrow": boolean, "prefer_harnesses": list(&harness), "escalate": nullable(escalate)}),
     );
@@ -1462,10 +1464,21 @@ mod tests {
             ]
         );
         let props = &s["properties"];
+        // The one deliberate difference: serde defaults `narrow` to false for
+        // stored policies, but a compiler must write it, so that leaving it
+        // out never makes a kind more restrictive by accident.
         assert_eq!(
             required(&props["kinds"]["additionalProperties"]),
-            ["class", "max_class"]
+            ["class", "max_class", "narrow"]
         );
+        let mut without_narrow = value.clone();
+        without_narrow["kinds"]["feature"]
+            .as_object_mut()
+            .unwrap()
+            .remove("narrow");
+        assert!(conforms(&s, &without_narrow, "policy", false).is_err());
+        let parsed: Policy = serde_json::from_value(without_narrow).unwrap();
+        assert!(!parsed.kinds["feature"].narrow);
         assert_eq!(
             required(&props["risk"]["additionalProperties"]),
             ["harnesses", "min_class"]
@@ -1483,7 +1496,7 @@ mod tests {
         let minimal = serde_json::json!({
             "version": 2, "default_kind": "feature",
             "kinds": {"feature": {"class": "standard-high", "max_class": "standard-high",
-                "lane": null, "escalate": null}},
+                "narrow": true, "lane": null, "escalate": null}},
             "origins": {"repair": {"narrow": null, "lane": null}},
             "risk": {"medium": {"min_class": "standard-high", "harnesses": [], "relax": null}},
             "lanes": [{"id": "x", "class": null, "max_risk": null, "hold": true}],

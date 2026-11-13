@@ -58,10 +58,11 @@ async fn save(
     let saved = saved.map_err(error)?;
     // A saved change to the routing Markdown is compiled (spec 0011 §6); the save stands either way.
     let revision = saved["revision"].as_str().and_then(|r| r.parse().ok());
-    if let (Some(before), Some(revision)) = (before, revision)
+    let markdown = saved["routing_markdown"].as_str();
+    if let (Some(before), Some(revision), Some(markdown)) = (before, revision, markdown)
         && saved["disposition"] == "saved"
-        && saved["routing_markdown"].as_str() != Some(before.routing_markdown.as_str())
-        && let Err(error) = crate::routing::compile::requested(&state, revision).await
+        && markdown != before.routing_markdown
+        && let Err(error) = crate::routing::compile::requested(&state, revision, markdown).await
     {
         tracing::warn!(?error, "routing policy compile not requested");
     }
