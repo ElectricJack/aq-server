@@ -145,8 +145,8 @@ A task does not have to change a file. Since 2026-11-13 (on
 without changing a file succeeds: its result is the agent's final message, and
 nothing is published. The task reads "Completed, no changes". An agent that
 ends with `Outcome: blocked` fails (rework reason `agent_blocked`); one that
-claims changes that did not arrive fails too. A `Changes:` value that names no
-file ("none", "no changes", "n/a", ...) is never such a claim. A handoff
+claims changes that did not arrive fails too. Only a `Changes:` value that is
+entirely a list of file paths is such a claim; any other wording is not. A handoff
 successor that only verified its predecessor's edits still publishes them.
 
 The recorded result is a summary of at most 500 bytes (the result report's

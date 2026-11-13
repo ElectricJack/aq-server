@@ -61,6 +61,8 @@ pub(super) struct Gate<'a> {
     pub claimed_changes_missing: bool,
     /// A refused (Failed) report whose agent said `Outcome: blocked` (R1-M2).
     pub agent_blocked: bool,
+    /// The lineage's base is past the handoff bound (R1-M1, R2-M1).
+    pub lineage_unknown: bool,
     pub checks: &'a [CheckVerdict],
     pub delivery: Delivery,
     pub delivery_state: DeliveryState,
@@ -92,6 +94,9 @@ pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
     if g.checks.contains(&CheckVerdict::Missing) {
         return Verdict::Hold("required_check_evidence_missing");
     }
+    if g.lineage_unknown {
+        return Verdict::Hold("lineage_history_unknown");
+    }
     if g.delivery == Delivery::Required {
         match g.delivery_state {
             DeliveryState::Published => {}
@@ -115,6 +120,7 @@ mod tests {
             source_retained: true,
             claimed_changes_missing: false,
             agent_blocked: false,
+            lineage_unknown: false,
             checks,
             delivery: Delivery::Required,
             delivery_state: DeliveryState::Published,
@@ -169,6 +175,19 @@ mod tests {
         g.acceptance = Acceptance::Refused;
         g.agent_blocked = true;
         assert_eq!(evaluate(&g), Verdict::Rework("agent_blocked"));
+    }
+    /// R2-M1: an unknown lineage holds only a report that would otherwise settle
+    /// as success; a refused report or a failed check is reworked as normal.
+    #[test]
+    fn an_unknown_lineage_holds_only_what_would_otherwise_succeed() {
+        use CheckVerdict::*;
+        let mut g = gate(&[Passed]);
+        g.lineage_unknown = true;
+        assert_eq!(evaluate(&g), Verdict::Hold("lineage_history_unknown"));
+        g.checks = &[Failed];
+        assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
+        g.acceptance = Acceptance::Refused;
+        assert_eq!(evaluate(&g), Verdict::Rework("not_accepted"));
     }
     #[test]
     fn default_policy_offers_name_the_policy_actor() {

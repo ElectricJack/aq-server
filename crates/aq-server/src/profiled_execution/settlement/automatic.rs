@@ -374,7 +374,7 @@ async fn evaluate_locked(
         Acceptance::Accepted
     };
     // The exact retained source is the central receipt pinned by this report.
-    let mut source = None;
+    let (mut source, mut lineage_unknown) = (None, false);
     for op in &r.report.source_receipt_ids {
         match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
             Ok(confirmed) => {
@@ -383,12 +383,11 @@ async fn evaluate_locked(
                 let m = &confirmed.manifest;
                 let task = r.spec.task.task_id;
                 let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                // R1-M1: a lineage past the hop bound is held, never guessed.
-                let Some(base) = base.await? else {
-                    let evidence = json!({"policy_actor": ACTOR, "report": r.receipt_artifact});
-                    return Ok((Verdict::Hold("lineage_history_unknown"), evidence));
-                };
-                let changed = m.checkpoint.hex != base;
+                // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
+                // the gate holds only a report that would otherwise succeed.
+                let base = base.await?;
+                lineage_unknown = base.is_none();
+                let changed = base.is_none_or(|base| m.checkpoint.hex != base);
                 source = Some((*op, m.checkpoint.hex.clone(), changed));
                 break;
             }
@@ -453,6 +452,7 @@ async fn evaluate_locked(
         source_retained: source.is_some(),
         claimed_changes_missing: unchanged && claimed,
         agent_blocked,
+        lineage_unknown,
         checks: &checks,
         delivery,
         delivery_state,

@@ -39,11 +39,9 @@ pub fn said_blocked(value: &str) -> bool {
 
 fn bare(token: &str) -> &str {
     token
-        .trim_matches([
-            '*', '_', '`', '\'', '"', '(', ')', '[', ']', '<', '>', '{', '}',
-        ])
+        .trim_matches(['*', '_', '`', '\'', '"', '[', ']', '<', '>', '{', '}'])
         .trim_end_matches(['.', ',', ':', ';', '!', '?'])
-        .trim_matches(['*', '_', '`', '\'', '"', '(', ')', '[', ']'])
+        .trim_matches(['*', '_', '`', '\'', '"', '[', ']'])
 }
 fn first_word(value: &str) -> &str {
     value
@@ -52,93 +50,104 @@ fn first_word(value: &str) -> &str {
         .find(|t| !t.is_empty())
         .unwrap_or_default()
 }
-/// A token that names a file or directory: `dir/name`, `dir/`, or `name.ext`.
+/// A token that names a file or directory: no `://`, and either `dir/name` (a
+/// segment of at least two characters) or `name.ext` (ext: 1-8 alphanumerics
+/// with a letter; name at least two characters and not a bare version or number).
+/// The two-character minimums keep `n/a`, `w/o`, `n.a` and `e.g` words.
 fn path_like(token: &str) -> bool {
-    let t = bare(token);
-    if t.contains('/') {
-        let lower = t.to_ascii_lowercase();
-        return t
-            .split('/')
-            .any(|s| s.chars().filter(|c| c.is_alphanumeric()).count() >= 2)
-            && !["and/or", "either/or", "yes/no"].contains(&lower.as_str());
+    if token.contains("://") {
+        return false;
     }
-    let Some((name, ext)) = t.rsplit_once('.') else {
+    if token.contains('/') {
+        // A segment of two or more characters: `n/a` and `w/o` are words, not paths.
+        return token.split('/').any(|s| s.chars().count() >= 2);
+    }
+    let Some((name, ext)) = token.rsplit_once('.') else {
         return false;
     };
-    name.chars().count() >= 2
-        && name
+    let number = |s: &str| {
+        s.trim_start_matches(['v', 'V'])
             .chars()
-            .all(|c| c.is_alphanumeric() || "-_.".contains(c))
-        && (1..=10).contains(&ext.len())
+            .all(|c| c.is_ascii_digit() || c == '.')
+    };
+    // Two or more characters before the dot: `n.a` and `e.g` are words.
+    name.chars().count() >= 2
+        && !number(name)
+        && (1..=8).contains(&ext.len())
         && ext.chars().all(|c| c.is_ascii_alphanumeric())
         && ext.chars().any(|c| c.is_ascii_alphabetic())
 }
-const NEGATIONS: [&str; 13] = [
-    "none",
-    "no",
-    "nothing",
-    "n/a",
-    "na",
-    "-",
-    "nil",
-    "null",
-    "unchanged",
-    "read-only",
-    "readonly",
-    "zero",
-    "0",
-];
 
-/// Review R1-I1: a `Changes:` value claims changes only when it names at least one
-/// path-like token and does not start with a negation. Anything else is no claim.
+/// Review R2-I1: a `Changes:` value claims changes only when, after removing
+/// markdown emphasis, backticks, a list bullet and trailing punctuation, it is
+/// ENTIRELY one or more path-like tokens separated by commas and/or whitespace
+/// (each optionally followed by a parenthesised note, which is ignored). Any
+/// other word makes it no claim. Prose is never interpreted: a missed claim only
+/// loses this consistency check (the task then reads "Completed, no changes" and
+/// the full message is in its comments), while a false claim fails an honest run.
 pub fn names_paths(value: &str) -> bool {
-    let first = first_word(value).to_ascii_lowercase();
-    !NEGATIONS.contains(&first.as_str())
-        && value
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .any(path_like)
+    let value = value.trim().trim_start_matches(['-', '+', '>', ' ']);
+    let mut rest = String::new();
+    let mut depth = 0usize;
+    for c in value.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ if depth == 0 => rest.push(c),
+            _ => {}
+        }
+    }
+    if depth > 0 {
+        return false;
+    }
+    let tokens: Vec<&str> = rest
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .map(bare)
+        .filter(|t| !t.is_empty())
+        .collect();
+    !tokens.is_empty() && tokens.iter().all(|t| path_like(t))
 }
-
-#[cfg(test)]
-const CASES: [(&str, bool); 24] = [
-    ("none", false),
-    ("None.", false),
-    ("no", false),
-    ("nothing", false),
-    ("n/a", false),
-    ("N/A", false),
-    ("no files changed", false),
-    ("No changes needed", false),
-    ("", false),
-    ("(none)", false),
-    ("-", false),
-    ("`none`", false),
-    ("**none**", false),
-    ("read-only investigation", false),
-    ("unchanged.", false),
-    ("none (read the Node.js docs)", false),
-    ("e.g. nothing", false),
-    ("version 1.2 bumped", false),
-    ("src/lib.rs", true),
-    ("`src/lib.rs`, `src/api.rs`", true),
-    ("**README.md**.", true),
-    ("Cargo.toml and docs/status.md", true),
-    ("updated crates/aq/src/x.rs (added a test)", true),
-    ("Makefile.", false),
-];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const CASES: &str = include_str!("claim_cases.txt");
+    /// FNV-1a 64 of the shared table; the same constant is in the other repository.
+    const CASES_FNV: u64 = 0xd6f4c4de7281c88d;
+    fn fnv(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+    fn cases() -> Vec<(bool, &'static str)> {
+        CASES
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| {
+                let (kind, value) = l.split_once('\t').expect("kind<TAB>value");
+                assert!(kind == "claim" || kind == "none", "{l}");
+                (kind == "claim", value)
+            })
+            .collect()
+    }
     #[test]
-    fn a_changes_value_claims_changes_only_when_it_names_a_path() {
-        for (value, claims) in CASES {
+    fn the_shared_claim_table_is_unchanged() {
+        assert_eq!(
+            fnv(CASES.as_bytes()),
+            CASES_FNV,
+            "update both repositories' tables together"
+        );
+        assert!(cases().len() >= 60);
+    }
+    #[test]
+    fn a_changes_value_claims_changes_only_when_it_is_a_list_of_paths() {
+        for (claims, value) in cases() {
             assert_eq!(names_paths(value), claims, "{value:?}");
         }
     }
     #[test]
     fn conclusion_fields_are_read_through_case_and_markdown() {
-        for (value, claims) in CASES {
+        for (claims, value) in cases() {
             let conclusion =
                 format!("Outcome: done; Changes: {value}; Copied: none; Claude exit 0");
             assert_eq!(claims_changes(&conclusion), claims, "{conclusion}");

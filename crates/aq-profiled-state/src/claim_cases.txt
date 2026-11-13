@@ -1,0 +1,73 @@
+# Shared table: aq-worker crates/aq-handoff-note/src/claim_cases.txt and
+# aq-server crates/aq-profiled-state/src/claim_cases.txt are byte-identical
+# (a test on each side checks the same hash). One case per line:
+# `claim<TAB>value` or `none<TAB>value`, where value is a `Changes:` value.
+# A value is a claim only when it is entirely a list of path-like tokens.
+none	none
+none	None.
+none	no
+none	nothing
+none	n/a
+none	N/A
+none	N/A.
+none	n.a.
+none	-
+none	— none
+none	
+none	(none)
+none	(none needed)
+none	`none`
+none	**none**
+none	None needed
+none	none — see README.md for why
+none	none (read the Node.js docs)
+none	no changes (e.g. src/ untouched)
+none	No changes needed
+none	no files changed
+none	no files changed (investigation only)
+none	Nothing: config.yaml was already correct
+none	Nothing to do (main.rs is fine)
+none	bumped nothing (still v1.2.3)
+none	Python 3.11 already in use
+none	I made no edits
+none	No file edits; investigation only
+none	Not applicable
+none	None. Verified with `cargo test -p aq-server`.
+none	None, CI log at https://ci.example.com/run/42
+none	read-only
+none	read-only investigation
+none	unchanged
+none	unchanged.
+none	e.g. nothing
+none	version 1.2 bumped
+none	Not needed (see README.md)
+none	No-op: config.yaml already correct
+none	Reviewed src/lib.rs, no edits needed
+none	Only read docs/status.md
+none	See https://github.com/x/y/issues/1 for why nothing changed
+none	Investigated Node.js version mismatch, no change
+none	Analysis only: see report.md in the comment
+none	Already fixed upstream in src/lib.rs
+none	Fixed the bug in src/lib.rs
+none	Added tests/new_test.rs and updated Cargo.lock
+none	edited lib.rs
+none	1 file: main.go
+none	Cargo.toml and docs/status.md
+none	updated crates/aq/src/x.rs (added a test)
+none	Makefile
+none	updated the docs
+none	https://example.com/src/lib.rs
+none	1.2.3
+none	v2.0
+claim	src/lib.rs
+claim	src/
+claim	README.md
+claim	**README.md**.
+claim	`src/lib.rs`, `src/api.rs`
+claim	src/lib.rs, src/api.rs
+claim	src/lib.rs src/api.rs
+claim	- src/lib.rs, docs/status.md
+claim	src/lib.rs (new test), Cargo.toml
+claim	crates/aq-server/src/lib.rs (fixed the bug).
+claim	Cargo.lock
+claim	docs/status.md;
