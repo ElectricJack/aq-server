@@ -40,10 +40,10 @@ fn login_harness(candidate: &ModelCandidate) -> Option<&'static str> {
         })
 }
 
-/// The model choice `candidate`'s reference names, the way manual sessions
-/// resolve it ([`aq_profile_settings::choice_for`]): on the logged-in
-/// `harness`, or for an API candidate on any harness the catalog lists for
-/// it. `None` when no choice matches or its harness refuses its effort.
+/// The model choice `candidate`'s reference names, matched as manual
+/// sessions match it ([`aq_profile_settings::find_choice`]): on the
+/// logged-in `harness`, or for an API candidate on any harness the catalog
+/// lists for it. `None` when no choice matches.
 fn model_choice<'a>(
     choices: &'a [ModelChoice],
     candidate: &ModelCandidate,
@@ -55,9 +55,22 @@ fn model_choice<'a>(
         candidate.reasoning_configuration_reference.as_str(),
     );
     match harness {
-        Some(harness) => aq_profile_settings::choice_for(choices, names, harness),
+        Some(harness) => aq_profile_settings::find_choice(choices, names, harness),
         None => (candidate.harnesses.iter())
-            .find_map(|h| aq_profile_settings::choice_for(choices, names, harness_name(h))),
+            .find_map(|h| aq_profile_settings::find_choice(choices, names, harness_name(h))),
+    }
+}
+
+/// The concrete effort of `choice`: its `reasoning_effort` option, passed on
+/// as given (the harness checks its own values); else its `reasoning` label
+/// when the harness accepts that as an effort. The label is otherwise only
+/// for display, and `None` leaves the harness its default.
+fn effort(choice: &ModelChoice) -> Option<String> {
+    let option = choice.options.get("reasoning_effort");
+    match option.and_then(serde_json::Value::as_str) {
+        Some(effort) => Some(effort.to_owned()),
+        None => aq_profile_settings::harness_supports(&choice.harness, &choice.reasoning)
+            .then(|| choice.reasoning.clone()),
     }
 }
 
@@ -111,7 +124,7 @@ fn blocked(
 }
 
 /// The candidates of `profile_id` that can be tried now, each with the
-/// reasoning effort and options of the model choice in `choices` its
+/// effort ([`effort`]) and options of the model choice in `choices` its
 /// reference names. A candidate without such a choice is dropped like one
 /// without a usable credential. A missing profile, or one with nothing usable
 /// left, is [`Reason::NoCandidate`].
@@ -159,7 +172,7 @@ pub fn resolve(
         candidates.push(Candidate {
             provider: entry.provider.clone(),
             model: entry.model.clone(),
-            reasoning: choice.reasoning.clone(),
+            reasoning: effort(choice),
             reasoning_reference: entry.reasoning_configuration_reference.clone(),
             options: choice.options.clone(),
             harness,

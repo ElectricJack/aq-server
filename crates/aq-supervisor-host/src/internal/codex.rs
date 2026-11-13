@@ -53,9 +53,8 @@ async fn attempt(
     let output = home.join("last-message.txt");
     let candidate = &claimed.candidate;
     let args = exec_arguments("read-only", &candidate.model, cwd, &output).map_err(|_| setup())?;
-    // The model choice's effort; `default` leaves the model's own.
-    let effort = Some(candidate.reasoning.as_str()).filter(|e| *e != "default");
-    let mut overrides = exec_overrides(effort);
+    // The model choice's effort; without one Codex keeps its default.
+    let mut overrides = exec_overrides(candidate.reasoning.as_deref());
     let tier = service_tier(&candidate.options)
         .map_err(|_| failure(Reason::ProviderError, "unsupported service tier"))?;
     overrides.extend(tier);

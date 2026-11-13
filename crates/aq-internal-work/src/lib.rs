@@ -236,8 +236,10 @@ pub struct Candidate {
     pub provider: String,
     pub model: String,
     /// The reasoning effort of the model choice the profile names, such as
-    /// `low` or `default`; never the reference itself.
-    pub reasoning: String,
+    /// `low`; `None` leaves the harness its default. Never the choice's
+    /// display label or the reference itself.
+    #[serde(default)]
+    pub reasoning: Option<String>,
     /// The catalog's `reasoning_configuration_reference` the effort and
     /// options were resolved from, for the record.
     #[serde(default)]

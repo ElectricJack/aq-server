@@ -41,7 +41,7 @@ fn api(provider: &str) -> Candidate {
     Candidate {
         provider: provider.into(),
         model: format!("{provider}-model"),
-        reasoning: "medium".into(),
+        reasoning: Some("medium".into()),
         reasoning_reference: format!("v1-{provider}-5749150b@1"),
         options: Default::default(),
         harness: None,
@@ -670,13 +670,14 @@ mod resolve {
                 ("openai", Way::Api, None, 1),
             ]
         );
-        assert_eq!(resolved.candidates[0].reasoning, "high");
-        assert_eq!(resolved.candidates[1].reasoning, "low");
+        assert_eq!(resolved.candidates[0].reasoning.as_deref(), Some("high"));
+        assert_eq!(resolved.candidates[1].reasoning.as_deref(), Some("low"));
         assert_eq!(resolved.candidates[1].model, "openai-model");
     }
 
-    #[test]
-    fn a_reference_resolves_to_the_effort_and_options_of_its_model_choice() {
+    /// The one candidate of a profile listing openai on a Codex login,
+    /// resolved against `choices`.
+    fn codex_login(choices: &[ModelChoice]) -> aq_internal_work::Candidate {
         let catalog = catalog(vec![(
             "internal",
             vec![candidate("o", "openai", &["codex"])],
@@ -685,12 +686,51 @@ mod resolve {
             credential("openai-login", "openai", true),
             CredentialKind::SubscriptionLogin,
         )]);
-        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
-        let codex = &resolved.candidates[0];
+        let resolved = resolve(&catalog, &registry, choices, &[], "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates.len(), 1);
+        resolved.candidates[0].clone()
+    }
+
+    /// `choices()` with the openai choice's label and options replaced.
+    fn openai_choice(label: &str, options: serde_json::Value) -> Vec<ModelChoice> {
+        let mut choices = choices();
+        choices[0].reasoning = label.into();
+        choices[0].options = serde_json::from_value(options).unwrap();
+        choices
+    }
+
+    #[test]
+    fn a_reference_resolves_to_the_effort_and_options_of_its_model_choice() {
+        let codex = codex_login(&choices());
         assert_eq!(codex.harness.as_deref(), Some("codex"));
-        assert_eq!(codex.reasoning, "low");
+        assert_eq!(codex.reasoning.as_deref(), Some("low"));
         assert_eq!(codex.reasoning_reference, "v1-openai-dcedeb62@1");
         assert_eq!(codex.options["service_tier"], "fast");
+    }
+
+    /// The label is for display; `options.reasoning_effort` is the effort.
+    #[test]
+    fn a_label_that_is_not_an_effort_takes_the_effort_from_the_options() {
+        let options = json!({"reasoning_effort": "low", "service_tier": "fast"});
+        let codex = codex_login(&openai_choice("low (fast service)", options));
+        assert_eq!(codex.reasoning.as_deref(), Some("low"));
+        assert_eq!(codex.options["service_tier"], "fast");
+        assert_eq!(codex.reasoning_reference, "v1-openai-dcedeb62@1");
+    }
+
+    #[test]
+    fn a_label_that_is_not_an_effort_without_an_effort_option_leaves_the_harness_default() {
+        let codex = codex_login(&openai_choice("Provider default", json!({})));
+        assert_eq!(codex.reasoning, None);
+        assert!(codex.options.is_empty());
+    }
+
+    /// Codex checks its own configuration; the option is not second-guessed.
+    #[test]
+    fn an_effort_option_the_harness_does_not_list_is_passed_through() {
+        let options = json!({"reasoning_effort": "turbo-9"});
+        let codex = codex_login(&openai_choice("Turbo", options));
+        assert_eq!(codex.reasoning.as_deref(), Some("turbo-9"));
     }
 
     #[test]
@@ -711,31 +751,10 @@ mod resolve {
     }
 
     #[test]
-    fn an_effort_the_harness_does_not_support_drops_the_candidate() {
-        let (catalog, registry, _) = two_providers();
-        // `ultra` is a Codex effort only; the label is how a v1 import may read.
-        for effort in ["ultra", "low (fast service)"] {
-            let mut choices = choices();
-            choices[1].reasoning = effort.into();
-            let resolved = resolve(&catalog, &registry, &choices, &[], "internal", NOW).unwrap();
-            let providers: Vec<_> = resolved.candidates.iter().map(|c| &c.provider).collect();
-            assert_eq!(providers, ["openai"], "{effort}");
-        }
-    }
-
-    #[test]
-    fn a_profile_whose_candidates_all_lack_a_usable_model_choice_is_no_candidate() {
+    fn a_profile_whose_candidates_all_lack_a_model_choice_is_no_candidate() {
         let (catalog, registry, _) = two_providers();
         assert_eq!(
             resolve(&catalog, &registry, &[], &[], "internal", NOW).unwrap_err(),
-            Reason::NoCandidate
-        );
-        let mut unsupported = choices();
-        for choice in &mut unsupported {
-            choice.reasoning = "Provider default".into();
-        }
-        assert_eq!(
-            resolve(&catalog, &registry, &unsupported, &[], "internal", NOW).unwrap_err(),
             Reason::NoCandidate
         );
     }

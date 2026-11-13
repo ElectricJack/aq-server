@@ -139,7 +139,7 @@ mod internal {
         Candidate {
             provider: "openai".into(),
             model: "gpt-fixture".into(),
-            reasoning: "high".into(),
+            reasoning: Some("high".into()),
             reasoning_reference: CODEX_REFERENCE.into(),
             options: BTreeMap::from([("reasoning_effort".into(), json!("high"))]),
             harness: Some("codex".into()),
@@ -152,7 +152,7 @@ mod internal {
         Candidate {
             provider: "anthropic".into(),
             model: "claude-fixture".into(),
-            reasoning: "default".into(),
+            reasoning: Some("default".into()),
             reasoning_reference: CLAUDE_REFERENCE.into(),
             options: BTreeMap::new(),
             harness: Some("claude".into()),
@@ -161,9 +161,13 @@ mod internal {
     }
 
     /// `candidate` with the effort and options its model choice resolved to.
-    fn with_effort(candidate: Candidate, effort: &str, options: &[(&str, &str)]) -> Candidate {
+    fn with_effort(
+        candidate: Candidate,
+        effort: Option<&str>,
+        options: &[(&str, &str)],
+    ) -> Candidate {
         Candidate {
-            reasoning: effort.into(),
+            reasoning: effort.map(String::from),
             options: options
                 .iter()
                 .map(|(key, value)| (key.to_string(), json!(value)))
@@ -405,7 +409,7 @@ mod internal {
         let f = Fixture::new(&answering()).await;
         let candidate = with_effort(
             codex_candidate(),
-            "low",
+            Some("low"),
             &[("reasoning_effort", "low"), ("service_tier", "fast")],
         );
         f.submit(&[candidate]).await;
@@ -427,10 +431,9 @@ mod internal {
     }
 
     #[tokio::test]
-    async fn codex_run_with_the_default_effort_sets_no_effort_and_no_service_tier() {
+    async fn codex_run_without_an_effort_sets_no_effort_and_no_service_tier() {
         let f = Fixture::new(&answering()).await;
-        f.submit(&[with_effort(codex_candidate(), "default", &[])])
-            .await;
+        f.submit(&[with_effort(codex_candidate(), None, &[])]).await;
         assert!(f.tick().await);
         let argv = f.argv();
         assert!(
@@ -445,7 +448,7 @@ mod internal {
     #[tokio::test]
     async fn codex_candidate_with_an_unsupported_service_tier_fails_without_running() {
         let f = Fixture::new(&answering()).await;
-        let candidate = with_effort(codex_candidate(), "low", &[("service_tier", "turbo")]);
+        let candidate = with_effort(codex_candidate(), Some("low"), &[("service_tier", "turbo")]);
         let id = f.submit(&[candidate]).await;
         assert!(f.tick().await);
         let row = f.row(id).await;
@@ -746,21 +749,29 @@ mod internal {
     }
 
     /// Claude's effort the way the worker's interactive launch passes it:
-    /// `--effort <effort>`, `off` as `MAX_THINKING_TOKENS=0`, `default` as
-    /// nothing. The reference reaches the native nowhere.
+    /// `--effort <effort>` for `low medium high xhigh max`, `off` as
+    /// `MAX_THINKING_TOKENS=0`, nothing for `default`, no effort or any other
+    /// value. The `thinking` option is not applied (the launch maps it to
+    /// nothing). The reference reaches the native nowhere.
     #[tokio::test]
     async fn claude_run_passes_the_resolved_effort_and_never_the_reference() {
         for (effort, flag, thinking) in [
-            ("high", Some("high"), None),
-            ("off", None, Some("0")),
-            ("default", None, None),
+            (Some("high"), Some("high"), None),
+            (Some("max"), Some("max"), None),
+            (Some("off"), None, Some("0")),
+            (Some("default"), None, None),
+            (Some("ultra"), None, None),
+            (None, None, None),
         ] {
             let f =
                 Fixture::with_claude("exit 1", &claude_printing(&claude_result(false, ANSWER), 0))
                     .await;
-            let candidate = with_effort(claude_candidate(), effort, &[("thinking", effort)]);
-            let id = f.submit(&[candidate]).await;
+            let options = [("thinking", "high")];
+            let id = f
+                .submit(&[with_effort(claude_candidate(), effort, &options)])
+                .await;
             assert!(f.tick().await);
+            let effort = format!("{effort:?}");
             assert_eq!(f.row(id).await.status, "answered", "{effort}");
             let argv = f.claude_argv();
             let passed = argv
