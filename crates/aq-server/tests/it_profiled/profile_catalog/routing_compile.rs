@@ -891,3 +891,44 @@ async fn an_answer_past_the_unresolved_bounds_fails_with_a_bounded_error() {
     assert_eq!(latest["unresolved"], json!([]));
     assert_eq!(body["active"], Value::Null);
 }
+
+#[tokio::test]
+async fn latest_is_never_an_unmatched_result_at_the_active_revision() {
+    let (reference, _) = fixtures::reference();
+    let e = Env::new(vec![answer(&reference, &[])], true).await;
+    e.save(SOURCE, None).await;
+    assert_eq!(e.settled().await["latest"]["status"], "active");
+    // A compile of the same revision that no save matches, recorded after the real one.
+    let state = &e.server.state;
+    let request = aq_internal_work::Request {
+        purpose: aq_internal_work::Purpose::PlaybookCompilation,
+        instructions: "Compile.".into(),
+        input: "# Routing".into(),
+        answer: aq_internal_work::AnswerShape::Json {
+            schema: json!({"type": "object"}),
+        },
+        blocking: false,
+        affected: aq_internal_work::Affected {
+            kind: "routing_policy".into(),
+            id: "1".into(),
+            project_id: None,
+        },
+        deadline_ms: 60_000,
+        max_output_bytes: 262_144,
+        escalate: false,
+        profile_override: None,
+    };
+    let task = state.internal_work.submit(request).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(20), state.internal_work.wait(task));
+    outcome.await.unwrap().unwrap();
+    sqlx::query("UPDATE internal_tasks SET created_at_ms=created_at_ms-60000 WHERE id=$1")
+        .bind(task)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(routing::compile::resume(state).await.unwrap(), 1);
+    let body = e.routing().await;
+    assert_eq!(body["latest"]["status"], "active", "{body}");
+    assert_ne!(body["latest"]["internal_task_id"], json!(task));
+    assert_eq!(body["active"]["digest"], policy::digest(&reference));
+}

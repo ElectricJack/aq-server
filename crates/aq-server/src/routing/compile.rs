@@ -208,7 +208,8 @@ pub async fn completed(
         {
             Some(row) => row,
             None => {
-                // No save asked for it: recorded once, so it is not looked at again.
+                // No save asked for it: recorded once, so it is not looked at again. Its empty
+                // source digest marks it, and keeps it out of the latest compile in `view`.
                 sqlx::query(
                     "INSERT INTO routing_policies(structure_revision,source_digest,internal_task_id,
                         status,error,created_at_ms,finished_at_ms)
@@ -389,12 +390,15 @@ pub(crate) async fn view(state: &AppState) -> Result<Value, AppError> {
         }
         None => Value::Null,
     };
+    // An unmatched result (the only row with an empty source digest) is never the latest
+    // compile: it would show a failure beside the policy its revision activated.
     let latest: Option<Value> = sqlx::query_scalar(
         "SELECT jsonb_build_object('status',status,'structure_revision',structure_revision,
             'error',error,'problems',problems,'unresolved',unresolved,
             'internal_task_id',internal_task_id,'created_at_ms',created_at_ms,
             'finished_at_ms',finished_at_ms)
-         FROM routing_policies ORDER BY structure_revision DESC, id DESC LIMIT 1",
+         FROM routing_policies WHERE source_digest<>'' ORDER BY structure_revision DESC, id DESC
+         LIMIT 1",
     )
     .fetch_optional(&mut *tx)
     .await

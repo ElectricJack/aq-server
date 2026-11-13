@@ -84,6 +84,7 @@ Whatever the structure says, the planner also enforces: a Deep level is only for
 - Who may take work at a risk goes in risk.<risk>.harnesses. A rule for one kind of work goes in a lane that kind names. An exception for narrow or tested work goes in relax or in a cheaper lane.
 - A rule that limits everyone the policy does not name to some risks is written by listing, in risk.<risk>.harnesses for every higher risk, the harnesses the policy does allow there.
 - A sentence is expressed, and needs nothing written for it, when it asks for something under What AQ does whatever the structure says, when a field you have already written makes it true, when the planner's fixed rules already guarantee it, or when it keeps something away from work that cannot reach it anyway (for example keeping the deepest models off work whose level is capped below them).
+- A sentence counts as already made true only when you can point to the exact field or fixed rule that guarantees it for every task the sentence covers, at every risk and every level of work. If you cannot, write the field; if no field can carry it, list it in unresolved. When in doubt, never drop a rule silently.
 
 # classifier_instructions
 
@@ -459,6 +460,8 @@ mod tests {
             "hold: true means do not go to another harness or provider when the allowed one is busy; wait for it",
             "That tasks wait while nothing is free is never a reason to set it",
             "Write it on every kind; left out, it is false",
+            "only when you can point to the exact field or fixed rule that guarantees it for every task the sentence covers",
+            "When in doubt, never drop a rule silently",
         ] {
             assert!(flat.contains(rule), "missing: {rule}");
         }
