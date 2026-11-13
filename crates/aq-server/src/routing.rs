@@ -48,6 +48,10 @@ async fn store(
 ) -> Result<Written, AppError> {
     let rt = state.agent_access.as_deref().ok_or_else(unavailable)?;
     let node = current(rt, workspace, task, "task").await?;
+    // The metadata cloned below is this version's; post it only against this version.
+    if node["version"].as_u64() != Some(expected_version) {
+        return Ok(Written::Stale);
+    }
     let stored = CompactRoute::from_metadata(&node["metadata"]).map_err(|_| unavailable())?;
     if !aq_routing::may_replace(stored.as_ref(), by) {
         return Ok(Written::Stale);

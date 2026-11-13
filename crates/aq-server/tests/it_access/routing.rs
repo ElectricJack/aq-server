@@ -29,6 +29,8 @@ const NOW_MS: i64 = 1_000_000;
 struct Fake {
     nodes: BTreeMap<String, Value>,
     posts: usize,
+    /// Bump the node's version right after the next GET (a concurrent edit).
+    race_after_get: bool,
 }
 type Shared = Arc<Mutex<Fake>>;
 
@@ -41,10 +43,14 @@ async fn graph(State(fake): State<Shared>, request: Request) -> Response {
     let parts: Vec<String> = request.uri().path().split('/').map(String::from).collect();
     let mut fake = fake.lock().await;
     if request.method() == Method::GET && parts.len() == 6 && parts[4] == "nodes" {
-        return match fake.nodes.get(&parts[5]) {
-            Some(n) => reply(StatusCode::OK, n.clone()),
-            None => reply(StatusCode::NOT_FOUND, json!({"error":{"code":"not_found"}})),
+        let Some(observed) = fake.nodes.get(&parts[5]).cloned() else {
+            return reply(StatusCode::NOT_FOUND, json!({"error":{"code":"not_found"}}));
         };
+        if std::mem::take(&mut fake.race_after_get) {
+            let n = fake.nodes.get_mut(&parts[5]).unwrap();
+            n["version"] = json!(n["version"].as_u64().unwrap() + 1);
+        }
+        return reply(StatusCode::OK, observed);
     }
     let bytes = axum::body::to_bytes(request.into_body(), 1 << 20)
         .await
@@ -115,7 +121,7 @@ async fn setup() -> Env {
     let workspace: Uuid = node["workspace_id"].as_str().unwrap().parse().unwrap();
     let fake: Shared = Arc::new(Mutex::new(Fake {
         nodes: BTreeMap::from([(task.to_string(), node)]),
-        posts: 0,
+        ..Fake::default()
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -235,17 +241,34 @@ async fn write_sets_aq_route_keeps_other_metadata_and_records_history() {
 async fn write_against_an_older_task_version_is_stale_and_leaves_no_history_row() {
     let e = setup().await;
     let before = e.node().await;
-    // The node is at version 3; the graph refuses expected version 2 with a 409.
+    // The node is at version 3: an older expected version is refused locally.
     assert_eq!(
         e.write(2, &route(Source::Router)).await.unwrap(),
         Written::Stale
     );
-    assert_eq!(e.posts().await, 1, "the stale write reached the graph");
+    assert_eq!(
+        routing::clear(&e.state, e.workspace, e.task, 2, Source::Owner)
+            .await
+            .unwrap(),
+        Written::Stale
+    );
+    assert_eq!(e.posts().await, 0, "a known-stale write never posts");
     assert_eq!(e.node().await, before);
+    assert!(e.history().await.is_empty());
+    // A concurrent edit between the read and the post: the graph answers 409
+    // and the history row is removed again.
+    e.fake.lock().await.race_after_get = true;
+    assert_eq!(
+        e.write(3, &route(Source::Router)).await.unwrap(),
+        Written::Stale
+    );
+    assert_eq!(e.posts().await, 1, "the raced write reached the graph");
+    assert_eq!(e.node().await["version"], 4);
+    assert_eq!(e.node().await["metadata"], before["metadata"]);
     assert!(e.history().await.is_empty());
     // The freed sequence is used again under a fresh idempotency key.
     assert_eq!(
-        e.write(3, &route(Source::Router)).await.unwrap(),
+        e.write(4, &route(Source::Router)).await.unwrap(),
         Written::Routed { sequence: 1 }
     );
     assert_eq!(e.history().await.len(), 1);
@@ -256,7 +279,7 @@ async fn write_against_an_older_task_version_is_stale_and_leaves_no_history_row(
         .nodes
         .get_mut(&e.task.to_string())
         .unwrap()["retired"] = json!(true);
-    assert!(e.write(4, &route(Source::Router)).await.is_err());
+    assert!(e.write(5, &route(Source::Router)).await.is_err());
     assert_eq!(e.history().await.len(), 1);
 }
 
