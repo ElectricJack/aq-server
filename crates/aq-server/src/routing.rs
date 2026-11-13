@@ -6,8 +6,10 @@ use crate::{
     agent_access::{self, human::graph_actions::current},
     error::{AppError, db},
 };
+mod http;
 use aq_routing::{Class, CompactRoute, Placement, Route, Source};
 pub use aq_routing::{StoredRoute, Written};
+pub(crate) use http::{admin_routes, view};
 use serde_json::json;
 use sqlx::{PgPool, types::Json};
 use std::time::Duration;
@@ -204,6 +206,25 @@ pub async fn class_assigned(state: &AppState, class: Class) -> Result<bool, AppE
         .is_some())
 }
 
+fn router_agent(catalog: &aq_profiles::ValidatedCatalog, agent: &str) -> bool {
+    let artifact = &catalog.artifact().catalog;
+    (artifact.agents.iter())
+        .find(|a| aq_profiles::key(&a.id, a.version) == agent)
+        .is_some_and(|a| aq_selection::is_automatic_router(artifact, &a.intelligence))
+}
+
+/// Whether `record`'s binding runs its agent on an automatic router.
+pub(crate) async fn on_router(
+    state: &AppState,
+    record: &crate::project_bindings::domain::ProjectRecord,
+) -> Result<bool, AppError> {
+    let [agent] = record.binding.allowed_agent_profiles.as_slice() else {
+        return Ok(false);
+    };
+    let catalog = crate::project_bindings::catalog(state, &record.binding.catalog_digest).await?;
+    Ok(router_agent(&catalog, agent))
+}
+
 /// Spec 0011 §4: how placement treats each ready task of `record`'s project, keyed by
 /// task; a task left out is placed unchanged. Empty unless the binding's agent is on an
 /// automatic router, so a route is ignored for a binding pinned to a named profile.
@@ -220,11 +241,7 @@ pub async fn placements(
         return Ok(out);
     }
     let catalog = crate::project_bindings::catalog(state, &record.binding.catalog_digest).await?;
-    let artifact = &catalog.artifact().catalog;
-    let automatic = (artifact.agents.iter())
-        .find(|a| aq_profiles::key(&a.id, a.version) == *agent)
-        .is_some_and(|a| aq_selection::is_automatic_router(artifact, &a.intelligence));
-    if !automatic {
+    if !router_agent(&catalog, agent) {
         return Ok(out);
     }
     let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);

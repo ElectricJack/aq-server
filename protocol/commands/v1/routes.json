@@ -207,6 +207,7 @@
     {"path": "/api/internal-work/runs/{id}/retry", "class": "owner_admin", "note": "Owner-only retry of a failed internal work run; RequireOwner and existing CSRF guard."},
     {"path": "/api/internal-work/runs/{id}/escalate", "class": "owner_admin", "note": "Owner-only escalation of a failed internal work run to the owner with a diagnosis of at most 4000 bytes (spec 0012 section 8); a supervisor reaches it through /v1/supervisor/admin; RequireOwner and existing CSRF guard."},
     {"path": "/api/internal-work/runs/{id}/resolve", "class": "owner_admin", "note": "Owner-only resolution of an escalated internal work run and the runs it retried (spec 0012 section 8); a supervisor reaches it through /v1/supervisor/admin; RequireOwner and existing CSRF guard."},
+    {"path": "/api/tasks/{id}/routes", "class": "owner_admin", "note": "Owner-only route history of a task, newest first, with reasons and classification (spec 0011 section 8); RequireOwner."},
     {"path": "/api/settings/intelligence", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/settings/intelligence/operations/{id}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/settings/intelligence/structure", "class": "owner_admin", "note": "Owner-only Intelligence presentation metadata and inert routing Markdown source; RequireOwner and existing CSRF guard."},

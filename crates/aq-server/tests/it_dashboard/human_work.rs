@@ -517,3 +517,148 @@ fn work_and_history_examples_match_the_schema() {
     work["data"]["readiness"]["reasons"][0]["code"] = json!("held_for_fun");
     assert!(!aq_agent_api::check(&schema, &schema, &work));
 }
+
+/// Stores the fixture's catalog and binds its project to it, with its intelligence profile an
+/// automatic router or not.
+async fn bind_catalog(x: &Fixture, automatic: bool) {
+    let pool = x.f.db.pool().await;
+    let binding: Value =
+        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
+            .bind(x.f.selection.lineage.project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // The fixture keeps its catalog in a file, not in the artifact table.
+    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
+    let original = raw["catalog_artifact_json"]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let mut artifact = aq_profiles::ValidatedCatalog::from_artifact(&original)
+        .unwrap()
+        .artifact()
+        .clone();
+    for profile in &mut artifact.catalog.intelligence {
+        profile.automatic_routing = automatic.then_some(true);
+    }
+    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
+    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) SELECT $1,$2,id,0 FROM users LIMIT 1")
+        .bind(updated.digest())
+        .bind(updated.canonical_bytes().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut binding = binding;
+    binding["catalog_digest"] = json!(updated.digest());
+    sqlx::query("UPDATE project_execution_bindings SET binding=$2 WHERE project_id=$1")
+        .bind(x.f.selection.lineage.project_id)
+        .bind(binding)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn work_read_reports_waiting_then_routed() {
+    let x = setup().await;
+    let (w, id) = (x.w(), Uuid::new_v4());
+    let node = task(id, w, "Unrouted", "active");
+    x.graph
+        .contexts
+        .lock()
+        .unwrap()
+        .insert(id, context(&node, vec![], vec![], false));
+    let path = format!("/tasks/{id}/work");
+    let work = || x.get(&path);
+    let pool = x.f.db.pool().await;
+    // Not on an automatic router: no routing object, even with routing on.
+    sqlx::query("UPDATE routing_state SET enabled=true WHERE singleton")
+        .execute(&pool)
+        .await
+        .unwrap();
+    bind_catalog(&x, false).await;
+    assert!(work().await.get("routing").is_none());
+
+    bind_catalog(&x, true).await;
+    let waiting = work().await;
+    assert_eq!(waiting["readiness"]["state"], "ready");
+    // The read has no ready time, so the node's updated_at (2026-01-01T00:00:00Z) is used.
+    assert_eq!(
+        waiting["routing"],
+        json!({"state":"waiting","since_ms":1767225600000_i64})
+    );
+    // Routing off and no route: placed as without routing, nothing to show.
+    sqlx::query("UPDATE routing_state SET enabled=false WHERE singleton")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(work().await.get("routing").is_none());
+    sqlx::query("UPDATE routing_state SET enabled=true WHERE singleton")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let route: aq_routing::Route = serde_json::from_value(json!({"class":"standard-high",
+        "harnesses":["codex"],"providers":["openai"],"prefer":[],"lane":"backend",
+        "provider_intent":"any","reasons":[],"classification":null,"policy_digest":null,
+        "structure_revision":null,"source":"owner"}))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO task_routes(task_id,sequence,route,at_ms) VALUES($1,1,$2,1790000000000)",
+    )
+    .bind(id)
+    .bind(sqlx::types::Json(&route))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut routed = node.clone();
+    routed["metadata"] =
+        aq_routing::with_route(&node["metadata"], Some(&route.compact(1).unwrap())).unwrap();
+    x.graph
+        .contexts
+        .lock()
+        .unwrap()
+        .insert(id, context(&routed, vec![], vec![], false));
+    assert_eq!(
+        work().await["routing"],
+        json!({"state":"routed","since_ms":1790000000000_i64,"route":{"class":"standard-high",
+            "harnesses":["codex"],"providers":["openai"],"prefer":[],"lane":"backend",
+            "provider_intent":"any","source":"owner","policy_digest":null}})
+    );
+}
+
+#[tokio::test]
+async fn routes_history_lists_reasons_newest_first() {
+    let x = setup().await;
+    let id = Uuid::new_v4();
+    let pool = x.f.db.pool().await;
+    let route = json!({"class":"complex-max","harnesses":[],"providers":[],"prefer":["codex"],
+        "lane":null,"provider_intent":"pinned",
+        "reasons":[{"code":"class_raised_for_risk","detail":"Risk is high, so the class is raised."}],
+        "classification":null,"policy_digest":"ab12","structure_revision":3,"source":"router"});
+    for (sequence, route, at) in [(1, Some(route.clone()), 1000_i64), (2, None, 2000)] {
+        sqlx::query("INSERT INTO task_routes(task_id,sequence,route,at_ms) VALUES($1,$2,$3,$4)")
+            .bind(id)
+            .bind(sequence)
+            .bind(route.map(sqlx::types::Json))
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let app = aq_server::build_admin_router(x.f.state.clone());
+    let request = Request::get(format!("/api/tasks/{id}/routes"))
+        .header("x-aq-dev-email", "owner@localhost")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        body,
+        json!({"items":[{"sequence":2,"at_ms":2000,"route":null},
+            {"sequence":1,"at_ms":1000,"route":route}]})
+    );
+}

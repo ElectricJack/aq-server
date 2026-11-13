@@ -85,15 +85,14 @@ pub(super) async fn work(
         complete,
     );
     let parent = parent(&raw, w, id)?;
-    finish(
-        &s,
-        &r,
-        a,
-        json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
-            "readiness":readiness,
-            "parent":parent,"execution":execution}),
-    )
-    .await
+    let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
+        "readiness":readiness,
+        "parent":parent,"execution":execution});
+    let ready = data["readiness"]["state"].as_str().unwrap_or_default();
+    if let Some(routing) = crate::routing::view(&s, &a.record, id, &raw["node"], ready).await? {
+        data["routing"] = routing;
+    }
+    finish(&s, &r, a, data).await
 }
 
 #[derive(Deserialize, Default)]
