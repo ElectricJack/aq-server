@@ -108,6 +108,25 @@ pub struct Affected {
     pub project_id: Option<Uuid>,
 }
 
+impl Affected {
+    /// The item in words, from its kind and id alone: "Routing policy,
+    /// revision 7", "Playbook operation <id>".
+    pub fn describe(kind: &str, id: &str) -> String {
+        let words = kind.replace('_', " ");
+        let mut chars = words.chars();
+        let mut text: String = chars
+            .next()
+            .into_iter()
+            .flat_map(char::to_uppercase)
+            .collect();
+        text.push_str(chars.as_str());
+        match kind {
+            "routing_policy" => format!("{text}, revision {id}"),
+            _ => format!("{text} {id}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
     pub purpose: Purpose,

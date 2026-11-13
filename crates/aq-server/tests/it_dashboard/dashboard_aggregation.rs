@@ -778,3 +778,97 @@ async fn owner_escalated_internal_run_is_an_attention_item_pointing_at_the_affec
     let (_, body) = read(&app, "/api/v1/overview").await;
     assert!(internal(&body).is_empty(), "{body}");
 }
+
+/// A routing classification about `kind` `id`, already failed (no candidate).
+fn internal_request(
+    kind: &str,
+    id: &str,
+    project: Option<uuid::Uuid>,
+) -> aq_internal_work::Request {
+    use aq_internal_work::{Affected, AnswerShape, Purpose};
+    aq_internal_work::Request {
+        purpose: Purpose::RoutingClassification,
+        instructions: "Compile the routing policy.".into(),
+        input: "Policy text".into(),
+        answer: AnswerShape::Choice {
+            choices: vec!["ok".into()],
+            rationale_max_bytes: 512,
+        },
+        blocking: false,
+        affected: Affected {
+            kind: kind.into(),
+            id: id.into(),
+            project_id: project,
+        },
+        deadline_ms: 60_000,
+        max_output_bytes: 4_096,
+        escalate: true,
+        profile_override: None,
+    }
+}
+
+/// Every owner run is an item: one about an item the dashboard cannot open
+/// by id opens the run and names the item; an unknown project is null.
+#[tokio::test]
+async fn owner_escalated_internal_runs_are_never_dropped() {
+    use aq_internal_work::store;
+    use serde_json::json;
+    use uuid::Uuid;
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let policy = internal_request("routing_policy", "7", None);
+    let policy = store::submit(&pool, &policy, &[], 1_000).await.unwrap();
+    let operation = internal_request("playbook_operation", &Uuid::new_v4().to_string(), None);
+    let operation = store::submit(&pool, &operation, &[], 1_000).await.unwrap();
+    let task = Uuid::new_v4();
+    let elsewhere = internal_request("task", &task.to_string(), Some(Uuid::new_v4()));
+    let elsewhere = store::submit(&pool, &elsewhere, &[], 1_000).await.unwrap();
+    for id in [policy, operation, elsewhere] {
+        store::mark_owner(&pool, id, "no working model", 2_000)
+            .await
+            .unwrap();
+    }
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/overview").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let item = |run: Uuid| {
+        body["data"]["attention"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == format!("internal_work:{run}"))
+            .cloned()
+            .unwrap_or_else(|| panic!("no item for {run}: {body}"))
+    };
+    let shown = item(policy);
+    assert_eq!(
+        shown["subject"],
+        json!({"type": "internal_run", "id": policy})
+    );
+    assert_eq!(shown["impact"], "Routing policy, revision 7");
+    assert_eq!(shown["reason"], "no working model");
+    assert!(shown["project"].is_null());
+    let shown = item(operation);
+    assert_eq!(shown["subject"]["type"], "internal_run");
+    let operation_id = store::get(&pool, operation)
+        .await
+        .unwrap()
+        .unwrap()
+        .affected_id;
+    assert_eq!(
+        shown["impact"],
+        format!("Playbook operation {operation_id}")
+    );
+    let shown = item(elsewhere);
+    assert_eq!(shown["subject"], json!({"type": "task", "id": task}));
+    assert!(shown["project"].is_null(), "{shown}");
+    assert!(
+        body["data"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["source"] == "internal_work" && s["coverage"]["state"] == "complete"),
+        "{body}"
+    );
+}

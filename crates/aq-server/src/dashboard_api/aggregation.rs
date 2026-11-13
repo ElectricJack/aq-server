@@ -806,57 +806,65 @@ async fn operations(
 }
 
 /// Spec 0012 §8 step 3: one item per internal run a supervisor could not fix.
-/// It opens the affected item; a run about an item without a UUID id cannot.
+/// It opens the affected item when the dashboard can open that kind by id;
+/// otherwise it opens the run, and `impact` names the affected item.
 async fn internal_work(
     state: &AppState,
     runtime: &Runtime,
     scope: &Scope,
     labels: &BTreeMap<Uuid, ProjectRef>,
 ) -> Result<Contribution> {
+    const OPENABLE: [&str; 5] = ["task", "decision", "session", "knowledge", "playbook_run"];
     let mut transaction = tx(runtime).await?;
     let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
         .bind(scope.project()).fetch_all(&mut *transaction).await?;
     transaction.commit().await?;
     let mut c = Contribution::default();
-    let mut unreferenced = false;
     for row in rows.iter().take(MEMBERS) {
-        let project: Option<Uuid> = row.get("project_id");
-        let label = project.and_then(|id| labels.get(&id).cloned());
-        let affected = row.get::<String, _>("affected_id").parse::<Uuid>();
-        let (Ok(affected), true) = (affected, project.is_none() || label.is_some()) else {
-            unreferenced = true;
-            continue;
-        };
+        let (run, kind, id): (Uuid, String, String) = (
+            row.get("id"),
+            row.get("affected_kind"),
+            row.get("affected_id"),
+        );
+        let project = row
+            .get::<Option<Uuid>, _>("project_id")
+            .and_then(|id| labels.get(&id).cloned());
+        let affected = id
+            .parse::<Uuid>()
+            .ok()
+            .filter(|_| OPENABLE.contains(&kind.as_str()));
         let subject = EntityRef {
-            kind: row.get("affected_kind"),
-            id: affected,
+            kind: if affected.is_some() {
+                kind.clone()
+            } else {
+                "internal_run".into()
+            },
+            id: affected.unwrap_or(run),
             revision: None,
         };
         let diagnosis: Option<String> = row.get("diagnosis");
         let since = row.get::<Option<i64>, _>("escalated_at_ms");
         let since = since.map(|ms| timestamp(ms as u64)).transpose()?;
+        let reason = diagnosis
+            .as_deref()
+            .unwrap_or("A supervisor could not fix it");
+        let title = "Internal work failed";
         let mut item = attention(
             AttentionKind::InternalWork,
             subject,
-            label,
-            "Internal work failed",
-            diagnosis
-                .as_deref()
-                .unwrap_or("A supervisor could not fix it"),
+            project,
+            title,
+            reason,
             since,
         );
-        item.id = format!("internal_work:{}", row.get::<Uuid, _>("id"));
+        item.id = format!("internal_work:{run}");
+        if affected.is_none() {
+            item.impact = aq_internal_work::Affected::describe(&kind, &id);
+        }
         c.attention.push(item);
     }
-    let reason = unreferenced.then_some("affected_item_unreferenceable");
-    let n = c.attention.len();
-    c.sources.push(source(
-        "internal_work",
-        None,
-        stamp(state)?,
-        n,
-        rows.len() > MEMBERS,
-        reason,
-    )?);
+    let (n, more) = (c.attention.len(), rows.len() > MEMBERS);
+    c.sources
+        .push(source("internal_work", None, stamp(state)?, n, more, None)?);
     Ok(c)
 }
