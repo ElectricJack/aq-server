@@ -1,5 +1,8 @@
 # 0011: Routing policy (the routing playbook, the route on a task, and placement that honors it)
 
+> **2026-11-13:** the owner redirected how the routing playbook is produced. Spec [0013](0013-playbook-authoring.md) replaces the planner in §5, all of §6, and "compiling the policy" in §7: the playbook is compiled from the document by a generic compiler. The route record, placement, owner set/clear, task reads and the failure path (§4) stand.
+
+
 **Status:** Approved by the owner on 2026-11-12. Nothing here is implemented except the Settings field in §2.
 **Repositories:** aq-server, aq-playbooks (host catalog), aq-dashboard.
 **Depends on:** spec [0012](0012-internal-work.md) for every model call, and aq-server #131 and aq-dashboard #105 (the Intelligence structure setting, migration 117). **(owner)** The work is stacked on those two pull requests, on branch `feat/internal-work` in each repository, without waiting for them to merge.
