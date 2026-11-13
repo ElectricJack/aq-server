@@ -820,7 +820,7 @@ async fn claimed_changes_that_did_not_land_are_reworked() {
             Some("claimed_changes_missing"),
         ),
         (
-            "Changes: target/debug/x; Claude exit 0; Summary: built",
+            "Changes: target/debug/aq-server; Claude exit 0; Summary: built",
             Some("claimed_changes_missing"),
         ),
         (

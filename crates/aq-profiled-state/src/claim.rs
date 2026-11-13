@@ -37,11 +37,13 @@ pub fn said_blocked(value: &str) -> bool {
     first_word(value).eq_ignore_ascii_case("blocked")
 }
 
+/// A token without its wrapping backticks or emphasis and its trailing `.` `;` `,`.
 fn bare(token: &str) -> &str {
+    const WRAP: [char; 3] = ['*', '_', '`'];
     token
-        .trim_matches(['*', '_', '`', '\'', '"', '[', ']', '<', '>', '{', '}'])
-        .trim_end_matches(['.', ',', ':', ';', '!', '?'])
-        .trim_matches(['*', '_', '`', '\'', '"', '[', ']'])
+        .trim_matches(WRAP)
+        .trim_end_matches(['.', ';', ','])
+        .trim_matches(WRAP)
 }
 fn first_word(value: &str) -> &str {
     value
@@ -50,19 +52,11 @@ fn first_word(value: &str) -> &str {
         .find(|t| !t.is_empty())
         .unwrap_or_default()
 }
-/// A token that names a file or directory: no `://`, and either `dir/name` (a
-/// segment of at least two characters) or `name.ext` (ext: 1-8 alphanumerics
-/// with a letter; name at least two characters and not a bare version or number).
-/// The two-character minimums keep `n/a`, `w/o`, `n.a` and `e.g` words.
-fn path_like(token: &str) -> bool {
-    if token.contains("://") {
-        return false;
-    }
-    if token.contains('/') {
-        // A segment of two or more characters: `n/a` and `w/o` are words, not paths.
-        return token.split('/').any(|s| s.chars().count() >= 2);
-    }
-    let Some((name, ext)) = token.rsplit_once('.') else {
+/// A file name `name.ext`: `ext` 1-8 alphanumerics with a letter; `name` at least two
+/// characters, starting with two before any dot (`a.k.a`, `e.g` are words), of
+/// letters, digits, `-`, `_` and `.`, and not a bare number or version.
+fn file_name(segment: &str) -> bool {
+    let Some((name, ext)) = segment.rsplit_once('.') else {
         return false;
     };
     let number = |s: &str| {
@@ -70,42 +64,74 @@ fn path_like(token: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_digit() || c == '.')
     };
-    // Two or more characters before the dot: `n.a` and `e.g` are words.
     name.chars().count() >= 2
+        && name
+            .split('.')
+            .next()
+            .is_some_and(|s| s.chars().count() >= 2)
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || "-_.".contains(c))
         && !number(name)
         && (1..=8).contains(&ext.len())
         && ext.chars().all(|c| c.is_ascii_alphanumeric())
         && ext.chars().any(|c| c.is_ascii_alphabetic())
 }
-
-/// Review R2-I1: a `Changes:` value claims changes only when, after removing
-/// markdown emphasis, backticks, a list bullet and trailing punctuation, it is
-/// ENTIRELY one or more path-like tokens separated by commas and/or whitespace
-/// (each optionally followed by a parenthesised note, which is ignored). Any
-/// other word makes it no claim. Prose is never interpreted: a missed claim only
-/// loses this consistency check (the task then reads "Completed, no changes" and
-/// the full message is in its comments), while a false claim fails an honest run.
-pub fn names_paths(value: &str) -> bool {
-    let value = value.trim().trim_start_matches(['-', '+', '>', ' ']);
-    let mut rest = String::new();
-    let mut depth = 0usize;
-    for c in value.chars() {
-        match c {
-            '(' => depth += 1,
-            ')' if depth > 0 => depth -= 1,
-            _ if depth == 0 => rest.push(c),
-            _ => {}
-        }
-    }
-    if depth > 0 {
+/// A dotfile or dot-directory segment (`.github`, `.config`).
+fn dot_name(segment: &str) -> bool {
+    segment.strip_prefix('.').is_some_and(|rest| {
+        rest.chars().count() >= 2
+            && rest
+                .chars()
+                .all(|c| c.is_alphanumeric() || "-_.".contains(c))
+    })
+}
+/// Review R3-I1: a path token is (a) a file name, (b) a slash path whose last
+/// segment is a file name, (c) a slash path ending in `/` whose first segment has
+/// two or more characters, or (d) a slash path with a segment containing `-`, `_`
+/// or a digit, or a segment that is a file or dot name. Letter-only slash words
+/// (`none/nil`, `and/or`, `CI/CD`, `I/O`) are not paths, and nothing with `://` is.
+fn path_like(token: &str) -> bool {
+    if token.contains("://")
+        || !token
+            .chars()
+            .all(|c| c.is_alphanumeric() || "-_./".contains(c))
+    {
         return false;
     }
-    let tokens: Vec<&str> = rest
+    if !token.contains('/') {
+        return file_name(token);
+    }
+    let segments: Vec<&str> = token.split('/').collect();
+    let last = segments[segments.len() - 1];
+    file_name(last)
+        || (last.is_empty() && segments[0].chars().count() >= 2)
+        || segments.iter().any(|s| {
+            s.chars()
+                .any(|c| c == '-' || c == '_' || c.is_ascii_digit())
+                || (s.contains('.') && (file_name(s) || dot_name(s)))
+        })
+}
+
+/// Review R2-I1, R3-I1: a `Changes:` value claims changes only when it consists
+/// ENTIRELY of path tokens: separated by commas and/or whitespace, after a leading
+/// list bullet, each optionally wrapped in backticks or emphasis and followed by a
+/// trailing `.` `;` or `,`. Any other character or word (a parenthesised note, a
+/// colon, a dash used as a separator, a word that is not a path) means no claim.
+/// Prose is never interpreted: a missed claim only loses this consistency check
+/// (the task then reads "Completed, no changes" and the full message is in its
+/// comments), while a false claim fails an honest run.
+pub fn names_paths(value: &str) -> bool {
+    let value = value.trim();
+    let value = ["- ", "* ", "+ "]
+        .iter()
+        .find_map(|b| value.strip_prefix(b))
+        .unwrap_or(value);
+    let tokens: Vec<&str> = value
         .split(|c: char| c.is_whitespace() || c == ',')
-        .map(bare)
         .filter(|t| !t.is_empty())
         .collect();
-    !tokens.is_empty() && tokens.iter().all(|t| path_like(t))
+    !tokens.is_empty() && tokens.iter().all(|t| path_like(bare(t)))
 }
 
 #[cfg(test)]
@@ -113,7 +139,7 @@ mod tests {
     use super::*;
     const CASES: &str = include_str!("claim_cases.txt");
     /// FNV-1a 64 of the shared table; the same constant is in the other repository.
-    const CASES_FNV: u64 = 0xd6f4c4de7281c88d;
+    const CASES_FNV: u64 = 0xce2b9d1a7171d515;
     fn fnv(bytes: &[u8]) -> u64 {
         bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
             (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
