@@ -296,6 +296,11 @@ pub(super) async fn bootstrap(
             "Task reprioritization requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.route",
+            graph_mutation,
+            "Task routes require an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.dependencies.add",
             graph_mutation,
             "Dependency changes require an owner account and configured Graph mutation identity",

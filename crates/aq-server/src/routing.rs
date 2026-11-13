@@ -190,3 +190,15 @@ pub async fn class_profile(
         .find(|p| p.id == assignment.profile_id && p.automatic_routing != Some(true))
         .map(|p| aq_profiles::key(&p.id, p.version)))
 }
+
+/// Whether Settings assigns a profile to the class in the active catalog.
+pub async fn class_assigned(state: &AppState, class: Class) -> Result<bool, AppError> {
+    let (_, digest) = crate::project_bindings::active_catalog(state).await?;
+    let Some(digest) = digest else {
+        return Ok(false);
+    };
+    let catalog = crate::project_bindings::catalog(state, &digest).await?;
+    Ok(class_profile(&state.store.pool, &catalog, class)
+        .await?
+        .is_some())
+}

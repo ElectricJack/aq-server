@@ -142,7 +142,7 @@ pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<Stri
         row.get("active_digest"),
     ))
 }
-async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
+pub(crate) async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
     let bytes: Vec<u8> =
         sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
             .bind(digest)

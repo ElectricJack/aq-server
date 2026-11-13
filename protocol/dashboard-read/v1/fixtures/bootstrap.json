@@ -101,6 +101,12 @@
       },
       {
         "enabled": false,
+        "name": "tasks.route",
+        "reason": "Task routes require an owner account and configured Graph mutation identity",
+        "version": "1"
+      },
+      {
+        "enabled": false,
         "name": "tasks.dependencies.add",
         "reason": "Dependency changes require an owner account and configured Graph mutation identity",
         "version": "1"

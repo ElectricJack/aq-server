@@ -177,6 +177,13 @@ subject revision and the single `expected_versions` entry (`task` or
   Graph's cap; schema `maxLength` values count characters and are upper bounds.
 - `task.reprioritize` writes Graph metadata `aq:priority` (integer in
   -1,000,000..1,000,000, higher first) and preserves other metadata keys.
+- `task.route.set` puts an owner route on the task: `class` is
+  `<parent>-<effort>` (for example `standard-high`), with optional `harnesses`
+  and `providers` limits. It is refused (`422`) when Settings assigns no profile
+  to the class. `task.route.clear` removes the route and has no fields beyond
+  the common ones. Both write Graph metadata `aq:route` against the expected
+  task version and record the change in the route history; a stale version
+  returns a `conflict`.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
   `task.dependency.remove` removes `edge_id` at `edge_version`.
 - `task.cancel` records Graph task lifecycle `canceled`, including draft tasks
