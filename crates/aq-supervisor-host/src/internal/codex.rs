@@ -6,8 +6,8 @@
 //! holding its files, with its event stream kept as the transcript and its
 //! answer read from the outcome file.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Run, agent, clip, execute, execute_into, failure, in_run_dirs,
-    unavailable,
+    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, execute_into, failure,
+    in_run_dirs, scrub, unavailable,
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
@@ -27,22 +27,39 @@ pub(crate) async fn codex(
     scratch: &Path,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(h, homes, scratch, run, async |executable, home, cwd| {
-        attempt(h, executable, home, cwd, run).await
+    in_run_dirs(h, homes, scratch, run, async |executable, place| {
+        attempt(h, executable, place, run).await
     })
     .await
 }
 
-/// The `--config` override that keeps an agent's sandbox off the network.
-const NO_NETWORK: &str = "sandbox_workspace_write.network_access=false";
+/// The `--config` overrides of agent work's sandbox: no network, and `/tmp`
+/// not writable (`exclude_slash_tmp`; accepted by codex-cli 0.167.1 under
+/// `--strict-config`, which refuses an unknown key of the same table). Its
+/// shell's `PATH` starts with the shims and its `TMPDIR` is the workspace's.
+fn agent_overrides(place: &Place) -> [String; 4] {
+    let toml = |text: String| Value::String(text).to_string();
+    [
+        "sandbox_workspace_write.network_access=false".into(),
+        "sandbox_workspace_write.exclude_slash_tmp=true".into(),
+        format!(
+            "shell_environment_policy.set.PATH={}",
+            toml(place.path(true))
+        ),
+        format!(
+            "shell_environment_policy.set.TMPDIR={}",
+            toml(place.tmp().display().to_string())
+        ),
+    ]
+}
 
 async fn attempt(
     h: &Harness,
     executable: &std::fs::File,
-    home: &Path,
-    cwd: &Path,
+    place: &Place,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
+    let (home, cwd) = (place.home.as_path(), place.cwd.as_path());
     let Run {
         claimed,
         identity,
@@ -76,12 +93,21 @@ async fn attempt(
     let tier = service_tier(&candidate.options)
         .map_err(|_| failure(Reason::ProviderError, "unsupported service tier"))?;
     overrides.extend(tier);
-    overrides.extend(agent.then(|| NO_NETWORK.to_owned()));
+    if agent {
+        // In place of the fixed shell `PATH`.
+        overrides.retain(|o| !o.starts_with("shell_environment_policy.set.PATH="));
+        overrides.extend(agent_overrides(place));
+    }
     let args = exec_finish(args, overrides);
     let mut command = native_command(executable, args, home, cwd, identity);
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
+    if agent {
+        command
+            .env("PATH", place.path(true))
+            .env("TMPDIR", place.tmp());
+    }
     let (mut events, mut transcript) = (Events::default(), agent::Transcript::default());
     let ran = if agent {
         let prompt = validate::agent_prompt(&claimed.request);
@@ -120,8 +146,14 @@ async fn attempt(
         .flatten()
         .map(|doc| doc.as_slice())
         .collect();
-    // Without a redaction nothing of the native's text leaves this function.
-    let redact = |text: String| redact_login(text, &documents).ok();
+    // Without a redaction nothing of the native's text leaves this function;
+    // it also takes the secrets of every other login on this host.
+    let secrets = run.secrets();
+    let redact = |text: String| {
+        redact_login(text, &documents)
+            .ok()
+            .map(|t| scrub(t, &secrets))
+    };
     if agent {
         run.keep(transcript.finish(|text| redact(text.to_owned())));
     }

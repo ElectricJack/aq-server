@@ -7,8 +7,8 @@
 //! The setup token reaches the native only in its environment and is never
 //! written to disk, so nothing is copied back.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Run, agent, clip, execute, execute_into, failure, in_run_dirs,
-    unavailable,
+    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, execute_into, failure,
+    in_run_dirs, scrub, unavailable,
 };
 use crate::{
     config::protected_read,
@@ -49,8 +49,8 @@ pub(crate) async fn claude(
     scratch: &Path,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(h, homes, scratch, run, async |executable, home, cwd| {
-        attempt(h, executable, home, cwd, run).await
+    in_run_dirs(h, homes, scratch, run, async |executable, place| {
+        attempt(h, executable, place, run).await
     })
     .await
 }
@@ -58,10 +58,10 @@ pub(crate) async fn claude(
 async fn attempt(
     h: &Harness,
     executable: &std::fs::File,
-    home: &Path,
-    cwd: &Path,
+    place: &Place,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
+    let (home, cwd) = (place.home.as_path(), place.cwd.as_path());
     let Run {
         claimed,
         identity,
@@ -75,11 +75,12 @@ async fn attempt(
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
     // Printable ASCII, as `normalize_claude_token` checked.
     let secret = std::str::from_utf8(&token).map_err(|_| setup())?;
-    let settings = home.join("settings.json");
-    write_settings(&settings, home, identity).map_err(|_| setup())?;
+    let work = claimed.request.agent.as_ref();
+    // An agent's settings are the host's, beside its home, not in it.
+    let settings = place.root.join("settings.json");
+    write_settings(&settings, home, identity, work.is_some()).map_err(|_| setup())?;
     let candidate = &claimed.candidate;
     let effort = candidate.reasoning.as_deref();
-    let work = claimed.request.agent.as_ref();
     let args = match work {
         Some(work) => agent_arguments(&candidate.model, effort, &settings, work.max_turns),
         None => arguments(&candidate.model, effort, &settings),
@@ -100,7 +101,13 @@ async fn attempt(
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let redact = |text: &str| text.replace(secret, agent::REDACTED);
+    if work.is_some() {
+        command
+            .env("PATH", place.path(true))
+            .env("TMPDIR", place.tmp());
+    }
+    // The redaction takes every login's secrets, read once the native has
+    // ended, and this run's token.
     if work.is_some() {
         let prompt = validate::agent_prompt(&claimed.request);
         let (mut transcript, mut result) = (agent::Transcript::default(), None);
@@ -115,6 +122,8 @@ async fn attempt(
         })
         .await;
         lines.end(&mut each);
+        let secrets = run.secrets();
+        let redact = |text: &str| scrub(text.replace(secret, agent::REDACTED), &secrets);
         run.keep(transcript.finish(|text| Some(redact(text))));
         let status =
             ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
@@ -132,6 +141,8 @@ async fn attempt(
         return Ok((reply, result.as_ref().and_then(usage)));
     }
     let ran = execute(command, validate::prompt(&claimed.request), session).await;
+    let secrets = run.secrets();
+    let redact = |text: &str| scrub(text.replace(secret, agent::REDACTED), &secrets);
     match ran {
         Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
         Ok((status, stdout)) => outcome(status, &stdout, redact),
@@ -208,19 +219,28 @@ fn agent_arguments(
     Some(args)
 }
 
-/// `<home>/settings.json`: no hooks and no project MCP servers. It and the
-/// home belong to the native's user.
-fn write_settings(path: &Path, home: &Path, identity: Identity) -> std::io::Result<()> {
+/// The settings file at `path`: no hooks and no project MCP servers. The
+/// home belongs to the native's user. An answer run's file is its own; an
+/// agent's stays the host's, readable (0644) and not writable by the agent,
+/// in a directory the agent cannot write either.
+fn write_settings(
+    path: &Path,
+    home: &Path,
+    identity: Identity,
+    agent: bool,
+) -> std::io::Result<()> {
     let body = json!({"disableAllHooks": true, "enableAllProjectMcpServers": false});
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(if agent { 0o644 } else { 0o600 })
         .open(path)?
         .write_all(body.to_string().as_bytes())?;
     if identity.drop_privileges {
         let id = Some(identity.run_as);
-        std::os::unix::fs::chown(path, id, id)?;
+        if !agent {
+            std::os::unix::fs::chown(path, id, id)?;
+        }
         std::os::unix::fs::chown(home, id, id)?;
     }
     Ok(())

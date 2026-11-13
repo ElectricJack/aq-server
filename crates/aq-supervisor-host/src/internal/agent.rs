@@ -3,10 +3,11 @@
 //! answer is the outcome file it leaves there. This module writes the files,
 //! reads the outcome back as untrusted data, and turns the harness's event
 //! stream into a clipped transcript. It knows nothing about what the work is.
-use super::{Failure, failure};
+use super::{Failure, Place, failure};
 use crate::subscription::Identity;
 use aq_internal_work::{
-    AGENT_OUTCOME, AgentWork, Reason, TRANSCRIPT_BYTES, TRANSCRIPT_ITEM_BYTES, workspace_path,
+    AGENT_OUTCOME, AGENT_TMP, AgentWork, Reason, TRANSCRIPT_BYTES, TRANSCRIPT_ITEM_BYTES,
+    workspace_path,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -27,17 +28,96 @@ pub(super) const NO_OUTCOME: &str = "the agent ended without saving, asking or g
 /// What replaces a login secret in text that leaves a run.
 pub(super) const REDACTED: &str = "[credential redacted]";
 
-/// The executables an agent's shell may run, and the only ones.
+/// The executables an agent's shell may run, and the only ones. Each is
+/// installed under the host's `libexec` directory, off `PATH`, and reached
+/// through its shim ([`shim`]). Its own contract (another task's): every path
+/// argument is relative to the working directory, without `..` or a link.
 pub(super) const SHELL_EXECUTABLES: [&str; 1] = ["aq-playbooks"];
 
-/// Writes `work`'s files into the fresh workspace `cwd`: directories 0700 and
-/// files 0600, owned by the native's user. A path that would leave the
-/// workspace is refused, as `Request::validate` refuses it.
-pub(super) fn materialize(cwd: &Path, work: &AgentWork, identity: Identity) -> std::io::Result<()> {
-    let owned = |path: &Path| match identity.drop_privileges {
-        true => std::os::unix::fs::chown(path, Some(identity.run_as), Some(identity.run_as)),
-        false => Ok(()),
+/// The agent's temporary directory in its workspace.
+pub(super) const TMP: &str = AGENT_TMP;
+
+/// Prepares agent work's place under the fresh, host-owned run directories
+/// `root` and `cwd`. The workspace is built while it is still the host's,
+/// so nothing can be swapped into it, then handed to the agent's uid without
+/// following links. `root` stays the host's (0711), with the agent's own
+/// `home` and the root-owned `bin` of shims in it.
+pub(super) fn prepare(
+    root: &Path,
+    cwd: &Path,
+    work: &AgentWork,
+    libexec: &Path,
+    identity: Identity,
+) -> std::io::Result<Place> {
+    materialize(cwd, work)?;
+    let tmp = cwd.join(TMP);
+    std::fs::create_dir(&tmp)?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o700))?;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o711))?;
+    let home = root.join("home");
+    std::fs::create_dir(&home)?;
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))?;
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin)?;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+    for name in SHELL_EXECUTABLES {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o755)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(bin.join(name))?
+            .write_all(shim(name, cwd, &libexec.join(name))?.as_bytes())?;
+    }
+    if identity.drop_privileges {
+        hand_over(cwd, identity.run_as)?;
+        hand_over(&home, identity.run_as)?;
+    }
+    Ok(Place {
+        root: root.to_owned(),
+        home,
+        cwd: cwd.to_owned(),
+    })
+}
+
+/// The shim of `name`: it runs `engine` only when its working directory is
+/// the workspace `cwd`, with an environment of `PATH`, `HOME`, the
+/// workspace's `TMPDIR` and a locale, so a login token in the harness's
+/// environment never reaches it.
+fn shim(name: &str, cwd: &Path, engine: &Path) -> std::io::Result<String> {
+    let quoted = |path: &Path| match path.to_str() {
+        Some(text) if !text.contains('\'') => Ok(format!("'{text}'")),
+        _ => Err(std::io::Error::other("a path the shim cannot quote")),
     };
+    let (workspace, tmp, engine) = (quoted(cwd)?, quoted(&cwd.join(TMP))?, quoted(engine)?);
+    Ok(format!(
+        "#!/bin/sh\n\
+         # {name} for agent work: only in the workspace, with a clean environment.\n\
+         if [ \"$(pwd -P)\" != {workspace} ]; then\n\
+         \x20 echo '{name}: runs only in the workspace' >&2\n\
+         \x20 exit 126\n\
+         fi\n\
+         exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=\"$HOME\" \
+         TMPDIR={tmp} LANG=C.UTF-8 {engine} \"$@\"\n"
+    ))
+}
+
+/// Gives `path` and, for a directory, everything in it to `uid`, never
+/// following a link.
+fn hand_over(path: &Path, uid: u32) -> std::io::Result<()> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(uid))?;
+    if std::fs::symlink_metadata(path)?.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            hand_over(&entry?.path(), uid)?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes `work`'s files into the fresh workspace `cwd`: directories 0700 and
+/// files 0600. A path that would leave the workspace is refused, as
+/// `Request::validate` refuses it.
+fn materialize(cwd: &Path, work: &AgentWork) -> std::io::Result<()> {
     for (path, text) in &work.files {
         if !workspace_path(path) {
             return Err(std::io::Error::other("workspace path refused"));
@@ -49,7 +129,6 @@ pub(super) fn materialize(cwd: &Path, work: &AgentWork, identity: Identity) -> s
             match std::fs::create_dir(&dir) {
                 Ok(()) => {
                     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-                    owned(&dir)?;
                 }
                 // Made for an earlier file; never a link, the workspace is new.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -68,7 +147,6 @@ pub(super) fn materialize(cwd: &Path, work: &AgentWork, identity: Identity) -> s
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&file)?
             .write_all(text.as_bytes())?;
-        owned(&file)?;
     }
     Ok(())
 }
@@ -108,6 +186,9 @@ pub(super) fn read_outcome(cwd: &Path, limit: u64) -> Result<Option<String>, Str
         return Err(format!(
             "the outcome path {AGENT_OUTCOME} is not a regular file"
         ));
+    }
+    if meta.nlink() != 1 {
+        return Err("the outcome file has another link".into());
     }
     let over = |len: u64| format!("the outcome file is {len} bytes, over the limit of {limit}");
     if meta.size() > limit {

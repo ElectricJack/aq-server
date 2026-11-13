@@ -38,6 +38,9 @@ pub const AGENT_FILES_BYTES: usize = 1024 * 1024;
 /// The file in the workspace an agent's answer is read from; it is the raw
 /// answer `validate::answer` checks, at most `Request::max_output_bytes`.
 pub const AGENT_OUTCOME: &str = "out/outcome.json";
+/// The agent's own temporary directory in its workspace, made by the host;
+/// no request file may be under it.
+pub const AGENT_TMP: &str = ".tmp";
 /// What an agent candidate leaves for each later candidate of its task, and
 /// the smallest agent candidate budget unless less time is left.
 pub const AGENT_FALLBACK_RESERVE_MS: i64 = 300_000;
@@ -242,7 +245,8 @@ impl AgentWork {
             return Err(invalid("agent files exceed 1 MiB"));
         }
         for path in self.files.keys() {
-            if !workspace_path(path) || path == AGENT_OUTCOME {
+            let in_tmp = path.split('/').next() == Some(AGENT_TMP);
+            if !workspace_path(path) || path == AGENT_OUTCOME || in_tmp {
                 return Err(invalid("agent file paths must be relative workspace paths"));
             }
             // A file cannot also be the directory of another.
@@ -255,14 +259,16 @@ impl AgentWork {
     }
 }
 
-/// Whether `path` names a file inside a workspace: relative, `/`-separated
-/// segments that are neither empty, `.` nor `..`, and no NUL.
+/// Whether `path` names a file inside a workspace: at most 4096 bytes of
+/// relative, `/`-separated segments of at most 255 bytes that are neither
+/// empty, `.` nor `..`, and no NUL.
 pub fn workspace_path(path: &str) -> bool {
     !path.is_empty()
+        && path.len() <= 4096
         && !path.contains('\0')
         && path
             .split('/')
-            .all(|segment| !matches!(segment, "" | "." | ".."))
+            .all(|segment| segment.len() <= 255 && !matches!(segment, "" | "." | ".."))
 }
 
 impl Request {
@@ -548,9 +554,26 @@ mod tests {
                 agent_request(&[("a", ""), ("a/b", "")], 1, 60_000),
                 "file and dir",
             ),
+            (
+                agent_request(&[(".tmp/x", "")], 1, 60_000),
+                "the agent's temp",
+            ),
+            (
+                agent_request(&[(&"s".repeat(256), "")], 1, 60_000),
+                "long segment",
+            ),
+            (
+                agent_request(&[(&format!("{}s", "s/".repeat(2048)), "")], 1, 60_000),
+                "long path",
+            ),
         ] {
             assert!(bad.validate().is_err(), "{why}");
         }
+        assert!(
+            agent_request(&[(&"s".repeat(255), "")], 1, 60_000)
+                .validate()
+                .is_ok()
+        );
         let big = "x".repeat(AGENT_FILES_BYTES);
         assert!(
             agent_request(&[("big", &big)], 1, 60_000)

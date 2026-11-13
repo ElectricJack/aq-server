@@ -50,8 +50,9 @@ services:
     # Internal work host (docs/specs/0012-internal-work.md; operations page:
     # docs/operations/internal-work.md). The same image as the supervisor host,
     # run as `internal <CONFIG>`: it claims queued login tasks from the database
-    # and runs the model CLI as UID/GID 10001. Nothing untrusted may run as
-    # 10001 in this container. The image holds neither CLI: both native
+    # and runs the model CLI as UID/GID 10001, agent work as 10002 (see the
+    # operations page). Nothing untrusted may run as 10001 or 10002 in this
+    # container. The image holds neither CLI: both native
     # executables are read-only mounts whose digests are in internal.json.
     image: ${AQ_SUPERVISOR_HOST_IMAGE:?set AQ_SUPERVISOR_HOST_IMAGE to a digest-pinned supervisor host reference}
     user: '0:0'

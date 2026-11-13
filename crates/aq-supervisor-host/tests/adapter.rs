@@ -235,6 +235,29 @@ mod internal {
         }
 
         async fn build(behaviour: &str, digest: Option<Digest>, claude: Option<&str>) -> Self {
+            Self::build_as(behaviour, digest, claude, false).await
+        }
+
+        /// A host as production runs it, for tests run as root: answer runs
+        /// as uid 10001 and agent work as 10002, root-owned files and
+        /// parents traversable by both, and a record directory both can
+        /// write (each native's own files there stay owner-only).
+        async fn as_root(codex: &str, claude: &str) -> Self {
+            assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+            Self::build_as(codex, None, Some(claude), true).await
+        }
+
+        async fn build_as(
+            behaviour: &str,
+            digest: Option<Digest>,
+            claude: Option<&str>,
+            as_root: bool,
+        ) -> Self {
+            let (dir_mode, exe_mode) = if as_root {
+                (0o711, 0o755)
+            } else {
+                (0o700, 0o700)
+            };
             let db = aq_server::test_support::TestDb::create().await;
             drop(db.store().await);
             let pool = db.pool().await;
@@ -243,9 +266,15 @@ mod internal {
                 .tempdir_in("/tmp")
                 .unwrap();
             let root = dir.path().canonicalize().unwrap();
-            for sub in ["homes", "scratch", "rec", "login"] {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+            for sub in ["homes", "scratch", "rec", "login", "libexec"] {
+                let mode = match sub {
+                    "rec" if as_root => 0o777,
+                    "homes" | "scratch" | "libexec" => dir_mode,
+                    _ => 0o700,
+                };
                 std::fs::create_dir(root.join(sub)).unwrap();
-                std::fs::set_permissions(root.join(sub), std::fs::Permissions::from_mode(0o700))
+                std::fs::set_permissions(root.join(sub), std::fs::Permissions::from_mode(mode))
                     .unwrap();
             }
             let rec = root.join("rec");
@@ -259,7 +288,16 @@ mod internal {
             );
             let native = root.join("codex");
             std::fs::write(&native, &script).unwrap();
-            std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&native, std::fs::Permissions::from_mode(exe_mode)).unwrap();
+            // The engine CLI an agent's shell may run: it records how it ran.
+            let engine = root.join("libexec").join("aq-playbooks");
+            let recording = format!(
+                "#!/bin/sh\nrec='{rec}'\ncat /proc/$$/environ > \"$rec/engine.env\"\n\
+                 pwd -P > \"$rec/engine.pwd\"\necho \"$*\" >> \"$rec/engine.args\"\n",
+                rec = rec.display()
+            );
+            std::fs::write(&engine, recording).unwrap();
+            std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
             let secret = root.join("login").join("auth.json");
             replace(&secret, &login("A"));
             let digest = digest.unwrap_or_else(|| Digest::of(script.as_bytes()));
@@ -280,7 +318,8 @@ mod internal {
                 );
                 let native = root.join("claude");
                 std::fs::write(&native, &script).unwrap();
-                std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700)).unwrap();
+                std::fs::set_permissions(&native, std::fs::Permissions::from_mode(exe_mode))
+                    .unwrap();
                 json!({"native": native, "native_digest": Digest::of(script.as_bytes()),
                     "secret_file": token})
             });
@@ -293,11 +332,13 @@ mod internal {
                 "claude": claude,
             }))
             .unwrap();
+            let config = config.with_libexec(root.join("libexec"));
+            let config = if as_root { config } else { config.for_tests() };
             Self {
                 _db: db,
                 pool,
                 dir,
-                config: std::sync::Arc::new(config.for_tests()),
+                config: std::sync::Arc::new(config),
             }
         }
 
@@ -1557,6 +1598,7 @@ sleep 0.5
              *\" m-dir-link \"*) rmdir out; mkdir elsewhere; cp doc.md elsewhere/outcome.json; \
              ln -s elsewhere out;;\n\
              *\" m-fifo \"*) mkfifo out/outcome.json;;\n\
+             *\" m-hardlink \"*) ln doc.md out/outcome.json;;\n\
              esac";
         let f = Fixture::new(behaviour).await;
         let mut request = agent_request();
@@ -1586,6 +1628,7 @@ sleep 0.5
                 "m-fifo",
                 "the outcome path out/outcome.json is not a regular file",
             ),
+            ("m-hardlink", "the outcome file has another link"),
         ] {
             let candidate = Candidate {
                 model: model.into(),
@@ -1617,8 +1660,10 @@ sleep 0.5
         let id = f.submit_request(&agent_request(), &[candidate]).await;
         assert!(f.tick().await);
         assert_eq!(f.row(id).await.status, "answered");
+        // The settings are the host's, beside the agent's home, not in it.
         let home = PathBuf::from(&f.claude_env()["HOME"]);
-        let settings = home.join("settings.json");
+        assert_eq!(home.file_name().unwrap(), "home");
+        let settings = home.parent().unwrap().join("settings.json");
         assert_eq!(
             f.claude_argv(),
             [
@@ -1689,6 +1734,27 @@ sleep 0.5
         assert!(configs.contains(&&"approval_policy=\"never\"".to_string()));
         let cwd = PathBuf::from(after("--cd"));
         assert_eq!(cwd.parent().unwrap(), f.root().join("scratch"));
+        // `/tmp` is not writable; the shell's temporary directory is the
+        // workspace's and its `PATH` starts with the shims.
+        let has = |config: &str| configs.iter().any(|c| *c == config);
+        assert!(
+            has("sandbox_workspace_write.exclude_slash_tmp=true"),
+            "{argv:?}"
+        );
+        let tmp = cwd.join(".tmp");
+        assert!(has(&format!(
+            "shell_environment_policy.set.TMPDIR=\"{}\"",
+            tmp.display()
+        )));
+        let paths: Vec<_> = configs
+            .iter()
+            .filter(|c| c.starts_with("shell_environment_policy.set.PATH="))
+            .collect();
+        assert_eq!(paths.len(), 1, "{paths:?}");
+        assert!(
+            paths[0].ends_with("/bin:/usr/local/bin:/usr/bin:/bin\""),
+            "{paths:?}"
+        );
         assert_eq!(argv.last().unwrap(), "-");
         // An answer task keeps the read-only sandbox.
         f.submit(&[codex_candidate()]).await;
@@ -1729,8 +1795,7 @@ sleep 0.5
             })
             .collect();
         let keys: Vec<&str> = codex_env.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["CODEX_HOME", "HOME", "PATH"]);
-        assert_eq!(codex_env["PATH"], "/usr/local/bin:/usr/bin:/bin");
+        assert_eq!(keys, ["CODEX_HOME", "HOME", "PATH", "TMPDIR"]);
         let claude_env = f.claude_env();
         let keys: Vec<&str> = claude_env.keys().map(String::as_str).collect();
         assert_eq!(
@@ -1745,12 +1810,26 @@ sleep 0.5
                 "DISABLE_TELEMETRY",
                 "HOME",
                 "PATH",
+                "TMPDIR",
             ]
         );
         for (name, env) in [("codex", &codex_env), ("claude", &claude_env)] {
             for value in env.values() {
                 assert!(!value.contains("postgres"), "{name}: {value}");
             }
+            // The shims come first; the temporary directory is the workspace's.
+            let home = PathBuf::from(&env["HOME"]);
+            let bin = home.parent().unwrap().join("bin");
+            assert_eq!(
+                env["PATH"],
+                format!("{}:/usr/local/bin:/usr/bin:/bin", bin.display())
+            );
+            let tmp = PathBuf::from(&env["TMPDIR"]);
+            assert_eq!(tmp.file_name().unwrap(), ".tmp");
+            assert_eq!(
+                tmp.parent().unwrap().parent().unwrap(),
+                f.root().join("scratch")
+            );
             let tree = std::fs::read_to_string(f.rec(&format!("{name}.tree"))).unwrap();
             assert_eq!(tree, "./doc.md\n./guide/language.md\n", "{name}");
         }
@@ -2003,5 +2082,241 @@ sleep 0.5
         assert!(!alive, "the grandchild still runs");
         let kept = transcripts(&f, id).await;
         assert_eq!(kept[0].1, json!([{"kind": "text", "text": "checking"}]));
+    }
+
+    /// The engine CLI is reached only through its shim: with a clean
+    /// environment (no login token), and only in the workspace.
+    #[tokio::test]
+    async fn the_engine_cli_runs_through_a_shim_with_a_clean_environment_only_in_the_workspace() {
+        let claude = format!(
+            "aq-playbooks check draft.md\n(cd / && aq-playbooks check); echo $? > \"$rec/outside\"\n{}",
+            saving("claude")
+        );
+        let f = Fixture::with_claude("exit 1", &claude).await;
+        let id = f
+            .submit_request(&agent_request(), &[claude_candidate()])
+            .await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(id).await.status, "answered");
+        let env = std::fs::read_to_string(f.rec("engine.env")).unwrap();
+        let env: BTreeMap<&str, &str> = env
+            .split('\0')
+            .filter(|e| !e.is_empty())
+            .map(|e| e.split_once('=').unwrap())
+            .collect();
+        let keys: Vec<&str> = env.keys().copied().collect();
+        assert_eq!(keys, ["HOME", "LANG", "PATH", "TMPDIR"]);
+        assert_eq!(env["PATH"], "/usr/local/bin:/usr/bin:/bin");
+        assert!(!format!("{env:?}").contains(CLAUDE_TOKEN));
+        let workspace = PathBuf::from(f.claude_rec("pwd").trim());
+        assert_eq!(env["TMPDIR"], workspace.join(".tmp").to_str().unwrap());
+        let ran_in = std::fs::read_to_string(f.rec("engine.pwd")).unwrap();
+        assert_eq!(Path::new(ran_in.trim()), workspace);
+        // Outside the workspace the shim refuses, and the engine never runs.
+        assert_eq!(std::fs::read_to_string(f.rec("outside")).unwrap(), "126\n");
+        let args = std::fs::read_to_string(f.rec("engine.args")).unwrap();
+        assert_eq!(args, "check draft.md\n");
+    }
+
+    /// Whichever harness a run used, what it stores (answer, outcome,
+    /// transcript, failure detail) has the secrets of both logins removed,
+    /// a Codex refresh copied back during the run included.
+    #[tokio::test]
+    async fn every_run_redacts_the_secrets_of_both_logins() {
+        let codex = format!(
+            "case \" $* \" in\n*\" workspace-write \"*)\n\
+             echo '{}'\nmkdir -p out\n\
+             printf '%s' '{{\"kind\":\"saved\",\"note\":\"{CLAUDE_TOKEN}\"}}' > out/outcome.json;;\n\
+             *) echo '{}'; exit 1;;\nesac",
+            json!({"type": "item.completed", "item": {"type": "agent_message",
+                "text": format!("the claude token is {CLAUDE_TOKEN}")}}),
+            json!({"type": "turn.failed", "error": {"message": format!("boom {CLAUDE_TOKEN}")}}),
+        );
+        let answer = r#"{"choice":"yes","rationale":"codex access-B"}"#;
+        let claude = format!(
+            "touch \"$rec/started\"\ni=0\n\
+             while [ ! -e \"$rec/go\" ] && [ $i -lt 400 ]; do sleep 0.025; i=$((i+1)); done\n{}",
+            claude_printing(&claude_result(false, answer), 0)
+        );
+        let f = std::sync::Arc::new(Fixture::with_claude(&codex, &claude).await);
+        let agent = f
+            .submit_request(&agent_request(), &[codex_candidate()])
+            .await;
+        assert!(f.tick().await);
+        let row = f.row(agent).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(row.answer.unwrap()["note"], "[credential redacted]");
+        let kept = transcripts(&f, agent).await;
+        assert_eq!(
+            kept[0].1,
+            json!([{"kind": "text", "text": "the claude token is [credential redacted]"}])
+        );
+        let failing = f.submit(&[codex_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(failing).await;
+        assert_eq!(row.detail.as_deref(), Some("boom [credential redacted]"));
+        // A Codex refresh (login B) lands in the login file while Claude runs.
+        let claude_run = f.submit(&[claude_candidate()]).await;
+        let running = {
+            let f = f.clone();
+            tokio::spawn(async move { f.tick().await })
+        };
+        f.started().await;
+        replace(&f.secret(), &login("B"));
+        std::fs::write(f.rec("go"), "").unwrap();
+        assert!(running.await.unwrap());
+        let row = f.row(claude_run).await;
+        assert_eq!(
+            row.answer.as_ref().unwrap()["rationale"],
+            "codex [credential redacted]"
+        );
+        assert!(!format!("{row:?}").contains("access-B"));
+    }
+
+    /// The live processes (not zombies) whose real uid is `uid`.
+    fn processes_of(uid: u32) -> Vec<String> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+                continue;
+            };
+            let field = |key: &str| {
+                status
+                    .lines()
+                    .find_map(|l| l.strip_prefix(key))
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let real = field("Uid:").split_whitespace().next().map(str::to_owned);
+            if real == Some(uid.to_string()) && !field("State:").starts_with('Z') {
+                found.push(format!("{name} {}", field("Name:")));
+            }
+        }
+        found
+    }
+
+    /// Waits up to two seconds for no live process of `uid` to be left.
+    async fn none_left_of(uid: u32) -> Vec<String> {
+        for _ in 0..100 {
+            let left = processes_of(uid);
+            if left.is_empty() {
+                return left;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        processes_of(uid)
+    }
+
+    /// Shell that waits up to 10 s for `$rec/<file>`.
+    fn wait_for(file: &str) -> String {
+        format!(
+            "i=0; while [ ! -e \"$rec/{file}\" ] && [ $i -lt 400 ]; do sleep 0.025; i=$((i+1)); done"
+        )
+    }
+
+    /// I1, as production runs it (root, uids 10001 and 10002): a Codex agent
+    /// and a concurrent Claude answer run cannot read each other's process
+    /// environment, home or workspace, and a process the agent started in a
+    /// session of its own dies with the agent run, as does what it left in
+    /// `/tmp`. Run as root in a container with the internal-work service's
+    /// capabilities (see the C2 report).
+    #[tokio::test]
+    #[ignore = "needs root: run in a container as the C2 report says"]
+    async fn as_root_agent_and_answer_runs_cannot_reach_each_other_and_nothing_of_the_agent_outlives_it()
+     {
+        let probe = |me: &str, other: &str| {
+            format!(
+                "id -u > \"$rec/{me}.uid\"; stat -c %u . > \"$rec/{me}.owner\"\n\
+                 echo $$ > \"$rec/{me}.pid\"; echo \"$HOME\" > \"$rec/{me}.homepath\"\n\
+                 pwd -P > \"$rec/{me}.cwd\"\n\
+                 chmod 644 \"$rec/{me}.pid\" \"$rec/{me}.homepath\" \"$rec/{me}.cwd\"\n\
+                 {}\n\
+                 p=$(cat \"$rec/{other}.pid\"); h=$(cat \"$rec/{other}.homepath\"); w=$(cat \"$rec/{other}.cwd\")\n\
+                 cat /proc/$p/environ > /dev/null 2>&1 && echo environ >> \"$rec/{me}.reached\"\n\
+                 ls \"$h\" > /dev/null 2>&1 && echo home >> \"$rec/{me}.reached\"\n\
+                 cat \"$h/auth.json\" > /dev/null 2>&1 && echo login >> \"$rec/{me}.reached\"\n\
+                 ls \"$w\" > /dev/null 2>&1 && echo workspace >> \"$rec/{me}.reached\"\n\
+                 cat \"$rec/{other}.env\" > /dev/null 2>&1 && echo record >> \"$rec/{me}.reached\"\n\
+                 touch \"$rec/{me}.checked\"; chmod 644 \"$rec/{me}.checked\"\n{}",
+                wait_for(&format!("{other}.pid")),
+                wait_for(&format!("{other}.checked")),
+            )
+        };
+        let codex = format!(
+            "cat /proc/$$/environ > \"$rec/codex.env\"\n\
+             setsid sleep 30 &\necho $! > \"$rec/escaped\"\ntouch /tmp/agent-left-behind\n{}\n{}",
+            probe("codex", "claude"),
+            saving("codex")
+        );
+        let claude = format!(
+            "{}\n{}",
+            probe("claude", "codex"),
+            claude_printing(&claude_result(false, ANSWER), 0)
+        );
+        let f = Fixture::as_root(&codex, &claude).await;
+        let answer = f.submit(&[claude_candidate()]).await;
+        let agent = f
+            .submit_request(&agent_request(), &[codex_candidate()])
+            .await;
+        let host = serving(&f);
+        let answer = answered_within(&f, answer, 20).await;
+        let agent = answered_within(&f, agent, 20).await;
+        let left = none_left_of(10002).await;
+        host.abort();
+        assert_eq!(answer.attempts.len(), 1);
+        assert_eq!(agent.attempts.len(), 1);
+        for (me, uid) in [("codex", "10002"), ("claude", "10001")] {
+            let read = |name: &str| std::fs::read_to_string(f.rec(&format!("{me}.{name}")));
+            assert!(
+                read("reached").is_err(),
+                "{me} reached {:?}",
+                read("reached")
+            );
+            assert_eq!(read("uid").unwrap().trim(), uid, "{me}");
+            assert_eq!(read("owner").unwrap().trim(), uid, "{me} workspace owner");
+        }
+        assert!(left.is_empty(), "agent processes left: {left:?}");
+        // It had started a process in a session of its own; none is left.
+        assert!(f.rec("escaped").exists());
+        assert!(!Path::new("/tmp/agent-left-behind").exists());
+    }
+
+    /// I2, as production runs it: a Claude agent (uid 10002) cannot change
+    /// its settings or its shims, nor add to the directory holding them; its
+    /// workspace is its own.
+    #[tokio::test]
+    #[ignore = "needs root: run in a container as the C2 report says"]
+    async fn as_root_a_claude_agent_cannot_change_its_settings_or_shims() {
+        let claude = format!(
+            "r=$(dirname \"$HOME\")\n\
+             echo x >> \"$r/settings.json\" 2>/dev/null && echo write >> \"$rec/b.changed\"\n\
+             mv \"$r/settings.json\" \"$r/moved\" 2>/dev/null && echo rename >> \"$rec/b.changed\"\n\
+             echo x >> \"$r/bin/aq-playbooks\" 2>/dev/null && echo shim >> \"$rec/b.changed\"\n\
+             touch \"$r/bin/other\" 2>/dev/null && echo bin >> \"$rec/b.changed\"\n\
+             touch \"$r/other\" 2>/dev/null && echo root >> \"$rec/b.changed\"\n\
+             id -u > \"$rec/b.uid\"; stat -c %u doc.md > \"$rec/b.owner\"\n\
+             stat -c %u \"$r/settings.json\" > \"$rec/b.settings\"\n{}",
+            saving("claude")
+        );
+        let f = Fixture::as_root("exit 1", &claude).await;
+        let id = f
+            .submit_request(&agent_request(), &[claude_candidate()])
+            .await;
+        assert!(f.tick().await);
+        assert_eq!(f.row(id).await.status, "answered");
+        let read = |name: &str| std::fs::read_to_string(f.rec(name));
+        assert!(
+            read("b.changed").is_err(),
+            "changed: {:?}",
+            read("b.changed")
+        );
+        assert_eq!(read("b.uid").unwrap().trim(), "10002");
+        assert_eq!(read("b.owner").unwrap().trim(), "10002");
+        assert_eq!(read("b.settings").unwrap().trim(), "0");
     }
 }

@@ -21,11 +21,12 @@ run does not keep the next task waiting. Spec:
 
 ## Requirements
 
-- Run as root. The host drops to uid/gid 10001 for each model CLI run.
+- Run as root. The host drops to uid/gid 10001 for each model CLI run, and to
+  10002 for agent work (see "Agent work").
 - Its own PID namespace (Compose's default; never `pid: host`) and no Docker
   socket. Network: the database and provider egress only.
-- Nothing untrusted may run as uid 10001 in the container. The model CLI's
-  environment and its staged login are readable by that uid.
+- Nothing untrusted may run as uid 10001 or 10002 in the container. The model
+  CLI's environment and its staged login are readable by the uid it runs as.
 - The image holds neither CLI. Mount both native executables read-only and put
   each one's SHA-256 in the config.
 
@@ -173,14 +174,37 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
 A request with `agent` work (spec 0013 §4.2) runs the harness with tools in a
 workspace instead of as one prompt. Its task row has `workspace_kind = 'agent'`.
 
-- **Workspace.** A fresh directory under `scratch` per candidate, holding only
-  the request's files (relative paths, at most 256 files and 1 MiB). It is
-  removed when the candidate ends, however it ends.
+- **Its own uid.** Agent work runs as uid/gid **10002**; answer runs stay
+  10001. So an agent cannot read another run's process environment
+  (`/proc/<pid>/environ`), home or workspace, and no other run can read the
+  agent's. When an agent run ends (answer, failure, timeout, a dropped or
+  panicked run) the host kills every process of uid 10002, a process that left
+  the session included, and removes what 10002 left at the top of `/tmp`. The
+  host does the same at start. Nothing else may run as 10002.
+- **Workspace.** A fresh directory under `scratch` per candidate, built while
+  it is still root's and then handed to 10002 without following links. It holds
+  only the request's files (relative paths, segments of at most 255 bytes,
+  paths of at most 4096, at most 256 files and 1 MiB) and the agent's own
+  temporary directory `.tmp` (its `TMPDIR`). It is removed when the candidate
+  ends, however it ends.
+- **Home.** `homes/<run>` stays root's (0711). It holds the agent's own
+  `home/` (its `HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, owned by 10002), and,
+  root-owned and not writable by the agent, Claude's `settings.json` (0644) and
+  `bin/`, the shims. A leftover Codex login of an agent run is
+  `homes/<run>/home/auth.json`; startup recovery offers it back like any other.
+- **The engine CLI and its shim.** The agent's `PATH` starts with
+  `homes/<run>/bin`, where `aq-playbooks` is a shim: it runs the real binary,
+  `/usr/local/libexec/aq-playbooks`, only when its working directory is the
+  workspace, with an environment of `PATH`, `HOME`, `TMPDIR` and `LANG` only, so
+  a login token in the harness's environment never reaches it. The real binary
+  must not be on `PATH`. Its own contract (the engine CLI's): every path
+  argument is relative to the workspace, without `..` or a link.
 - **Answer.** The file `out/outcome.json` in the workspace, opened without
-  following links and at most the request's `max_output_bytes`, then checked
-  against the request's answer schema like any answer. No outcome, a link, a
-  file that is too large or malformed fails the candidate as `invalid_output`
-  ("the agent ended without saving, asking or giving up" when there is none).
+  following links, a regular file with one link and at most the request's
+  `max_output_bytes`, then checked against the request's answer schema like any
+  answer. No outcome, a link, a file that is too large or malformed fails the
+  candidate as `invalid_output` ("the agent ended without saving, asking or
+  giving up" when there is none).
 - **Claude tools:** `--restricted --permission-mode dontAsk --tools
   Bash,Read,Write,Edit,Glob,Grep --allowedTools "Bash(aq-playbooks:*)" Read
   Write Edit Glob Grep --disallowedTools WebFetch WebSearch --max-turns N`, with
@@ -188,27 +212,86 @@ workspace instead of as one prompt. Its task row has `workspace_kind = 'agent'`.
   listed in `--help` of Claude Code 2.1.323. Confirm the flags against the
   mounted binary before deploying.
 - **Codex:** `--sandbox workspace-write` with
-  `sandbox_workspace_write.network_access=false`; its shell inherits no
-  environment. Codex has no turn limit.
-- **Environment.** As for answer runs: cleared, the login only, `PATH`
-  `/usr/local/bin:/usr/bin:/bin` (the engine CLI lives in `/usr/local/bin`).
-  No database URL and no AQ credential reach the harness.
+  `sandbox_workspace_write.network_access=false` and
+  `sandbox_workspace_write.exclude_slash_tmp=true` (codex-cli 0.167.1 accepts
+  both under `--strict-config`); its shell inherits no environment and gets the
+  shims' `PATH` and the workspace's `TMPDIR`. Codex has no turn limit.
+- **Environment.** Cleared, as for answer runs: the login only, the `PATH`
+  above, the workspace's `TMPDIR`. No database URL and no AQ credential reach
+  the harness.
+- **Profiles.** Agent work keeps only a profile's logged-in candidates; a
+  profile with none fails the request at once (`no_candidate`, "agent work
+  needs a logged-in harness, and intelligence profile … lists none").
 - **One agent at a time.** A host runs at most one agent run, so one of its
   two slots always serves answer tasks. A Codex agent run holds the Codex login
   for its whole run (up to 30 min), and it is claimed only while no blocking
   answer task ends on Codex. While it runs, blocking tasks with a later
   candidate skip Codex (`login_busy`); a task whose only candidate is Codex
-  waits. Prefer a Claude-first profile for `playbook_compilation`.
+  waits. A Codex-first agent task can itself wait up to its deadline while
+  blocking tasks that end on Codex keep arriving, without trying its later
+  candidate. Prefer a Claude-first profile for `playbook_compilation`.
 - **Time.** Agent deadlines may be up to 1 800 000 ms. A candidate's budget is
   what is left less 300 s for each later candidate, at least 300 s. At the stop
-  the whole process group is killed, a Codex login is still copied back, and
-  the attempt says "`<harness>` did not finish within N s".
+  the whole process group is killed, then every process of 10002, a Codex login
+  is still copied back, and the attempt says "`<harness>` did not finish within
+  N s".
 - **Transcript.** Each candidate's tool calls, tool results and text are kept
   in `internal_task_transcripts` (items at most 2 KiB, at most 256 KiB per
-  candidate, the login's secrets redacted) and shown in the run read.
-  `internal work: a transcript was not recorded` means that write failed.
-- **Deploy order.** Migrate the server (0123) before starting a host that
-  runs agent work.
+  candidate) and shown in the run read. `internal work: a transcript was not
+  recorded` means that write failed.
+- **Redaction.** Whichever harness ran, every stored transcript, outcome and
+  failure detail has the secrets of both logins replaced: the Claude token and
+  the Codex login's tokens, as staged, as left by the run and as the login file
+  holds them at the end (a refresh copied back meanwhile included).
+- **Disk.** Nothing bounds what an agent writes into its workspace in 30
+  minutes; give the `scratch` volume a quota if that matters.
+- **Deploy order.** Migrate the server (0123) before starting a host that runs
+  agent work, and update **every** internal work host before anything submits
+  agent work: an older host claims agent tasks and runs them as one prompt with
+  tools off, so its "outcome" is free text.
+
+### What the image and compose need for agent work
+
+- The image (Task C3 builds it): the engine CLI at
+  `/usr/local/libexec/aq-playbooks` (root-owned, not on `PATH`), `/bin/sh` and
+  `/usr/bin/env` for the shim. No passwd entry is needed for 10002.
+- Compose: nothing new beyond the `internal-work` service's
+  `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]` (SETUID and
+  SETGID cover 10002; the sweep itself runs as 10002),
+  `init: true` (reaps what the sweep kills) and a private PID namespace. The
+  `homes` and `scratch` volumes must be traversable by both uids (root-owned
+  0711 or 0755, never group or world writable). Keep `/tmp` a tmpfs.
+
+### What an agent run can reach
+
+In plain terms:
+
+- **A Claude agent** reads and writes files only in its workspace
+  (`--restricted`) and runs only `aq-playbooks …`, through the shim, which
+  never sees the token. What `aq-playbooks` itself may touch is the engine
+  CLI's contract (workspace-relative paths only).
+- **A Codex agent's shell** can read whatever uid 10002 can read, its own Codex
+  login file (`$CODEX_HOME/auth.json`) included, and can write only its
+  workspace; it has no network. It cannot read other runs: they belong to
+  another uid.
+- **Neither** can reach the database, the AQ server or any AQ credential: the
+  environment is cleared and none is mounted.
+- **The provider sees what the agent reads**, its own login included for Codex.
+- **Redaction** replaces exact login secrets. A secret an agent deliberately
+  splits, encodes or reverses is not matched.
+- **The outcome is untrusted** until its caller checks it: it is whatever the
+  agent wrote (a Claude agent can `Write` it without the engine CLI), checked
+  here only against the answer schema. Playbook authoring re-checks it on the
+  server (Task C4).
+
+Only a real login can confirm two things, before agent work is enabled:
+
+1. Claude enforces `Bash(aq-playbooks:*)` against compound commands (`&&`,
+   `;`, pipes), command substitution and redirections under `dontAsk`.
+2. The Codex sandbox (bubblewrap with user namespaces) starts inside this
+   hardened container. If it cannot, Codex agent candidates must fail fast with
+   a clear attempt message so that the next candidate runs; do not turn on a
+   weaker sandbox mode instead.
 
 ## Time limits
 

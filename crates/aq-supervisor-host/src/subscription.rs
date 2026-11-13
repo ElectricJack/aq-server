@@ -13,6 +13,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// The uid and gid agent work runs as; ordinary runs use [`Identity::NATIVE`]'s.
+pub(crate) const AGENT_UID: u32 = 10002;
+
 /// Who must own the native executable, and who the native child runs as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
@@ -31,6 +34,20 @@ impl Identity {
         run_as: 10001,
         drop_privileges: true,
     };
+
+    /// The identity agent work runs as (spec 0013 §4.2): its own uid, which
+    /// no other run uses, so an agent cannot reach another run's process,
+    /// home or workspace, and every process of that uid can be killed when
+    /// the agent run ends. Without a privilege drop (tests) it is unchanged.
+    pub(crate) fn agent(self) -> Identity {
+        match self.drop_privileges {
+            true => Identity {
+                run_as: AGENT_UID,
+                ..self
+            },
+            false => self,
+        }
+    }
 
     /// The current uid, with no privilege drop and no chown, for tests that
     /// do not run as root.

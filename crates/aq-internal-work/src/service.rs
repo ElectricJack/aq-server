@@ -124,10 +124,27 @@ impl Service {
             Some(id) => Some(id.clone()),
             None => settings::profile_for(&self.pool, request.purpose).await?,
         };
-        match profile {
-            Some(profile) => self.candidates(&profile, now_ms).await,
-            None => Ok(Err("no internal work profile configured".into())),
+        let Some(profile) = profile else {
+            return Ok(Err("no internal work profile configured".into()));
+        };
+        let candidates = self.candidates(&profile, now_ms).await?;
+        if request.agent.is_none() {
+            return Ok(candidates);
         }
+        // Agent work needs a harness with tools: an API candidate could only
+        // fail, and would take a fallback's reserve from the budget.
+        Ok(candidates.and_then(|candidates| {
+            let logins: Vec<Candidate> = candidates
+                .into_iter()
+                .filter(|c| c.way == Way::Login)
+                .collect();
+            match logins.is_empty() {
+                true => Err(format!(
+                    "agent work needs a logged-in harness, and intelligence profile {profile:?} lists none"
+                )),
+                false => Ok(logins),
+            }
+        }))
     }
 
     /// Re-submits the stored request of a failed run, resolving candidates

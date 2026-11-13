@@ -12,7 +12,7 @@ mod codex;
 
 use crate::{
     config::protected_read,
-    subscription::{Identity, file_digest, open_native, recover_login},
+    subscription::{AGENT_UID, Identity, file_digest, open_native, recover_login},
 };
 use anyhow::{Result, ensure};
 use aq_internal_work::{
@@ -41,6 +41,14 @@ pub struct InternalConfig {
     pub claude: Option<Harness>,
     #[serde(skip)]
     identity: Identity,
+    /// Where the executables an agent's shell may run are installed, off
+    /// `PATH`; the agent reaches each only through its shim ([`agent::shims`]).
+    #[serde(skip, default = "libexec")]
+    libexec: PathBuf,
+}
+
+fn libexec() -> PathBuf {
+    PathBuf::from("/usr/local/libexec")
 }
 
 #[derive(Deserialize)]
@@ -150,6 +158,13 @@ impl InternalConfig {
         self
     }
 
+    /// Takes the executables an agent's shell may run from `dir`.
+    #[cfg(feature = "test-support")]
+    pub fn with_libexec(mut self, dir: PathBuf) -> Self {
+        self.libexec = dir;
+        self
+    }
+
     /// Makes the next `runs` Codex runs panic once the native has run, before
     /// anything is copied back.
     #[cfg(feature = "test-support")]
@@ -180,6 +195,10 @@ pub async fn run(path: &Path) -> Result<()> {
         libc::umask(0o077);
     }
     let (config, digest) = InternalConfig::load(path)?;
+    if config.identity.drop_privileges {
+        // Whatever an agent run of a host that stopped left running.
+        sweep_uid(AGENT_UID);
+    }
     recover_run_dirs(&config);
     // A statement that hangs ends instead of holding a run, its slot and
     // the Codex login.
@@ -200,6 +219,8 @@ pub async fn run(path: &Path) -> Result<()> {
 /// alone. A Codex login such a run refreshed is first offered back to the
 /// login file ([`recover_login`]); a home whose newer login could not be
 /// copied back, or that holds a login while Codex is not configured, is kept.
+/// An answer run's login is `<run>/auth.json`, an agent run's
+/// `<run>/home/auth.json`, owned by the agent's uid.
 pub fn recover_run_dirs(config: &InternalConfig) {
     for parent in [&config.homes, &config.scratch] {
         if private_parent(parent, config.identity).is_err() {
@@ -210,17 +231,22 @@ pub fn recover_run_dirs(config: &InternalConfig) {
                 continue;
             }
             let path = entry.path();
-            let login = path.join("auth.json");
-            if parent == &config.homes && std::fs::symlink_metadata(&login).is_ok() {
-                // Without Codex configured there is no login file to check it
-                // against, so it is kept too.
-                let checked = config.codex.as_ref().is_some_and(|codex| {
-                    recover_login(&codex.secret_file, &login, config.identity)
+            let logins = [
+                (path.join("auth.json"), config.identity),
+                (path.join("home").join("auth.json"), config.identity.agent()),
+            ];
+            let kept = parent == &config.homes
+                && logins.iter().any(|(login, identity)| {
+                    // Without Codex configured there is no login file to check
+                    // it against, so it is kept too.
+                    std::fs::symlink_metadata(login).is_ok()
+                        && !config.codex.as_ref().is_some_and(|codex| {
+                            recover_login(&codex.secret_file, login, *identity)
+                        })
                 });
-                if !checked {
-                    eprintln!("internal work: kept a run home holding a login not copied back");
-                    continue;
-                }
+            if kept {
+                eprintln!("internal work: kept a run home holding a login not copied back");
+                continue;
             }
             if std::fs::remove_dir_all(&path).is_err() {
                 let _ = std::fs::remove_file(&path);
@@ -429,8 +455,10 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
     };
     let stop_after = u64::try_from(claimed.stop_at_ms() - now_ms).unwrap_or(0);
     let stop_at = started + Duration::from_millis(stop_after);
-    let session = Session::new(stop_at);
-    let transcript = Transcript::default();
+    // Every process of the agent's own uid dies with an agent run.
+    let agent = claimed.request.agent.is_some() && config.identity.drop_privileges;
+    let session = Session::new(stop_at, agent.then_some(AGENT_UID));
+    let transcript = TranscriptSlot::default();
     let run = run_candidate(config, &claimed, &session, &transcript);
     tokio::pin!(run);
     let ran = tokio::select! {
@@ -497,11 +525,11 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
 
 /// Where an agent run leaves its clipped, redacted transcript for
 /// [`keep_transcript`]; it stays empty for an answer run.
-type Transcript = std::sync::Mutex<Option<serde_json::Value>>;
+type TranscriptSlot = std::sync::Mutex<Option<serde_json::Value>>;
 
 /// Stores the transcript an agent run left, once the run has ended (also
 /// after a timeout, when its native was killed).
-async fn keep_transcript(pool: &PgPool, claimed: &Claimed, transcript: &Transcript) {
+async fn keep_transcript(pool: &PgPool, claimed: &Claimed, transcript: &TranscriptSlot) {
     let events = transcript
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -521,12 +549,17 @@ async fn run_candidate(
     config: &InternalConfig,
     claimed: &Claimed,
     session: &Session,
-    transcript: &Transcript,
+    transcript: &TranscriptSlot,
 ) -> Result<(String, Option<Usage>), Failure> {
-    let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
+    let (homes, scratch) = (&config.homes, &config.scratch);
     let harness = claimed.candidate.harness.as_deref();
+    let identity = match claimed.request.agent {
+        Some(_) => config.identity.agent(),
+        None => config.identity,
+    };
     let run = Run {
         claimed,
+        config,
         identity,
         session,
         transcript,
@@ -549,16 +582,25 @@ const STDOUT_BYTES: usize = 8 * 1024 * 1024;
 
 type Failure = (Reason, String);
 
-/// What a harness runner is given for one attempt.
+/// What a harness runner is given for one attempt. `identity` runs agent
+/// work as the agent's own uid ([`Identity::agent`]).
 #[derive(Clone, Copy)]
 struct Run<'a> {
     claimed: &'a Claimed,
+    config: &'a InternalConfig,
     identity: Identity,
     session: &'a Session,
-    transcript: &'a Transcript,
+    transcript: &'a TranscriptSlot,
 }
 
 impl Run<'_> {
+    /// The secrets of every login this host holds, whichever harness the run
+    /// used, read now: call it once the native has ended, so a refresh copied
+    /// back meanwhile is included.
+    fn secrets(&self) -> Vec<zeroize::Zeroizing<String>> {
+        login_secrets(self.config)
+    }
+
     /// Leaves an agent run's transcript for [`keep_transcript`].
     fn keep(&self, events: Option<serde_json::Value>) {
         *self
@@ -572,6 +614,69 @@ fn failure(reason: Reason, detail: &str) -> Failure {
     (reason, detail.into())
 }
 
+/// `text` with each of `secrets` replaced.
+fn scrub(mut text: String, secrets: &[zeroize::Zeroizing<String>]) -> String {
+    for secret in secrets.iter().filter(|s| !s.is_empty()) {
+        text = text.replace(secret.as_str(), agent::REDACTED);
+    }
+    text
+}
+
+/// The secrets of the logins `config` names: the Claude setup token and
+/// the Codex login's tokens, read now. A file that cannot be read gives none.
+fn login_secrets(config: &InternalConfig) -> Vec<zeroize::Zeroizing<String>> {
+    use zeroize::Zeroizing;
+    let mut secrets = Vec::new();
+    if let Some(claude) = &config.claude {
+        let token = protected_read(&claude.secret_file, 65536)
+            .map(Zeroizing::new)
+            .and_then(aq_intelligence_config::material::normalize_claude_token);
+        if let Ok(token) = token
+            && let Ok(token) = std::str::from_utf8(&token)
+        {
+            secrets.push(Zeroizing::new(token.to_owned()));
+        }
+    }
+    if let Some(codex) = &config.codex
+        && let Ok(login) = protected_read(&codex.secret_file, 65536).map(Zeroizing::new)
+        && let Ok(login) = serde_json::from_slice::<serde_json::Value>(&login)
+    {
+        for key in ["id_token", "access_token", "refresh_token"] {
+            if let Some(token) = login["tokens"][key].as_str() {
+                secrets.push(Zeroizing::new(token.to_owned()));
+            }
+        }
+    }
+    secrets
+}
+
+/// Where a run happens. For an answer run `home` is `root`. For agent work
+/// `root` stays root-owned (0711) and holds what configures the harness,
+/// which the agent cannot change: Claude's settings and `bin`, the shims of
+/// the executables its shell may run. `home` is `root/home`, the agent's own.
+pub(crate) struct Place {
+    pub(crate) root: PathBuf,
+    pub(crate) home: PathBuf,
+    pub(crate) cwd: PathBuf,
+}
+
+impl Place {
+    /// The `PATH` of a run: an agent's shims come first.
+    pub(crate) fn path(&self, agent: bool) -> String {
+        let system = "/usr/local/bin:/usr/bin:/bin";
+        match agent {
+            true => format!("{}:{system}", self.root.join("bin").display()),
+            false => system.to_owned(),
+        }
+    }
+
+    /// The temporary directory of agent work, inside its workspace, so it
+    /// goes with the workspace and is shared with no other run.
+    pub(crate) fn tmp(&self) -> PathBuf {
+        self.cwd.join(agent::TMP)
+    }
+}
+
 /// Checks the run directories' parents and the native of `h`, makes a fresh
 /// private home under `homes` and an empty working directory under `scratch`
 /// (owned by the native's user), writes agent work's files into the
@@ -582,7 +687,7 @@ async fn in_run_dirs<T>(
     homes: &Path,
     scratch: &Path,
     run: Run<'_>,
-    attempt: impl AsyncFnOnce(&std::fs::File, &Path, &Path) -> Result<T, Failure>,
+    attempt: impl AsyncFnOnce(&std::fs::File, &Place) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
     let identity = run.identity;
     for parent in [homes, scratch] {
@@ -593,25 +698,43 @@ async fn in_run_dirs<T>(
         .verified_native(identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "native executable refused"))?;
     let name = uuid::Uuid::new_v4().to_string();
-    let (home, cwd) = (homes.join(&name), scratch.join(&name));
-    let made = run_dirs(&home, &cwd, identity)
+    let (root, cwd) = (homes.join(&name), scratch.join(&name));
+    let made = run_dirs(&root, &cwd)
         .map_err(|_| failure(Reason::ProviderError, "native run could not be prepared"));
     // Removed however this ends, a panic included.
-    let _dirs = RunDirs([&home, &cwd]);
-    let work = run.claimed.request.agent.as_ref();
-    let made = made.and_then(|()| match work {
-        Some(work) => agent::materialize(&cwd, work, identity).map_err(|_| {
-            failure(
+    let _dirs = RunDirs([&root, &cwd]);
+    let place = made.and_then(|()| {
+        let work = run.claimed.request.agent.as_ref();
+        let prepared = match work {
+            Some(work) => agent::prepare(&root, &cwd, work, &run.config.libexec, identity),
+            None => answer_place(&root, &cwd, identity),
+        };
+        prepared.map_err(|_| match work {
+            Some(_) => failure(
                 Reason::ProviderError,
                 "agent workspace could not be prepared",
-            )
-        }),
-        None => Ok(()),
+            ),
+            None => failure(Reason::ProviderError, "native run could not be prepared"),
+        })
     });
-    match made {
-        Ok(()) => attempt(&executable, &home, &cwd).await,
+    match place {
+        Ok(place) => attempt(&executable, &place).await,
         Err(failure) => Err(failure),
     }
+}
+
+/// An answer run's place: its home is the run's root, and its empty working
+/// directory belongs to the native's user.
+fn answer_place(root: &Path, cwd: &Path, identity: Identity) -> std::io::Result<Place> {
+    if identity.drop_privileges {
+        let id = Some(identity.run_as);
+        std::os::unix::fs::chown(cwd, id, id)?;
+    }
+    Ok(Place {
+        root: root.to_owned(),
+        home: root.to_owned(),
+        cwd: cwd.to_owned(),
+    })
 }
 
 /// A run's home and working directory, removed on drop.
@@ -625,15 +748,12 @@ impl Drop for RunDirs<'_> {
     }
 }
 
-/// Creates `home` and `cwd` owner-only; `cwd` belongs to the native's user.
-fn run_dirs(home: &Path, cwd: &Path, identity: Identity) -> std::io::Result<()> {
-    for dir in [home, cwd] {
+/// Creates `root` and `cwd` owner-only, owned by the host until the run's
+/// place is prepared.
+fn run_dirs(root: &Path, cwd: &Path) -> std::io::Result<()> {
+    for dir in [root, cwd] {
         std::fs::create_dir(dir)?;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    if identity.drop_privileges {
-        let id = Some(identity.run_as);
-        std::os::unix::fs::chown(cwd, id, id)?;
     }
     Ok(())
 }
@@ -663,6 +783,9 @@ const DRAIN_MS: u64 = 500;
 struct Session {
     state: std::sync::Mutex<SessionState>,
     stop_at: Instant,
+    /// The agent's uid, whose every process [`Session::kill`] kills too, so
+    /// a process that left the session cannot outlive the run.
+    sweep: Option<u32>,
 }
 
 enum SessionState {
@@ -672,10 +795,11 @@ enum SessionState {
 }
 
 impl Session {
-    fn new(stop_at: Instant) -> Self {
+    fn new(stop_at: Instant, sweep: Option<u32>) -> Self {
         Session {
             state: std::sync::Mutex::new(SessionState::NotStarted),
             stop_at,
+            sweep,
         }
     }
 
@@ -712,8 +836,9 @@ impl Session {
         }
     }
 
-    /// Kills every process left in the session (SIGKILL), and keeps a
-    /// native that has not started from starting.
+    /// Kills every process left in the session (SIGKILL), and for agent work
+    /// every process of the agent's uid, and keeps a native that has not
+    /// started from starting.
     fn kill(&self) {
         let mut state = self.state();
         if let SessionState::Running(pid) = *state {
@@ -722,6 +847,56 @@ impl Session {
             }
         }
         *state = SessionState::Stopped;
+        if let Some(uid) = self.sweep {
+            sweep_uid(uid);
+        }
+    }
+}
+
+/// Kills every process of `uid` (SIGKILL), from a child that has taken that
+/// uid, so nothing else can be reached; then removes what `uid` left at the
+/// top of `/tmp`. Only agent work's own uid is swept: no other run uses it,
+/// and at most one agent runs on a host.
+fn sweep_uid(uid: u32) {
+    unsafe {
+        let pid = libc::fork();
+        if pid == 0 {
+            // Only async-signal-safe calls in the child of a threaded process.
+            if libc::setgroups(0, std::ptr::null()) == 0
+                && libc::setgid(uid) == 0
+                && libc::setuid(uid) == 0
+            {
+                // Again while something was signalled, so a process forked
+                // while the first pass ran dies too; zombies count as
+                // signalled, hence the bound.
+                let pause = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 10_000_000,
+                };
+                for _ in 0..20 {
+                    if libc::kill(-1, libc::SIGKILL) != 0 {
+                        break;
+                    }
+                    libc::nanosleep(&pause, std::ptr::null_mut());
+                }
+            }
+            libc::_exit(0);
+        }
+        if pid > 0 {
+            let mut status = 0;
+            while libc::waitpid(pid, &mut status, 0) < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+            }
+        }
+    }
+    for entry in std::fs::read_dir("/tmp").into_iter().flatten().flatten() {
+        let path = entry.path();
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.uid() == uid)
+            && std::fs::remove_dir_all(&path).is_err()
+        {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 

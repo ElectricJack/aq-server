@@ -1738,27 +1738,69 @@ mod service {
         assert!(f.anthropic.lock().unwrap().bodies.is_empty());
     }
 
-    /// An API call is one prompt, so agent work fails its API candidates over
-    /// without calling the provider.
+    /// Agent work needs a harness with tools: a profile of API candidates
+    /// only is refused at submission, saying so, and no provider is called;
+    /// a profile with a login keeps only its logged-in candidates.
     #[tokio::test]
-    async fn agent_work_is_never_sent_to_an_api_candidate() {
+    async fn agent_work_whose_profile_has_no_logged_in_harness_is_refused_at_submission() {
         let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
         let _stop = start(&f.work);
         let id = f.work.submit(super::agent_request(true)).await.unwrap();
         match wait(&f.work, id).await {
             Outcome::Failed {
-                reason, attempts, ..
+                reason,
+                detail,
+                attempts,
             } => {
-                assert_eq!(reason, Reason::ProviderUnavailable);
-                assert_eq!(attempts.len(), 2);
-                for attempt in attempts {
-                    assert_eq!(attempt.detail, aq_internal_work::service::AGENT_NEEDS_LOGIN);
-                }
+                assert_eq!(reason, Reason::NoCandidate);
+                assert_eq!(
+                    detail,
+                    "agent work needs a logged-in harness, and intelligence profile \"internal\" lists none"
+                );
+                assert!(attempts.is_empty());
             }
             answered => panic!("expected a failure, got {answered:?}"),
         }
         assert!(f.openai.lock().unwrap().bodies.is_empty());
         assert!(f.anthropic.lock().unwrap().bodies.is_empty());
+        let f = fixture(SMALL, LARGE, CredentialKind::SubscriptionLogin).await;
+        let id = f.work.submit(super::agent_request(true)).await.unwrap();
+        let row = store::get(&f.pool, id).await.unwrap().unwrap();
+        let ways: Vec<Way> = row.candidates.iter().map(|c| c.way).collect();
+        assert_eq!(ways, [Way::Login]);
+        assert_eq!(row.status, "queued");
+    }
+
+    /// Agent work stored with an API candidate (not through the service) is
+    /// failed over by the API loop without calling the provider.
+    #[tokio::test]
+    async fn agent_work_is_never_sent_to_an_api_candidate() {
+        let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
+        let _stop = start(&f.work);
+        let candidates = [super::api("openai"), login("anthropic", "claude")];
+        let id = store::submit(&f.pool, &super::agent_request(true), &candidates, now_ms())
+            .await
+            .unwrap();
+        let moved = tokio::time::timeout(Duration::from_secs(10), async {
+            while store::get(&f.pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .candidate_index
+                == 0
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(moved.is_ok(), "the API candidate was not failed over");
+        let row = store::get(&f.pool, id).await.unwrap().unwrap();
+        assert_eq!(row.attempts[0].reason, Some(Reason::ProviderUnavailable));
+        assert_eq!(
+            row.attempts[0].detail,
+            aq_internal_work::service::AGENT_NEEDS_LOGIN
+        );
+        assert!(f.openai.lock().unwrap().bodies.is_empty());
     }
 
     #[tokio::test]
