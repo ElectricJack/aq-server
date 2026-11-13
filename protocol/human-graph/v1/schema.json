@@ -1680,6 +1680,18 @@
               "since_ms"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "unrouted"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
           }
         ]
       }

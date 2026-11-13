@@ -89,8 +89,11 @@ pub(super) async fn work(
         "readiness":readiness,
         "parent":parent,"execution":execution});
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
-    if let Some(routing) = crate::routing::view(&s, &a.record, id, &raw["node"], ready).await? {
-        data["routing"] = routing;
+    // Optional field: when it cannot be computed the read still succeeds without it.
+    match crate::routing::view(&s, &a.record, id, &raw["node"], ready).await {
+        Ok(Some(routing)) => data["routing"] = routing,
+        Ok(None) => {}
+        Err(error) => tracing::warn!(task = %id, ?error, "task routing view omitted"),
     }
     finish(&s, &r, a, data).await
 }

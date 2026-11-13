@@ -588,12 +588,26 @@ async fn work_read_reports_waiting_then_routed() {
         waiting["routing"],
         json!({"state":"waiting","since_ms":1767225600000_i64})
     );
-    // Routing off and no route: placed as without routing, nothing to show.
+    // Routing on, not ready (an open blocker), no route: nothing is held back for routing.
+    let (blocked, blocker) = (Uuid::new_v4(), Uuid::new_v4());
+    x.graph.contexts.lock().unwrap().insert(
+        blocked,
+        context(
+            &task(blocked, w, "Blocked", "active"),
+            vec![task(blocker, w, "First", "active")],
+            vec![edge(w, blocker, blocked, "blocks")],
+            false,
+        ),
+    );
+    let held = x.get(&format!("/tasks/{blocked}/work")).await;
+    assert_eq!(held["readiness"]["state"], "waiting");
+    assert_eq!(held["routing"], json!({"state":"unrouted"}));
+    // Routing off and no route: the owner can still route by hand.
     sqlx::query("UPDATE routing_state SET enabled=false WHERE singleton")
         .execute(&pool)
         .await
         .unwrap();
-    assert!(work().await.get("routing").is_none());
+    assert_eq!(work().await["routing"], json!({"state":"unrouted"}));
     sqlx::query("UPDATE routing_state SET enabled=true WHERE singleton")
         .execute(&pool)
         .await
@@ -661,4 +675,18 @@ async fn routes_history_lists_reasons_newest_first() {
         json!({"items":[{"sequence":2,"at_ms":2000,"route":null},
             {"sequence":1,"at_ms":1000,"route":route}]})
     );
+}
+
+#[tokio::test]
+async fn work_read_survives_a_routing_view_that_cannot_be_computed() {
+    let x = setup().await;
+    let (w, id) = (x.w(), Uuid::new_v4());
+    x.graph.contexts.lock().unwrap().insert(
+        id,
+        context(&task(id, w, "Any", "active"), vec![], vec![], false),
+    );
+    // The binding's catalog digest names no stored artifact (the fixture stores none).
+    let work = x.get(&format!("/tasks/{id}/work")).await;
+    assert_eq!(work["readiness"]["state"], "ready");
+    assert!(work.get("routing").is_none());
 }

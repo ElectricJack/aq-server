@@ -37,10 +37,10 @@ fn compact(route: &CompactRoute) -> Value {
 }
 
 /// The `routing` object of the work read for `node` (a task of `record`'s project whose
-/// readiness is `ready_state`), or none when the binding is not on an automatic router or
-/// routing is off and the task has no route. A task without a route waits only while it is ready;
-/// it has waited since the node's last update, the nearest time the work read holds to when
-/// it became ready.
+/// readiness is `ready_state`); none when the binding is not on an automatic router. On one:
+/// `routed` with the route; `waiting` when routing is on and a ready task has no route (held
+/// back, since the node's last update, the nearest time the read holds to when it became
+/// ready); otherwise `unrouted` (no route, nothing held back).
 pub(crate) async fn view(
     state: &AppState,
     record: &ProjectRecord,
@@ -48,25 +48,23 @@ pub(crate) async fn view(
     node: &Value,
     ready_state: &str,
 ) -> Result<Option<Value>, AppError> {
-    let pool = &state.store.pool;
-    let on = enabled(pool).await?;
-    // Routing off and no route: placed as without routing, whatever the binding.
-    if !on && matches!(CompactRoute::from_metadata(&node["metadata"]), Ok(None)) {
+    if !on_router(state, record).await? {
         return Ok(None);
     }
-    let placement = Placement::of(on_router(state, record).await?, on, &node["metadata"]);
+    let pool = &state.store.pool;
+    let on = enabled(pool).await?;
     let updated = node["updated_at"]
         .as_str()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map_or(0, |t| t.timestamp_millis());
-    Ok(match placement {
-        Placement::Unchanged => None,
+    Ok(Some(match Placement::of(true, on, &node["metadata"]) {
         Placement::Routed(route) => {
             let since = (history(pool, task).await?.first()).map_or(updated, |r| r.at_ms);
-            Some(json!({"state":"routed","route":compact(&route),"since_ms":since}))
+            json!({"state":"routed","route":compact(&route),"since_ms":since})
         }
-        Placement::Wait | Placement::Reroute => {
-            (ready_state == "ready").then(|| json!({"state":"waiting","since_ms":updated}))
+        Placement::Wait | Placement::Reroute if on && ready_state == "ready" => {
+            json!({"state":"waiting","since_ms":updated})
         }
-    })
+        _ => json!({"state":"unrouted"}),
+    }))
 }
