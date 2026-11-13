@@ -11,7 +11,9 @@ use crate::{
     subscription::{Identity, file_digest, open_native, recover_login},
 };
 use anyhow::{Result, ensure};
-use aq_internal_work::{Claimed, DEADLINE_PASSED, Reason, Usage, Way, store, validate};
+use aq_internal_work::{
+    Claimed, DEADLINE_PASSED, MIN_CANDIDATE_BUDGET_MS, Reason, Usage, Way, store, validate,
+};
 use aq_session_protocol::Digest;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -50,6 +52,10 @@ pub struct Harness {
     /// The native's file when its digest last matched.
     #[serde(skip)]
     verified: std::sync::Mutex<Option<Stamp>>,
+    /// How many of the next runs panic once the native has run (tests only).
+    #[cfg(feature = "test-support")]
+    #[serde(skip)]
+    pub(crate) panics: std::sync::atomic::AtomicUsize,
 }
 
 /// What shows a change to a file's content without reading it: its device,
@@ -139,6 +145,18 @@ impl InternalConfig {
         self.identity = Identity::current();
         self
     }
+
+    /// Makes the next `runs` Codex runs panic once the native has run, before
+    /// anything is copied back.
+    #[cfg(feature = "test-support")]
+    pub fn panic_in_codex_runs(self, runs: usize) -> Self {
+        if let Some(codex) = &self.codex {
+            codex
+                .panics
+                .store(runs, std::sync::atomic::Ordering::SeqCst);
+        }
+        self
+    }
 }
 
 /// How many login tasks one host runs at once, so a long run does not keep
@@ -159,9 +177,13 @@ pub async fn run(path: &Path) -> Result<()> {
     }
     let (config, digest) = InternalConfig::load(path)?;
     recover_run_dirs(&config);
+    // A statement that hangs ends instead of holding a run, its slot and
+    // the Codex login.
+    let options: sqlx::postgres::PgConnectOptions = config.database_url.parse()?;
+    let options = options.options([("statement_timeout", "30000")]);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(MAX_RUNS as u32 + 1)
-        .connect(&config.database_url)
+        .connect_with(options)
         .await?;
     let runner = format!("internal-host:{}", hostname()?);
     let config = std::sync::Arc::new(config);
@@ -173,7 +195,7 @@ pub async fn run(path: &Path) -> Result<()> {
 /// mid-run left under `homes` and `scratch`. Anything else there is left
 /// alone. A Codex login such a run refreshed is first offered back to the
 /// login file ([`recover_login`]); a home whose newer login could not be
-/// copied back is kept.
+/// copied back, or that holds a login while Codex is not configured, is kept.
 pub fn recover_run_dirs(config: &InternalConfig) {
     for parent in [&config.homes, &config.scratch] {
         if private_parent(parent, config.identity).is_err() {
@@ -185,13 +207,16 @@ pub fn recover_run_dirs(config: &InternalConfig) {
             }
             let path = entry.path();
             let login = path.join("auth.json");
-            if parent == &config.homes
-                && let Some(codex) = &config.codex
-                && std::fs::symlink_metadata(&login).is_ok()
-                && !recover_login(&codex.secret_file, &login, config.identity)
-            {
-                eprintln!("internal work: kept a run home whose newer login was not copied back");
-                continue;
+            if parent == &config.homes && std::fs::symlink_metadata(&login).is_ok() {
+                // Without Codex configured there is no login file to check it
+                // against, so it is kept too.
+                let checked = config.codex.as_ref().is_some_and(|codex| {
+                    recover_login(&codex.secret_file, &login, config.identity)
+                });
+                if !checked {
+                    eprintln!("internal work: kept a run home holding a login not copied back");
+                    continue;
+                }
             }
             if std::fs::remove_dir_all(&path).is_err() {
                 let _ = std::fs::remove_file(&path);
@@ -228,8 +253,11 @@ pub async fn serve(
     let mut runs = tokio::task::JoinSet::new();
     loop {
         let mut claimed = false;
+        let codex = codex_login.clone().try_acquire_owned().ok();
+        if codex.is_none() && config.codex.is_some() {
+            pass_busy_codex(&pool, &runner).await;
+        }
         if runs.len() < MAX_RUNS {
-            let codex = codex_login.clone().try_acquire_owned().ok();
             match claim(&config, &pool, &runner, now_ms()?, codex.is_some()).await {
                 Ok(Some(job)) => {
                     let is_codex = job.claimed.candidate.harness.as_deref() == Some("codex");
@@ -261,6 +289,52 @@ pub async fn serve(
         }
         while let Some(ended) = runs.try_join_next() {
             report_end(ended);
+        }
+    }
+}
+
+/// The detail of a Codex candidate passed over while the login is busy.
+const LOGIN_BUSY: &str = "codex login busy";
+
+/// While the Codex login is busy: passes over the Codex candidate of each
+/// queued task that cannot wait for it, so that its next candidate runs. A
+/// task cannot wait when it has a later candidate and is blocking or has
+/// less than twice [`MIN_CANDIDATE_BUDGET_MS`] left. A task whose last
+/// candidate is Codex waits: passing it over would only fail it.
+async fn pass_busy_codex(pool: &PgPool, runner: &str) {
+    loop {
+        let Ok(now) = now_ms() else { return };
+        let short = 2 * MIN_CANDIDATE_BUDGET_MS;
+        let passable = match store::claim_passable(pool, "codex", runner, now, short).await {
+            Ok(Some(passable)) => passable,
+            Ok(None) => return,
+            Err(_) => {
+                eprintln!("internal work: claim failed");
+                return;
+            }
+        };
+        let (id, index) = (passable.id, passable.candidate_index);
+        if store::pass_candidate(pool, id, index, LOGIN_BUSY, now)
+            .await
+            .is_err()
+        {
+            eprintln!("internal work: passing over a busy login failed");
+            return;
+        }
+    }
+}
+
+/// How long recording a run's result may take. Past it the host logs, gives
+/// the record up (the sweep moves the task on) and frees the login and the
+/// slot the run held.
+const RECORD_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn record(write: impl Future<Output = aq_internal_work::Result<()>>) -> Result<()> {
+    match tokio::time::timeout(RECORD_TIMEOUT, write).await {
+        Ok(written) => Ok(written?),
+        Err(_) => {
+            eprintln!("internal work: recording a run timed out");
+            Ok(())
         }
     }
 }
@@ -355,7 +429,14 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
         let harness = claimed.candidate.harness.as_deref().unwrap_or("native");
         let detail = claimed.unanswered(harness);
         let reason = Reason::DeadlineExceeded;
-        let report = store::fail_candidate(pool, id, index, reason, &detail, finished());
+        let report = record(store::fail_candidate(
+            pool,
+            id,
+            index,
+            reason,
+            &detail,
+            finished(),
+        ));
         // The run's outcome is not used; it still has to reap the native,
         // copy a refreshed login back and remove its directories.
         let end = async {
@@ -367,7 +448,7 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
         };
         // The report is polled first and does not wait for the run to end.
         let (reported, ()) = tokio::join!(report, end);
-        return Ok(reported?);
+        return reported;
     };
     let request = &claimed.request;
     let checked = result.and_then(|(raw, usage)| {
@@ -378,13 +459,23 @@ async fn finish(job: Job, config: &InternalConfig, pool: &PgPool) -> Result<()> 
     let finished = finished();
     match checked {
         Ok((answer, usage)) => {
-            store::complete(pool, id, index, &answer, usage.as_ref(), finished).await
+            record(store::complete(
+                pool,
+                id,
+                index,
+                &answer,
+                usage.as_ref(),
+                finished,
+            ))
+            .await
         }
         Err((reason, detail)) => {
-            store::fail_candidate(pool, id, index, reason, &detail, finished).await
+            record(store::fail_candidate(
+                pool, id, index, reason, &detail, finished,
+            ))
+            .await
         }
-    }?;
-    Ok(())
+    }
 }
 
 /// Runs `claimed` on the harness its candidate names, in `session`.
@@ -444,13 +535,23 @@ async fn in_run_dirs<T>(
     let (home, cwd) = (homes.join(&name), scratch.join(&name));
     let made = run_dirs(&home, &cwd, identity)
         .map_err(|_| failure(Reason::ProviderError, "native run could not be prepared"));
-    let result = match made {
+    // Removed however this ends, a panic included.
+    let _dirs = RunDirs([&home, &cwd]);
+    match made {
         Ok(()) => attempt(&executable, &home, &cwd).await,
         Err(failure) => Err(failure),
-    };
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&cwd);
-    result
+    }
+}
+
+/// A run's home and working directory, removed on drop.
+struct RunDirs<'a>([&'a Path; 2]);
+
+impl Drop for RunDirs<'_> {
+    fn drop(&mut self) {
+        for dir in self.0 {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
 
 /// Creates `home` and `cwd` owner-only; `cwd` belongs to the native's user.

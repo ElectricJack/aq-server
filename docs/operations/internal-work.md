@@ -3,11 +3,7 @@
 The internal work host is `aq-supervisor-host internal <CONFIG>`. It claims
 queued internal tasks that use a subscription login (Codex or Claude) from the
 database and runs the model CLI for each, up to two at a time, so that one long
-run does not keep the next task waiting. At most one of them is a Codex run: two
-Codex runs on one login could both spend the same single-use refresh token, so
-while a Codex run holds the login (until its refresh is copied back) the host
-claims only Claude tasks. Claude runs can share their token, which is never
-refreshed. Spec:
+run does not keep the next task waiting. Spec:
 [0012 internal work](../specs/0012-internal-work.md). Build notes:
 [implementation](../implementation/0012-internal-work.md).
 
@@ -109,8 +105,9 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   refreshed. At start the host copies such a login back when it is the same
   account and its `last_refresh` is later than the login file's, then removes the
   run directories (only entries named by a UUID). A home whose newer login could
-  not be copied back is kept and the host prints
-  `internal work: kept a run home whose newer login was not copied back`.
+  not be copied back, or that holds a login while Codex is not configured, is kept
+  and the host prints
+  `internal work: kept a run home holding a login not copied back`.
 - Codex: the file is copied in and back under a read-only `flock` on the login
   file's directory. The directory must be writable only if a refreshed login is to
   be kept; a refresh is written by temp-file-and-rename, and only if the file still
@@ -137,7 +134,9 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   `internal work: run failed` (recording a run's result failed),
   `internal work: a native executable was refused` (at start, a native whose
   SHA-256 does not match the config; its runs fail) and
-  `internal work: login refresh was not copied back`. Secrets never appear in logs.
+  `internal work: login refresh was not copied back` and
+  `internal work: recording a run timed out` (a result write took over 30 s; the
+  sweep moves the task on). Secrets never appear in logs.
 - A container that stays up with no `claim failed` or `run failed` lines and no
   failed rows is polling. A bad config makes the process exit at start with the
   reason on stderr.
@@ -147,6 +146,26 @@ Start: `docker compose -f compose.yaml -f compose.workers.yaml --profile interna
   only after the runs in progress have ended (each within its task deadline, at
   most 900 s): the host stops claiming, lets them finish and copy their logins
   back, then exits (with the error, if the file was refused) to be restarted.
+
+## One Codex run per login
+
+- Each host runs at most one Codex run at a time on its Codex login: two Codex
+  runs on one login could both spend the same single-use refresh token. A Codex
+  run holds the login until it has ended and its refresh is copied back,
+  including after a timeout or a crash of the run. Claude runs share their token,
+  which is never refreshed, and can use both slots.
+- While the login is busy, a queued task whose current candidate is Codex either
+  waits or is passed over. It is passed over when it has a later candidate and is
+  blocking or has less than 60 s left: its Codex attempt is recorded with reason
+  `login_busy` and detail `codex login busy`, and the next candidate runs at once.
+  This says nothing about the provider or the login's health; it is not a
+  usage-limit or provider failure, and it never fails a task by itself or
+  messages a supervisor. Other tasks, and a task whose only remaining candidate is
+  Codex, wait for the login.
+- A Codex candidate that falls back to another Codex candidate on the same host
+  rarely has time to run: the first candidate takes all but a second of a
+  deadline under 60 s, and the second waits for the first's copy-back. Put a
+  candidate of another harness or an API candidate after a Codex one.
 
 ## Time limits
 

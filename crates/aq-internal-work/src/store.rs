@@ -7,6 +7,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sqlx::{PgPool, postgres::PgRow};
 
+/// The failure detail of a task whose deadline passed while it was queued.
+const QUEUED_PAST_DEADLINE: &str = "deadline passed before a runner took the task";
+
 /// Every column of `internal_tasks`, JSON columns decoded.
 #[derive(Clone, Debug)]
 pub struct Row {
@@ -229,14 +232,21 @@ pub async fn claim(
     .bind(now_ms)
     .fetch_optional(pool)
     .await?;
-    let Some(row) = row else { return Ok(None) };
-    let row = Row::decode(&row)?;
+    row.as_ref()
+        .map(Row::decode)
+        .transpose()?
+        .map(claimed)
+        .transpose()
+}
+
+/// The [`Claimed`] of a row a claim has just taken.
+fn claimed(row: Row) -> Result<Claimed> {
     let candidate = row
         .candidates
         .get(row.candidate_index as usize)
         .cloned()
         .ok_or(Error::Corrupt)?;
-    Ok(Some(Claimed {
+    Ok(Claimed {
         id: row.id,
         request: row.request,
         candidate,
@@ -244,7 +254,94 @@ pub async fn claim(
         deadline_at_ms: row.deadline_at_ms,
         claimed_at_ms: row.claimed_at_ms.ok_or(Error::Corrupt)?,
         candidate_count: row.candidates.len(),
-    }))
+    })
+}
+
+/// Takes the next queued task whose current candidate is served by the
+/// login `harness` and may be passed over while that login is busy: a later
+/// candidate exists, the deadline has not passed, and the task is blocking
+/// or has less than `short_ms` left. Blocking tasks first, then oldest. The
+/// caller hands it to [`pass_candidate`].
+pub async fn claim_passable(
+    pool: &PgPool,
+    harness: &str,
+    runner: &str,
+    now_ms: i64,
+    short_ms: i64,
+) -> Result<Option<Claimed>> {
+    let row = sqlx::query(
+        "WITH next AS (
+             SELECT id FROM internal_tasks
+             WHERE status='queued'
+               AND candidates->candidate_index->>'way'='login'
+               AND candidates->candidate_index->>'harness'=$1
+               AND candidate_index+1 < jsonb_array_length(candidates)
+               AND deadline_at_ms > $3
+               AND (blocking OR deadline_at_ms-$3 < $4)
+             ORDER BY blocking DESC, created_at_ms, id
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED)
+         UPDATE internal_tasks t SET status='running', runner=$2, claimed_at_ms=$3
+         FROM next WHERE t.id=next.id
+         RETURNING t.*",
+    )
+    .bind(harness)
+    .bind(runner)
+    .bind(now_ms)
+    .bind(short_ms)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref()
+        .map(Row::decode)
+        .transpose()?
+        .map(claimed)
+        .transpose()
+}
+
+/// Passes over candidate `candidate_index` without running it: the attempt
+/// is recorded with [`Reason::LoginBusy`] and `detail`, and the task moves
+/// on to the next candidate. It never fails a task with that reason: when no
+/// later candidate is left, or the deadline passed meanwhile, the task fails
+/// as a queued task past its deadline would. Does nothing when that
+/// candidate no longer holds the task.
+pub async fn pass_candidate(
+    pool: &PgPool,
+    id: Uuid,
+    candidate_index: u32,
+    detail: &str,
+    now_ms: i64,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let Some(row) = held(&mut tx, id, candidate_index).await? else {
+        return Ok(());
+    };
+    let next = candidate_index as usize + 1;
+    if next < row.candidates.len() && now_ms < row.deadline_at_ms {
+        let attempt = to_json(&attempt(&row, Some(Reason::LoginBusy), detail, now_ms)?);
+        sqlx::query(
+            "UPDATE internal_tasks SET status='queued', candidate_index=$2, runner=NULL,
+                 claimed_at_ms=NULL, attempts=attempts||jsonb_build_array($3::jsonb)
+             WHERE id=$1",
+        )
+        .bind(id)
+        .bind(next as i32)
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE internal_tasks SET status='failed', reason=$2, detail=$3, finished_at_ms=$4
+             WHERE id=$1",
+        )
+        .bind(id)
+        .bind(to_text(&Reason::DeadlineExceeded))
+        .bind(QUEUED_PAST_DEADLINE)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Records the answer of candidate `candidate_index`. Does nothing when that
@@ -388,7 +485,7 @@ pub async fn sweep(pool: &PgPool, now_ms: i64) -> Result<u64> {
     )
     .bind(now_ms)
     .bind(to_text(&Reason::DeadlineExceeded))
-    .bind("deadline passed before a runner took the task")
+    .bind(QUEUED_PAST_DEADLINE)
     .execute(pool)
     .await?;
     Ok(changed + expired.rows_affected())

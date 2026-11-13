@@ -214,6 +214,10 @@ pub enum Reason {
     BudgetExceeded,
     InvalidOutput,
     NoCandidate,
+    /// A candidate passed over because its login was busy with another run
+    /// on the host, so that the next candidate could run. Says nothing about
+    /// the provider; only an attempt carries it, never a failed task.
+    LoginBusy,
 }
 
 /// One candidate's run of a task.

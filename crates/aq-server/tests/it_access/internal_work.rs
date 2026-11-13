@@ -518,6 +518,86 @@ async fn the_sweep_and_candidate_budget_ms_agree_on_every_budget() {
     }
 }
 
+/// While a host's Codex login is busy it passes over the Codex candidate of
+/// a task that cannot wait: one with a later candidate that is blocking or
+/// has less than 60 s left. A task whose last candidate is Codex, or that
+/// has time, is left to wait.
+#[tokio::test]
+async fn only_tasks_that_cannot_wait_are_passed_over_while_a_login_is_busy() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let fallback = [login("openai", "codex"), login("anthropic", "claude")];
+    let only_codex = [login("openai", "codex")];
+    let long = |blocking| Request {
+        deadline_ms: 600_000,
+        ..request(blocking)
+    };
+    let mut ids = Vec::new();
+    for (request, candidates) in [
+        (long(false), &fallback[..]),
+        (long(true), &only_codex[..]),
+        (long(true), &fallback[..]),
+        (request(false), &fallback[..]),
+    ] {
+        ids.push(
+            store::submit(&pool, &request, candidates, NOW)
+                .await
+                .unwrap(),
+        );
+    }
+    let [waits_long, waits_alone, blocking, short] = ids[..] else {
+        unreachable!()
+    };
+    let passable = |now| store::claim_passable(&pool, "codex", "host", now, 60_000);
+    let mut passed = Vec::new();
+    while let Some(claimed) = passable(NOW + 1_000).await.unwrap() {
+        passed.push(claimed.id);
+        store::pass_candidate(&pool, claimed.id, 0, "codex login busy", NOW + 1_000)
+            .await
+            .unwrap();
+    }
+    assert_eq!(passed, [blocking, short]);
+    for id in [blocking, short] {
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.candidate_index), ("queued", 1));
+        assert_eq!(row.attempts[0].reason, Some(Reason::LoginBusy));
+        assert_eq!(row.attempts[0].detail, "codex login busy");
+    }
+    for id in [waits_long, waits_alone] {
+        let row = store::get(&pool, id).await.unwrap().unwrap();
+        assert_eq!((row.status.as_str(), row.candidate_index), ("queued", 0));
+        assert!(row.attempts.is_empty());
+    }
+}
+
+/// Passing a candidate over never fails a task with `login_busy`: if the
+/// deadline passed meanwhile, the task fails as a queued task past its
+/// deadline does.
+#[tokio::test]
+async fn passing_over_past_the_deadline_fails_the_task_as_queued_past_its_deadline() {
+    let db = TestDb::create().await;
+    let pool = migrated(&db).await;
+    let candidates = [login("openai", "codex"), login("anthropic", "claude")];
+    let id = store::submit(&pool, &request(true), &candidates, NOW)
+        .await
+        .unwrap();
+    let claimed = store::claim_passable(&pool, "codex", "host", NOW + 59_000, 60_000)
+        .await
+        .unwrap()
+        .expect("a blocking task with a later candidate");
+    store::pass_candidate(&pool, claimed.id, 0, "codex login busy", NOW + 60_001)
+        .await
+        .unwrap();
+    let row = store::get(&pool, id).await.unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert_eq!(row.reason, Some(Reason::DeadlineExceeded));
+    assert_eq!(
+        row.detail.as_deref(),
+        Some("deadline passed before a runner took the task")
+    );
+    assert!(row.attempts.is_empty());
+}
+
 /// Candidate resolution (spec 0012 §5, §6): pure, so plain tests.
 mod resolve {
     use aq_intelligence_config::{CredentialConfig, IntelligenceConfig, LoadedRegistry};

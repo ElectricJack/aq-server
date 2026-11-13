@@ -50,6 +50,15 @@ async fn attempt(
     let auth = stage_login(&h.secret_file, home, identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
     let auth_path = home.join("auth.json");
+    // From here on the login is copied back however this ends, a panic
+    // included, and before the run's directories go.
+    let copy_back = CopyBack {
+        secret_file: &h.secret_file,
+        auth_path: &auth_path,
+        original: &auth,
+        identity,
+        done: false,
+    };
     let output = home.join("last-message.txt");
     let candidate = &claimed.candidate;
     let args = exec_arguments("read-only", &candidate.model, cwd, &output).map_err(|_| setup())?;
@@ -64,14 +73,17 @@ async fn attempt(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     let ran = execute(command, validate::prompt(&claimed.request), session).await;
-    let refreshed = match copy_back(&h.secret_file, &auth_path, &auth, identity) {
-        Ok(refreshed) => refreshed,
-        Err(_) => {
-            eprintln!("internal work: login refresh was not copied back");
-            None
+    #[cfg(feature = "test-support")]
+    {
+        use std::sync::atomic::Ordering::SeqCst;
+        if h.panics
+            .fetch_update(SeqCst, SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            panic!("internal work test panic after the native ran");
         }
-    };
-    let _ = std::fs::remove_file(&auth_path);
+    }
+    let refreshed = copy_back.copy();
     let current = crate::config::protected_read(&h.secret_file, 65536)
         .ok()
         .map(Zeroizing::new);
@@ -106,6 +118,47 @@ async fn attempt(
                 failure(Reason::ProviderError, "native reply could not be redacted")
             })?;
             Ok((reply, events.usage))
+        }
+    }
+}
+
+/// Copies the run's login back to the login file ([`copy_back`]) and removes
+/// the run's copy: once through [`CopyBack::copy`], or on drop if that never
+/// ran (an early return or a panic).
+struct CopyBack<'a> {
+    secret_file: &'a Path,
+    auth_path: &'a Path,
+    original: &'a [u8],
+    identity: Identity,
+    done: bool,
+}
+
+impl CopyBack<'_> {
+    /// The refreshed login the native left, if any.
+    fn copy(mut self) -> Option<Zeroizing<Vec<u8>>> {
+        self.run()
+    }
+
+    fn run(&mut self) -> Option<Zeroizing<Vec<u8>>> {
+        self.done = true;
+        let copied = copy_back(
+            self.secret_file,
+            self.auth_path,
+            self.original,
+            self.identity,
+        );
+        let _ = std::fs::remove_file(self.auth_path);
+        copied.unwrap_or_else(|_| {
+            eprintln!("internal work: login refresh was not copied back");
+            None
+        })
+    }
+}
+
+impl Drop for CopyBack<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.run();
         }
     }
 }

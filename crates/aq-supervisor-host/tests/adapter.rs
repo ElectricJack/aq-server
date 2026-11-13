@@ -99,9 +99,13 @@ mod internal {
     }
 
     fn login_at(tag: &str, last_refresh: &str) -> String {
+        login_for(tag, last_refresh, "account-1")
+    }
+
+    fn login_for(tag: &str, last_refresh: &str, account: &str) -> String {
         json!({"auth_mode":"chatgpt","tokens":{"id_token":format!("id-{tag}"),
             "access_token":format!("access-{tag}"),"refresh_token":format!("refresh-{tag}"),
-            "account_id":"account-1"},"last_refresh":last_refresh})
+            "account_id":account},"last_refresh":last_refresh})
         .to_string()
     }
 
@@ -615,21 +619,23 @@ mod internal {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         };
+        // The first runner leaves at most a tenth of the 4 s. While it runs
+        // (its stop was fixed when it was claimed), give the task 2 s more,
+        // so a slow machine cannot let the second's remainder expire queued.
+        let extend = async {
+            f.started().await;
+            sqlx::query("UPDATE internal_tasks SET deadline_at_ms=deadline_at_ms+2000 WHERE id=$1")
+                .bind(id)
+                .execute(&f.pool)
+                .await
+                .unwrap();
+        };
         let runs = async {
             let mut claims = Vec::new();
             for index in 0..2 {
                 if index == 1 {
-                    // The first runner leaves at most a tenth of the 4 s; leave
-                    // the second a known 2 s, so a slow machine cannot run its
-                    // claim past the deadline.
                     let row = f.row(id).await;
                     assert_eq!((row.status.as_str(), row.candidate_index), ("queued", 1));
-                    sqlx::query("UPDATE internal_tasks SET deadline_at_ms=$2 WHERE id=$1")
-                        .bind(id)
-                        .bind(now_ms() + 2_000)
-                        .execute(&f.pool)
-                        .await
-                        .unwrap();
                 }
                 let deadline = f.row(id).await.deadline_at_ms;
                 let claimed_at = now_ms();
@@ -639,7 +645,7 @@ mod internal {
             done.store(true, std::sync::atomic::Ordering::SeqCst);
             claims
         };
-        let ((), claims) = tokio::join!(sweeper, runs);
+        let ((), claims, ()) = tokio::join!(sweeper, runs, extend);
         let row = f.row(id).await;
         for (index, (attempt, harness)) in row.attempts.iter().zip(["codex", "claude"]).enumerate()
         {
@@ -954,6 +960,194 @@ sleep 0.5
         };
         assert_eq!(names("homes"), ["not-a-run"]);
         assert!(names("scratch").is_empty());
+    }
+
+    /// A fake Codex that answers, except on the model `gpt-slow`, where it
+    /// hangs after signalling start.
+    fn slow_or_answering() -> String {
+        format!(
+            "touch \"$rec/started\"\ncase \" $* \" in *\" gpt-slow \"*) sleep 30;; esac\n{}",
+            answering()
+        )
+    }
+
+    fn slow_codex() -> Candidate {
+        Candidate {
+            model: "gpt-slow".into(),
+            ..codex_candidate()
+        }
+    }
+
+    /// Waits up to `seconds` for task `id` to be answered.
+    async fn answered_within(f: &Fixture, id: uuid::Uuid, seconds: u64) -> store::Row {
+        let wait = async {
+            loop {
+                let row = f.row(id).await;
+                if row.status == "answered" {
+                    return row;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(seconds), wait)
+            .await
+            .unwrap_or_else(|_| panic!("task {id} was not answered"))
+    }
+
+    /// While a 600 s compile holds the Codex login, a blocking judgment whose
+    /// first candidate is Codex skips it at once ("codex login busy") and is
+    /// answered by its Claude candidate. A background task with plenty of
+    /// time keeps waiting for the login.
+    #[tokio::test]
+    async fn a_blocking_judgment_skips_a_busy_codex_login_and_is_answered_by_claude() {
+        let answers = claude_printing(&claude_result(false, ANSWER), 0);
+        let f = Fixture::with_claude(&slow_or_answering(), &answers).await;
+        let long = Request {
+            deadline_ms: 600_000,
+            blocking: false,
+            ..request()
+        };
+        let compile = f.submit_request(&long, &[slow_codex()]).await;
+        let background = f
+            .submit_request(&long, &[codex_candidate(), claude_candidate()])
+            .await;
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let host = tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)));
+        f.started().await;
+        let judgment = f.submit(&[codex_candidate(), claude_candidate()]).await;
+        let row = answered_within(&f, judgment, 10).await;
+        let waiting = f.row(background).await;
+        let running = f.row(compile).await.status;
+        host.abort();
+        assert_eq!(row.attempts.len(), 2, "{:?}", row.attempts);
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::LoginBusy)
+        );
+        assert_eq!(row.attempts[0].detail, "codex login busy");
+        assert_eq!(row.attempts[1].provider, "anthropic");
+        assert_eq!(running, "running");
+        assert_eq!(
+            (waiting.status.as_str(), waiting.candidate_index),
+            ("queued", 0)
+        );
+        assert!(waiting.attempts.is_empty());
+    }
+
+    /// A blocking task whose only candidate is Codex is not skipped: it waits
+    /// for the busy login and runs when the login is free.
+    #[tokio::test]
+    async fn a_codex_only_task_waits_for_the_busy_login_and_then_runs() {
+        let f = Fixture::new(&slow_or_answering()).await;
+        let short_compile = Request {
+            deadline_ms: 4_000,
+            blocking: false,
+            ..request()
+        };
+        let compile = f.submit_request(&short_compile, &[slow_codex()]).await;
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let host = tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)));
+        f.started().await;
+        let judgment = f.submit(&[codex_candidate()]).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waiting = f.row(judgment).await;
+        let row = answered_within(&f, judgment, 15).await;
+        host.abort();
+        assert_eq!(
+            (waiting.status.as_str(), waiting.attempts.len()),
+            ("queued", 0)
+        );
+        assert_eq!(row.attempts.len(), 1, "{:?}", row.attempts);
+        assert_eq!(row.attempts[0].reason, None);
+        assert_eq!(f.row(compile).await.status, "failed");
+    }
+
+    /// A Codex run that panics after its native refreshed the login still
+    /// copies the refresh back before the login is released, so the next
+    /// Codex run starts from it.
+    #[tokio::test]
+    async fn a_codex_run_that_panics_copies_its_refresh_back_before_the_login_is_released() {
+        let mut f = Fixture::new(&rotating()).await;
+        std::fs::write(f.rec("current"), "refresh-A").unwrap();
+        let config = std::sync::Arc::try_unwrap(f.config).ok().unwrap();
+        f.config = std::sync::Arc::new(config.panic_in_codex_runs(1));
+        f.submit(&[codex_candidate()]).await;
+        let second = f.submit(&[codex_candidate()]).await;
+        let (config, pool) = (f.config.clone(), f.pool.clone());
+        let host = tokio::spawn(serve(config, pool, RUNNER.into(), || Ok(true)));
+        let row = answered_within(&f, second, 15).await;
+        host.abort();
+        assert_eq!(row.attempts.len(), 1, "{:?}", row.attempts);
+        assert!(!f.rec("reused").exists(), "a refresh token was used twice");
+        assert_eq!(refresh_token(&f), "refresh-Axx");
+    }
+
+    /// A leftover run home holding a login is never removed unchecked: with
+    /// Codex no longer configured there is nothing to compare it with, so it
+    /// is kept.
+    #[tokio::test]
+    async fn startup_keeps_a_leftover_login_when_codex_is_not_configured() {
+        let f = Fixture::new(&answering()).await;
+        let home = f
+            .root()
+            .join("homes")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&home).unwrap();
+        replace(
+            &home.join("auth.json"),
+            &login_at("B", "2026-11-13T08:00:00Z"),
+        );
+        let config: InternalConfig = serde_json::from_value(json!({
+            "database_url": "postgres://unused",
+            "homes": f.root().join("homes"),
+            "scratch": f.root().join("scratch"),
+            "poll_ms": 100,
+        }))
+        .unwrap();
+        recover_run_dirs(&config.for_tests());
+        assert!(
+            home.join("auth.json").exists(),
+            "the leftover login was deleted"
+        );
+    }
+
+    /// A leftover login of another account is not copied in, however new.
+    #[tokio::test]
+    async fn startup_does_not_copy_back_a_login_of_another_account() {
+        let f = Fixture::new(&answering()).await;
+        let home = f
+            .root()
+            .join("homes")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&home).unwrap();
+        let other = login_for("B", "2026-11-13T08:00:00Z", "account-2");
+        replace(&home.join("auth.json"), &other);
+        recover_run_dirs(&f.config);
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("A"));
+    }
+
+    /// A newer leftover login that cannot be copied back (the login
+    /// directory is read-only) keeps its home for the next start.
+    #[tokio::test]
+    async fn startup_keeps_a_newer_leftover_login_it_could_not_copy_back() {
+        let f = Fixture::new(&answering()).await;
+        let home = f
+            .root()
+            .join("homes")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&home).unwrap();
+        replace(
+            &home.join("auth.json"),
+            &login_at("B", "2026-11-13T08:00:00Z"),
+        );
+        let read_only = ReadOnly::new(f.root().join("login"));
+        recover_run_dirs(&f.config);
+        drop(read_only);
+        assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("A"));
+        assert!(
+            home.join("auth.json").exists(),
+            "the newer login was deleted"
+        );
     }
 
     /// A 3 s single-candidate request: the runner stops it at 2.7 s.
