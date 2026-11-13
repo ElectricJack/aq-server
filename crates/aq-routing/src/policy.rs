@@ -584,7 +584,7 @@ fn parent_words(parent: Parent) -> &'static str {
 }
 
 /// `Standard, high effort`.
-fn class_words(class: Class) -> String {
+pub(crate) fn class_words(class: Class) -> String {
     format!(
         "{}, {} effort",
         parent_words(class.parent),
@@ -611,7 +611,7 @@ fn class_list(classes: impl Iterator<Item = Class>) -> String {
     or_list(&groups)
 }
 
-fn risk_words(risk: Risk) -> &'static str {
+pub(crate) fn risk_words(risk: Risk) -> &'static str {
     match risk {
         Risk::Low => "Low risk",
         Risk::Medium => "Medium risk",
@@ -620,7 +620,7 @@ fn risk_words(risk: Risk) -> &'static str {
     }
 }
 
-fn flags_words(flags: &[Flag]) -> String {
+pub(crate) fn flags_words(flags: &[Flag]) -> String {
     let words: Vec<String> = flags
         .iter()
         .map(|f| {
@@ -635,11 +635,11 @@ fn flags_words(flags: &[Flag]) -> String {
     and_list(&words)
 }
 
-fn harness_list(ids: &[String]) -> Vec<String> {
+pub(crate) fn harness_list(ids: &[String]) -> Vec<String> {
     ids.iter().map(|h| harness_words(h)).collect()
 }
 
-fn harness_words(id: &str) -> String {
+pub(crate) fn harness_words(id: &str) -> String {
     match id {
         "claude" => "Claude".into(),
         "codex" => "Codex".into(),
@@ -649,7 +649,7 @@ fn harness_words(id: &str) -> String {
     }
 }
 
-fn provider_words(id: &str) -> String {
+pub(crate) fn provider_words(id: &str) -> String {
     match id {
         "anthropic" => "Anthropic".into(),
         "openai" => "OpenAI".into(),
@@ -659,7 +659,7 @@ fn provider_words(id: &str) -> String {
     }
 }
 
-fn kind_words(id: &str) -> String {
+pub(crate) fn kind_words(id: &str) -> String {
     match id {
         "feature" => "Features".into(),
         "bugfix" => "Bug fixes".into(),
@@ -679,14 +679,14 @@ fn kind_words(id: &str) -> String {
     }
 }
 
-fn origin_words(id: &str) -> String {
+pub(crate) fn origin_words(id: &str) -> String {
     match id {
         "repair" => "Repairs to a failed integration or build".into(),
         other => humanize(other),
     }
 }
 
-fn lane_words(id: &str) -> String {
+pub(crate) fn lane_words(id: &str) -> String {
     humanize(id)
 }
 
@@ -708,7 +708,7 @@ fn joined(items: &[String], last: &str) -> String {
     }
 }
 
-fn or_list(items: &[String]) -> String {
+pub(crate) fn or_list(items: &[String]) -> String {
     joined(items, "or")
 }
 

@@ -3,7 +3,10 @@
 pub mod classify;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
+pub mod plan;
 pub mod policy;
+
+pub use plan::{Classified, Plan, TaskFacts, plan};
 
 use std::fmt;
 use std::str::FromStr;
