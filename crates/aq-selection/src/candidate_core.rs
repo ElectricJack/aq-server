@@ -39,6 +39,7 @@ pub(crate) struct CoreInputs<'a> {
     pub ceilings: &'a ResourceCeilings,
     pub allowed_environments: &'a [String],
     pub placement: Option<&'a Placement>,
+    pub route: Option<&'a RouteLimits>,
     pub now_ms: u64,
     pub global: Option<&'static str>,
     pub environment_denied: &'static str,
@@ -287,6 +288,11 @@ pub(crate) fn evaluate(
                             if let Some(reason) = global {
                                 return Err((CandidateState::PolicyDenied, reason));
                             }
+                            if let Some(reason) = (input.route)
+                                .and_then(|r| crate::route::excludes(r, name, &candidate.provider))
+                            {
+                                return Err((CandidateState::PolicyDenied, reason));
+                            }
                             if !input.allowed_environments.iter().any(|e| {
                                 e == harness.environment.id.as_str()
                                     || e == &profile_key(&harness.environment)
@@ -472,16 +478,36 @@ pub(crate) fn evaluate(
             ));
         }
     }
+    if let Some(route) = input.route {
+        crate::route::preferred_first(route, &mut rows, |(t, _, _)| &t.harness);
+    }
     let mut blocked = false;
     let mut selected = None;
+    // Spec 0011 §4: a pinned route's provider is the first one it allows.
+    let (mut pinned, mut pin_refused) = (None, false);
     for (index, (row, choice, _)) in rows.iter_mut().enumerate() {
         if selected.is_some() {
+            continue;
+        }
+        // A candidate the route excludes is not a fallback: it neither blocks nor pins.
+        if (input.route)
+            .is_some_and(|r| crate::route::excludes(r, &row.harness, &row.provider).is_some())
+        {
             continue;
         }
         if blocked {
             row.state = CandidateState::PolicyDenied;
             row.reason_codes.push("fallback_not_permitted".into());
             continue;
+        }
+        if input.route.is_some_and(|r| r.pinned) {
+            let provider = pinned.get_or_insert_with(|| row.provider.clone());
+            if *provider != row.provider {
+                row.state = CandidateState::PolicyDenied;
+                row.reason_codes.push("route_provider_pinned".into());
+                pin_refused = true;
+                continue;
+            }
         }
         if row.state == CandidateState::Eligible && choice.is_some() {
             selected = Some(index);
@@ -494,6 +520,8 @@ pub(crate) fn evaluate(
     Ok(CoreOutcome {
         reason_codes: if resolved.is_some() {
             vec![]
+        } else if pin_refused {
+            vec!["route_provider_pinned".into()]
         } else if blocked {
             vec!["no_permitted_fallback".into()]
         } else {

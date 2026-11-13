@@ -82,6 +82,7 @@ async fn binding(state: &AppState, p: &Pinned) -> Result<FrozenProjectBinding, A
         agent_profile: profile(&p.offer.manifest.agent_profile, "agent")?,
         intelligence_profile: profile(&p.offer.manifest.intelligence_profile, "intelligence")?,
         execution_profile: profile(&p.offer.manifest.execution_profile, "execution")?,
+        intelligence_override: None,
     };
     let result = crate::project_bindings::check_execution_eligibility(
         state,

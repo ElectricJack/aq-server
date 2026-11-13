@@ -24,6 +24,7 @@ use aq_admission::{
     transport::{Poll, TransportDocument},
 };
 use aq_machine_control::holds;
+use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
 use std::sync::OnceLock;
@@ -214,6 +215,8 @@ async fn selection(
             compositions: compiled.candidates.clone(),
             replacement,
             record_refused: false,
+            intelligence_override: compiled.intelligence_override.clone(),
+            route: compiled.route.clone(),
         },
     )
     .await
@@ -495,9 +498,17 @@ async fn offers(
                     skipped.insert(candidate.revision.task_id);
                 }
             }
+            // Spec 0011 §4, before any context read: a task's route, or its wait for one.
+            let placements = on_heap(|| crate::routing::placements(state, &record, &ready.items));
+            let placements = placements.await?;
             let (revision, project) = (record.revision, policy.project_id);
+            let (placed, items) = (&placements, &ready.items);
             if let Some((task, assessment)) = on_heap(|| {
                 first_eligible_task(&ready, &skipped, |task| async move {
+                    let placement = placed.get(&task);
+                    if placement == Some(&Placement::Wait) {
+                        return Ok(Assessment::Blocked("route_missing"));
+                    }
                     let (pool, at) = (&state.store.pool, (state.clock)());
                     let seen = holds::attempts(pool, task).await;
                     let a = replacement::assess_task_for_revision(state, task, polled_at, revision);
@@ -511,19 +522,29 @@ async fn offers(
                             attempt: None,
                         });
                         holds::hold(pool, d, at).await;
+                    } else if placement == Some(&Placement::Reroute) {
+                        let attempt = a.replacement().map(|r| (r.predecessor, seen));
+                        let r = crate::routing::reroute(state, project, items, task, attempt);
+                        r.await;
+                        return Ok(Assessment::Blocked("route_class_unassigned"));
                     }
                     Ok(a)
                 })
             })
             .await?
             {
-                chosen = Some((policy, record, ready, task, assessment));
+                let route = match placements.get(&task.task_id) {
+                    Some(Placement::Routed(route)) => Some(route.clone()),
+                    _ => None,
+                };
+                chosen = Some((policy, record, ready, task, assessment, route));
                 break;
             }
         }
-        let Some((policy, record, ready, task, assessment)) = chosen else {
+        let Some((policy, record, ready, task, assessment, route)) = chosen else {
             return Ok(page);
         };
+        let route = route.as_ref();
         let replacement = assessment.replacement().cloned();
         // R6: a successor's hold is recorded against the attempt count read before its refusal.
         let successor = match &replacement {
@@ -558,8 +579,8 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        let compiled =
-            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
+        let compiled = on_heap(compile).await?;
         super::observation::ReadProvenance::capture(
             &task,
             &ready,
@@ -709,8 +730,8 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        let compiled =
-            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
+        let compiled = on_heap(compile).await?;
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
         if refused_successor(state, &decision, successor, &mut skipped).await {
             continue;

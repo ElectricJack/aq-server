@@ -334,6 +334,8 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
         compositions: vec![composition],
         now_ms: 2000,
         placement: None,
+        intelligence_override: None,
+        route: None,
     };
     (catalog, input)
 }
@@ -431,5 +433,6 @@ pub fn compile_request(catalog: &ValidatedCatalog) -> CompileRequest {
         assignment: context("assignment:1", "Exact assignment"),
         context: vec![],
         overrides: vec![],
+        intelligence_override: None,
     }
 }

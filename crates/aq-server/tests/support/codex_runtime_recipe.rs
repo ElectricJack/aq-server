@@ -407,6 +407,7 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
             assignment: context(&projection.artifact, String::from_utf8(projection.bytes)?),
             context: vec![context(&startup, input.images.startup.clone())],
             overrides: vec![],
+            intelligence_override: None,
         },
     )?;
     ensure!(

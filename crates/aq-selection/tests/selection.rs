@@ -1128,3 +1128,202 @@ fn fence_recheck_refuses_frozen_choice_with_selection_reasons() {
         );
     }
 }
+/// Spec 0011 §4: the fixture with a second installed harness (`claude-code`) that both
+/// candidates support, so a route can choose between harnesses.
+fn two_harnesses() -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
+    let (catalog, mut input) = fixture();
+    let mut definitions = catalog.artifact().catalog.clone();
+    for candidate in &mut definitions.intelligence[0].candidates {
+        candidate.harnesses.push("claude-code".into());
+    }
+    let updated =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest =
+        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
+    let mut claude = input.compositions[0].clone();
+    claude.composition.harness = "claude-code".into();
+    input.compositions.push(claude);
+    for composition in &mut input.compositions {
+        composition.composition.catalog_digest = updated.digest().into();
+        composition.composition.intelligence_profile = updated
+            .source("intelligence", &input.project.intelligence_profile)
+            .unwrap();
+        composition.digest = aq_selection::digest(&composition.composition).unwrap();
+    }
+    let mut harness = input.node.harnesses[0].clone();
+    harness.harness = "claude-code".into();
+    harness.adapter = artifact("claude-code-adapter");
+    input.node.harnesses.push(harness);
+    (updated, input)
+}
+fn route(edit: impl FnOnce(&mut RouteLimits)) -> Option<RouteLimits> {
+    let mut route = RouteLimits::default();
+    edit(&mut route);
+    Some(route)
+}
+/// (profile candidate, harness, state, first reason) of each trace, in order.
+fn rows(out: &SelectionOutcome) -> Vec<(String, String, CandidateState, String)> {
+    (out.traces.iter())
+        .map(|t| {
+            let reason = t.reason_codes.first().cloned().unwrap_or_default();
+            (
+                t.profile_candidate_id.clone(),
+                t.harness.clone(),
+                t.state,
+                reason,
+            )
+        })
+        .collect()
+}
+#[test]
+fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes() {
+    let (catalog, mut input) = fixture();
+    input.route = route(|r| r.harnesses = vec!["claude-code".into()]);
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none(), "{out:?}");
+    assert_eq!(out.reason_codes, ["no_eligible_candidate"]);
+    for (_, _, state, reason) in rows(&out) {
+        assert_eq!(
+            (state, reason.as_str()),
+            (CandidateState::PolicyDenied, "route_excludes_harness")
+        );
+    }
+    // A provider outside the allowlist is excluded, and its exclusion is not a fallback:
+    // the next candidate is chosen even under a policy that permits no fallback at all.
+    let mut strict = policy();
+    strict.fallback_on.clear();
+    let catalog = change_policy(&catalog, strict, &mut input);
+    input.route = route(|r| r.providers = vec!["fixture-b".into()]);
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.as_ref().unwrap().choice.provider, "fixture-b");
+    assert_eq!(
+        rows(&out)[0],
+        (
+            "primary".into(),
+            "codex".into(),
+            CandidateState::PolicyDenied,
+            "route_excludes_provider".into()
+        )
+    );
+    // Both allowlists naming what the candidate has leave the profile's choice unchanged.
+    input.route = route(|r| {
+        r.harnesses = vec!["codex".into()];
+        r.providers = vec!["fixture-a".into(), "fixture-b".into()];
+    });
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-a");
+}
+#[test]
+fn preferred_harness_is_tried_first_and_profile_order_is_kept_otherwise() {
+    let (catalog, mut input) = two_harnesses();
+    let out = select(&catalog, &input).unwrap();
+    let chosen = &out.resolved.as_ref().unwrap().choice;
+    assert_eq!(
+        (
+            chosen.profile_candidate_id.as_str(),
+            chosen.harness.as_str()
+        ),
+        ("primary", "codex")
+    );
+    let order = |out: &SelectionOutcome| {
+        rows(out)
+            .into_iter()
+            .map(|(c, h, _, _)| format!("{c}/{h}"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        order(&out),
+        [
+            "primary/codex",
+            "primary/claude-code",
+            "fallback/codex",
+            "fallback/claude-code"
+        ]
+    );
+    input.route = route(|r| r.prefer = vec!["claude-code".into()]);
+    let out = select(&catalog, &input).unwrap();
+    let chosen = &out.resolved.as_ref().unwrap().choice;
+    assert_eq!(
+        (
+            chosen.profile_candidate_id.as_str(),
+            chosen.harness.as_str()
+        ),
+        ("primary", "claude-code")
+    );
+    assert_eq!(
+        order(&out),
+        [
+            "primary/claude-code",
+            "fallback/claude-code",
+            "primary/codex",
+            "fallback/codex"
+        ]
+    );
+    // A preferred harness that no candidate row has keeps the profile order exactly.
+    input.route = route(|r| r.prefer = vec!["gemini".into()]);
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(
+        order(&out),
+        [
+            "primary/codex",
+            "primary/claude-code",
+            "fallback/codex",
+            "fallback/claude-code"
+        ]
+    );
+}
+#[test]
+fn pinned_route_refuses_fallback_with_route_provider_pinned() {
+    let (catalog, mut input) = fixture();
+    // The first provider is in cooldown; the policy would fall back to fixture-b.
+    input.observations[0].state = Availability::QuotaUnavailable;
+    input.observations[0].cooldown_until_ms = 5000;
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
+    input.route = route(|r| r.pinned = true);
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none(), "{out:?}");
+    assert_eq!(out.reason_codes, ["route_provider_pinned"]);
+    let fallback = &out.traces[1];
+    assert_eq!(fallback.provider, "fixture-b");
+    assert_eq!(fallback.state, CandidateState::PolicyDenied);
+    assert!(
+        fallback
+            .reason_codes
+            .contains(&"route_provider_pinned".into())
+    );
+    // Pinned to the first provider the route allows: an excluded provider pins nothing,
+    // so with fixture-a excluded, fixture-b is that provider and is chosen.
+    input.route = route(|r| {
+        r.pinned = true;
+        r.providers = vec!["fixture-b".into()];
+    });
+    let out = select(&catalog, &input).unwrap();
+    assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
+}
+#[test]
+fn inputs_without_a_route_serialize_exactly_as_before() {
+    // Golden: an existing frozen native fixture's inputs and the selection made from them.
+    let golden: serde_json::Value = serde_json::from_str(include_str!(
+        "../../aq-server/tests/fixtures/selection-v2.json"
+    ))
+    .unwrap();
+    let input: SelectionInputs = serde_json::from_value(golden["inputs"].clone()).unwrap();
+    assert!(input.route.is_none() && input.intelligence_override.is_none());
+    let encoded = serde_json::to_value(&input).unwrap();
+    assert_eq!(encoded, golden["inputs"]);
+    assert_eq!(
+        aq_selection::digest(&input).unwrap(),
+        aq_selection::digest(&golden["inputs"]).unwrap()
+    );
+    for key in ["route", "intelligence_override"] {
+        assert!(encoded.get(key).is_none(), "{key}");
+    }
+    // A route that restricts nothing still changes the snapshot it is part of.
+    let mut routed = input.clone();
+    routed.route = Some(RouteLimits::default());
+    assert_ne!(
+        aq_selection::digest(&routed).unwrap(),
+        aq_selection::digest(&input).unwrap()
+    );
+}

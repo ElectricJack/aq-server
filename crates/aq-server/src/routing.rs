@@ -6,7 +6,7 @@ use crate::{
     agent_access::{self, human::graph_actions::current},
     error::{AppError, db},
 };
-use aq_routing::{Class, CompactRoute, Route, Source};
+use aq_routing::{Class, CompactRoute, Placement, Route, Source};
 pub use aq_routing::{StoredRoute, Written};
 use serde_json::json;
 use sqlx::{PgPool, types::Json};
@@ -52,7 +52,8 @@ async fn store(
     if node["version"].as_u64() != Some(expected_version) {
         return Ok(Written::Stale);
     }
-    let stored = CompactRoute::from_metadata(&node["metadata"]).map_err(|_| unavailable())?;
+    // An unreadable route is replaced like no route, so placement can clear it (spec 0011 §4).
+    let stored = CompactRoute::from_metadata(&node["metadata"]).unwrap_or(None);
     if !aq_routing::may_replace(stored.as_ref(), by) {
         return Ok(Written::Stale);
     }
@@ -201,4 +202,86 @@ pub async fn class_assigned(state: &AppState, class: Class) -> Result<bool, AppE
     Ok(class_profile(&state.store.pool, &catalog, class)
         .await?
         .is_some())
+}
+
+/// Spec 0011 §4: how placement treats each ready task of `record`'s project, keyed by
+/// task; a task left out is placed unchanged. Empty unless the binding's agent is on an
+/// automatic router, so a route is ignored for a binding pinned to a named profile.
+pub async fn placements(
+    state: &AppState,
+    record: &crate::project_bindings::domain::ProjectRecord,
+    ready: &[crate::agent_access::scheduling::ReadyTask],
+) -> Result<std::collections::BTreeMap<Uuid, Placement>, AppError> {
+    let mut out = std::collections::BTreeMap::new();
+    let [agent] = record.binding.allowed_agent_profiles.as_slice() else {
+        return Ok(out);
+    };
+    if ready.is_empty() {
+        return Ok(out);
+    }
+    let catalog = crate::project_bindings::catalog(state, &record.binding.catalog_digest).await?;
+    let artifact = &catalog.artifact().catalog;
+    let automatic = (artifact.agents.iter())
+        .find(|a| aq_profiles::key(&a.id, a.version) == *agent)
+        .is_some_and(|a| aq_selection::is_automatic_router(artifact, &a.intelligence));
+    if !automatic {
+        return Ok(out);
+    }
+    let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);
+    let mut assigned = std::collections::BTreeMap::new();
+    for task in ready {
+        let mut placement = Placement::of(true, on, &task.node["metadata"]);
+        if let Placement::Routed(route) = &placement {
+            let known = assigned.get(&route.c).copied();
+            let has = match known {
+                Some(has) => has,
+                None => class_profile(pool, &catalog, route.c).await?.is_some(),
+            };
+            assigned.insert(route.c, has);
+            if !has {
+                placement = Placement::Reroute;
+            }
+        }
+        if placement != Placement::Unchanged {
+            out.insert(task.revision.task_id, placement);
+        }
+    }
+    Ok(out)
+}
+
+/// A ready task whose route cannot be placed is routed again. The refusal is recorded only
+/// against an attempt the task has had, with the attempt count read before the decision
+/// (`attempt`). Never fails the poll.
+pub async fn reroute(
+    state: &AppState,
+    project: Uuid,
+    ready: &[crate::agent_access::scheduling::ReadyTask],
+    id: Uuid,
+    attempt: Option<(Uuid, Option<i32>)>,
+) {
+    let Some(task) = ready
+        .iter()
+        .find(|r| r.revision.task_id == id)
+        .map(|r| &r.revision)
+    else {
+        return;
+    };
+    let pool = &state.store.pool;
+    match clear(state, task.workspace_id, id, task.version, Source::Router).await {
+        Ok(Written::Routed { .. }) => {
+            tracing::info!(task = %id, "unplaceable route cleared; routed again")
+        }
+        Ok(Written::Stale) => {}
+        Err(error) => tracing::warn!(task = %id, ?error, "unplaceable route not cleared"),
+    }
+    if let Some((predecessor, seen)) = attempt {
+        let s = aq_machine_control::holds::Successor {
+            project,
+            task: id,
+            predecessor,
+            seen,
+        };
+        let reasons = ["route_class_unassigned".to_owned()];
+        aq_machine_control::holds::selection_refused(pool, s, &reasons, (state.clock)()).await;
+    }
 }

@@ -34,6 +34,8 @@ pub struct Case {
     pub observation_resume: Arc<tokio::sync::Semaphore>,
     /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task.
     pub second_task: Uuid,
+    /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
+    pub metadata: Arc<std::sync::Mutex<Value>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -86,12 +88,28 @@ pub async fn setup() -> Case {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let peer_mode = mode.clone();
+    let metadata = Arc::new(std::sync::Mutex::new(json!({})));
+    let (peer_metadata, written) = (metadata.clone(), metadata.clone());
     let observation_entered = Arc::new(tokio::sync::Semaphore::new(0));
     let observation_resume = Arc::new(tokio::sync::Semaphore::new(0));
     let peer_entered = observation_entered.clone();
     let peer_resume = observation_resume.clone();
+    let updated = node.clone();
+    let mutations = axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        let mut node = updated.clone();
+        let op = &body["operations"][0];
+        assert_eq!(
+            (&op["op"], &op["id"]),
+            (&json!("update_node"), &json!(task))
+        );
+        *written.lock().unwrap() = op["patch"]["metadata"].clone();
+        node["metadata"] = op["patch"]["metadata"].clone();
+        let result = json!({"change_set_id":Uuid::new_v4(),"results":[node]});
+        async move { ([("X-AQ-Graph-API-Version", "1")], axum::Json(result)) }
+    });
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
+        node["metadata"] = peer_metadata.lock().unwrap().clone();
         let second = second.clone();
         let mode = peer_mode.load(Ordering::SeqCst);
         let entered = peer_entered.clone();
@@ -144,6 +162,7 @@ pub async fn setup() -> Case {
             ([("X-AQ-Graph-API-Version", "1")], axum::Json(value))
         }
     }));
+    let app = app.route("/v1/workspaces/{workspace}/mutations", mutations);
     tasks.push(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     }));
@@ -397,6 +416,7 @@ pub async fn setup() -> Case {
         observation_entered,
         observation_resume,
         second_task,
+        metadata,
         tasks,
     }
 }

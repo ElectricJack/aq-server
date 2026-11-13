@@ -168,6 +168,8 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
             compositions: env.input.compositions.clone(),
             replacement: None,
             record_refused: true,
+            intelligence_override: None,
+            route: None,
         },
     )
     .await

@@ -18,6 +18,8 @@ mod history_caps;
 mod holds;
 #[path = "native_offers/lost.rs"]
 mod lost;
+#[path = "native_offers/routed.rs"]
+mod routed;
 
 #[tokio::test]
 async fn offered_window_preserves_five_seconds_of_fresh_facts_and_allows_delayed_accept() {

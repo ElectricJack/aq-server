@@ -21,6 +21,9 @@ pub struct Compiled {
     pub policies: Vec<GraphAccessPolicy>,
     pub catalog: ValidatedCatalog,
     pub agent: String,
+    /// A routed task's class profile and limits (spec 0011 §4).
+    pub intelligence_override: Option<String>,
+    pub route: Option<aq_routing::RouteLimits>,
 }
 fn source(artifact: &ArtifactRef) -> Source {
     Source {
@@ -35,6 +38,7 @@ pub async fn compile(
     node: Uuid,
     snapshot: &CapabilitySnapshot,
     context: &TaskContext,
+    route: Option<&aq_routing::CompactRoute>,
 ) -> Result<Compiled, AppError> {
     let (revision, digest) = crate::project_bindings::active_catalog(state).await?;
     let digest = digest.ok_or_else(|| refused())?;
@@ -62,6 +66,19 @@ pub async fn compile(
         .iter()
         .find(|a| aq_profiles::key(&a.id, a.version) == agent_name)
         .ok_or_else(|| refused())?;
+    // Spec 0011 §4: only an automatic router takes a route, and never runs one without its
+    // class profile. Allowing the router allows its class profiles.
+    let route = route.filter(|_| {
+        aq_selection::is_automatic_router(&catalog.artifact().catalog, &agent.intelligence)
+    });
+    let intelligence_override = match route {
+        Some(r) => Some(
+            crate::routing::class_profile(&state.store.pool, &catalog, r.c)
+                .await?
+                .ok_or_else(|| refused())?,
+        ),
+        None => None,
+    };
     if !record
         .binding
         .allowed_intelligence_profiles
@@ -98,6 +115,7 @@ pub async fn compile(
             agent_profile: agent_name.clone(),
             intelligence_profile: agent.intelligence.clone(),
             execution_profile: agent.execution.clone(),
+            intelligence_override: intelligence_override.clone(),
         },
     )
     .await?;
@@ -254,6 +272,7 @@ pub async fn compile(
                 .chain(thread.clone())
                 .collect(),
             overrides: vec![],
+            intelligence_override: intelligence_override.clone(),
         };
         let draft = aq_profiles::compile_draft(&catalog, &request).map_err(|_| refused())?;
         if !draft.composition_valid {
@@ -290,5 +309,7 @@ pub async fn compile(
         policies,
         catalog,
         agent: agent_name,
+        intelligence_override,
+        route: route.map(aq_routing::CompactRoute::limits),
     })
 }

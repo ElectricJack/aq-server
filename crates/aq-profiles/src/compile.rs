@@ -46,6 +46,9 @@ pub struct CompileRequest {
     pub assignment: ContextInput,
     pub context: Vec<ContextInput>,
     pub overrides: Vec<Override>,
+    /// A routed task's class profile in place of the agent's automatic router (spec 0011 §4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_override: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -176,13 +179,13 @@ fn compile_internal(
             required_context_error: "platform/project/assignment must be startup required",
         },
     )?;
+    let routed = request.intelligence_override.as_deref();
+    let routed = catalog.source("intelligence", routed.unwrap_or(&agent.intelligence))?;
     let Some(graph_access_profile_digest) = graph_access_profile_digest else {
         let composition = blocking.is_empty().then(|| CompositionDraft {
             catalog_digest: catalog.digest().into(),
             agent_profile: role_source,
-            intelligence_profile: catalog
-                .source("intelligence", &agent.intelligence)
-                .expect("validated catalog"),
+            intelligence_profile: routed,
             execution_profile: catalog
                 .source("execution", &agent.execution)
                 .expect("validated catalog"),
@@ -224,7 +227,7 @@ fn compile_internal(
         estimated_tokens: None,
         tokenizer_version: None,
         selection: Selection {
-            intelligence_profile: catalog.source("intelligence", &agent.intelligence)?,
+            intelligence_profile: routed,
             selected_candidate_id: None,
             snapshot_digest: digest(&request)?,
             decision_trace: vec![

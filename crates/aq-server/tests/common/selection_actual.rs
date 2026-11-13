@@ -124,6 +124,7 @@ impl ActualSelectionFixture {
             agent_profile: profiles.agent_profile.clone(),
             intelligence_profile: profiles.intelligence_profile.clone(),
             execution_profile: profiles.execution_profile.clone(),
+            intelligence_override: None,
         };
         let current = aq_server::project_bindings::check_eligibility(
             &self.env.state,

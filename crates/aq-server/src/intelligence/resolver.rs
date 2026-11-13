@@ -28,6 +28,11 @@ pub struct ResolveRequest {
     /// Not part of the request payload or its digest.
     #[serde(skip, default = "yes")]
     pub record_refused: bool,
+    /// A routed task's class profile and limits (spec 0011 §4); absent unrouted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RouteLimits>,
 }
 fn yes() -> bool {
     true
@@ -300,6 +305,8 @@ async fn resolve_with_principal(
         compositions: request.compositions,
         now_ms: time,
         placement,
+        intelligence_override: request.intelligence_override,
+        route: request.route,
     };
     let mut outcome =
         select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
@@ -311,7 +318,7 @@ async fn resolve_with_principal(
         let artifact = serde_json::to_value(catalog.artifact()).map_err(|_| AppError::Internal)?;
         let cell = aq_swarm_settings::admission::classify(
             &artifact,
-            Some(&input.project.intelligence_profile),
+            Some(input.intelligence_key()),
             &choice,
         );
         let reason = aq_swarm_settings::admission::observe(
@@ -547,7 +554,7 @@ async fn fence_retained_decision(
         let cell = aq_swarm_settings::admission::resolve(
             tx,
             Some(decision.inputs.project.catalog_digest.as_str()),
-            Some(&decision.inputs.project.intelligence_profile),
+            Some(decision.inputs.intelligence_key()),
             &choice,
         )
         .await

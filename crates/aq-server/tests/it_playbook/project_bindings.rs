@@ -18,6 +18,8 @@ async fn missing_intelligence_registry_refuses_new_selection_and_offer_fence_exp
         compositions: f.input.compositions.clone(),
         replacement: None,
         record_refused: true,
+        intelligence_override: None,
+        route: None,
     };
     let decision = resolver::resolve_trusted(&f.env.state, f.actor, request())
         .await
@@ -73,6 +75,8 @@ async fn resolve_once(f: &SelectionFixture) -> Result<(), aq_server::error::AppE
         compositions: f.input.compositions.clone(),
         replacement: None,
         record_refused: true,
+        intelligence_override: None,
+        route: None,
     };
     resolver::resolve_trusted(&f.env.state, f.actor, request)
         .await
@@ -534,6 +538,8 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
         compositions: input.compositions.clone(),
         replacement: None,
         record_refused: true,
+        intelligence_override: None,
+        route: None,
     };
     let decision = resolver::resolve_trusted(&env.state, actor, req)
         .await
@@ -569,6 +575,8 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
             compositions: input.compositions.clone(),
             replacement: None,
             record_refused: true,
+            intelligence_override: None,
+            route: None,
         },
     )
     .await
@@ -709,6 +717,8 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         compositions: input.compositions.clone(),
         replacement: None,
         record_refused: true,
+        intelligence_override: None,
+        route: None,
     };
     assert!(
         resolver::resolve_for_project_policy(&env.state, request())

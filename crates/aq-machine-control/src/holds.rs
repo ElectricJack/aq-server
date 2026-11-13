@@ -74,6 +74,9 @@ pub fn phrase(code: &str) -> String {
         "replacement_successor_stuck" => {
             "its replacement was refused on every poll for 10 minutes (AQ keeps trying it)"
         }
+        "route_class_unassigned" => {
+            "its route names a class with no assigned profile, so it is routed again"
+        }
         _ => return format!("held by the retry policy: {code}"),
     };
     fixed.into()
@@ -562,6 +565,7 @@ mod tests {
             "lost_attempt_release_not_admitted",
             "handoff_successor_stuck",
             "replacement_successor_stuck",
+            "route_class_unassigned",
         ];
         let phrases: std::collections::BTreeSet<String> = known.iter().map(|c| phrase(c)).collect();
         assert_eq!(phrases.len(), known.len(), "one distinct phrase per code");
@@ -607,6 +611,7 @@ mod tests {
             "replacement_effects_unreconciled",
             "replacement_lineage_history_unknown",
             "task_already_settled_accepted",
+            "route_class_unassigned",
         ] {
             assert!(!is_hold(code), "{code}");
         }

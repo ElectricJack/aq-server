@@ -121,6 +121,9 @@ pub struct EligibilityRequest {
     pub agent_profile: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
+    /// A routed task's class profile in place of the automatic router (spec 0011 §4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_override: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -481,6 +484,7 @@ pub(crate) mod tests {
             agent_profile: "implementer@1".into(),
             intelligence_profile: "engineering@1".into(),
             execution_profile: "confined-development@1".into(),
+            intelligence_override: None,
         }
     }
     fn observation() -> BindingObservation {

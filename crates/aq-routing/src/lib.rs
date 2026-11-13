@@ -232,6 +232,36 @@ impl CompactRoute {
     }
 }
 
+/// How placement treats a ready task (spec 0011 §4).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Placement {
+    /// Placed as without routing: the binding is not on an automatic router, or
+    /// routing is off and the task has no route.
+    Unchanged,
+    /// Not offered: routing is on and the task has no route yet.
+    Wait,
+    /// Not offered and routed again: the route cannot be read, or its class has no profile.
+    Reroute,
+    /// Placed on the route's class profile within its limits.
+    Routed(CompactRoute),
+}
+
+impl Placement {
+    /// The placement of a task with `metadata` under a binding on an automatic
+    /// router or not. A route that exists is honored with routing off too.
+    pub fn of(automatic_router: bool, routing_on: bool, metadata: &serde_json::Value) -> Self {
+        if !automatic_router {
+            return Placement::Unchanged;
+        }
+        match CompactRoute::from_metadata(metadata) {
+            Err(_) => Placement::Reroute,
+            Ok(Some(route)) => Placement::Routed(route),
+            Ok(None) if routing_on => Placement::Wait,
+            Ok(None) => Placement::Unchanged,
+        }
+    }
+}
+
 /// Outcome of writing or clearing a task's route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Written {
@@ -376,6 +406,26 @@ mod tests {
         assert!(!may_replace(Some(&owner), Source::Router));
         assert!(may_replace(Some(&owner), Source::Owner));
         assert!(may_replace(Some(&router), Source::Owner));
+    }
+
+    #[test]
+    fn placement_honors_a_route_only_on_an_automatic_router_and_waits_only_with_routing_on() {
+        let compact = route().compact(3).unwrap();
+        let routed = json!({"aq:route": serde_json::to_value(&compact).unwrap()});
+        let unrouted = json!({"aq:priority": 1});
+        let garbage = json!({"aq:route": {"c": "fast-high"}});
+        for on in [false, true] {
+            for md in [&routed, &unrouted, &garbage] {
+                assert_eq!(Placement::of(false, on, md), Placement::Unchanged);
+            }
+            assert_eq!(
+                Placement::of(true, on, &routed),
+                Placement::Routed(compact.clone())
+            );
+            assert_eq!(Placement::of(true, on, &garbage), Placement::Reroute);
+        }
+        assert_eq!(Placement::of(true, true, &unrouted), Placement::Wait);
+        assert_eq!(Placement::of(true, false, &unrouted), Placement::Unchanged);
     }
 
     #[test]

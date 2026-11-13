@@ -704,6 +704,7 @@ name = "aq-selection"
 version = "0.1.5"
 dependencies = [
  "aq-profiles",
+ "aq-routing",
  "aq-session-api",
  "aq-session-protocol",
  "schemars",
