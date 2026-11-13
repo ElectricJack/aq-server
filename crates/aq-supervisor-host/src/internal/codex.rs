@@ -2,31 +2,17 @@
 //! sandbox and an empty directory, the prompt on stdin, the answer from
 //! `--output-last-message`. The Codex CLI has no switch that removes its
 //! shell tool, so this is what "tools off" means for Codex.
-use super::Harness;
+use super::{
+    DETAIL_BYTES, Exit, Failure, Harness, clip, execute, failure, in_run_dirs, unavailable,
+};
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
-    redact_login, stage_login, verify_native,
+    redact_login, stage_login,
 };
 use aq_internal_work::{Claimed, Reason, Usage, validate};
 use serde_json::Value;
-use std::{
-    os::unix::fs::{MetadataExt, PermissionsExt},
-    path::Path,
-    time::Duration,
-};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{path::Path, time::Duration};
 use zeroize::Zeroizing;
-
-/// Longest failure `detail`, in bytes; it is stored in the task row.
-const DETAIL_BYTES: usize = 500;
-/// The JSON event stream read from stdout; the rest is drained unread.
-const EVENTS_BYTES: u64 = 8 * 1024 * 1024;
-
-type Failure = (Reason, String);
-
-fn failure(reason: Reason, detail: &str) -> Failure {
-    (reason, detail.into())
-}
 
 /// Runs `claimed` once on the Codex login of `h`, killing it after `budget`.
 /// The per-run home under `homes` and working directory under `scratch` are
@@ -39,18 +25,16 @@ pub(crate) async fn codex(
     identity: Identity,
     budget: Duration,
 ) -> Result<(String, Option<Usage>), Failure> {
-    for parent in [homes, scratch] {
-        private_parent(parent, identity)
-            .map_err(|_| failure(Reason::ProviderError, "internal work directories rejected"))?;
-    }
-    let executable = verify_native(&h.native, &h.native_digest, identity)
-        .map_err(|_| failure(Reason::ProviderUnavailable, "native executable refused"))?;
-    let name = uuid::Uuid::new_v4().to_string();
-    let (home, cwd) = (homes.join(&name), scratch.join(&name));
-    let result = attempt(h, &executable, &home, &cwd, claimed, identity, budget).await;
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&cwd);
-    result
+    in_run_dirs(
+        h,
+        homes,
+        scratch,
+        identity,
+        async |executable, home, cwd| {
+            attempt(h, executable, home, cwd, claimed, identity, budget).await
+        },
+    )
+    .await
 }
 
 async fn attempt(
@@ -63,15 +47,6 @@ async fn attempt(
     budget: Duration,
 ) -> Result<(String, Option<Usage>), Failure> {
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
-    for dir in [home, cwd] {
-        std::fs::create_dir(dir).map_err(|_| setup())?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| setup())?;
-    }
-    if identity.drop_privileges {
-        let id = Some(identity.run_as);
-        std::os::unix::fs::chown(cwd, id, id).map_err(|_| setup())?;
-    }
     let auth = stage_login(&h.secret_file, home, identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
     let auth_path = home.join("auth.json");
@@ -134,74 +109,6 @@ async fn attempt(
     }
 }
 
-/// `dir` is a canonical directory owned by the executable owner and not
-/// writable by group or others, so nobody else can plant a run directory.
-fn private_parent(dir: &Path, identity: Identity) -> anyhow::Result<()> {
-    let meta = std::fs::symlink_metadata(dir)?;
-    anyhow::ensure!(
-        meta.is_dir()
-            && meta.uid() == identity.executable_owner
-            && meta.mode() & 0o022 == 0
-            && dir.canonicalize()? == dir,
-        "internal work directory ownership"
-    );
-    Ok(())
-}
-
-enum Exit {
-    Finished(std::process::ExitStatus, Vec<u8>),
-    TimedOut,
-}
-
-/// Spawns `command`, writes `prompt` to its stdin, reads its stdout and waits
-/// for it, all within `budget`. At the budget the child's whole session (it
-/// leads one) is killed and reaped.
-async fn execute(
-    command: std::process::Command,
-    prompt: String,
-    budget: Duration,
-) -> std::io::Result<Exit> {
-    let mut command = tokio::process::Command::from(command);
-    command.kill_on_drop(true);
-    let mut child = command.spawn()?;
-    let pid = child.id();
-    let stdin = child.stdin.take();
-    let mut stdout = child.stdout.take();
-    let run = async {
-        let write = async move {
-            if let Some(mut stdin) = stdin {
-                // A child that exits without reading is judged by its status.
-                let _ = stdin.write_all(prompt.as_bytes()).await;
-            }
-        };
-        let read = async {
-            let mut events = Vec::new();
-            if let Some(out) = stdout.as_mut() {
-                let _ = (&mut *out)
-                    .take(EVENTS_BYTES)
-                    .read_to_end(&mut events)
-                    .await;
-                let _ = tokio::io::copy(out, &mut tokio::io::sink()).await;
-            }
-            events
-        };
-        let ((), events, status) = tokio::join!(write, read, child.wait());
-        status.map(|status| Exit::Finished(status, events))
-    };
-    match tokio::time::timeout(budget, run).await {
-        Ok(finished) => finished,
-        Err(_) => {
-            if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-            }
-            let _ = child.wait().await;
-            Ok(Exit::TimedOut)
-        }
-    }
-}
-
 /// What the `--json` event stream says: the last turn's usage, the last
 /// error message, and whether any error names a login or usage-limit problem.
 #[derive(Default)]
@@ -246,38 +153,4 @@ impl Events {
         }
         events
     }
-}
-
-/// An authentication or usage-limit failure: the login cannot serve now.
-fn unavailable(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    [
-        "usage limit",
-        "usage_limit",
-        "rate limit",
-        "quota",
-        "unauthorized",
-        "401",
-        "authenticat",
-        "log in",
-        "login",
-        "sign in",
-        "token expired",
-        "token_expired",
-        "refresh token",
-    ]
-    .iter()
-    .any(|needle| message.contains(needle))
-}
-
-/// `text` cut to at most `limit` bytes at a character boundary.
-fn clip(mut text: String, limit: usize) -> String {
-    if text.len() > limit {
-        let mut end = limit;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-    }
-    text
 }

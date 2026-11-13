@@ -82,6 +82,7 @@ mod internal {
     use aq_supervisor_host::internal::{InternalConfig, tick};
     use serde_json::json;
     use std::{
+        collections::BTreeMap,
         io::Write,
         os::unix::fs::{OpenOptionsExt, PermissionsExt},
         path::{Path, PathBuf},
@@ -90,6 +91,8 @@ mod internal {
 
     const RUNNER: &str = "internal-host:test";
     const ANSWER: &str = r#"{"choice":"yes","rationale":"the input says so"}"#;
+    /// The fake Claude setup token; its file holds it with a trailing newline.
+    const CLAUDE_TOKEN: &str = "sk-ant-oat01-fixture-token";
 
     fn login(tag: &str) -> String {
         json!({"auth_mode":"chatgpt","tokens":{"id_token":format!("id-{tag}"),
@@ -138,6 +141,15 @@ mod internal {
         }
     }
 
+    fn claude_candidate() -> Candidate {
+        Candidate {
+            provider: "anthropic".into(),
+            model: "claude-fixture".into(),
+            harness: Some("claude".into()),
+            ..codex_candidate()
+        }
+    }
+
     fn api_candidate() -> Candidate {
         Candidate {
             harness: None,
@@ -176,6 +188,18 @@ mod internal {
         }
 
         async fn with_digest(behaviour: &str, digest: Option<Digest>) -> Self {
+            Self::build(behaviour, digest, None).await
+        }
+
+        /// A host with Claude configured too. `claude` is shell run by the
+        /// fake Claude after it has recorded its argv (NUL separated), its
+        /// exact environment, stdin, cwd, the cwd's and `$HOME`'s entries and
+        /// `$HOME/settings.json` under `$rec/claude.*`.
+        async fn with_claude(codex: &str, claude: &str) -> Self {
+            Self::build(codex, None, Some(claude)).await
+        }
+
+        async fn build(behaviour: &str, digest: Option<Digest>, claude: Option<&str>) -> Self {
             let db = aq_server::test_support::TestDb::create().await;
             drop(db.store().await);
             let pool = db.pool().await;
@@ -204,13 +228,34 @@ mod internal {
             let secret = root.join("login").join("auth.json");
             replace(&secret, &login("A"));
             let digest = digest.unwrap_or_else(|| Digest::of(script.as_bytes()));
+            let claude = claude.map(|behaviour| {
+                let dir = root.join("claude-login");
+                std::fs::create_dir(&dir).unwrap();
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+                let token = dir.join("token");
+                replace(&token, &format!("{CLAUDE_TOKEN}\n"));
+                let script = format!(
+                    "#!/bin/sh\numask 077\nrec='{rec}'\n\
+                     for a in \"$@\"; do printf '%s\\0' \"$a\" >> \"$rec/claude.argv\"; done\n\
+                     cat /proc/$$/environ > \"$rec/claude.env\"\n\
+                     cat > \"$rec/claude.stdin\"\npwd > \"$rec/claude.pwd\"\n\
+                     ls -A . > \"$rec/claude.listing\"\nls -A \"$HOME\" > \"$rec/claude.home\"\n\
+                     cat \"$HOME/settings.json\" > \"$rec/claude.settings\"\n{behaviour}\n",
+                    rec = rec.display()
+                );
+                let native = root.join("claude");
+                std::fs::write(&native, &script).unwrap();
+                std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700)).unwrap();
+                json!({"native": native, "native_digest": Digest::of(script.as_bytes()),
+                    "secret_file": token})
+            });
             let config: InternalConfig = serde_json::from_value(json!({
                 "database_url": "postgres://unused",
                 "homes": root.join("homes"),
                 "scratch": root.join("scratch"),
                 "poll_ms": 100,
                 "codex": {"native": native, "native_digest": digest, "secret_file": secret},
-                "claude": null,
+                "claude": claude,
             }))
             .unwrap();
             Self {
@@ -236,6 +281,24 @@ mod internal {
                 .split(|b| *b == 0)
                 .filter(|a| !a.is_empty())
                 .map(|a| String::from_utf8(a.to_vec()).unwrap())
+                .collect()
+        }
+        fn claude_rec(&self, name: &str) -> String {
+            std::fs::read_to_string(self.rec(&format!("claude.{name}"))).unwrap()
+        }
+        fn claude_argv(&self) -> Vec<String> {
+            let argv = self.claude_rec("argv");
+            let argv = argv.strip_suffix('\0').unwrap();
+            argv.split('\0').map(str::to_owned).collect()
+        }
+        fn claude_env(&self) -> BTreeMap<String, String> {
+            self.claude_rec("env")
+                .split('\0')
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| {
+                    let (key, value) = entry.split_once('=').unwrap();
+                    (key.to_owned(), value.to_owned())
+                })
                 .collect()
         }
         async fn submit(&self, candidates: &[Candidate]) -> uuid::Uuid {
@@ -458,5 +521,182 @@ mod internal {
             Some(aq_internal_work::Reason::ProviderUnavailable)
         );
         assert_eq!(std::fs::read_to_string(f.secret()).unwrap(), login("A"));
+    }
+
+    /// The object Claude Code prints with `--output-format json`.
+    fn claude_result(is_error: bool, result: &str) -> String {
+        json!({"type":"result","subtype":"success","is_error":is_error,"duration_ms":1840,
+            "duration_api_ms":1712,"num_turns":1,"result":result,
+            "session_id":"5f0c8d52-0e7a-4c55-9d43-3c1f2b8a7e10","total_cost_usd":0.0123,
+            "usage":{"input_tokens":13,"cache_creation_input_tokens":0,
+                "cache_read_input_tokens":0,"output_tokens":9}})
+        .to_string()
+    }
+
+    /// Shell that prints `stdout`, with `@TOKEN@` replaced by the token the
+    /// fake Claude found in its environment, and exits with `code`.
+    fn claude_printing(stdout: &str, code: u8) -> String {
+        format!("sed \"s/@TOKEN@/$CLAUDE_CODE_OAUTH_TOKEN/g\" <<'EOF'\n{stdout}\nEOF\nexit {code}")
+    }
+
+    #[tokio::test]
+    async fn claude_run_passes_the_token_only_in_the_environment_and_never_in_argv_or_rows() {
+        // The answer echoes the token the fake read from its environment.
+        let answer = r#"{"choice":"yes","rationale":"token @TOKEN@"}"#;
+        let f = Fixture::with_claude("exit 1", &claude_printing(&claude_result(false, answer), 0))
+            .await;
+        let id = f.submit(&[claude_candidate()]).await;
+        assert!(f.tick().await);
+        let env = f.claude_env();
+        let home = PathBuf::from(&env["HOME"]);
+        assert_eq!(home.parent().unwrap(), f.root().join("homes"));
+        let home_text = home.to_str().unwrap();
+        let expected: BTreeMap<String, String> = [
+            ("HOME", home_text),
+            ("CLAUDE_CONFIG_DIR", home_text),
+            ("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            ("DISABLE_AUTOUPDATER", "1"),
+            ("DISABLE_TELEMETRY", "1"),
+            ("DISABLE_ERROR_REPORTING", "1"),
+            ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+            ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"),
+            ("CLAUDE_CODE_OAUTH_TOKEN", CLAUDE_TOKEN),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .into();
+        assert_eq!(env, expected);
+        let settings = home.join("settings.json");
+        assert_eq!(
+            f.claude_argv(),
+            [
+                "-p",
+                "--output-format",
+                "json",
+                "--input-format",
+                "text",
+                "--model",
+                "claude-fixture",
+                "--setting-sources",
+                "user",
+                "--settings",
+                settings.to_str().unwrap(),
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--disable-slash-commands",
+                "--tools",
+                "",
+            ]
+        );
+        assert_eq!(f.claude_rec("stdin"), validate::prompt(&request()));
+        let pwd = PathBuf::from(f.claude_rec("pwd").trim());
+        assert_eq!(pwd.parent().unwrap(), f.root().join("scratch"));
+        assert_eq!(f.claude_rec("listing"), "");
+        // The token is never written to disk: the home holds only the settings.
+        assert_eq!(f.claude_rec("home"), "settings.json\n");
+        let written: serde_json::Value = serde_json::from_str(&f.claude_rec("settings")).unwrap();
+        assert!(written.is_object());
+        assert!(!f.claude_rec("settings").contains(CLAUDE_TOKEN));
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(
+            row.answer.clone().unwrap(),
+            json!({"choice":"yes","rationale":"token [credential redacted]"})
+        );
+        assert!(!format!("{row:?}").contains(CLAUDE_TOKEN));
+        assert!(!f.rec("argv").exists(), "the Codex native ran");
+    }
+
+    #[tokio::test]
+    async fn claude_result_and_usage_complete_the_task() {
+        let f = Fixture::with_claude("exit 1", &claude_printing(&claude_result(false, ANSWER), 0))
+            .await;
+        let id = f.submit(&[claude_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(row.runner.as_deref(), Some(RUNNER));
+        assert_eq!(
+            row.answer.unwrap(),
+            json!({"choice":"yes","rationale":"the input says so"})
+        );
+        let usage = row.usage.unwrap();
+        assert_eq!((usage.input_tokens, usage.output_tokens), (13, 9));
+        for dir in ["scratch", "homes"] {
+            let left: Vec<_> = std::fs::read_dir(f.root().join(dir)).unwrap().collect();
+            assert!(left.is_empty(), "{dir} keeps {left:?}");
+        }
+        assert!(!f.tick().await, "nothing else is queued");
+    }
+
+    #[tokio::test]
+    async fn claude_is_error_with_usage_limit_text_is_provider_unavailable() {
+        // Exit 0: `is_error` alone fails the run. The text echoes the token.
+        let text = "Claude AI usage limit reached|1731456000 (@TOKEN@)";
+        let f =
+            Fixture::with_claude("exit 1", &claude_printing(&claude_result(true, text), 0)).await;
+        let id = f.submit(&[claude_candidate(), api_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "queued");
+        assert_eq!(row.candidate_index, 1);
+        let attempt = &row.attempts[0];
+        assert_eq!(
+            attempt.reason,
+            Some(aq_internal_work::Reason::ProviderUnavailable)
+        );
+        assert!(
+            attempt.detail.contains("usage limit reached"),
+            "{}",
+            attempt.detail
+        );
+        assert!(!attempt.detail.contains(CLAUDE_TOKEN), "{}", attempt.detail);
+        assert!(attempt.detail.len() <= 500);
+    }
+
+    #[tokio::test]
+    async fn claude_output_that_is_not_json_is_provider_error_with_a_capped_redacted_detail() {
+        let noise = format!("@TOKEN@ {}", "x".repeat(2000));
+        let f = Fixture::with_claude("exit 1", &claude_printing(&noise, 1)).await;
+        let id = f.submit(&[claude_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.reason, Some(aq_internal_work::Reason::ProviderError));
+        let detail = &row.attempts[0].detail;
+        assert!(detail.contains("[credential redacted]"), "{detail}");
+        assert!(!detail.contains(CLAUDE_TOKEN), "{detail}");
+        assert!(detail.len() <= 500, "{}", detail.len());
+    }
+
+    /// Spec 0012 §6: fallback between providers is real.
+    #[tokio::test]
+    async fn a_profile_listing_codex_then_claude_falls_back_to_claude_when_codex_is_unavailable() {
+        let codex = "echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"You have hit your usage limit. Try again later.\"}}'\n\
+                     exit 1";
+        let f =
+            Fixture::with_claude(codex, &claude_printing(&claude_result(false, ANSWER), 0)).await;
+        let id = f.submit(&[codex_candidate(), claude_candidate()]).await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "queued");
+        assert_eq!(row.candidate_index, 1);
+        assert!(
+            !f.rec("claude.argv").exists(),
+            "Claude ran on the first tick"
+        );
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
+        assert_eq!(row.attempts.len(), 2);
+        assert_eq!(row.attempts[0].provider, "openai");
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::ProviderUnavailable)
+        );
+        assert_eq!(row.attempts[1].provider, "anthropic");
+        assert_eq!(row.attempts[1].reason, None);
+        let usage = row.usage.unwrap();
+        assert_eq!((usage.input_tokens, usage.output_tokens), (13, 9));
+        assert!(!f.tick().await, "nothing else is queued");
     }
 }

@@ -905,6 +905,7 @@ dependencies = [
  "aq-central-authority",
  "aq-codex-mapper",
  "aq-command-registry",
+ "aq-intelligence-config",
  "aq-internal-work",
  "aq-responses-transport",
  "aq-server",

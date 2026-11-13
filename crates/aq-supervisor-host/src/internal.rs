@@ -3,28 +3,30 @@
 //!
 //! Internal work takes no worker slot and is outside swarm admission: nothing
 //! here reads swarm settings or admits a supervisor generation.
+mod claude;
 mod codex;
 
-use crate::{config::protected_read, subscription::Identity};
+use crate::{
+    config::protected_read,
+    subscription::{Identity, verify_native},
+};
 use anyhow::{Result, ensure};
 use aq_internal_work::{CANDIDATE_TIMEOUT_MS, Reason, Way, store, validate};
 use aq_session_protocol::Digest;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::{
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
-/// The harnesses this build can run. `claude` is configured and validated,
-/// but its runner does not exist yet, so its tasks are left queued.
-const RUNNABLE: [&str; 1] = ["codex"];
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InternalConfig {
     pub database_url: String,
-    /// Parent of the per-run Codex homes; root-owned, not group or world writable.
+    /// Parent of the per-run native homes; root-owned, not group or world writable.
     pub homes: PathBuf,
     /// Parent of the per-run empty working directories; same ownership as `homes`.
     pub scratch: PathBuf,
@@ -40,8 +42,10 @@ pub struct InternalConfig {
 pub struct Harness {
     pub native: PathBuf,
     pub native_digest: Digest,
-    /// The login file. Each copy in and back holds a `flock` on its directory,
-    /// which needs to be writable only for a refresh to be written back.
+    /// The login file. Codex: an `auth.json`; each copy in and back holds a
+    /// `flock` on its directory, which needs to be writable only for a
+    /// refresh to be written back. Claude: the one-line setup token, read
+    /// only and passed to the native in its environment.
     pub secret_file: PathBuf,
 }
 
@@ -93,9 +97,6 @@ pub async fn run(path: &Path) -> Result<()> {
         libc::umask(0o077);
     }
     let (config, digest) = InternalConfig::load(path)?;
-    if config.claude.is_some() {
-        eprintln!("internal work: the Claude runner is not available in this build");
-    }
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
         .connect(&config.database_url)
@@ -118,40 +119,45 @@ pub async fn run(path: &Path) -> Result<()> {
     }
 }
 
-/// Claims at most one queued login task for a harness this host runs, runs
-/// it, and records the answer or the candidate's failure. Returns whether it
-/// claimed. One task at a time: the next claim waits for this run to end.
+/// Claims at most one queued login task for a harness this host has
+/// configured, runs it, and records the answer or the candidate's failure.
+/// Returns whether it claimed. One task at a time: the next claim waits for
+/// this run to end.
 pub async fn tick(
     config: &InternalConfig,
     pool: &PgPool,
     runner: &str,
     now_ms: i64,
 ) -> Result<bool> {
-    if config.codex.is_none() {
+    let configured: Vec<&str> = [("codex", &config.codex), ("claude", &config.claude)]
+        .into_iter()
+        .filter_map(|(name, harness)| harness.as_ref().map(|_| name))
+        .collect();
+    if configured.is_empty() {
         return Ok(false);
     }
-    let Some(claimed) = store::claim(pool, Way::Login, &RUNNABLE, runner, now_ms).await? else {
+    let Some(claimed) = store::claim(pool, Way::Login, &configured, runner, now_ms).await? else {
         return Ok(false);
     };
     let started = Instant::now();
     // The same per-candidate budget as the in-server API loop.
     let budget = (claimed.deadline_at_ms - now_ms).clamp(0, CANDIDATE_TIMEOUT_MS);
-    let result = match (&config.codex, claimed.candidate.harness.as_deref()) {
+    let (homes, scratch, identity) = (&config.homes, &config.scratch, config.identity);
+    let duration = Duration::from_millis(budget as u64);
+    let result = match (
+        claimed.candidate.harness.as_deref(),
+        &config.codex,
+        &config.claude,
+    ) {
         _ if budget == 0 => Err((
             Reason::DeadlineExceeded,
             "the task deadline passed before the run".into(),
         )),
-        (Some(h), Some("codex")) => {
-            let budget = Duration::from_millis(budget as u64);
-            codex::codex(
-                h,
-                &config.homes,
-                &config.scratch,
-                &claimed,
-                config.identity,
-                budget,
-            )
-            .await
+        (Some("codex"), Some(h), _) => {
+            codex::codex(h, homes, scratch, &claimed, identity, duration).await
+        }
+        (Some("claude"), _, Some(h)) => {
+            claude::claude(h, homes, scratch, &claimed, identity, duration).await
         }
         _ => Err((
             Reason::ProviderUnavailable,
@@ -176,6 +182,165 @@ pub async fn tick(
         }
     }?;
     Ok(true)
+}
+
+/// Longest failure `detail`, in bytes; it is stored in the task row.
+const DETAIL_BYTES: usize = 500;
+/// The stdout read from a native; the rest is drained unread.
+const STDOUT_BYTES: u64 = 8 * 1024 * 1024;
+
+type Failure = (Reason, String);
+
+fn failure(reason: Reason, detail: &str) -> Failure {
+    (reason, detail.into())
+}
+
+/// Checks the run directories' parents and the native of `h`, makes a fresh
+/// private home under `homes` and an empty working directory under `scratch`
+/// (owned by the native's user), and runs `attempt` with the verified
+/// executable, the home and the directory. Both are removed afterwards,
+/// whatever the outcome.
+async fn in_run_dirs<T>(
+    h: &Harness,
+    homes: &Path,
+    scratch: &Path,
+    identity: Identity,
+    attempt: impl AsyncFnOnce(&std::fs::File, &Path, &Path) -> Result<T, Failure>,
+) -> Result<T, Failure> {
+    for parent in [homes, scratch] {
+        private_parent(parent, identity)
+            .map_err(|_| failure(Reason::ProviderError, "internal work directories rejected"))?;
+    }
+    let executable = verify_native(&h.native, &h.native_digest, identity)
+        .map_err(|_| failure(Reason::ProviderUnavailable, "native executable refused"))?;
+    let name = uuid::Uuid::new_v4().to_string();
+    let (home, cwd) = (homes.join(&name), scratch.join(&name));
+    let made = run_dirs(&home, &cwd, identity)
+        .map_err(|_| failure(Reason::ProviderError, "native run could not be prepared"));
+    let result = match made {
+        Ok(()) => attempt(&executable, &home, &cwd).await,
+        Err(failure) => Err(failure),
+    };
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&cwd);
+    result
+}
+
+/// Creates `home` and `cwd` owner-only; `cwd` belongs to the native's user.
+fn run_dirs(home: &Path, cwd: &Path, identity: Identity) -> std::io::Result<()> {
+    for dir in [home, cwd] {
+        std::fs::create_dir(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    if identity.drop_privileges {
+        let id = Some(identity.run_as);
+        std::os::unix::fs::chown(cwd, id, id)?;
+    }
+    Ok(())
+}
+
+/// `dir` is a canonical directory owned by the executable owner and not
+/// writable by group or others, so nobody else can plant a run directory.
+fn private_parent(dir: &Path, identity: Identity) -> anyhow::Result<()> {
+    let meta = std::fs::symlink_metadata(dir)?;
+    anyhow::ensure!(
+        meta.is_dir()
+            && meta.uid() == identity.executable_owner
+            && meta.mode() & 0o022 == 0
+            && dir.canonicalize()? == dir,
+        "internal work directory ownership"
+    );
+    Ok(())
+}
+
+enum Exit {
+    Finished(std::process::ExitStatus, Vec<u8>),
+    TimedOut,
+}
+
+/// Spawns `command`, writes `prompt` to its stdin, reads its stdout and waits
+/// for it, all within `budget`. At the budget the child's whole session (it
+/// leads one) is killed and reaped.
+async fn execute(
+    command: std::process::Command,
+    prompt: String,
+    budget: Duration,
+) -> std::io::Result<Exit> {
+    let mut command = tokio::process::Command::from(command);
+    command.kill_on_drop(true);
+    let mut child = command.spawn()?;
+    let pid = child.id();
+    let stdin = child.stdin.take();
+    let mut stdout = child.stdout.take();
+    let run = async {
+        let write = async move {
+            if let Some(mut stdin) = stdin {
+                // A child that exits without reading is judged by its status.
+                let _ = stdin.write_all(prompt.as_bytes()).await;
+            }
+        };
+        let read = async {
+            let mut bytes = Vec::new();
+            if let Some(out) = stdout.as_mut() {
+                let _ = (&mut *out).take(STDOUT_BYTES).read_to_end(&mut bytes).await;
+                let _ = tokio::io::copy(out, &mut tokio::io::sink()).await;
+            }
+            bytes
+        };
+        let ((), bytes, status) = tokio::join!(write, read, child.wait());
+        status.map(|status| Exit::Finished(status, bytes))
+    };
+    match tokio::time::timeout(budget, run).await {
+        Ok(finished) => finished,
+        Err(_) => {
+            if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+            let _ = child.wait().await;
+            Ok(Exit::TimedOut)
+        }
+    }
+}
+
+/// An authentication or usage-limit failure: the login cannot serve now.
+/// Codex and Claude Code wordings both.
+fn unavailable(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "usage limit",
+        "usage_limit",
+        "rate limit",
+        "limit reached",
+        "hit your limit",
+        "quota",
+        "unauthorized",
+        "401",
+        "authenticat",
+        "log in",
+        "login",
+        "sign in",
+        "token expired",
+        "token_expired",
+        "refresh token",
+        "oauth token",
+        "invalid api key",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+/// `text` cut to at most `limit` bytes at a character boundary.
+fn clip(mut text: String, limit: usize) -> String {
+    if text.len() > limit {
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
 }
 
 /// Whether the config at `path` still has `digest`. A removed file is a change.
