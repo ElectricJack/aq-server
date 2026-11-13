@@ -94,7 +94,7 @@ pub fn retry_refusal(code: &str, budget: Option<(u32, u32)>) -> String {
         false => "A retry cannot clear this hold",
     };
     format!(
-        "Retry refused: {}{facts}. {next}: retire this task and create a new one to run it again.",
+        "Retry refused: {}{facts}. {next}: cancel this task and create a new one (re-add its dependencies) to run it again.",
         phrase(code)
     )
 }
@@ -611,12 +611,16 @@ mod tests {
         assert_eq!(
             retry_refusal("replacement_policy_retry_budget_exhausted", Some((2, 2))),
             "Retry refused: the catalog retry policy's maximum attempts are used up (2 of 2 \
-             allowed attempts charged). A retry cannot override the budget: retire this task \
-             and create a new one to run it again."
+             allowed attempts charged). A retry cannot override the budget: cancel this task \
+             and create a new one (re-add its dependencies) to run it again."
         );
         assert!(retry_refusal("stall_quarantined", None).contains("cannot clear this hold"));
         for code in known {
-            let text = retry_refusal(code, Some((u32::MAX, u32::MAX)));
+            // Only an attempt budget carries the counts.
+            let budget = code
+                .ends_with("retry_budget_exhausted")
+                .then_some((u32::MAX, u32::MAX));
+            let text = retry_refusal(code, budget);
             assert!(text.chars().count() <= 256, "{code}: {text}");
         }
     }

@@ -117,8 +117,9 @@ fn failed(prior: &Prior, now: u64) -> bool {
         || prior.execution_deadline_ms.is_some_and(|d| now >= d)
 }
 
-/// The started attempts charged to the retry budget, counted as [`assess`] counts them (spec
-/// 0007 Q1 exempts owner and service stops), and the latest attempt.
+/// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
+/// and service stops are exempt: S8/Q1 in aq-server `docs/implementation/0007-P1-server.md`),
+/// and the latest attempt.
 pub fn charged(priors: &[Prior]) -> (u32, Option<Uuid>) {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));

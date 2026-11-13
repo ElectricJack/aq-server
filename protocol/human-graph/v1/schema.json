@@ -1066,6 +1066,10 @@
           },
           "routing": {
             "$ref": "#/components/schemas/HumanRouting"
+          },
+          "completed_without_changes": {
+            "const": true,
+            "description": "Present on a completed task whose latest confirmed default-policy settlement found no file change (delivery state no_change)."
           }
         },
         "required": [

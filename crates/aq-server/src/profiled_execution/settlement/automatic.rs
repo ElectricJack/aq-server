@@ -378,8 +378,13 @@ async fn evaluate_locked(
     for op in &r.report.source_receipt_ids {
         match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
             Ok(confirmed) => {
+                // Review C-1: judged against the lineage's original base, never a handoff
+                // successor's own starting commit (its predecessor's saved edits).
                 let m = &confirmed.manifest;
-                source = Some((*op, m.checkpoint.hex.clone(), m.checkpoint != m.source.base));
+                let task = r.spec.task.task_id;
+                let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
+                let changed = m.checkpoint.hex != base.await?;
+                source = Some((*op, m.checkpoint.hex.clone(), changed));
                 break;
             }
             Err(crate::error::AppError::Conflict(_)) => {}
@@ -429,9 +434,12 @@ async fn evaluate_locked(
             }
         }
     };
+    let unchanged = matches!(source, Some((_, _, false)));
+    let claimed = policy::claims_changes(r.report.conclusion.as_str());
     let verdict = policy::evaluate(&policy::Gate {
         acceptance,
         source_retained: source.is_some(),
+        claimed_changes_missing: unchanged && claimed,
         checks: &checks,
         delivery,
         delivery_state,

@@ -32,7 +32,7 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task.
+    /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task; mode 10 completes it.
     pub second_task: Uuid,
     /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
     pub metadata: Arc<std::sync::Mutex<Value>>,
@@ -136,6 +136,10 @@ pub async fn setup() -> Case {
             if mode == 8 {
                 // The owner closed the task in Graph.
                 node["task_state"] = json!("canceled");
+            }
+            if mode == 10 {
+                // AQ completed the task.
+                node["task_state"] = json!("completed");
             }
             let value = if uri.path().ends_with("/ready") {
                 let items = match mode {

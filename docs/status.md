@@ -143,7 +143,10 @@ This needs no playbook work. In order:
 A task does not have to change a file. Since 2026-11-13 (on
 `feat/internal-work`, not yet on `main`) an attempt that finishes successfully
 without changing a file succeeds: its result is the agent's final message, and
-nothing is published.
+nothing is published. The task reads "Completed, no changes". An agent that
+ends with `Outcome: blocked`, or claims changes that did not arrive, fails as
+before. A handoff successor that only verified its predecessor's edits still
+publishes them.
 
 ## 6. Boat workers
 
@@ -159,7 +162,7 @@ questions in aq-worker `docs/implementation/0006-P7.md`.
 | --- | --- |
 | aq-server `main` CI | Red since the #130 merge (2026-11-11). The `tests` job also runs over its 10-minute budget. |
 | M1 | Fixed 2026-11-08 by aq-server #121 (`a5966547`): an open dashboard no longer causes `nodes`-row lock timeouts (test `it_native` `scoped_presence_inventory`). A residual is fixed on `feat/internal-work` (2026-11-13, "fix(swarm): an owner machine action that hits a lock timeout reports busy, not unknown"), not yet on `main`: an owner Start, Stop, Drain or Revoke that hits its 1 s lock timeout changes nothing and now reports busy instead of an unknown outcome, and contention on the worker machine routes is a 503 with `Retry-After` instead of a 500. |
-| M2 | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. Retry on a task held by its retry budget (or another hold) is refused with the hold, the charged and allowed attempts, and the remedy (retire the task and create a new one). It used to report success and change nothing. |
+| M2 | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. Retry on a task held by its retry budget (or another hold) is refused with the hold, the charged and allowed attempts, and the remedy (cancel the task and create a new one). It used to report success and change nothing. |
 | M3 | `release-sandbox` needs `--force`. |
 | Completion policy | Fixed on `feat/internal-work` (2026-11-13), not yet on `main`. A task that changes no file succeeds, with nothing published. |
 | Owner decisions | W13 (terminal input on queued attempts), 0008 phase B retention, the A1 soak, true resume, the three boat channel questions. |

@@ -759,6 +759,11 @@ async fn task_retry_creates_replacement_attempt() {
     // B4 alone decides: an unsettled predecessor is never force-replaced.
     let (status, body) = x.act(&retry(Uuid::new_v4())).await;
     assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
+    // Review M-5: the receipt names the reason.
+    assert_eq!(
+        body["data"]["reason"], "replacement_prior_execution_uncertain",
+        "{body}"
+    );
     assert!(holds().await, "rejected retry leaves the claim untouched");
 
     hot.status = Status::Finished;
@@ -811,7 +816,8 @@ async fn task_retry_creates_replacement_attempt() {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
+    let confirmed_retry = retry(Uuid::new_v4());
+    let (status, body) = x.act(&confirmed_retry).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
     assert_eq!(
@@ -841,6 +847,17 @@ async fn task_retry_creates_replacement_attempt() {
         x.posts().is_empty(),
         "retry never writes Graph task lifecycle"
     );
+    // Review M-3: once the task is held (here quarantined), a NEW retry is refused with
+    // the hold, but a replay of the admitted operation keeps its recorded outcome.
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'synthetic stall','owner','{}',$3,1)")
+        .bind(predecessor).bind(task).bind(Uuid::new_v4())
+        .execute(&pool).await.unwrap();
+    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "stall_quarantined", "{body}");
+    let (status, body) = x.act(&confirmed_retry).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
 }
 
 fn graph_create(project: Uuid, first: Uuid, second: Uuid, edge: Uuid) -> Value {

@@ -100,6 +100,16 @@ pub(super) async fn work(
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,
         "parent":parent,"execution":execution});
+    // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
+    if root["task_state"] == "completed" {
+        let quiet = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT s.evidence#>>'{delivery,state}' FROM profiled_auto_settlements s JOIN execution_attempts e USING(attempt_id) WHERE e.task_id=$1 AND s.disposition='confirmed' ORDER BY s.updated_at_ms DESC LIMIT 1",
+        );
+        let quiet = quiet.bind(id).fetch_optional(&r.pool).await;
+        if matches!(quiet, Ok(Some(Some(ref s))) if s == "no_change") {
+            data["completed_without_changes"] = json!(true);
+        }
+    }
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
     // Optional field: when it cannot be computed the read still succeeds without it.
     match crate::routing::view(&s, &a.record, id, &raw["node"], ready).await {

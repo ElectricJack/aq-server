@@ -141,8 +141,13 @@ impl ActionKind for TaskRetry {
             let now = now(state)?;
             let assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
-            let Some(r) = assessment.replacement() else {
-                return Ok(rejected());
+            // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
+            let r = match &assessment {
+                replacement::Assessment::Replace(r) => r,
+                replacement::Assessment::Blocked(code) => return Ok(Outcome::refused(code)),
+                replacement::Assessment::Fresh => {
+                    return Ok(Outcome::refused("task_has_no_attempt"));
+                }
             };
             replacement::release(state, task, r).await?;
             Ok::<_, AppError>(Outcome::confirmed(

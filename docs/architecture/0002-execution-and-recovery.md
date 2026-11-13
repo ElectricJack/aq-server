@@ -202,7 +202,7 @@ Any other schema version, kind or extra field, or a missing `delivery`, means th
 1. **Acceptance.** The report is the current head, carries a stop proof, and is neither cancelled nor superseded (see §6).
 2. **Retained source.** The source has a confirmed aq-git retention receipt.
 3. **Required checks.** Each required check has a row in `profiled_check_evidence` bound to (report, source digest, check id, validator digest).
-4. **Delivery.** This gate runs only when `delivery` is `required`. It reads `profiled_delivery_evidence`, and only `published` passes. A retained source whose checkpoint is the admitted base (the attempt changed no file) has nothing to deliver: it passes with delivery state `no_change`, and no candidate, push or delivery evidence is made. Owner decision 2026-11-13: a task does not have to change a file to succeed.
+4. **Delivery.** This gate runs only when `delivery` is `required`. It reads `profiled_delivery_evidence`, and only `published` passes. A retained source whose checkpoint is the lineage base (nothing in the task's lineage changed a file) has nothing to deliver: it passes with delivery state `no_change`, and no candidate, push or delivery evidence is made. The lineage base is the admitted base, except for a handoff successor: it is admitted on its predecessor's saved commit, so its lineage base is that predecessor's lineage base (followed back through every handoff of the task), and a successor that only verified its predecessor's edits still delivers them, on a candidate built over the lineage base. Owner decision 2026-11-13: a task does not have to change a file to succeed. A report that claims changes (`Changes: <not none>;` at the start of the worker's conclusion) while the retained source is unchanged is refused with `claimed_changes_missing` (rework).
 
 **Reason codes.** A `rework` verdict means the evidence shows the work is wrong. A `hold` verdict means evidence is missing or not yet determinate.
 
@@ -211,6 +211,7 @@ Any other schema version, kind or extra field, or a missing `delivery`, means th
 | Acceptance | `not_accepted` (refused, cancelled or superseded report) | rework |
 | Acceptance | `not_stopped` (no stop proof) | hold |
 | Retained source | `source_not_retained` | hold |
+| Retained source | `claimed_changes_missing` (claimed changes, unchanged source) | rework |
 | Required checks | `required_check_failed` | rework |
 | Required checks | `required_check_evidence_missing` | hold |
 | Delivery | `delivery_unpublished` | rework |

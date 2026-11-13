@@ -361,7 +361,18 @@ async fn publish(state: &AppState, delivery: &DeliveryService, report_id: Uuid) 
         .await?
         {
             Some(head) => sha1(&head.oid),
-            None => sha1(&admitted.resolved_object.hex),
+            // A handoff successor's admitted base is its predecessor's saved commit; the
+            // target still holds the lineage's original base (review C-1).
+            None => {
+                let mut conn = state.store.pool.acquire().await.map_err(db)?;
+                let task = r.spec.task.task_id;
+                let base = aq_machine_control::lineage_base(
+                    &mut conn,
+                    task,
+                    &admitted.resolved_object.hex,
+                );
+                sha1(&base.await?)
+            }
         },
     };
     // Candidate creation has no remote effect; it may run before the fence.

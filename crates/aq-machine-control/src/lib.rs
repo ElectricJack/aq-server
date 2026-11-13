@@ -555,6 +555,38 @@ pub async fn record_handoff(
     reason_of(&stored)
 }
 
+/// The commit a task's lineage started from (review C-1). A handoff successor is admitted on
+/// its predecessor's saved commit, the handoff candidate; that candidate was built on the
+/// predecessor's own admitted base (its frozen `base` input), followed back through every
+/// handoff of the task. An attempt not admitted on a handoff candidate starts from `base`.
+pub async fn lineage_base(
+    conn: &mut PgConnection,
+    task: Uuid,
+    base: &str,
+) -> Result<String, Error> {
+    let mut current = base.to_owned();
+    if !has_format(conn).await? {
+        return Ok(current);
+    }
+    for _ in 0..64 {
+        let earlier: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT i.inputs->'base'->>'hex' FROM attempt_handoffs h \
+             JOIN execution_attempts a ON a.attempt_id=h.attempt_id \
+             JOIN delivery_intents i ON i.operation_id=h.candidate_operation_id \
+             WHERE a.task_id=$1 AND h.candidate_oid=$2 AND i.operation='candidate.create' \
+             ORDER BY h.requested_at LIMIT 1",
+        )
+        .bind(task)
+        .bind(&current)
+        .fetch_optional(&mut *conn)
+        .await?;
+        match earlier.flatten() {
+            Some(earlier) if earlier != current => current = earlier,
+            _ => break,
+        }
+    }
+    Ok(current)
+}
 pub async fn handoff_of(
     conn: &mut PgConnection,
     attempt: Uuid,

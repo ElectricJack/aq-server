@@ -25,9 +25,9 @@ pub(crate) struct AutoEnv {
     pub(crate) source: Uuid,
     pub(crate) checkpoint: String,
     check_id: String,
-    validator: String,
+    pub(crate) validator: String,
     expected_version: u64,
-    writes: Arc<AtomicUsize>,
+    pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
     _directory: tempfile::TempDir,
 }
@@ -66,19 +66,21 @@ async fn auto_env_profiled(
         process_outcome,
         graph_profile,
         true,
+        None,
     ))
     .await
 }
 
 /// `changed`: the retained checkpoint is a new commit on the admitted base;
 /// otherwise it is the admitted base itself (the attempt changed no file).
-async fn auto_env_source(
+pub(crate) async fn auto_env_source(
     delivery: &str,
     graph_status: axum::http::StatusCode,
     keep_checks: bool,
     process_outcome: Option<aq_admission::transport::ProcessOutcome>,
     graph_profile: Option<Value>,
     changed: bool,
+    conclusion: Option<&str>,
 ) -> AutoEnv {
     let (mut f, _, mut report) = Box::pin(prepare_with_policy_checks(
         true,
@@ -91,6 +93,9 @@ async fn auto_env_source(
     .await;
     if let Some(outcome) = process_outcome {
         report.outcome = outcome;
+    }
+    if let Some(conclusion) = conclusion {
+        report.conclusion = Label::new(conclusion).unwrap();
     }
     let source = Uuid::new_v4();
     report.source_receipt_ids.push(source);
@@ -251,7 +256,13 @@ impl AutoEnv {
             .unwrap()
             .expect("default policy applies")
     }
-    async fn check(&self, source: Uuid, checkpoint: &str, validator: &str, verdict: &str) {
+    pub(crate) async fn check(
+        &self,
+        source: Uuid,
+        checkpoint: &str,
+        validator: &str,
+        verdict: &str,
+    ) {
         sqlx::query("INSERT INTO profiled_check_evidence(attempt_id,check_id,source_operation_id,checkpoint,validator_digest,verdict,evidence,recorded_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(attempt_id,check_id,source_operation_id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint,validator_digest=EXCLUDED.validator_digest,verdict=EXCLUDED.verdict,evidence=EXCLUDED.evidence")
             .bind(self.report.binding.attempt_id).bind(&self.check_id).bind(source)
             .bind(checkpoint).bind(validator).bind(verdict)
@@ -264,7 +275,7 @@ impl AutoEnv {
             .bind(json!({"publisher":"synthetic-delivery-owner"})).bind(NOW as i64)
             .execute(&self.f.db.pool().await).await.unwrap();
     }
-    async fn holds_task(&self) -> bool {
+    pub(crate) async fn holds_task(&self) -> bool {
         sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
             .bind(self.report.binding.attempt_id)
             .fetch_one(&self.f.db.pool().await)
@@ -720,6 +731,7 @@ async fn unchanged_source_completes_without_publication() {
         None,
         None,
         false,
+        None,
     ))
     .await;
     assert_eq!(env.checkpoint, admitted(&env).await.resolved_object.hex);
@@ -761,6 +773,50 @@ async fn unchanged_source_completes_without_publication() {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing sent to aq-git");
     assert!(evidence_rows(&env).await.is_empty(), "no delivery evidence");
     assert!(head_of(&env).await.is_none(), "the source head never moves");
+}
+
+/// Review I-2: a worker report whose agent claimed changes (or copied back
+/// only files Git ignores) while the retained source is unchanged is refused
+/// for rework, never completed as `no_change`; a claim of none completes.
+#[tokio::test]
+async fn claimed_changes_that_did_not_land_are_reworked() {
+    for (conclusion, expected) in [
+        (
+            "Changes: src/lib.rs; Copied: none; Claude exit 0; Result: done",
+            Some("claimed_changes_missing"),
+        ),
+        (
+            "Changes: target/debug/x; Claude exit 0; Summary: built",
+            Some("claimed_changes_missing"),
+        ),
+        (
+            "Changes: none; Copied: target/x; Claude exit 0; Result: CI passes",
+            None,
+        ),
+    ] {
+        let env = Box::pin(auto_env_source(
+            "not_required",
+            axum::http::StatusCode::OK,
+            false,
+            None,
+            None,
+            false,
+            Some(conclusion),
+        ))
+        .await;
+        let s = env.settle().await;
+        match expected {
+            Some(reason) => {
+                env.assert_not_completed(&s, AutoDisposition::ReworkRequired, reason)
+                    .await
+            }
+            None => assert_eq!(
+                s.disposition,
+                AutoDisposition::Confirmed,
+                "{conclusion}: {s:?}"
+            ),
+        }
+    }
 }
 
 #[tokio::test]
@@ -822,14 +878,14 @@ async fn moved_target_is_unpublished_rework_and_never_advances_source() {
     );
 }
 
-async fn evidence_rows(env: &AutoEnv) -> Vec<(String, Value)> {
+pub(crate) async fn evidence_rows(env: &AutoEnv) -> Vec<(String, Value)> {
     sqlx::query_as("SELECT state,evidence FROM profiled_delivery_evidence WHERE attempt_id=$1")
         .bind(env.report.binding.attempt_id)
         .fetch_all(&env.f.db.pool().await)
         .await
         .unwrap()
 }
-async fn head_of(
+pub(crate) async fn head_of(
     env: &AutoEnv,
 ) -> Option<aq_server::profiled_execution::settlement::publication::SourceHead> {
     let source = admitted(env).await;

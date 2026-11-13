@@ -219,9 +219,65 @@ async fn a_task_past_its_policy_max_attempts_is_held_visibly_once_and_other_work
     );
 }
 
-/// I1, I3, M7: a hold is recorded only against the attempt count its decision saw, racing
-/// recorders write one row and one comment, a lost mark is repaired without a second comment,
-/// and a new attempt clears the hold in the view and the swarm alike.
+/// Owner ruling 4b (2026-11-13): a task the default policy completed with no file change
+/// reads as such in its work view, from the server's `no_change` settlement evidence.
+#[tokio::test]
+async fn a_task_completed_with_no_change_says_so_in_its_work_view() {
+    let c = setup().await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let attempt = page.offers.remove(0).offered.offer.binding.attempt_id;
+    let task = c.env.lineage.task_id;
+    c.mode.store(10, Ordering::SeqCst);
+    let work_view = work(&c, task).await;
+    assert_eq!(work_view["state"], "completed", "{work_view}");
+    let flag = |view: &Value| view.get("completed_without_changes").cloned();
+    assert_eq!(
+        flag(&full_work(&c, task).await),
+        None,
+        "nothing settled yet"
+    );
+    // A synthetic confirmed default-policy settlement (owner trigger bypassed).
+    let mut tx = c.env.env.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,evidence,operation_id,workspace_id,task_id,expected_version,expected_content_revision,payload_bytes,receipt,created_at_ms,updated_at_ms) VALUES($1,$2,'aq.settlement.default-policy@1','confirmed',$3,$4,$4,$5,1,1,'\\x7b7d','{}',1000,1000)")
+        .bind(Uuid::new_v4()).bind(attempt)
+        .bind(serde_json::json!({"delivery":{"policy":"required","state":"no_change"}}))
+        .bind(Uuid::new_v4()).bind(task)
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        flag(&full_work(&c, task).await),
+        Some(serde_json::json!(true))
+    );
+}
+/// The whole work view data of `task` (schema-checked by [`work`]).
+async fn full_work(c: &Case, task: Uuid) -> Value {
+    work(c, task).await;
+    let state = &c.env.env.state;
+    let project = c.env.lineage.project_id;
+    let app = aq_server::agent_access::human::routes(state).with_state(state.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::get(format!("/api/human/projects/{project}/tasks/{task}/work"))
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value =
+        serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    body["data"].clone()
+}
+
 /// The owner's `task.retry` dashboard action on the case's task.
 async fn retry(c: &Case, operation: Uuid) -> (axum::http::StatusCode, Value) {
     let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
@@ -277,7 +333,7 @@ async fn retry_on_a_task_its_retry_budget_holds_is_refused_with_the_reason() {
     for part in [
         "the catalog retry policy's maximum attempts are used up",
         "1 of 1 allowed attempts",
-        "retire this task",
+        "cancel this task and create a new one",
     ] {
         assert!(message.contains(part), "{message}");
     }
@@ -294,6 +350,9 @@ async fn retry_on_a_task_its_retry_budget_holds_is_refused_with_the_reason() {
     assert!(offered_tasks(&body).is_empty(), "{body}");
 }
 
+/// I1, I3, M7: a hold is recorded only against the attempt count its decision saw, racing
+/// recorders write one row and one comment, a lost mark is repaired without a second comment,
+/// and a new attempt clears the hold in the view and the swarm alike.
 #[tokio::test]
 async fn hold_records_race_free_and_post_their_stored_comment_once() {
     let (c, predecessor) = failed_once(None).await;
