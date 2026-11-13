@@ -14,6 +14,7 @@ pub mod execution_permits;
 pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
+mod internal_work;
 pub mod lifecycle_artifacts;
 pub mod machine_actions;
 pub mod machine_api;
@@ -315,6 +316,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(terminal::api::human_routes(state.clone()))
         .merge(manual_agents::service(&state).human_routes())
         .merge(profile_catalog::admin_routes())
+        .merge(internal_work::admin_routes())
         .merge(swarm_settings::routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())

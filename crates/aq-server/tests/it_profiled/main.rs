@@ -8,6 +8,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod internal_work_settings;
 mod lifecycle_artifacts;
 mod profile_catalog;
 mod profile_inspection;

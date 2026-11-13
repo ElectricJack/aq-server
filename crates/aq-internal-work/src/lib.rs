@@ -3,6 +3,8 @@
 //! A caller describes a [`Request`]; the server keeps it as an internal task
 //! (`internal_tasks`), outside the graph and outside project capacity, and
 //! tries the ordered [`Candidate`] list until one answers or the task fails.
+pub mod http;
+pub mod settings;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +25,10 @@ pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
+    #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
+    NotFound(String),
     #[error("database")]
     Database(#[from] sqlx::Error),
     /// A stored row no longer decodes into the types of this crate.
@@ -33,7 +39,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// What the work is for. A fixed list, so a typo is an error rather than a
 /// silent fall-through to the default profile (spec 0012 §3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
     RoutingClassification,
@@ -41,6 +47,16 @@ pub enum Purpose {
     PlaybookCall,
     DecisionRevision,
     ResultProcessing,
+}
+
+impl Purpose {
+    pub const ALL: [Purpose; 5] = [
+        Purpose::RoutingClassification,
+        Purpose::PlaybookCompilation,
+        Purpose::PlaybookCall,
+        Purpose::DecisionRevision,
+        Purpose::ResultProcessing,
+    ];
 }
 
 /// The structure the answer must have.

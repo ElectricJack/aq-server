@@ -198,6 +198,8 @@
     {"path": "/api/settings/swarm/limits", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/swarm/mode", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/swarm/operations/{id}", "class": "owner_admin", "note": "Owner-only swarm concurrency settings; RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/internal-work", "class": "owner_admin", "note": "Owner-only internal work profile settings (aq-internal-work http.rs); RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/internal-work/operations/{id}", "class": "owner_admin", "note": "Owner-only actor-scoped receipt lookup for internal work settings saves; RequireOwner."},
     {"path": "/api/settings/intelligence", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/settings/intelligence/operations/{id}", "class": "owner_admin", "note": "Scoped manual sessions, terminals and saved intelligence settings; existing owner/node guard."},
     {"path": "/api/settings/intelligence/structure", "class": "owner_admin", "note": "Owner-only Intelligence presentation metadata and inert routing Markdown source; RequireOwner and existing CSRF guard."},
