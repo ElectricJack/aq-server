@@ -359,6 +359,54 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<Row>> {
         .transpose()
 }
 
+/// Which runs [`list`] returns; `None` matches every value.
+#[derive(Default)]
+pub struct Filter {
+    pub affected_kind: Option<String>,
+    pub affected_id: Option<String>,
+    pub purpose: Option<Purpose>,
+    pub status: Option<String>,
+}
+
+/// Up to `limit` rows, newest first, strictly older than `cursor`
+/// (`created_at_ms`, `id`).
+pub async fn list(
+    pool: &PgPool,
+    filter: &Filter,
+    cursor: Option<(i64, Uuid)>,
+    limit: i64,
+) -> Result<Vec<Row>> {
+    sqlx::query(
+        "SELECT * FROM internal_tasks
+         WHERE ($1::text IS NULL OR affected_kind=$1) AND ($2::text IS NULL OR affected_id=$2)
+           AND ($3::text IS NULL OR purpose=$3) AND ($4::text IS NULL OR status=$4)
+           AND ($5::bigint IS NULL OR (created_at_ms,id)<($5,$6::uuid))
+         ORDER BY created_at_ms DESC, id DESC LIMIT $7",
+    )
+    .bind(&filter.affected_kind)
+    .bind(&filter.affected_id)
+    .bind(filter.purpose.as_ref().map(to_text))
+    .bind(&filter.status)
+    .bind(cursor.map(|c| c.0))
+    .bind(cursor.map(|c| c.1))
+    .bind(limit)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(Row::decode)
+    .collect()
+}
+
+/// Marks `id` as the retry of `of`.
+pub async fn set_retry_of(pool: &PgPool, id: Uuid, of: Uuid) -> Result<()> {
+    sqlx::query("UPDATE internal_tasks SET retry_of=$2 WHERE id=$1")
+        .bind(id)
+        .bind(of)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// The locked row, when candidate `candidate_index` is still running it.
 async fn held(tx: &mut sqlx::PgConnection, id: Uuid, candidate_index: u32) -> Result<Option<Row>> {
     sqlx::query(

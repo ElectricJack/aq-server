@@ -69,6 +69,20 @@ impl Service {
         }
     }
 
+    /// Re-submits the stored request of a failed run, resolving candidates
+    /// afresh from Settings, and links the new run to it.
+    pub async fn retry(&self, id: Uuid) -> Result<Uuid> {
+        let row = store::get(&self.pool, id)
+            .await?
+            .ok_or_else(|| Error::NotFound("Internal run not found".into()))?;
+        if row.status != "failed" {
+            return Err(Error::Conflict("Only a failed run can be retried".into()));
+        }
+        let new = self.submit(&row.request).await?;
+        store::set_retry_of(&self.pool, new, id).await?;
+        Ok(new)
+    }
+
     /// The candidates of `profile`, or why there are none.
     async fn candidates(
         &self,

@@ -6,6 +6,7 @@
 pub mod api_backend;
 pub mod http;
 pub mod resolve;
+pub mod runs;
 pub mod service;
 pub mod settings;
 pub mod store;

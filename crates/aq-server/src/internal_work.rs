@@ -66,6 +66,12 @@ impl From<Error> for AppError {
         }
     }
 }
+impl http::Host for AppState {
+    fn service(&self) -> aq_internal_work::Result<&Service> {
+        let unwired = || Error::Conflict("internal work is not available".into());
+        self.internal_work.0.as_deref().ok_or_else(unwired)
+    }
+}
 pub(crate) fn admin_routes() -> Router<AppState> {
     http::routes::<AppState, RequireOwner, AppError>()
 }
