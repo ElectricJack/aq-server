@@ -55,6 +55,10 @@ both return neutral 404. A missing row means **admission unknown**. Preserve the
 original ID and request bytes. Operation responses identify the digest, scope,
 created/updated timestamps, subject refs, receipt refs, affected entities and
 permitted recovery. Confirmed means only the effects named in that receipt.
+A `rejected` operation may carry a `reason` code when its domain owner names
+one. `busy` means the owner's rows were contended (for example a machine
+action's 1 s lock timeout): nothing was changed, and a new submission under a
+new operation ID may succeed.
 
 Ordinary terminal receipts survive at least 90 days after their last update.
 Pending and unknown operations never expire. Retirement erases response details

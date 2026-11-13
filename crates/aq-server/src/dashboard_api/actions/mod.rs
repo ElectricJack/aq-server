@@ -317,11 +317,15 @@ async fn finish(
                     .current_versions
                     .iter()
                     .all(|(k, v)| contract::safe(k, 128) && contract::revision(v))))
+        && outcome.reason.is_none_or(|r| {
+            outcome.disposition == Disposition::Rejected && aq_machine_control::holds::valid_code(r)
+        })
     {
         completed.disposition = outcome.disposition;
         completed.receipt_refs = outcome.receipt_refs;
         completed.affected_entities = outcome.affected_entities;
         completed.current_versions = outcome.current_versions;
+        completed.reason = outcome.reason.map(str::to_owned);
     } else {
         completed.disposition = Disposition::Unknown;
     }
@@ -329,6 +333,7 @@ async fn finish(
         && completed.receipt_refs == original.receipt_refs
         && completed.affected_entities == original.affected_entities
         && completed.current_versions == original.current_versions
+        && completed.reason == original.reason
     {
         return Ok(original);
     }

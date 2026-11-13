@@ -2743,6 +2743,16 @@
           "format": "uuid",
           "type": "string"
         },
+        "reason": {
+          "description": "Why a `rejected` operation was refused, when its domain owner names a reason (absent\notherwise). `busy`: the owner's rows were contended, nothing was changed, and a new\nsubmission may succeed.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "receipt_refs": {
           "items": {
             "$ref": "#/$defs/EntityRef"

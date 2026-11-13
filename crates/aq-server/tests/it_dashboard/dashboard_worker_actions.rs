@@ -269,6 +269,60 @@ async fn revoking_one_slot_of_a_machine_is_refused() {
     assert_eq!(live, 2);
 }
 
+/// Every node of the fixture, with the row version (`xmin`) that any write would change.
+async fn node_rows(pool: &PgPool) -> Vec<Value> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object('row',to_jsonb(n),'xmin',n.xmin::text) FROM nodes n ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// M1 residual: an owner machine action whose node-row locks time out (1 s,
+/// `OWNER_LOCK_TIMEOUT`) changed nothing, so it is a definite refusal with the
+/// reason `busy`, not an unknown outcome. The node rows are locked in id order
+/// before any write: holding the last one leaves every node and the control
+/// untouched, and a later submission succeeds.
+#[tokio::test]
+async fn an_action_that_hits_the_lock_timeout_is_refused_busy_and_changes_nothing() {
+    let (f, pool, app) = machine(3).await;
+    running_attempt(&f, &pool).await;
+    let before = node_rows(&pool).await;
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query(
+        "SELECT id FROM nodes WHERE machine_key='desktop' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+    )
+    .execute(&mut *held)
+    .await
+    .unwrap();
+    for request in [
+        body("stop", "desktop", "1"),
+        body("drain", "desktop", "1"),
+        body("revoke", "desktop", ""),
+    ] {
+        let (s, v) = act(&app, "owner@localhost", &request).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["data"]["disposition"], "rejected", "{v}");
+        assert_eq!(v["data"]["reason"], "busy", "{v}");
+        assert_eq!(v["data"]["recovery"], "refresh_and_review", "{v}");
+    }
+    assert_eq!(node_rows(&pool).await, before, "no node changed");
+    let controls: i64 = sqlx::query_scalar("SELECT count(*) FROM machine_controls")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let handoffs: i64 = sqlx::query_scalar("SELECT count(*) FROM attempt_handoffs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((controls, handoffs), (0, 0), "nothing was applied");
+    held.rollback().await.unwrap();
+    let (_, v) = act(&app, "owner@localhost", &body("stop", "desktop", "1")).await;
+    assert_eq!(v["data"]["disposition"], "confirmed", "{v}");
+    assert_eq!(control(&pool).await, ("stopped".into(), 2));
+}
+
 #[tokio::test]
 async fn non_owner_is_refused() {
     let (_f, pool, app) = machine(1).await;

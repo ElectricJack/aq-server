@@ -162,6 +162,12 @@ for disposition in ('pending', 'confirmed', 'conflict', 'rejected', 'unknown'):
         assert not operation['receipt_refs'] and not operation['affected_entities']
     request = load('request-supervisor-message-send')
     assert operation['request_digest'] == 'sha256:' + hashlib.sha256(canonical({'request':request, 'scope':operation['scope']})).hexdigest()
+busy = load('operation-rejected-busy')
+validator.validate(busy)
+assert busy['data']['disposition'] == 'rejected' and busy['data']['reason'] == 'busy'
+assert busy['data']['recovery'] == 'refresh_and_review' and not busy['pending_operations']
+for disposition in ('pending', 'confirmed', 'conflict', 'unknown'):
+    assert 'reason' not in load('operation-' + disposition)['data']
 for status in (401,403,404,409,410,413,422,426,429,503):
     error = load('error-' + str(status))
     validator.validate(error)
