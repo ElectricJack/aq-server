@@ -8,14 +8,20 @@
 use crate::common::native_offer::{Case, fail_and_release, poll, poll_offered, setup};
 use aq_admission::control::{ControlReply, decode_reply};
 use serde_json::{Value, json};
+use std::sync::{Arc, atomic::Ordering};
 use uuid::Uuid;
 
 const ROUTER: &str = "engineering@3";
 const CLASS_PROFILE: &str = "standard-high@1";
 
+/// The class profile's own model for fixture-a; the router's candidates do not have it.
+const CLASS_MODEL: &str = "model-c";
+
 /// Activates a catalog whose agents run on an automatic router (`engineering@3`) and that
-/// has a class profile `standard-high@1` with the router's candidates, assigns that profile
-/// to the standard parent at high effort, and binds the project to the router.
+/// has a class profile `standard-high@1` whose fixture-a candidate is its own model
+/// ([`CLASS_MODEL`], installed on the node and context-qualified here) with unknown
+/// availability allowed, assigns that profile to the standard parent at high effort, and
+/// binds the project to the router.
 async fn on_the_router(c: &mut Case) {
     let env = &mut c.env.env;
     let original: Vec<u8> =
@@ -36,6 +42,13 @@ async fn on_the_router(c: &mut Case) {
     profiles[0].version = 3;
     profiles[0].automatic_routing = Some(true);
     (class.id, class.version, class.automatic_routing) = ("standard-high".into(), 1, None);
+    assert_eq!(class.candidates[0].provider, "fixture-a");
+    class.candidates[0].model = CLASS_MODEL.into();
+    class
+        .selection_policy
+        .as_mut()
+        .unwrap()
+        .allow_unknown_availability = true;
     profiles.push(class);
     for agent in &mut artifact.catalog.agents {
         agent.version = 3;
@@ -72,6 +85,25 @@ async fn on_the_router(c: &mut Case) {
     .execute(&env.pool)
     .await
     .unwrap();
+    let model = json!([{"provider":"fixture-a","model":CLASS_MODEL,
+        "reasoning_configuration_reference":"reasoning-a@1","native_reasoning":"high"}]);
+    sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses,0,models}',(snapshot#>'{harnesses,0,models}')||$1::jsonb)")
+        .bind(model)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let mut config = (*env.state.config).clone();
+    let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
+    let mut fact = profiled.context_qualifications[0].clone();
+    assert_eq!(fact.subject.provider, "fixture-a");
+    fact.subject.model = CLASS_MODEL.into();
+    profiled.context_qualifications.push(fact);
+    profiled.revision += 1;
+    config.profiled_execution = Some(Arc::new(profiled));
+    env.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&env.state)
+        .await
+        .unwrap();
 }
 /// The installation's routing switch, written directly (no compiled policy is needed here).
 async fn routing(c: &Case, on: bool) {
@@ -84,6 +116,12 @@ async fn routing(c: &Case, on: bool) {
 /// Puts a router route of `class` with harness allowlist `harnesses` on the task.
 fn route(c: &Case, class: &str, harnesses: &[&str]) {
     let route = json!({"c":class,"h":harnesses,"p":[],"pf":[],"l":null,"i":"any","d":null,"s":"router","n":1});
+    *c.metadata.lock().unwrap() = json!({"aq:route": route});
+}
+/// Puts a pinned router route of `class` on the task.
+fn pinned_route(c: &Case, class: &str) {
+    let route =
+        json!({"c":class,"h":[],"p":[],"pf":[],"l":null,"i":"pinned","d":null,"s":"router","n":1});
     *c.metadata.lock().unwrap() = json!({"aq:route": route});
 }
 fn stored_route(c: &Case) -> Option<Value> {
@@ -105,6 +143,17 @@ fn offered(body: &Value) -> Vec<String> {
                 .to_owned()
         })
         .collect()
+}
+/// Polls until an offer arrives (a refused poll fails the test) and returns its task.
+async fn offered_task(c: &Case) -> Uuid {
+    let (status, body) = poll_offered(c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(page.offers.len(), 1, "{body}");
+    page.offers[0].offered.offer.manifest.bindings.task_id
 }
 /// Polls until an offer arrives and returns its intelligence profile identity.
 async fn offered_on(c: &Case) -> String {
@@ -131,21 +180,6 @@ async fn not_offered(c: &Case) -> usize {
     }
     assert_eq!(attempts(c).await, 0, "no attempt was published");
     refused
-}
-/// Polls until a poll is refused (a selection that refuses a first attempt fails the poll);
-/// none offers the task.
-async fn refused(c: &Case) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let (status, body) = poll(c).await;
-        if status == 409 && body["body"]["code"] == "conflict" {
-            return;
-        }
-        assert_eq!(status, 200, "{body}");
-        assert!(offered(&body).is_empty(), "{body}");
-        assert!(tokio::time::Instant::now() < deadline, "never refused");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
 }
 async fn attempts(c: &Case) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE task_id=$1")
@@ -290,8 +324,8 @@ async fn route_excluding_every_candidate_is_refused_and_no_offer_is_published() 
     on_the_router(&mut c).await;
     routing(&c, true).await;
     route(&c, "standard-high", &["no-such-harness"]);
-    refused(&c).await;
-    not_offered(&c).await;
+    // Selection refuses it for a route reason: skipped for the poll, not a failed poll.
+    assert_eq!(not_offered(&c).await, 0);
     assert!(
         stored_route(&c).is_some(),
         "a refused route is not rerouted"
@@ -303,4 +337,91 @@ async fn route_excluding_every_candidate_is_refused_and_no_offer_is_published() 
         offered_on(&c).await,
         format!("intelligence:{CLASS_PROFILE}")
     );
+}
+
+/// Review finding 2: a running routed attempt is counted in its class profile's capacity
+/// cell, not the router's, so a cell limit holds for routed work. The class profile's model
+/// is not among the router's candidates.
+#[tokio::test]
+async fn a_running_routed_attempt_occupies_its_class_profiles_cell_not_the_routers() {
+    use aq_swarm_settings::admission::{Cell, check};
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    routing(&c, true).await;
+    let pool = c.env.env.pool.clone();
+    let cell = |class: &str| Cell {
+        provider: "fixture-a".into(),
+        intelligence_class: class.into(),
+    };
+    let limits = json!({"cell_limits":[
+        {"provider":"fixture-a","intelligence_class":"standard-high","limit":1},
+        {"provider":"fixture-a","intelligence_class":"engineering","limit":1}]});
+    sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
+        .bind(limits)
+        .execute(&pool)
+        .await
+        .unwrap();
+    route(&c, "standard-high", &[]);
+    assert_eq!(
+        offered_on(&c).await,
+        format!("intelligence:{CLASS_PROFILE}")
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    // The admission check the offer path makes for the next task of each cell.
+    let routed = check(&mut conn, Some(&cell("standard-high")))
+        .await
+        .unwrap();
+    assert!(
+        routed.is_some(),
+        "a second routed task of the class is not admitted"
+    );
+    let unrouted = check(&mut conn, Some(&cell("engineering"))).await.unwrap();
+    assert_eq!(unrouted, None, "an unrouted task under the router still is");
+}
+
+/// Review finding 3: a routed first attempt this node cannot serve (its route allows only a
+/// harness the node lacks) is skipped for the poll; the project's next ready task is offered
+/// instead of the poll failing.
+#[tokio::test]
+async fn a_routed_task_this_node_cannot_serve_does_not_block_its_project() {
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    c.mode.store(7, Ordering::SeqCst);
+    route(&c, "standard-high", &["claude-code"]);
+    assert_eq!(offered_task(&c).await, c.second_task);
+    assert!(
+        stored_route(&c).is_some(),
+        "the route is valid, so it is kept"
+    );
+    assert_eq!(holds(&c).await, 0);
+}
+
+/// Review finding 3: a pinned route whose provider is unavailable here refuses fallback; the
+/// task is skipped for the poll and the project's next ready task is offered.
+#[tokio::test]
+async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    let mut scope = c.env.input.observations[0].scope.clone();
+    scope.model = Some(CLASS_MODEL.into());
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    let observation = json!({"operation_id":Uuid::new_v4(),"expected_revision":revision,"sequence":1,
+        "scope":scope,"state":"quota_unavailable","ttl_ms":30_000,"cooldown_ms":20_000});
+    let app = aq_server::build_admin_router(c.env.env.state.clone());
+    let path = "/api/intelligence/observations";
+    let (status, body) =
+        crate::common::selection::call(&app, path, Some(observation), "owner@localhost").await;
+    assert_eq!(status, 200, "{body}");
+    c.mode.store(7, Ordering::SeqCst);
+    pinned_route(&c, "standard-high");
+    assert_eq!(offered_task(&c).await, c.second_task);
+    assert!(
+        stored_route(&c).is_some(),
+        "the route is valid, so it is kept"
+    );
+    assert_eq!(holds(&c).await, 0);
 }

@@ -1182,6 +1182,7 @@ fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes(
     let out = select(&catalog, &input).unwrap();
     assert!(out.resolved.is_none(), "{out:?}");
     assert_eq!(out.reason_codes, ["no_eligible_candidate"]);
+    assert_eq!(route_refusal(&out), Some(RouteRefusal::AllExcluded));
     for (_, _, state, reason) in rows(&out) {
         assert_eq!(
             (state, reason.as_str()),
@@ -1284,6 +1285,7 @@ fn pinned_route_refuses_fallback_with_route_provider_pinned() {
     let out = select(&catalog, &input).unwrap();
     assert!(out.resolved.is_none(), "{out:?}");
     assert_eq!(out.reason_codes, ["route_provider_pinned"]);
+    assert_eq!(route_refusal(&out), Some(RouteRefusal::ProviderPinned));
     let fallback = &out.traces[1];
     assert_eq!(fallback.provider, "fixture-b");
     assert_eq!(fallback.state, CandidateState::PolicyDenied);
@@ -1405,6 +1407,11 @@ fn a_first_provider_without_an_installed_composition_still_bounds_fallback_under
     let plain = select(&catalog, &input).unwrap();
     assert!(plain.resolved.is_none(), "{plain:?}");
     assert_eq!(plain.reason_codes, ["no_permitted_fallback"]);
+    assert_eq!(
+        route_refusal(&plain),
+        None,
+        "a policy refusal is not a route one"
+    );
     input.route = route(|r| r.harnesses = vec!["codex".into()]);
     let routed = select(&catalog, &input).unwrap();
     assert!(routed.resolved.is_none(), "{routed:?}");

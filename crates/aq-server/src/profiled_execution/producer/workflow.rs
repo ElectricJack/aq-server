@@ -235,7 +235,9 @@ async fn refused_successor(
     successor: Option<holds::Successor>,
     skipped: &mut std::collections::BTreeSet<Uuid>,
 ) -> bool {
-    if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) {
+    // Spec 0011 §4: a route this node cannot serve now skips a first attempt for the poll.
+    let unservable = successor.is_none() && unservable_route(decision).is_some();
+    if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) || unservable {
         skipped.insert(decision.inputs.project.lineage.task_id);
         return true;
     }
@@ -245,6 +247,14 @@ async fn refused_successor(
     let (pool, reasons) = (&state.store.pool, &decision.outcome.reason_codes);
     holds::selection_refused(pool, s, reasons, (state.clock)()).await;
     skipped.insert(s.task)
+}
+/// The route reason selection refused a routed task for: no candidate can serve its route
+/// on this node now (spec 0011 §4).
+pub(crate) fn unservable_route(
+    decision: &resolver::Decision,
+) -> Option<aq_selection::RouteRefusal> {
+    decision.inputs.route.as_ref()?;
+    aq_selection::route_refusal(&decision.outcome)
 }
 /// The commit frozen into the export operation key. An immutable policy keeps
 /// its historical key; a named ref adds the commit it resolved to at offer
