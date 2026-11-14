@@ -478,10 +478,10 @@ async fn supervisor_reads_and_switches_routing_through_the_admin_nest() {
     let a = admin().await;
     let (status, body) = a.supervisor("GET", ROUTING, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body,
-        json!({"enabled": false, "active": null, "latest": null})
-    );
+    // No routing source has been written on this server yet: no playbook.
+    let source = json!({"id": "routing", "kind": "builtin", "binding": "aq.routing",
+        "active": null, "latest": null});
+    assert_eq!(body, json!({"enabled": false, "source": source}));
     // Routing turns on only once a routing playbook is active, for a supervisor as for the owner.
     let on = Some(json!({"enabled": true}));
     let (status, refused) = a.supervisor("POST", ROUTING, on).await;
