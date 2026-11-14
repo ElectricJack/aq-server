@@ -3,6 +3,144 @@
     {
       "cli": [
         "attempt",
+        "abandon"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "attempt.abandon",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:3bb48098e18acd67b316b156e07bb6ee094efda90fc69302875cb8c19bfbe3fe",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id",
+              "operation_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/execution/attempts/{id}/disposition"
+          }
+        }
+      },
+      "summary": "Abandon a stopped, unsettled attempt and release its hold on the task (cannot be undone)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
+        "cancel"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "attempt.cancel",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:3bb48098e18acd67b316b156e07bb6ee094efda90fc69302875cb8c19bfbe3fe",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id",
+              "operation_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/execution/attempts/{id}/cancel"
+          }
+        }
+      },
+      "summary": "Ask a running attempt to stop",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
+        "disposition",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "attempt.disposition.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:432ef672133f082728574353773c15bdde95b05ca57012b9853827a1bf59eb58",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "attempt_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/execution/attempts/{id}/disposition"
+          }
+        }
+      },
+      "summary": "The record of an attempt's abandonment",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
         "show"
       ],
       "grant": "dashboard.read",
@@ -854,6 +992,46 @@
     {
       "cli": [
         "intelligence",
+        "operation",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "intelligence.operation.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "operation_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/intelligence/operations/{id}"
+          }
+        }
+      },
+      "summary": "The recorded result of one intelligence.set",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "intelligence",
         "registry",
         "show"
       ],
@@ -879,6 +1057,110 @@
         }
       },
       "summary": "The intelligence registry: credentials and recent observations",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "intelligence",
+        "set"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "intelligence.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:807c453649c2f0c1171234815d4b51c29e886456cf6bf6b1fb65d25b0966fad5",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "candidates": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "harnesses": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "reasoning_configuration_reference": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "provider",
+                    "model",
+                    "reasoning_configuration_reference",
+                    "harnesses"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "description": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "expected_revision": {
+                "description": "The settings revision intelligence.list returned",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "profile_id": {
+                "type": "string"
+              },
+              "profile_version": {
+                "description": "The profile's current version; 0 creates it",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "operation_id",
+              "expected_revision",
+              "profile_id",
+              "profile_version",
+              "name",
+              "description",
+              "candidates"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/settings/intelligence"
+          }
+        }
+      },
+      "summary": "Create, change or delete one intelligence profile",
       "target": {
         "rule": "own"
       }
@@ -1579,6 +1861,58 @@
     {
       "cli": [
         "notification",
+        "retry"
+      ],
+      "grant": "notification.admin",
+      "kind": "mutation",
+      "name": "notification.retry",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:0425a97d5905f94c0becb1243f9c4c52404ead264343698c5c7d5863d09d95c1",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "accept_duplicate_risk": {
+                "const": true
+              },
+              "delivery_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "expected_revision": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation_id",
+              "delivery_id",
+              "expected_revision",
+              "accept_duplicate_risk"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/notifications/retry"
+          }
+        }
+      },
+      "summary": "Retry a notification delivery whose outcome is unknown, accepting a possible duplicate",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "notification",
         "show"
       ],
       "grant": "dashboard.read",
@@ -1611,6 +1945,44 @@
         }
       },
       "summary": "One notification",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "operation",
+        "recover"
+      ],
+      "grant": "operation.recover",
+      "kind": "mutation",
+      "name": "operation.recover",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:612171e531274c66e3a3bd6662318da306c9dfd0e99f6cea4da6a9361c28261f",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "description": "The operation ID of the original create",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/human/operations/{operation}/recover"
+          }
+        }
+      },
+      "summary": "Retry the dispatch of a task create whose outcome was uncertain",
       "target": {
         "rule": "own"
       }
@@ -2227,6 +2599,54 @@
     {
       "cli": [
         "project",
+        "disable"
+      ],
+      "grant": "project.admin",
+      "kind": "mutation",
+      "name": "project.disable",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:ab7eb046cadee893ade6e4bdc4469d7a1d52c17b8386b58e6fd939f696ad8a21",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "operation_id",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{id}/disable"
+          }
+        }
+      },
+      "summary": "Disable a project so no new work starts in it",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "project",
         "list"
       ],
       "grant": "dashboard.read",
@@ -2290,6 +2710,163 @@
     {
       "cli": [
         "project",
+        "onboard"
+      ],
+      "grant": "project.admin",
+      "kind": "mutation",
+      "name": "project.onboard",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:9ebbc843772e1e81afa09330270916b4a1977111b52c230cedc3816a66f3cacf",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "credential_profile": {
+                "description": "A configured credential profile of the transport's kind",
+                "type": "string"
+              },
+              "default_branch": {
+                "type": "string"
+              },
+              "github": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "owner": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "owner",
+                  "name"
+                ],
+                "type": "object"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "publication": {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "enum": [
+                      "pull_request",
+                      "fast_forward"
+                    ]
+                  },
+                  "wait_for_checks": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "timeout_secs": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "timeout_secs"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              "repository_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "template": {
+                "description": "The project binding without its project, repository and publication fields",
+                "type": "object"
+              },
+              "transport": {
+                "enum": [
+                  "ssh",
+                  "https"
+                ]
+              }
+            },
+            "required": [
+              "operation_id",
+              "project_id",
+              "repository_id",
+              "github",
+              "transport",
+              "publication",
+              "template"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/repositories/onboard"
+          }
+        }
+      },
+      "summary": "Onboard a GitHub repository as a project (resumes when repeated with the same operation ID)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "project",
+        "onboard",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "project.onboard.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "operation_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/repositories/onboard/{operation_id}"
+          }
+        }
+      },
+      "summary": "The state of one repository onboarding",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "project",
         "revision",
         "show"
       ],
@@ -2332,6 +2909,60 @@
       "target": {
         "param": "project_id",
         "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "project",
+        "set"
+      ],
+      "grant": "project.admin",
+      "kind": "mutation",
+      "name": "project.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:fd1294fceebdbccdfdc8174a1e57d2a009cc9e0af062f518c39a3b9656df9173",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "binding": {
+                "description": "The whole binding, as project.show returns it; its project_id must be this project",
+                "type": "object"
+              },
+              "expected_revision": {
+                "description": "The project's current revision; 0 creates it",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "operation_id",
+              "expected_revision",
+              "binding"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{id}"
+          }
+        }
+      },
+      "summary": "Create a project or replace its binding (repository, profiles, limits, publication)",
+      "target": {
+        "rule": "own"
       }
     },
     {
@@ -3150,6 +3781,43 @@
     },
     {
       "cli": [
+        "sandbox",
+        "release"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "sandbox.release",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:25f80e035d907bcf76dd732c6179a11fc16dad5a8901f030bfd263aa87281b86",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "continuation_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "continuation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/hibernation/{continuation_id}/disk-release"
+          }
+        }
+      },
+      "summary": "Release the protected disk of a suspended attempt",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "server",
         "status"
       ],
@@ -3315,6 +3983,181 @@
         }
       },
       "summary": "Sessions the owner started by hand, with the workers, slots and projects to start one on",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "session",
+        "manual",
+        "slots",
+        "set"
+      ],
+      "grant": "worker.admin",
+      "kind": "mutation",
+      "name": "session.manual.slots.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:a06259599c9356e25377ce9959415c3cc0ce1d728ae36a8a5720952463ed3532",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "node_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "slots": {
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "node_id",
+              "project_id",
+              "operation_id",
+              "expected_revision",
+              "slots"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/manual-agents/workers/{node}/projects/{project}/slots"
+          }
+        }
+      },
+      "summary": "Set how many hand-started sessions a worker offers a project",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "session",
+        "manual",
+        "start"
+      ],
+      "grant": "worker.admin",
+      "kind": "mutation",
+      "name": "session.manual.start",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:f15a7f14a66085f2aa4261dbaefc88373db03d53d19b2239587f95a6d686ad4a",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "intelligence_profile": {
+                "additionalProperties": false,
+                "properties": {
+                  "candidate_id": {
+                    "type": "string"
+                  },
+                  "profile_id": {
+                    "type": "string"
+                  },
+                  "profile_version": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "profile_id",
+                  "profile_version",
+                  "candidate_id"
+                ],
+                "type": "object"
+              },
+              "node_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Becomes the session's ID; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "node_id",
+              "project_id",
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/manual-agents/workers/{node}/projects/{project}"
+          }
+        }
+      },
+      "summary": "Start a session by hand on a worker for a project",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "session",
+        "manual",
+        "stop"
+      ],
+      "grant": "worker.admin",
+      "kind": "mutation",
+      "name": "session.manual.stop",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:3f86d59974ce562585bc3658cb40ce98027863d57b9de0f3d183fe9cd68a2168",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "session_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/manual-agents/{id}/stop"
+          }
+        }
+      },
+      "summary": "Stop a session started by hand, keeping its workspace",
       "target": {
         "rule": "own"
       }
@@ -3586,6 +4429,126 @@
         }
       },
       "summary": "Send a message to the supervisor conversation",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
+        "operation",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "supervisor.operation.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:d1e2b9c9a2ec6063b3339a435e5bab6fffcb6d4d111e765c8d8947090c5c7d4b",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "conversation_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "conversation_id",
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/supervisors/{id}/operations/{operation}"
+          }
+        }
+      },
+      "summary": "The receipt of one supervisor.set",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
+        "set"
+      ],
+      "grant": "supervisor.control",
+      "kind": "mutation",
+      "name": "supervisor.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:afb777c7bd5e58435fb203c44ed1c90170cd05b025b9c1bf961ae0eb8b168343",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "conversation_id": {
+                "description": "The supervisor's conversation, as supervisor.list shows it",
+                "format": "uuid",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "expected_revision": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "intelligence_profile": {
+                "additionalProperties": false,
+                "properties": {
+                  "candidate_id": {
+                    "type": "string"
+                  },
+                  "profile_id": {
+                    "type": "string"
+                  },
+                  "profile_version": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "profile_id",
+                  "profile_version",
+                  "candidate_id"
+                ],
+                "type": "object"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "conversation_id",
+              "operation_id",
+              "expected_revision",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/supervisors/{id}/control"
+          }
+        }
+      },
+      "summary": "Turn a supervisor on or off and choose the profile it runs on",
       "target": {
         "rule": "own"
       }
@@ -5477,6 +6440,43 @@
     },
     {
       "cli": [
+        "wait",
+        "suspend"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "wait.suspend",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:e5c84fcb3096774992938f68d68f62d0cff37bbec5568b1983d94f011df240db",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "wait_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "wait_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/waits/{wait_id}/suspend"
+          }
+        }
+      },
+      "summary": "Suspend the attempt behind a wait (repeating returns the same directive)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "whoami"
       ],
       "grant": null,
@@ -5555,6 +6555,36 @@
       "summary": "Stop a machine taking new work and let running attempts finish",
       "target": {
         "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "enroll"
+      ],
+      "grant": "worker.admin",
+      "kind": "mutation",
+      "name": "worker.enroll",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/enrollments"
+          }
+        }
+      },
+      "summary": "Create a one-time enrollment code for a new worker (each call makes a new code)",
+      "target": {
+        "rule": "own"
       }
     },
     {

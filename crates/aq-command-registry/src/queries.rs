@@ -388,6 +388,12 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         "/api/settings/intelligence" | "/api/intelligence/registry" => NONE,
         // profile_catalog.rs::inspect, ::artifact
         "/api/profiles/catalogs" | "/api/profiles/catalogs/{digest}" => NONE,
+        // repository_onboarding.rs::show; profiled_execution/disposition.rs::read;
+        // aq-supervisor-control api.rs::operation; profile_catalog/settings.rs::operation
+        "/api/repositories/onboard/{operation_id}"
+        | "/api/execution/attempts/{id}/disposition"
+        | "/api/supervisors/{id}/operations/{operation}"
+        | "/api/settings/intelligence/operations/{id}" => NONE,
         _ => return None,
     })
 }

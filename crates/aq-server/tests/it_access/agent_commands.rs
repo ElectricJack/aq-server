@@ -402,6 +402,95 @@ async fn owner_commands_reach_the_same_handlers() {
         (StatusCode::BAD_REQUEST, json!("invalid_request")),
         "subject is required: {body}"
     );
+    // A mutation served by its own REST route answers as that route does for
+    // the same body (each with its own operation ID, so neither is a replay).
+    for (name, path, params) in [
+        (
+            "project.disable",
+            format!("/api/projects/{project}/disable"),
+            json!({"project_id":project,"expected_revision":999_999}),
+        ),
+        (
+            "attempt.cancel",
+            format!("/api/execution/attempts/{}/cancel", Uuid::from_u128(77)),
+            json!({"attempt_id":Uuid::from_u128(77),"reason":"test"}),
+        ),
+        (
+            "attempt.abandon",
+            format!(
+                "/api/execution/attempts/{}/disposition",
+                Uuid::from_u128(77)
+            ),
+            json!({"attempt_id":Uuid::from_u128(77),"reason":"test"}),
+        ),
+        (
+            "supervisor.set",
+            format!("/api/supervisors/{}/control", Uuid::from_u128(78)),
+            json!({"conversation_id":Uuid::from_u128(78),"expected_revision":1,"enabled":false}),
+        ),
+        (
+            "notification.retry",
+            "/api/notifications/retry".to_string(),
+            json!({"delivery_id":Uuid::from_u128(79),"expected_revision":1,"accept_duplicate_risk":true}),
+        ),
+        (
+            "session.manual.stop",
+            format!("/api/manual-agents/{}/stop", Uuid::from_u128(80)),
+            json!({"session_id":Uuid::from_u128(80)}),
+        ),
+        (
+            "wait.suspend",
+            format!("/api/waits/{}/suspend", Uuid::from_u128(81)),
+            json!({"wait_id":Uuid::from_u128(81)}),
+        ),
+        (
+            "sandbox.release",
+            format!("/api/hibernation/{}/disk-release", Uuid::from_u128(82)),
+            json!({"continuation_id":Uuid::from_u128(82)}),
+        ),
+        (
+            "operation.recover",
+            format!("/api/human/operations/{}/recover", Uuid::from_u128(83)),
+            json!({"operation":Uuid::from_u128(83)}),
+        ),
+    ] {
+        // The direct body is the params without the path params.
+        let mut body = params.clone();
+        for key in [
+            "project_id",
+            "attempt_id",
+            "conversation_id",
+            "session_id",
+            "wait_id",
+            "continuation_id",
+            "operation",
+        ] {
+            body.as_object_mut().unwrap().remove(key);
+        }
+        let takes_operation = !matches!(
+            name,
+            "wait.suspend" | "sandbox.release" | "operation.recover"
+        );
+        if takes_operation {
+            body["operation_id"] = json!(Uuid::new_v4());
+        }
+        let (direct_status, direct) = send(&e.admin, &path, None, Some(body)).await;
+        let (status, via) = send(
+            &e.admin,
+            &format!("/api/v1/commands/{name}"),
+            None,
+            Some(json!({"operation_id":Uuid::new_v4(),"params":params})),
+        )
+        .await;
+        assert_eq!(status, direct_status, "{name}: {via} / {direct}");
+        assert!(
+            !matches!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ) && via["message"] != "unknown param",
+            "{name}: {status} {via}"
+        );
+    }
     // With the task named, the command builds the subject itself and answers
     // exactly as the action union does for the same request.
     let (op, task) = (Uuid::new_v4(), Uuid::new_v4());

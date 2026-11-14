@@ -514,3 +514,79 @@ fn an_action_subject_follows_from_its_params() {
             "revision_param":"expected_version","version_key":"task"})
     );
 }
+
+/// An owner mutation served by its own REST route (catalog `owner_post`).
+#[test]
+fn route_backed_owner_mutations_fill_the_path_and_send_the_rest() {
+    let r = Registry::new(&actions()).unwrap();
+    let op = Uuid::from_u128(9);
+    let build = |name: &str, params: Value, reason: Option<&str>| {
+        let c = r.get(name).unwrap();
+        assert!(
+            c.kind == Kind::Mutation && c.owner_only() && c.agent.is_none(),
+            "{name}"
+        );
+        let request = CommandRequest {
+            operation_id: Some(op),
+            reason: reason.map(str::to_owned),
+            params: params.as_object().unwrap().clone(),
+            ..Default::default()
+        };
+        forward(c, c.owner.as_ref().unwrap(), &request, None, Uuid::nil()).unwrap()
+    };
+    // The request's operation ID and reason reach a body that takes them.
+    let f = build("attempt.cancel", json!({"attempt_id":"a-1"}), Some("stuck"));
+    assert_eq!(
+        (f.method, f.uri.as_str()),
+        ("POST", "/api/execution/attempts/a-1/cancel")
+    );
+    assert_eq!(f.body.unwrap(), json!({"operation_id":op,"reason":"stuck"}));
+    // Params win over the request's.
+    let f = build(
+        "attempt.cancel",
+        json!({"attempt_id":"a-1","operation_id":"mine","reason":"given"}),
+        Some("other"),
+    );
+    assert_eq!(
+        f.body.unwrap(),
+        json!({"operation_id":"mine","reason":"given"})
+    );
+    // A body that takes neither gets neither: recover's must be `{}`.
+    let f = build("operation.recover", json!({"operation":"o-1"}), Some("why"));
+    assert_eq!(f.uri, "/api/human/operations/o-1/recover");
+    assert_eq!(f.body.unwrap(), json!({}));
+    let f = build(
+        "session.manual.slots.set",
+        json!({"node_id":"n","project_id":"p","expected_revision":2,"slots":1}),
+        None,
+    );
+    assert_eq!(f.uri, "/api/manual-agents/workers/n/projects/p/slots");
+    assert_eq!(
+        f.body.unwrap(),
+        json!({"operation_id":op,"expected_revision":2,"slots":1})
+    );
+    // Each such schema is closed, names its path params and requires them.
+    for c in r.commands() {
+        let inline = |o: &Route| o.body == Body::Params && matches!(o.params, Params::Inline(_));
+        let Some(route) = c.owner.filter(inline) else {
+            continue;
+        };
+        let schema = params_schema(&route, &BTreeMap::new(), c.name);
+        assert_eq!(schema["additionalProperties"], false, "{}", c.name);
+        for (_, param) in route.segments() {
+            assert!(
+                schema["properties"].get(param).is_some(),
+                "{}: {param}",
+                c.name
+            );
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(param)),
+                "{}: {param}",
+                c.name
+            );
+        }
+    }
+}
