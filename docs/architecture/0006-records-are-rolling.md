@@ -150,7 +150,7 @@ fitting. "Pending" means not built.
 | Intelligence receipts and decision metadata (aq-server, [spec 0004](../specs/0004-intelligence-selection.md)) | The most recent 10,000 owner receipts, 4,096 machine receipts per node, 1,024 credential definition revisions; decisions with their run | On insert; spec 0008 for decisions. Pending |
 | DEP6 tables (aq-server, [row retention](../operations/row-retention.md)) | As listed there | DEP6 tick. Built for completed tasks; cancelled and retired tasks pending |
 | Worker per-attempt archive directories (aq-worker) | Directories holding unretained work; the most recent 20 others per slot, none older than 14 days | Worker service on its existing reconcile pass. Pending |
-| Preserved and kept sandboxes (aq-worker, [0005 SBX22](0005-sandboxed-execution-and-deployment-topology.md)) | The most recent `preserve.max_count` per node, none older than `preserve.max_age` | Oldest destroyed when a new one is preserved, after a notice. Pending; see §6 |
+| Kept sandboxes (aq-worker, [0005 SBX22](0005-sandboxed-execution-and-deployment-topology.md)) | Only sandboxes whose salvage failed: the most recent `preserve.max_count` (default 2) per machine, none older than `preserve.max_age` (default 3 days). A lost attempt's sandbox is salvaged once and deleted at once on success (decided 2026-11-13) | The service deletes the oldest when a new one is kept, and any past its age, after a notice. Pending |
 | Worker verbose log spool (aq-worker) | The newest entries within the spool size | Oldest deleted first, with a gap marker. Pending |
 | aq-git operation journal (aq-git) | Unresolved operations, and terminal records of the last 30 days, at most the most recent 50,000 per state root | aq-git deletes them in its own admission path. Pending |
 | aq-git retired workspaces, released handles, old bindings (aq-git) | The most recent 16 binding versions per repository; retired and released records with the journal | With the journal. Pending |
@@ -183,26 +183,29 @@ artifacts in use, aq-git source that a live retention handle names.
 ## 6. Questions for the owner
 
 1. **Proposed defaults.** Every number in §4 marked proposed.
-2. **Preserved sandboxes hold unsaved work.** Under this rule a node at
-   `preserve.max_count` destroys its oldest preserved sandbox instead of
-   refusing new work, and `preserve.max_age` destroys rather than only
-   re-notifying. That deletes work nobody copied back. Is that what you want,
-   or is a preserved sandbox work in progress (not covered)?
-3. **Per-task review limit (256 per task lineage).** Is it a budget you want
+2. **Per-task review limit (256 per task lineage).** Is it a budget you want
    (keep), or a cap (remove)?
-4. **Phase A live caps (spec 0008).** They count only live rows, so this
-   document treats them as controls on work happening now and keeps them.
-   Keep, or remove as well?
-5. **Duplicate risk after the window.** Dashboard, comment and graph
+3. **Duplicate risk after the window.** Dashboard, comment and graph
    requests carry no request time, so a repeat after its window is accepted
    as new and could create a second task or comment. Is a 7-day window
    enough, or should these requests carry their time so a late repeat is
    refused?
-6. **Profile catalog identity history.** It records every definition
+4. **Profile catalog identity history.** It records every definition
    identity and version ever published, so a version cannot be reused with
    other content. It grows with edits, not runs, and has a 4 MiB bound that
    refuses activation. Is it product (keep the bound as a limit), or a rolling
    set?
-7. **aq-git forgotten operation ids.** A forgotten id is accepted as new and
+5. **aq-git forgotten operation ids.** A forgotten id is accepted as new and
    then checked against its preconditions. Should aq-git instead require a
    request time so it can refuse a late repeat as `operation_expired`?
+
+Decided, so no longer open:
+
+- **Preserved sandboxes (owner, 2026-11-13).** Planned restarts and stops
+  hand their work off. After a crash, kill or reboot the service salvages a
+  lost attempt's work once and deletes the sandbox. A sandbox whose salvage
+  failed is kept only for inspection: the most recent 2 per machine, each for
+  at most 3 days. Both numbers are settings with those defaults. Implementation
+  pending ([0005](0005-sandboxed-execution-and-deployment-topology.md) §4
+  step 7, SBX22).
+- **Limits on work happening now.** Answered by §1a: they are settings.
