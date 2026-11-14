@@ -15,6 +15,7 @@ mod common;
 mod migration_catalog;
 mod playbook_authoring_migration;
 mod playbook_rolling_records_migration;
+mod presence_rolling_records_migration;
 mod rate_limit_removal_migration;
 mod result_origin_migration;
 mod routing_policies_migration;

@@ -368,3 +368,34 @@ Runs: `-p aq-playbook-host` (with the ignored PostgreSQL test) 15/15;
 `it_schema` 83/83; `it_profiled` `profiled_results::` 107/107;
 `it_dashboard` 207/207 (run with `--test-threads 4`; at the default the
 shared test database refused connections, "too many clients").
+
+## Server batch S1 (2026-11-13): fix round 3 and two more rolling records
+
+- **N1.** A queued event that cannot be decrypted ends the outbox page before
+  it instead of failing the quantum early: rows before it are delivered,
+  effects are cancelled and runs tick, and the quantum then fails with
+  `cannot decrypt queued event <id> (key id <key>)`. The row stays queued
+  (fixing the keyring recovers it). `POST /api/playbooks/events/{id}/hold`
+  (owner) holds a named queued row `invalid`; delivery goes on past it, and
+  `…/retry` puts it back.
+- **N2.** A graph source item that is not a valid event (no task id) is queued
+  held `invalid` under its source id, so it is listed with the held events
+  and later graph events are collected. The settlement and schedule
+  collectors are unchanged.
+- **N3.** A refused engine open says which step failed and why
+  (`playbook owner startup refused: <step>: <cause>`), in the 503 message of
+  the playbook routes, the retry log and the start error.
+- **N4.** `[playbooks.engine_timeouts] open_ms` (default 30000, positive, no
+  upper bound) replaces the 30 s literal on the engine open.
+- **Minor.** An admission whose outcome is unknown stays pending with the
+  reason `uncertain` and is taken after the other pending ones. The drive
+  keeps one reason per failed stage, joined with `; `. A runtime that opens
+  after shutdown began is shut down, and the shutdown drain waits twice the
+  Stop call deadline.
+- **Finding episodes.** `findings.reconcile` no longer refuses above 100
+  episodes per partition. Cleared episodes are the eighth table of the rolling
+  deletion (`keep_finished`, `delete_batch`); an open episode never matches.
+  A notification's id now includes its time, because a finding that returns
+  after its cleared episode was deleted starts again at revision 1.
+- **Heartbeat log.** See `docs/operations/row-retention.md`
+  (`profiled_presence_operations`, `[workers.heartbeat_log]`, migration 0127).

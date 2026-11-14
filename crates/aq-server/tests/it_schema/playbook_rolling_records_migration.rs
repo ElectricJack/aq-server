@@ -78,5 +78,4 @@ async fn migration_0126_drops_the_playbook_lifetime_counters() {
             .await
             .unwrap();
     assert_eq!(format, "126");
-    assert_eq!(aq_server::STATE_FORMAT_VERSION, 126);
 }

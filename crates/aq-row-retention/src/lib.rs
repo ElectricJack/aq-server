@@ -89,6 +89,82 @@ async fn statement(
     Ok(n)
 }
 
+/// `[workers.heartbeat_log]`: each node keeps its newest `keep` heartbeat log
+/// operations; one sweep deletes at most `delete_batch` older ones. Defaults
+/// 256 and 4096 (more than 250 nodes add between two sweeps); both positive, no upper bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HeartbeatLog {
+    pub keep: u64,
+    pub delete_batch: u64,
+}
+impl Default for HeartbeatLog {
+    fn default() -> Self {
+        Self {
+            keep: 256,
+            delete_batch: 4096,
+        }
+    }
+}
+impl HeartbeatLog {
+    /// `(keep, delete_batch)` as SQL bigints; `None` when either is zero or
+    /// too large to bind.
+    pub fn bounds(&self) -> Option<(i64, i64)> {
+        let keep = i64::try_from(self.keep).ok()?;
+        let batch = i64::try_from(self.delete_batch).ok()?;
+        (keep > 0 && batch > 0).then_some((keep, batch))
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_log_tests {
+    use super::HeartbeatLog;
+    #[test]
+    fn the_heartbeat_log_keeps_256_and_deletes_4096_by_default_and_refuses_zero() {
+        let parsed: HeartbeatLog = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.bounds(), Some((256, 4096)));
+        let set: HeartbeatLog = serde_json::from_str(r#"{"keep":3,"delete_batch":1}"#).unwrap();
+        assert_eq!(set.bounds(), Some((3, 1)));
+        for (keep, delete_batch) in [(0, 1), (1, 0), (u64::MAX, 1)] {
+            assert_eq!(HeartbeatLog { keep, delete_batch }.bounds(), None);
+        }
+        assert!(serde_json::from_str::<HeartbeatLog>(r#"{"batch":1}"#).is_err());
+    }
+}
+
+/// The worker heartbeat log, `profiled_presence_operations` (architecture
+/// 0006): keeps each node's newest `keep` operations and deletes at most
+/// `delete_batch` older ones. Never deleted: an operation a head row names (the
+/// node's accepted inventory, each lease's latest report) and one whose
+/// receipt has not expired at `now`.
+///
+/// The log is read for idempotent replay by operation id
+/// (`presence::storage::{inventory, fact}` in aq-server). A repeat of a
+/// deleted id finds no receipt and is judged as a new report: its sequence is
+/// not above the one the node snapshot or the lease's head keeps, so it is
+/// refused and never applied a second time.
+pub async fn presence_operations(
+    pool: &PgPool,
+    now: i64,
+    log: &HeartbeatLog,
+) -> anyhow::Result<u64> {
+    let (keep, batch) = log
+        .bounds()
+        .filter(|_| now > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid heartbeat log bounds"))?;
+    // $1 = now, $2 = keep per node, $3 = batch size.
+    let query = r#"DELETE FROM profiled_presence_operations WHERE (node_id,operation_id) IN (
+      SELECT r.node_id,r.operation_id FROM (
+        SELECT o.node_id,o.operation_id,o.expires_at_ms,row_number() OVER (PARTITION BY o.node_id
+          ORDER BY o.recorded_at_ms DESC,o.sequence DESC,o.operation_id DESC) AS newest
+        FROM profiled_presence_operations o) r
+      WHERE r.newest>$2 AND r.expires_at_ms<$1
+      AND NOT EXISTS(SELECT 1 FROM profiled_inventory_semantic_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
+      AND NOT EXISTS(SELECT 1 FROM profiled_material_presence_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
+      ORDER BY r.newest DESC LIMIT $3)"#;
+    statement(pool, query, now, keep, batch).await
+}
+
 /// One bounded pass. Inject `now` and `tasks` for deterministic database tests.
 /// The batch argument may lower the production limit, never raise it.
 pub async fn collect(

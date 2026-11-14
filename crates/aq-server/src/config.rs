@@ -131,6 +131,8 @@ impl Default for EnrollmentConfig {
 pub struct WorkersConfig {
     pub heartbeat_interval_secs: u64,
     pub offline_after_secs: u64,
+    /// `[workers.heartbeat_log]`: rolling deletion of the heartbeat log.
+    pub heartbeat_log: aq_row_retention::HeartbeatLog,
 }
 
 impl Default for WorkersConfig {
@@ -138,6 +140,7 @@ impl Default for WorkersConfig {
         Self {
             heartbeat_interval_secs: 15,
             offline_after_secs: 60,
+            heartbeat_log: Default::default(),
         }
     }
 }
@@ -223,6 +226,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
         if v < 1 {
             return invalid(key, "must be at least 1".into());
         }
+    }
+    if c.workers.heartbeat_log.bounds().is_none() {
+        return invalid("workers.heartbeat_log", "must be at least 1".into());
     }
     if c.workers.offline_after_secs <= c.workers.heartbeat_interval_secs {
         return invalid(
