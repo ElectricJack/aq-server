@@ -498,3 +498,78 @@ async fn supervisor_reads_and_switches_routing_through_the_admin_nest() {
     );
     assert_eq!(a.as_owner("GET", ROUTING, None).await.1, body);
 }
+
+/// Playbook sources (spec 0013 §4.4): a supervisor reaches the owner's
+/// handlers through the nest, with PUT and DELETE there and nowhere else. A
+/// worker, or anyone without the bearer, does not.
+#[tokio::test]
+async fn a_supervisor_can_register_and_rerun_but_not_as_a_worker() {
+    const SOURCES: &str = "/api/playbooks/sources";
+    let a = admin().await;
+    let (status, list) = a.supervisor("GET", SOURCES, None).await;
+    assert_eq!((status, &list), (StatusCode::OK, &json!({"items": []})));
+    // The handler is reached: the source is stored, and with no playbook
+    // engine on this server it says so instead of starting a run.
+    let body = json!({"id": "triage", "binding": "aq.triage", "purpose": "Label new tasks",
+        "markdown": "Label every new task.\n", "commands": ["work.read"], "events": []});
+    let (status, out) = a.supervisor("POST", SOURCES, Some(body.clone())).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert!(out.to_string().contains("not running"), "{out}");
+    let (status, view) = a
+        .supervisor("GET", &format!("{SOURCES}/triage"), None)
+        .await;
+    assert_eq!(
+        (status, &view["kind"]),
+        (StatusCode::OK, &json!("registered"))
+    );
+    let (status, _) = a
+        .supervisor("POST", &format!("{SOURCES}/triage/runs"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let markdown = json!({"markdown": "Label every task.\n", "expected_revision": 7});
+    let (status, _) = a
+        .supervisor("PUT", &format!("{SOURCES}/triage/markdown"), Some(markdown))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a stale revision, refused by the handler"
+    );
+    let (status, _) = a
+        .supervisor("DELETE", &format!("{SOURCES}/nobody"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // The owner has the same routes on the admin listener.
+    let (status, list) = a.as_owner("GET", SOURCES, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+
+    // Without the supervisor bearer nothing is reached.
+    let nested = format!("{NEST}{SOURCES}");
+    let (status, _) = call(
+        &a.machine,
+        "POST",
+        &nested,
+        As::Owner { csrf: true },
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(
+        &a.machine,
+        "GET",
+        &nested,
+        As::Supervisor("not-a-credential"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // The machine listener has no such route outside the nest.
+    let (status, _) = call(&a.machine, "GET", SOURCES, As::Supervisor(&a.token), None).await;
+    assert_ne!(status, StatusCode::OK);
+    let sources: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_sources")
+        .fetch_one(&a.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(sources, 1);
+}

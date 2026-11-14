@@ -321,6 +321,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(manual_agents::service(&state).human_routes())
         .merge(profile_catalog::admin_routes())
         .merge(internal_work::admin_routes())
+        .merge(playbook_authoring::admin_routes())
         .merge(swarm_settings::routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())

@@ -63,7 +63,9 @@ pub(super) fn supervisor_controls(state: &AppState) -> axum::Router<AppState> {
 pub(super) fn supervisor_nests(state: &AppState) -> axum::Router<AppState> {
     let (clock, pool) = (state.clock.clone(), state.store.pool.clone());
     let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
-    let settings = crate::profile_catalog::settings::routes().merge(internal_work::admin_routes());
+    let settings = crate::profile_catalog::settings::routes()
+        .merge(internal_work::admin_routes())
+        .merge(crate::playbook_authoring::admin_routes());
     let human = crate::agent_access::human::routes(state);
     read::routes(human, pool.clone(), clock.clone()).merge(admin::routes(settings, pool, clock))
 }

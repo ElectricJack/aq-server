@@ -10,6 +10,7 @@
 pub mod complete;
 pub mod config;
 pub mod deploy;
+pub mod http;
 pub mod request;
 pub mod runs;
 pub mod save;

@@ -16,13 +16,19 @@ use axum::{
 const DOCUMENTS: [&str; 2] = ["/api/settings/intelligence", "/api/settings/internal-work"];
 /// Internal runs: only below it.
 const RUNS: &str = "/api/internal-work/";
+/// Playbook sources (spec 0013 §4.4): the list and each source below it. A
+/// supervisor may also replace a source's document (PUT) and delete one.
+const SOURCES: &str = "/api/playbooks/sources";
+
+fn under(path: &str, document: &str) -> bool {
+    path.strip_prefix(document)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
 
 fn forwarded(path: &str) -> bool {
     path.starts_with(RUNS)
-        || DOCUMENTS.iter().any(|document| {
-            path.strip_prefix(document)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-        })
+        || under(path, SOURCES)
+        || DOCUMENTS.iter().any(|document| under(path, document))
 }
 
 /// Any other path is 404 before authentication or the inner handler.
@@ -31,7 +37,12 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
     if !forwarded(request.uri().path()) {
         return Error(StatusCode::NOT_FOUND, "no such route").into_response();
     }
-    if !matches!(*request.method(), Method::GET | Method::HEAD | Method::POST) {
+    let allowed = match *request.method() {
+        Method::GET | Method::HEAD | Method::POST => true,
+        Method::PUT | Method::DELETE => under(request.uri().path(), SOURCES),
+        _ => false,
+    };
+    if !allowed {
         return Error(
             StatusCode::FORBIDDEN,
             "Supervisor admin endpoint accepts GET, HEAD and POST only",

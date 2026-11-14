@@ -2,7 +2,7 @@
 //! The crate does the work; this says where the engine, the grants, internal
 //! work and the clock are.
 use crate::playbooks::{domain::GrantScope, driver::Driver};
-use crate::{AppState, error::AppError};
+use crate::{AppState, authz::RequireOwner, error::AppError};
 use aq_playbook_authoring::{self as authoring, Error, Result, SourceKind, SourceRecord};
 use serde_json::Value;
 use sqlx::types::Json;
@@ -164,4 +164,8 @@ impl From<Error> for AppError {
             Error::Corrupt => Self::Internal,
         }
     }
+}
+
+pub(crate) fn admin_routes() -> axum::Router<AppState> {
+    authoring::http::routes::<AppState, RequireOwner, AppError>()
 }
