@@ -145,6 +145,13 @@ pub struct Route {
     pub policy_digest: Option<String>,
     pub structure_revision: Option<u64>,
     pub source: Source,
+    /// The task's ended attempts when the route was written (stored as `a`).
+    #[serde(default)]
+    pub ended_attempts: u64,
+    /// The structured judgment a playbook's route rests on (`work.route`
+    /// `classification`: reference, fields, labels, flags, rationale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment: Option<serde_json::Value>,
 }
 
 /// What is stored under `aq:route`. No reasons, no classification.
@@ -162,6 +169,10 @@ pub struct CompactRoute {
     pub d: Option<String>,
     pub s: Source,
     pub n: u64,
+    /// The task's ended attempts when routed: a router route written before
+    /// a later attempt ended is routed again (spec 0011 §4).
+    #[serde(default)]
+    pub a: u64,
 }
 
 /// Restrictions a route places on selection. An empty `harnesses` or
@@ -191,6 +202,7 @@ impl Route {
                 .map(|d| d.chars().take(16).collect()),
             s: self.source,
             n: sequence,
+            a: self.ended_attempts,
         };
         let bytes = serde_json::to_vec(&compact)
             .map_err(|e| Error::Metadata {
@@ -249,12 +261,25 @@ pub enum Placement {
 impl Placement {
     /// The placement of a task with `metadata` under a binding on an automatic
     /// router or not. A route that exists is honored with routing off too.
-    pub fn of(automatic_router: bool, routing_on: bool, metadata: &serde_json::Value) -> Self {
+    /// With routing on, a router route written before the task's latest
+    /// attempt ended (`a < ended_attempts`) is routed again: the task was
+    /// retried, and a failure may change the level. An owner route stays.
+    pub fn of(
+        automatic_router: bool,
+        routing_on: bool,
+        metadata: &serde_json::Value,
+        ended_attempts: u64,
+    ) -> Self {
         if !automatic_router {
             return Placement::Unchanged;
         }
         match CompactRoute::from_metadata(metadata) {
             Err(_) => Placement::Reroute,
+            Ok(Some(route))
+                if routing_on && route.s == Source::Router && route.a < ended_attempts =>
+            {
+                Placement::Reroute
+            }
             Ok(Some(route)) => Placement::Routed(route),
             Ok(None) if routing_on => Placement::Wait,
             Ok(None) => Placement::Unchanged,
@@ -338,6 +363,8 @@ mod tests {
             policy_digest: Some("0123456789abcdef0123456789abcdef".into()),
             structure_revision: Some(3),
             source: Source::Router,
+            ended_attempts: 0,
+            judgment: None,
         }
     }
 
@@ -416,16 +443,40 @@ mod tests {
         let garbage = json!({"aq:route": {"c": "fast-high"}});
         for on in [false, true] {
             for md in [&routed, &unrouted, &garbage] {
-                assert_eq!(Placement::of(false, on, md), Placement::Unchanged);
+                assert_eq!(Placement::of(false, on, md, 0), Placement::Unchanged);
             }
             assert_eq!(
-                Placement::of(true, on, &routed),
+                Placement::of(true, on, &routed, 0),
                 Placement::Routed(compact.clone())
             );
-            assert_eq!(Placement::of(true, on, &garbage), Placement::Reroute);
+            assert_eq!(Placement::of(true, on, &garbage, 9), Placement::Reroute);
         }
-        assert_eq!(Placement::of(true, true, &unrouted), Placement::Wait);
-        assert_eq!(Placement::of(true, false, &unrouted), Placement::Unchanged);
+        assert_eq!(Placement::of(true, true, &unrouted, 0), Placement::Wait);
+        assert_eq!(
+            Placement::of(true, false, &unrouted, 0),
+            Placement::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_router_route_older_than_the_latest_ended_attempt_is_routed_again() {
+        let mut r = route();
+        r.ended_attempts = 1;
+        let compact = r.compact(4).unwrap();
+        assert_eq!(compact.a, 1);
+        let md = json!({"aq:route": serde_json::to_value(&compact).unwrap()});
+        let routed = Placement::Routed(compact.clone());
+        assert_eq!(Placement::of(true, true, &md, 1), routed);
+        assert_eq!(Placement::of(true, true, &md, 2), Placement::Reroute);
+        // Routing off honours the route as it is; an owner route always stays.
+        assert_eq!(Placement::of(true, false, &md, 2), routed);
+        r.source = Source::Owner;
+        let owner = r.compact(5).unwrap();
+        let md = json!({"aq:route": serde_json::to_value(&owner).unwrap()});
+        assert_eq!(Placement::of(true, true, &md, 2), Placement::Routed(owner));
+        // A route stored before `a` existed reads as 0.
+        let old = json!({"aq:route": {"c": "standard-high", "l": null, "i": "any", "d": null, "s": "router", "n": 1}});
+        assert_eq!(CompactRoute::from_metadata(&old).unwrap().unwrap().a, 0);
     }
 
     #[test]

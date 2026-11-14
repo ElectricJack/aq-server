@@ -296,6 +296,8 @@ impl GraphPayload for TaskRouteSet {
             policy_digest: None,
             structure_revision: None,
             source: aq_routing::Source::Owner,
+            ended_attempts: 0,
+            judgment: None,
         })))
     }
 }

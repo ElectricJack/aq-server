@@ -509,6 +509,7 @@ name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
  "aq-playbook-host",
+ "aq-routing",
  "aq-session-protocol",
  "axum",
  "hex",

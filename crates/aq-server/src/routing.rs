@@ -275,7 +275,7 @@ pub async fn placements(
     let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);
     let mut assigned = std::collections::BTreeMap::new();
     for task in ready {
-        let mut placement = Placement::of(true, on, &task.node["metadata"]);
+        let mut placement = Placement::of(true, on, &task.node["metadata"], 0);
         if let Placement::Routed(route) = &placement {
             let known = assigned.get(&route.c).copied();
             let has = match known {

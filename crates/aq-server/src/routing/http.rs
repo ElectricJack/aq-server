@@ -96,7 +96,7 @@ pub(crate) async fn view(
         .as_str()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map_or(0, |t| t.timestamp_millis());
-    Ok(Some(match Placement::of(true, on, &node["metadata"]) {
+    Ok(Some(match Placement::of(true, on, &node["metadata"], 0) {
         Placement::Routed(route) => {
             let since = (history(pool, task).await?.first()).map_or(updated, |r| r.at_ms);
             json!({"state":"routed","route":compact(&route),"since_ms":since})

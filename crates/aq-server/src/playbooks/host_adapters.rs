@@ -22,9 +22,11 @@ mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
+mod routing;
 pub use delivery_port::*;
 pub use integration::*;
 pub use requests::*;
+pub use routing::{RoutingPort, ServerRouting};
 
 /// External ports. Authority never comes from here: it comes from the grant.
 pub struct HostPorts {
@@ -36,6 +38,8 @@ pub struct HostPorts {
     pub judgments: Option<Arc<dyn JudgmentProvider>>,
     /// D7 integration port (D1 delivery); `None` refuses `unavailable`.
     pub integration: Option<Arc<dyn Integration>>,
+    /// Host9 routing commands: routes, bindings and attempt history.
+    pub routing: Arc<dyn RoutingPort>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -158,6 +162,9 @@ impl Service {
     ) -> Result<HostResult> {
         match intent.command.name.as_str() {
             "findings.reconcile" => self.findings_reconcile(owner, id, revision, intent).await,
+            "work.read" | "work.route" | "work.unroutable" => {
+                self.work_routing(owner, id, revision, intent).await
+            }
             "context.read" => self.context_read(owner, id, revision, intent).await,
             "work.ensure" => self.work_ensure(owner, id, revision, intent).await,
             "work.change" => self.work_change(owner, id, revision, intent).await,
