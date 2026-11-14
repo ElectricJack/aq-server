@@ -45,7 +45,9 @@ aq whoami                            # attempt, task, project, session (and gene
 aq run NAME [--param KEY=VALUE | --param KEY:=JSON]... [--params-file FILE|-]
        [--subject TYPE:ID[:REVISION]] [--expect TYPE=REVISION]... [--reason TEXT]
        [--operation-id UUID] [--describe]
-aq <cli tokens> [run flags]          # e.g. aq task graph show --param task_id=ID
+aq <cli tokens> [flags] [run flags]  # e.g. aq task list --project-id ID --limit 5
+aq <cli tokens> --help               # the command's summary, grant and flags (no connection)
+aq <group>                           # the commands under those tokens, e.g. aq project
 ```
 
 - `run` sends `params`; a mutation gets a fresh `operation_id`, which is also
@@ -56,6 +58,20 @@ aq <cli tokens> [run flags]          # e.g. aq task graph show --param task_id=I
   does not know are resolved through `GET /api/v1/commands?all=true`, and
   `run` sends any name, so a command added to the server later needs no CLI
   change.
+- After a command's CLI tokens, each param of its published schema is a flag:
+  `--project-id ID` is `--param project_id=ID`. The value is typed by the
+  schema: an integer or boolean param is sent as a number or boolean, an enum
+  is checked against its values, a list of strings is a repeatable flag, and
+  anything else is JSON when it parses as JSON and text otherwise. A boolean
+  flag alone is `true`. `--param` still works and may be mixed with flags; a
+  param given both ways is refused. A param named like one of `run`'s own
+  flags (`reason`, `subject`, `expect`, `param`) is given with `--param`.
+- Flags and help come from the catalog built into the binary, for the mode's
+  principal (owner, or the agent in a sandbox). They are a convenience: a
+  required param that is missing is refused by the server, not the CLI, and a
+  command the binary does not know takes `--param` only. The three wait
+  requests (`wait register|ack|inspect`) are described by a schema outside
+  the catalog and have no generated flags.
 - `--describe` prints the built-in description (grant, target rule, params
   schema per principal) without a connection.
 
