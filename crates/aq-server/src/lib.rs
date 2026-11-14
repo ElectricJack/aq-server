@@ -507,6 +507,9 @@ async fn run_with_listeners_and_dashboard(
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
     let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
     let internal_work_task = tokio::spawn(state.internal_work.clone().serve(rx.clone()));
+    if let Err(error) = routing::ensure_source(&state.store.pool).await {
+        tracing::warn!(?error, "the routing source record was not written");
+    }
     let authoring_task = tokio::spawn(aq_playbook_authoring::serve(state.clone(), rx.clone()));
     tokio::spawn(async move {
         shutdown.await;

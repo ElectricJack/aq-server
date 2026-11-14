@@ -33,6 +33,7 @@ mod playbook_host_requests;
 mod playbook_integration_startup;
 mod playbook_isolation;
 mod playbook_review_contract;
+mod playbook_routing;
 mod playbook_work_completion;
 mod project_bindings;
 mod real_adapter_pilots;

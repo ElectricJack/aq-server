@@ -45,7 +45,10 @@ async fn save(
     let now = (state.clock)().timestamp_millis();
     let pool = &state.store.pool;
     let saved = http::save(pool, actor.id, request, &choices(&state), now, uri.path()).await;
-    saved.map(Json).map_err(error)
+    let saved = saved.map_err(error)?;
+    // The routing document or what Settings offers may have changed.
+    crate::routing::author(&state).await;
+    Ok(Json(saved))
 }
 async fn operation(
     State(state): State<AppState>,

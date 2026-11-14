@@ -104,6 +104,33 @@ impl Options {
     pub fn offers(&self) -> impl Iterator<Item = &Offer> {
         self.classes.values().flatten()
     }
+
+    /// What a routing document's author is told Settings offers, as named
+    /// facts: `levels` from the lowest up, `offers` with each level's
+    /// harnesses and providers, and every harness and provider any level has.
+    pub fn facts(&self) -> BTreeMap<String, serde_json::Value> {
+        use serde_json::json;
+        use std::collections::BTreeSet;
+        let names = |offers: &[Offer], pick: fn(&Offer) -> &String| -> BTreeSet<String> {
+            offers.iter().map(|o| pick(o).clone()).collect()
+        };
+        let all: Vec<Offer> = self.offers().cloned().collect();
+        let levels: Vec<String> = self.classes.keys().map(Class::to_string).collect();
+        let offers: serde_json::Map<String, serde_json::Value> = (self.classes.iter())
+            .map(|(class, offers)| {
+                let harnesses = names(offers, |o| &o.harness);
+                let providers = names(offers, |o| &o.provider);
+                let offered = json!({"harnesses": harnesses, "providers": providers});
+                (class.to_string(), offered)
+            })
+            .collect();
+        BTreeMap::from([
+            ("levels".to_owned(), json!(levels)),
+            ("offers".to_owned(), json!(offers)),
+            ("harnesses".to_owned(), json!(names(&all, |o| &o.harness))),
+            ("providers".to_owned(), json!(names(&all, |o| &o.provider))),
+        ])
+    }
 }
 
 /// A profile's offers: each (provider, harness) pair its candidates list, once,

@@ -28,7 +28,7 @@ async fn active(pool: &PgPool, source: &str) -> Result<Value> {
         return Ok(Value::Null);
     };
     let since = column::<i64>(&row, "activated_at_ms")?.or(column(&row, "finished_at_ms")?);
-    let previous = rollback_target(pool, source).await?;
+    let previous = rollback_target(pool, source, false).await?;
     let cases = match json_column(&row, "cases")? {
         Value::Array(cases) => Value::Array(cases),
         _ => json!([]),

@@ -383,10 +383,13 @@ async fn saved<S: Server>(
     if !finish(pool, run.id, &finished).await? {
         return Ok(());
     }
-    // A failure here is repaired by `reinstall_active` (at start, and by the
-    // loop until it succeeds once).
-    if let Err(e) = s.activate(source, &binding, &digest).await {
-        tracing::error!(source, error = %e, "authored artifact recorded active but not activated");
+    // The run is active but not yet deployed: when this fails, every pass of
+    // `tick` tries again until the engine has the artifact on the binding.
+    match s.activate(source, &binding, &digest).await {
+        Ok(()) => runs::deployed(pool, run.id).await?,
+        Err(e) => {
+            tracing::error!(source, error = %e, "authored artifact recorded active but not activated yet")
+        }
     }
     prune(s, source).await
 }
@@ -399,19 +402,21 @@ async fn prune<S: Server>(s: &S, source: &str) -> Result<()> {
 /// The saved run a rollback of `source` would make active again: the newest
 /// one holding the artifact the active run replaced.
 pub(crate) async fn rollback_target(
-    pool: &PgPool,
+    db: impl sqlx::PgExecutor<'_>,
     source: &str,
+    lock: bool,
 ) -> Result<Option<(i64, Value, Option<i64>)>> {
     type Row = (i64, sqlx::types::Json<Value>, Option<i64>, Option<i64>);
-    let row: Option<Row> = sqlx::query_as(
+    let lock = if lock { "FOR UPDATE OF p" } else { "" };
+    let row: Option<Row> = sqlx::query_as(&format!(
         "SELECT p.id,p.artifact,p.activated_at_ms,p.finished_at_ms
          FROM playbook_authoring_runs a JOIN playbook_authoring_runs p
            ON p.source_id=a.source_id AND p.artifact_digest=a.previous_digest
           AND p.status='saved' AND NOT p.active
-         WHERE a.source_id=$1 AND a.active ORDER BY p.id DESC LIMIT 1",
-    )
+         WHERE a.source_id=$1 AND a.active ORDER BY p.id DESC LIMIT 1 {lock}"
+    ))
     .bind(source)
-    .fetch_optional(pool)
+    .fetch_optional(db)
     .await?;
     Ok(row.map(|(id, artifact, activated, finished)| (id, artifact.0, activated.or(finished))))
 }
@@ -419,10 +424,20 @@ pub(crate) async fn rollback_target(
 /// Puts the previous playbook of `source` back in effect. A run in flight is
 /// superseded: the owner chose the previous playbook, and a later save of
 /// the document starts a new run.
+///
+/// The target is chosen, activated in the engine and recorded under the
+/// source's lock and its own row lock, so a save that finishes meanwhile
+/// waits and cannot have it deleted; nothing is recorded unless exactly the
+/// chosen run became active.
 pub async fn rollback<S: Server>(s: &S, source: &str) -> Result<()> {
     let pool: &PgPool = s.as_ref();
     let record = (store::get(pool, source).await?).ok_or_else(|| not_found(source))?;
-    let Some((target, artifact, _)) = rollback_target(pool, source).await? else {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT 1 FROM playbook_sources WHERE id=$1 FOR UPDATE")
+        .bind(source)
+        .execute(&mut *tx)
+        .await?;
+    let Some((target, artifact, _)) = rollback_target(&mut *tx, source, true).await? else {
         return Err(Error::Conflict(
             "There is no earlier playbook to go back to.".into(),
         ));
@@ -433,23 +448,24 @@ pub async fn rollback<S: Server>(s: &S, source: &str) -> Result<()> {
     s.activate(source, &record.binding, &artifact.digest)
         .await?;
     let now = now_ms();
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT 1 FROM playbook_sources WHERE id=$1 FOR UPDATE")
-        .bind(source)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("UPDATE playbook_authoring_runs SET active=FALSE WHERE source_id=$1 AND active")
         .bind(source)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE playbook_authoring_runs SET active=TRUE,activated_at_ms=$2
+    let activated = sqlx::query(
+        "UPDATE playbook_authoring_runs SET active=TRUE,deployed=TRUE,activated_at_ms=$2
          WHERE id=$1 AND status='saved'",
     )
     .bind(target)
     .bind(now)
     .execute(&mut *tx)
     .await?;
+    if activated.rows_affected() != 1 {
+        // Dropping the transaction leaves what was active as it was.
+        return Err(Error::Conflict(
+            "The earlier playbook is no longer kept; nothing was changed.".into(),
+        ));
+    }
     sqlx::query(
         "UPDATE playbook_authoring_runs SET status='superseded',finished_at_ms=$2
          WHERE source_id=$1 AND status='running'",
@@ -533,7 +549,29 @@ pub async fn tick<S: Server>(s: &S) -> Result<usize> {
             tracing::warn!(source = %run.source_id, run = run.id, error = %e, "authoring run not advanced");
         }
     }
+    deploy_pending(s).await?;
     Ok(runs.len())
+}
+
+/// Activates every active run the engine has not acknowledged yet: a save
+/// whose activation failed is tried again on every pass.
+async fn deploy_pending<S: Server>(s: &S) -> Result<()> {
+    let pool: &PgPool = s.as_ref();
+    type Row = (i64, String, String, sqlx::types::Json<Value>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT r.id,r.source_id,s.binding,r.artifact FROM playbook_authoring_runs r
+         JOIN playbook_sources s ON s.id=r.source_id
+         WHERE r.status='saved' AND r.active AND NOT r.deployed AND s.deleted_at_ms IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    for (run, source, binding, artifact) in &rows {
+        match reinstall(s, source, binding, &artifact.0).await {
+            Ok(()) => runs::deployed(pool, *run).await?,
+            Err(e) => tracing::warn!(%source, error = %e, "active playbook not activated yet"),
+        }
+    }
+    Ok(())
 }
 
 pub fn internal_error(e: aq_internal_work::Error) -> Error {

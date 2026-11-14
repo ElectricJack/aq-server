@@ -311,7 +311,7 @@ pub async fn finish(pool: &PgPool, run: i64, finished: &Finished) -> Result<bool
         "UPDATE playbook_authoring_runs SET status=$2,active=$3,artifact_digest=$4,artifact=$5,
             previous_digest=$6,comparison=$7,cases=$8,question=$9,unable=$10,refusal=$11,
             finished_at_ms=$12,markdown=$13,case_files=$14,
-            activated_at_ms=CASE WHEN $3 THEN $12 END WHERE id=$1",
+            activated_at_ms=CASE WHEN $3 THEN $12 END,deployed=NOT $3 WHERE id=$1",
     )
     .bind(run)
     .bind(finished.status.as_str())
@@ -474,6 +474,13 @@ pub async fn running(pool: &PgPool, id: i64) -> Result<Option<Run>> {
 /// still running are never deleted. Returns how many it deleted.
 pub async fn prune(pool: &PgPool, source: &str, keep: u64) -> Result<u64> {
     let keep = i64::try_from(keep).unwrap_or(i64::MAX);
+    // Under the source's lock, as a save and a rollback are: what a rollback
+    // has chosen to bring back is not deleted under it.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT 1 FROM playbook_sources WHERE id=$1 FOR UPDATE")
+        .bind(source)
+        .execute(&mut *tx)
+        .await?;
     let done = sqlx::query(
         "DELETE FROM playbook_authoring_runs r WHERE r.source_id=$1 AND r.status<>'running'
             AND NOT r.active
@@ -484,7 +491,17 @@ pub async fn prune(pool: &PgPool, source: &str, keep: u64) -> Result<u64> {
     )
     .bind(source)
     .bind(keep)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(done.rows_affected())
+}
+
+/// Records that the engine runs the active run `id`'s artifact on its binding.
+pub async fn deployed(pool: &PgPool, id: i64) -> Result<()> {
+    sqlx::query("UPDATE playbook_authoring_runs SET deployed=TRUE WHERE id=$1 AND active")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

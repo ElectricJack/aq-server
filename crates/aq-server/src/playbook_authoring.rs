@@ -56,17 +56,27 @@ impl authoring::Host for AppState {
             SourceKind::Registered => {
                 authoring::stored_markdown(&self.store.pool, &source.id).await?
             }
-            // A built-in source's document lives where the server keeps it.
+            // The routing document is part of the Intelligence structure.
+            SourceKind::Builtin if source.id == authoring::builtin::ROUTING => {
+                let read = aq_profile_settings::structure::document(&self.store.pool).await;
+                let (document, revision, _) = read.map_err(|e| Error::Host(e.to_string()))?;
+                Some((document.routing_markdown, revision))
+            }
             SourceKind::Builtin => None,
         };
         stored.ok_or_else(|| Error::Host(format!("{} has no document yet", source.id)))
     }
     async fn facts(&self, source: &SourceRecord) -> Result<BTreeMap<String, Value>> {
-        match source.facts.first() {
-            // Fact providers are named by a built-in source's record.
-            Some(name) => Err(Error::Host(format!("there is no fact provider {name}"))),
-            None => Ok(BTreeMap::new()),
+        let mut facts = BTreeMap::new();
+        for name in &source.facts {
+            if name != authoring::builtin::ROUTING_OPTIONS {
+                return Err(Error::Host(format!("there is no fact provider {name}")));
+            }
+            // What Settings offers: the facts `levels`, `offers`, `harnesses`, `providers`.
+            let options = crate::routing::options(self).await;
+            facts.extend(options.map_err(|e| Error::Host(format!("{e:?}")))?.facts());
         }
+        Ok(facts)
     }
 }
 
@@ -83,6 +93,7 @@ impl authoring::Deployer for AppState {
         let driver = self.internal_work.authoring().driver()?;
         let (service, pool) = (&driver.service, &self.store.pool);
         let owner = service.namespace.owner_user_id;
+        let mut replaced = None;
         if let Some((id, revision, held, revoked)) = grant_row(self, source).await? {
             // Live in this namespace generation, with these abilities: reuse.
             let live: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM playbook_grants WHERE grant_id=$1 AND namespace_id=$2 AND generation=$3 AND revoked_at_ms IS NULL)")
@@ -91,15 +102,40 @@ impl authoring::Deployer for AppState {
             if live && revoked.is_none() && held.0 == *capabilities {
                 return Ok((id, revision));
             }
-            if live {
-                service.revoke(owner, id).await.map_err(engine)?;
-            }
+            replaced = live.then_some(id);
         }
         let id = Uuid::new_v4();
         (service.source_grant(id, scope(&driver, capabilities)).await).map_err(engine)?;
         sqlx::query("INSERT INTO playbook_source_grants(source_id,grant_id,revision,capabilities,created_at_ms) VALUES($1,$2,1,$3,$4) ON CONFLICT(source_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,revision=1,capabilities=EXCLUDED.capabilities,created_at_ms=EXCLUDED.created_at_ms,revoked_at_ms=NULL")
             .bind(source).bind(id).bind(Json(capabilities)).bind(authoring::Server::now_ms(self))
             .execute(pool).await?;
+        if let Some(old) = replaced {
+            // What runs now moves to the new grant before the old one goes, so
+            // a playbook in effect keeps working while its successor is
+            // written. When the new abilities no longer cover it, it stops.
+            let binding: Option<String> =
+                sqlx::query_scalar("SELECT binding FROM playbook_sources WHERE id=$1")
+                    .bind(source)
+                    .fetch_optional(pool)
+                    .await?;
+            let current = match &binding {
+                Some(binding) => driver
+                    .binding_activation(binding.clone())
+                    .await
+                    .map_err(engine)?,
+                None => None,
+            };
+            if let (Some(binding), Some(current)) = (binding, current)
+                && let Err(error) = driver.activate(binding, current.artifact, id, 1).await
+            {
+                tracing::warn!(
+                    source,
+                    ?error,
+                    "the playbook in effect is not allowed by the new grant"
+                );
+            }
+            service.revoke(owner, old).await.map_err(engine)?;
+        }
         Ok((id, 1))
     }
     async fn revoke_grant(&self, source: &str) -> Result<()> {

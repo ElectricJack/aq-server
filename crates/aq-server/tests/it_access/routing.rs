@@ -475,7 +475,10 @@ async fn routing_cannot_be_switched_on_without_a_routing_playbook() {
         "Routing can be turned on once a routing playbook is active"
     );
     assert!(!routing::enabled(&e.pool).await.unwrap());
-    let off = json!({"enabled": false, "active": null, "latest": null});
+    // Before the server has written the routing source there is no playbook to show.
+    let source = json!({"id": "routing", "kind": "builtin", "binding": "aq.routing",
+        "active": null, "latest": null});
+    let off = json!({"enabled": false, "source": source});
     assert_eq!(call(&app, "GET", None).await, (StatusCode::OK, off.clone()));
     // A switch left on by an earlier build is turned off.
     sqlx::query("UPDATE routing_state SET enabled=TRUE")

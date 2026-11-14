@@ -91,8 +91,7 @@ fn name(what: &str, value: &str, max: usize) -> Result<(), Error> {
     }
 }
 
-/// Registers a source, or replaces one registered under the same id, and
-/// starts authoring it. What its playbook may do follows from the commands
+/// Registers a new source and starts authoring it. What its playbook may do follows from the commands
 /// it names: the abilities those commands need, and no more.
 async fn register<S: Server, O, E: From<Error>>(
     State(s): State<S>,
@@ -123,6 +122,15 @@ async fn register<S: Server, O, E: From<Error>>(
         facts: vec![],
         revision: 0,
     };
+    // Create only: a source that exists keeps its document, binding and
+    // abilities. Its document changes through `PUT …/markdown` at a revision.
+    if store::get(s.as_ref(), &record.id).await?.is_some() {
+        return Err(Error::Conflict(format!(
+            "The source {} already exists; change its document with its expected revision",
+            record.id
+        ))
+        .into());
+    }
     store::register(s.as_ref(), &record, &body.markdown).await?;
     complete::author(&s, &record.id).await?;
     Ok(Json(one(&s, &record.id).await?))

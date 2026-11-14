@@ -322,6 +322,7 @@ impl Runtime {
         }
         let reviews = Arc::new(reviews::Service::new(state.clone(), config.keys.clone()));
         state.internal_work.authoring().set(driver.clone());
+        tokio::spawn(crate::routing::author_first(state.clone()));
         let (stop, receiver) = watch::channel(false);
         driver.set_automatic_state(1);
         let owned = driver.clone();

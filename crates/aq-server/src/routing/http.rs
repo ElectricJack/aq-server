@@ -23,8 +23,7 @@ pub(crate) fn settings_routes() -> Router<AppState> {
     Router::new().route("/api/settings/intelligence/routing", policy)
 }
 
-/// `GET /api/settings/intelligence/routing`: the switch. No routing playbook can be active yet,
-/// so `active` and `latest` are null (the shape the dashboard reads).
+/// `GET /api/settings/intelligence/routing`: the switch and the routing source.
 async fn policy(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -33,10 +32,16 @@ async fn policy(
 }
 
 async fn switch_view(state: &AppState) -> Result<Json<Value>, AppError> {
-    let enabled = enabled(&state.store.pool).await?;
-    Ok(Json(
-        json!({"enabled": enabled, "active": null, "latest": null}),
-    ))
+    let pool = &state.store.pool;
+    let enabled = enabled(pool).await?;
+    let now = (state.clock)().timestamp_millis();
+    let source = match aq_playbook_authoring::get(pool, super::ROUTING_SOURCE).await? {
+        Some(record) => aq_playbook_authoring::view(pool, &record, now).await?,
+        // Before the server has written the record: no playbook yet.
+        None => json!({"id": super::ROUTING_SOURCE, "kind": "builtin", "binding": super::BINDING,
+            "active": null, "latest": null}),
+    };
+    Ok(Json(json!({"enabled": enabled, "source": source})))
 }
 
 #[derive(serde::Deserialize)]

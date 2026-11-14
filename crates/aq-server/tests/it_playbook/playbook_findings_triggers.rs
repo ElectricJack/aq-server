@@ -1190,6 +1190,11 @@ async fn an_authored_playbook_runs_under_a_source_grant_that_never_expires() {
     assert_ne!(next, grant);
     assert!(expiry(grant).await.1.is_some());
     assert_eq!(expiry(next).await, (i64::MAX, None));
+    // What was in effect moved to the new grant before the old one went.
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+    let actor = bound["authority"]["actor"].as_str().unwrap();
+    assert!(actor.contains(&next.to_string()), "{actor}");
     state
         .activate(SOURCE, BINDING, &second.digest)
         .await

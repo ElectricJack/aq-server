@@ -107,6 +107,14 @@ async fn write(pool: &PgPool, record: &SourceRecord, markdown: Option<&str>) -> 
             }
             let text: Option<String> = row.try_get("markdown")?;
             let deleted: Option<i64> = row.try_get("deleted_at_ms")?;
+            // The old binding would stay live in the engine with nothing to
+            // stop it: a source keeps its binding for as long as it exists.
+            if stored.binding != record.binding && deleted.is_none() {
+                return Err(Error::Conflict(format!(
+                    "{} is bound to {}; a source's binding cannot be changed",
+                    record.id, stored.binding
+                )));
+            }
             if stored.same_as(record) && text.as_deref() == markdown && deleted.is_none() {
                 return Ok(());
             }

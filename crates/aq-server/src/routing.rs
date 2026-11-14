@@ -153,19 +153,61 @@ pub async fn enabled(pool: &PgPool) -> Result<bool, AppError> {
         .map_err(db)
 }
 
-/// Routing turns on only while a routing playbook is active (spec 0013 §7). None can be active
-/// until playbook authoring lands, so turning it on is refused; turning it off always works.
+/// Routing turns on only while a routing playbook is active (spec 0013 §7); turning it off
+/// always works.
 pub async fn set_enabled(pool: &PgPool, on: bool) -> Result<(), AppError> {
-    if on {
+    if on
+        && aq_playbook_authoring::active(pool, ROUTING_SOURCE)
+            .await?
+            .is_none()
+    {
         return Err(AppError::Conflict(
             "Routing can be turned on once a routing playbook is active".into(),
         ));
     }
-    sqlx::query("UPDATE routing_state SET enabled=FALSE WHERE singleton")
+    sqlx::query("UPDATE routing_state SET enabled=$1 WHERE singleton")
+        .bind(on)
         .execute(pool)
         .await
         .map_err(db)?;
     Ok(())
+}
+
+pub use aq_playbook_authoring::builtin::{ROUTING as ROUTING_SOURCE, ROUTING_BINDING as BINDING};
+
+/// Writes the built-in routing source's record (at start; the same record changes nothing).
+pub async fn ensure_source(pool: &PgPool) -> Result<(), AppError> {
+    let record = aq_playbook_authoring::builtin::routing();
+    Ok(aq_playbook_authoring::ensure_builtin(pool, &record).await?)
+}
+
+/// Authors the routing document as it is now, after a save of the structure or of Settings
+/// that may have changed what it offers. Nothing starts for an empty document or when
+/// nothing the agent would see changed. A server without an open playbook engine, or without
+/// the source, only logs: the save that led here has succeeded.
+pub async fn author(state: &AppState) {
+    let document = aq_profile_settings::structure::document(&state.store.pool).await;
+    if document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty()) {
+        return;
+    }
+    if let Err(error) = aq_playbook_authoring::author(state, ROUTING_SOURCE).await {
+        tracing::info!(%error, "the routing document was not authored");
+    }
+}
+
+/// [`author`] when the routing source has never been authored: a document saved before this
+/// server could author it gets its playbook once the engine is open.
+pub(crate) async fn author_first(state: AppState) {
+    let pool = &state.store.pool;
+    let none = sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS(SELECT 1 FROM playbook_authoring_runs WHERE source_id=$1)",
+    )
+    .bind(ROUTING_SOURCE)
+    .fetch_one(pool)
+    .await;
+    if ensure_source(pool).await.is_ok() && none.unwrap_or(false) {
+        author(&state).await;
+    }
 }
 
 /// What Settings offers: each class with an assigned profile in the active catalog, and every

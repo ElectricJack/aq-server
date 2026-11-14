@@ -7,6 +7,7 @@
 //! `playbook_authoring_runs`, recorded before its internal task is submitted,
 //! superseded by a newer request, and found again after a restart
 //! ([`stranded`]). At most one saved run per source is active (§4.5).
+pub mod builtin;
 pub mod complete;
 pub mod config;
 pub mod deploy;
