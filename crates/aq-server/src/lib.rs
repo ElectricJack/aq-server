@@ -7,7 +7,7 @@ pub mod config;
 pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod delegated_permits;
-pub mod delivery;
+pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
 pub mod execution_permits;
@@ -116,7 +116,7 @@ impl AppState {
     pub fn delivery(&self) -> Option<delivery::DeliveryService> {
         self.source_retention
             .as_ref()
-            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config))
+            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config.git_socket))
     }
     pub(crate) fn terminal_read_view(&self) -> Self {
         Self {

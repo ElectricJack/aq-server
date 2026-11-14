@@ -550,7 +550,7 @@ async fn quiet_successor(
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
     };
-    let delivery = aq_server::delivery::DeliveryService::new(pool, &config);
+    let delivery = aq_server::delivery::DeliveryService::new(pool, &config.git_socket);
     (env, delivery, socket, git)
 }
 

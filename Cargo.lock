@@ -243,6 +243,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-delivery"
+version = "0.1.0"
+dependencies = [
+ "aq-worker-protocol",
+ "async-trait",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "sqlx-postgres",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
 name = "aq-environment-templates"
 version = "0.1.0"
 dependencies = [
@@ -746,6 +766,7 @@ dependencies = [
  "aq-command-registry",
  "aq-context-renewal",
  "aq-dashboard-contract",
+ "aq-delivery",
  "aq-environment-templates",
  "aq-history-caps",
  "aq-human-cursor",
@@ -821,7 +842,6 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "unicode-normalization",
  "uuid",
  "zeroize",
 ]

@@ -630,7 +630,7 @@ async fn publish_env_with(outcome: Option<aq_admission::transport::ProcessOutcom
         incomplete_ttl_secs: 60,
     };
     PublishEnv {
-        delivery: aq_server::delivery::DeliveryService::new(pool, &config),
+        delivery: aq_server::delivery::DeliveryService::new(pool, &config.git_socket),
         env,
         socket,
         _git: git,
@@ -763,7 +763,7 @@ async fn unchanged_source_completes_without_publication() {
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
     };
-    let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config);
+    let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config.git_socket);
     let s = publication::deliver_then_settle(&env.f.state, &delivery, env.report.report_id)
         .await
         .unwrap()

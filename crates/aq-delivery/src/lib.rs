@@ -23,7 +23,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -153,10 +153,11 @@ fn destination_key(target: &str) -> String {
         .collect()
 }
 impl DeliveryService {
-    pub fn new(pool: PgPool, config: &crate::source_retention::SourceRetentionConfig) -> Self {
+    /// `git_socket` is the configured aq-git socket (`SourceRetentionConfig::git_socket`).
+    pub fn new(pool: PgPool, git_socket: &Path) -> Self {
         Self {
             pool,
-            socket: config.git_socket.clone(),
+            socket: git_socket.to_path_buf(),
         }
     }
     // A transaction-scoped operation lock serializes freezing the original
