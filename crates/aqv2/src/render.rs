@@ -21,6 +21,10 @@ pub fn clean(text: &str) -> String {
     }
     out
 }
+fn clean_lines(text: &str) -> String {
+    let lines: Vec<String> = text.trim_end().lines().map(clean).collect();
+    lines.join("\n")
+}
 fn s(v: &Value) -> String {
     match v {
         Value::String(s) => clean(s),
@@ -41,7 +45,13 @@ fn grant(g: &Value) -> String {
 }
 pub fn render(kind: Render, value: &Value) -> String {
     match kind {
-        Render::Json => serde_json::to_string_pretty(value).expect("JSON value"),
+        // Generated help is text (surface::help).
+        Render::Json => match value.as_object().filter(|o| o.len() == 1) {
+            Some(o) if o.get("help").is_some_and(Value::is_string) => {
+                clean_lines(value["help"].as_str().unwrap_or_default())
+            }
+            _ => serde_json::to_string_pretty(value).expect("JSON value"),
+        },
         Render::Commands => commands(value),
         Render::Whoami => whoami(value),
     }
