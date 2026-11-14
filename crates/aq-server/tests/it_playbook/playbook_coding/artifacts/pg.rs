@@ -1,8 +1,11 @@
 //! `PgLedger` against a real database (`DATABASE_URL`, see `scripts/test-db`),
 //! driven through `activate`/`rollback` with a fake engine catalog.
-use super::super::*;
-use crate::test_support::TestDb;
-use std::{collections::HashMap, sync::Arc};
+use super::*;
+use aq_server::test_support::{TestDb, store_pool};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 /// Engine stand-in. `activate` yields between deciding and switching so
 /// callers that are not serialized interleave inside the critical section.
@@ -54,7 +57,7 @@ async fn ledger(db: &TestDb, name: &str) -> PgLedger {
     {
         Some(user) => user.id,
         None => sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-            .fetch_one(&store.pool)
+            .fetch_one(store_pool(&store))
             .await
             .unwrap(),
     };
@@ -68,11 +71,11 @@ async fn ledger(db: &TestDb, name: &str) -> PgLedger {
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
     .bind(owner)
-    .execute(&store.pool)
+    .execute(store_pool(&store))
     .await
     .unwrap();
     PgLedger {
-        pool: store.pool.clone(),
+        pool: store_pool(&store).clone(),
         namespace_id,
     }
 }

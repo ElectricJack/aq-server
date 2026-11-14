@@ -1,5 +1,5 @@
 //! Explicit catalog2 addition. Catalog1 functions/fixture bytes remain fixed.
-use super::domain::{Error, Recipient, Result};
+use crate::{Error, Recipient, Result};
 use aq_playbook_host::{model::*, runner::Authority};
 use aq_session_protocol::{ArtifactRef, Validate};
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ fn host8_registry() -> Registry {
     REGISTRY
         .get_or_init(|| {
             let registry: Registry = serde_json::from_str(include_str!(
-                "../../../../vendor/aq-host-catalog-2.1.0/registry.json"
+                "../../../vendor/aq-host-catalog-2.1.0/registry.json"
             ))
             .expect("vendored AQ host catalog 2.1.0 parses");
             assert_eq!(
@@ -74,7 +74,7 @@ fn host7_registry() -> Registry {
     REGISTRY
         .get_or_init(|| {
             let registry: Registry = serde_json::from_str(include_str!(
-                "../../../../vendor/aq-host-catalog-2.0.0/registry.json"
+                "../../../vendor/aq-host-catalog-2.0.0/registry.json"
             ))
             .expect("vendored AQ host catalog 2.0.0 parses");
             assert_eq!(
@@ -102,7 +102,7 @@ fn host5_registry() -> Registry {
     REGISTRY
         .get_or_init(|| {
             let registry: Registry = serde_json::from_str(include_str!(
-                "../../../../vendor/aq-host-catalog-1.0.0/registry.json"
+                "../../../vendor/aq-host-catalog-1.0.0/registry.json"
             ))
             .expect("vendored D4 host catalog parses");
             assert_eq!(
@@ -157,7 +157,7 @@ impl CatalogProfile {
         if self == Self::Host8 {
             return host8_registry();
         }
-        let mut registry = super::domain::registry();
+        let mut registry = crate::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
             let event = graph_operation_event();
             registry.events.insert(event.name.clone(), event);
@@ -176,7 +176,7 @@ impl CatalogProfile {
         }
         registry
     }
-    pub fn validate_scope(self, scope: &super::domain::GrantScope) -> Result<()> {
+    pub fn validate_scope(self, scope: &crate::GrantScope) -> Result<()> {
         if self == Self::Mail1 {
             return scope.validate();
         }
@@ -223,10 +223,10 @@ impl CatalogProfile {
         self,
         id: Uuid,
         revision: i64,
-        scope: &super::domain::GrantScope,
+        scope: &crate::GrantScope,
     ) -> Result<Authority> {
         self.validate_scope(scope)?;
-        let mut authority = super::domain::authority(id, revision);
+        let mut authority = crate::authority(id, revision);
         authority.capabilities = scope.capabilities.clone();
         Ok(authority)
     }
@@ -310,7 +310,7 @@ pub fn decision_contract() -> CommandContract {
         name: "decision.request".into(),
         version: "1".into(),
         input: object([
-            ("recipient", super::domain::recipient_schema()),
+            ("recipient", crate::recipient_schema()),
             ("report_id", Schema::string(36)),
             ("source_operation_id", Schema::string(36)),
             ("expected_subject", artifact()),
@@ -368,7 +368,7 @@ pub fn operation_contract() -> CommandContract {
         input: object([
             ("kind", fixed("human_decision")),
             ("handle", Schema::string(36)),
-            ("recipient", super::domain::recipient_schema()),
+            ("recipient", crate::recipient_schema()),
         ]),
         outcomes: BTreeMap::from([
             (

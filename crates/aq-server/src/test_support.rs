@@ -346,6 +346,11 @@ pub fn admission(store: &Store) -> std::sync::Arc<crate::admission::Admission> {
     store.admission.clone()
 }
 
+/// The store's main pool, for tests that poke at tables beside a store.
+pub fn store_pool(store: &Store) -> &PgPool {
+    &store.pool
+}
+
 /// Whether the node's compute is busy (`compute::busy_locked`, as a native poll sees it).
 pub async fn node_busy(
     state: &crate::AppState,

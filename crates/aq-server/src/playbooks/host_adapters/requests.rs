@@ -237,7 +237,7 @@ struct JudgmentJob {
 /// never inferred, so a missing or unknown disposition is `failed`; other
 /// kinds are `accepted`. A canceled, retired, deleted or missing task is
 /// `refused` / `failed`.
-pub(crate) fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<HostResult>> {
+pub fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<HostResult>> {
     let (outcome, disposition, revision) = match node {
         None => ("refused", "failed", revision_of(&request["subject"])?),
         Some(node) => {

@@ -1,15 +1,19 @@
 //! In-memory owner + fake Host8 peer; no daemon, no database.
-use super::*;
-use crate::playbooks::coding::{
-    CodingArtifacts, CodingPolicy, ROOT,
-    tests::{Log, authority, checks, owner, request, settle},
-};
-use crate::playbooks::review_domain::CatalogProfile;
+use super::{Log, authority, checks, owner, request, settle};
+use aq_playbook_host::model::{Artifact, Registry};
 use aq_playbook_host::{
     MemoryStorage, Owner, Request,
     runner::{Activation, InspectionKind, InspectionQuery},
 };
+use aq_server::playbooks::{
+    artifacts::*,
+    coding::{CodingArtifacts, CodingPolicy, ROOT},
+    domain::{Error, Result},
+    review_domain::CatalogProfile,
+};
+use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
+use uuid::Uuid;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 

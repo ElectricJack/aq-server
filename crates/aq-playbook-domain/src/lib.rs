@@ -1,4 +1,7 @@
 //! Fixed host contracts and typed grant scope. No generic SQL/endpoint/command proxy.
+pub mod artifacts;
+pub mod coding;
+pub mod review_domain;
 use aq_playbook_host::{
     model::*,
     runner::{Authority, Intent},

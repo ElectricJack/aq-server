@@ -489,12 +489,15 @@ name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
  "aq-playbook-host",
+ "aq-session-protocol",
  "axum",
  "hex",
  "serde",
  "serde_json",
  "sqlx",
+ "sqlx-postgres",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 

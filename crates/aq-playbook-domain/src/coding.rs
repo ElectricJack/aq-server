@@ -1059,5 +1059,3 @@ impl Builder {
 }
 
 pub mod pilots;
-#[cfg(test)]
-pub(crate) mod tests;

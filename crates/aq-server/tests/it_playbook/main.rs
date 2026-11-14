@@ -23,6 +23,7 @@ mod codex_runtime_recipe;
 mod playbook_activation;
 mod playbook_authoring;
 mod playbook_bridge;
+mod playbook_coding;
 mod playbook_contract;
 mod playbook_findings_triggers;
 mod playbook_host_adapters;

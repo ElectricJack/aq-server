@@ -1,11 +1,16 @@
 //! Fake Host8 peer only: synchronous answers in each command's exact contract
 //! shape; no daemon, no database, no sleeps.
-use super::*;
-use crate::playbooks::review_domain::HOST7_CAPABILITIES;
+use aq_playbook_host::model::*;
 use aq_playbook_host::{
     DomainHost, HostMode, MemoryStorage, Owner, Request,
     runner::{Authority, DispatchResult, Host, Intent, Storage},
 };
+use aq_server::playbooks::{
+    coding::*,
+    review_domain::{CatalogProfile, HOST7_CAPABILITIES},
+};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -46,7 +51,7 @@ impl Peer {
         let task = format!("work-{n}");
         let request = json!({"kind": input["kind"], "reference": format!("aq.playbook.work/{task}"),
             "subject": {"id": task, "revision": 1}});
-        let done = crate::playbooks::host_adapters::work_completion(&request, Some(&node))
+        let done = aq_server::playbooks::host_adapters::work_completion(&request, Some(&node))
             .unwrap()
             .unwrap();
         let handle = format!("operation-{n}");
@@ -677,3 +682,5 @@ async fn coding_policy_human_decision_follows_review_and_gates_publish() {
     );
     assert_eq!(publish[0]["candidate"], decisions[1]["subject"]);
 }
+
+mod artifacts;
