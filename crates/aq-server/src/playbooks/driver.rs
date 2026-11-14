@@ -980,11 +980,6 @@ impl Driver {
     pub async fn test_collect_graph_events(&self) -> Result<usize> {
         self.service.collect_graph_events(&self.runtime, 2).await
     }
-    pub async fn test_collect_work_completions(&self) -> Result<usize> {
-        self.service
-            .collect_work_completions(&self.runtime, 2)
-            .await
-    }
     pub async fn test_collect_settlement_events(&self) -> Result<usize> {
         self.service
             .collect_settlement_events(&self.runtime, 2)

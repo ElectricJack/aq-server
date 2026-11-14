@@ -1135,19 +1135,6 @@ impl Service {
 }
 
 impl Service {
-    pub async fn authorize_recovery(
-        &self,
-        owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-    ) -> Result<()> {
-        let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
-        self.runtime(&ns, owner)?;
-        self.grant_locked(&mut tx, id, revision, false).await?;
-        tx.commit().await?;
-        Ok(())
-    }
     /// Hold pending work with its reason (an outbox event, else an
     /// admission): it is kept, listed with the reason, no longer delivered,
     /// and can be retried.

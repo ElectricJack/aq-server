@@ -2,8 +2,6 @@
 include!("../accepted_preparation/authority_core.rs");
 
 pub(crate) struct PreparationAuthority {
-    proposal: Proposal,
-    request: AcceptRequest,
     receipt: AcceptedReceipt,
     receipt_digest: aq_admission::Digest,
 }
@@ -22,9 +20,6 @@ impl PreparationAuthority {
     }
     pub fn materials(&self) -> &[aq_admission::MaterialLease] {
         &self.receipt.lease.materials
-    }
-    pub fn context(&self) -> (&Proposal, &AcceptRequest, &AcceptedReceipt) {
-        (&self.proposal, &self.request, &self.receipt)
     }
 }
 pub(crate) async fn load_preparing_locked(
@@ -51,8 +46,6 @@ pub(crate) async fn load_preparing_locked(
     live_locked(state, tx, auth, &proposal, &request, &receipt).await?;
     let receipt_digest = receipt.digest().map_err(|_| refused())?;
     Ok(PreparationAuthority {
-        proposal,
-        request,
         receipt,
         receipt_digest,
     })
