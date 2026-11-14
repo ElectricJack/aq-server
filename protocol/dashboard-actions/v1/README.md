@@ -192,6 +192,16 @@ subject revision and the single `expected_versions` entry (`task` or
   and permanently held. Follow-up work on such a task is a new task. Reopening
   a completed task blocks its dependents again; waits already satisfied by it
   are not undone.
+- `task.complete` is the owner closing an `active` task by hand, for work
+  finished outside AQ. Settlement stays the way work that ran is completed.
+  It requires the action's `reason` (non-blank), which Graph records on the
+  transition. It is `rejected`, with nothing written, when the task is not
+  `active`; when any attempt holds the task (the attempt would keep running
+  and its result could not be settled: cancel or abandon it first); when a
+  playbook manages the task (metadata `aq:playbook_namespace`: the playbook
+  would read the completion as an accepted result it has no receipt for); and
+  when Graph refuses the completion because a child task is still open.
+  Completion unblocks the task's dependents and satisfies waits on it at once.
 - `task.cancel` records Graph task lifecycle `canceled`, including draft tasks
   without attempts. `reason` is optional. A central cleanup cursor requests B3
   cancellation for any holding attempt, retries after restart, and records the

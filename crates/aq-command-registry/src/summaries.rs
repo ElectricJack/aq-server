@@ -41,6 +41,7 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "swarm.availability.set" => "Turn the owner's availability switch on or off",
         "task.activate" => "Make a draft task schedulable",
         "task.cancel" => "Cancel a task and stop any attempt holding it",
+        "task.complete" => "Close an active task by hand, with a reason, when no attempt holds it",
         "task.delete" => "Delete a task and its relationships; its history is kept",
         "task.dependency.add" => "Make one task block another",
         "task.dependency.remove" => "Remove a blocking dependency between two tasks",

@@ -316,6 +316,11 @@ pub(super) async fn bootstrap(
             "Task activation requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.complete",
+            graph_mutation,
+            "Completing a task requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.reopen",
             graph_mutation,
             "Reopening a task requires an owner account and configured Graph mutation identity",
