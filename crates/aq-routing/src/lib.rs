@@ -145,13 +145,18 @@ pub struct Route {
     pub policy_digest: Option<String>,
     pub structure_revision: Option<u64>,
     pub source: Source,
-    /// The task's ended attempts when the route was written (stored as `a`).
-    #[serde(default)]
+    /// The task's ended attempts when the route was written (stored as `a`);
+    /// left out of the stored route when 0, as before the field existed.
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub ended_attempts: u64,
     /// The structured judgment a playbook's route rests on (`work.route`
     /// `classification`: reference, fields, labels, flags, rationale).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgment: Option<serde_json::Value>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// What is stored under `aq:route`. No reasons, no classification.
