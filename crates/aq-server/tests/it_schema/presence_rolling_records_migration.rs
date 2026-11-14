@@ -44,5 +44,4 @@ async fn migration_0127_lets_row_retention_delete_the_heartbeat_log() {
             .await
             .unwrap();
     assert_eq!(format, "127");
-    assert_eq!(aq_server::STATE_FORMAT_VERSION, 127);
 }

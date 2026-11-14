@@ -136,7 +136,10 @@ mod heartbeat_log_tests {
 /// 0006): keeps each node's newest `keep` operations and deletes at most
 /// `delete_batch` older ones. Never deleted: an operation a head row names (the
 /// node's accepted inventory, each lease's latest report) and one whose
-/// receipt has not expired at `now`.
+/// receipt has not expired at `now`. An inventory of the node's current boot
+/// is also kept while the node has an attempt that is not settled: a live
+/// phase execution and a continuation read the inventory they were selected
+/// against by its revision and digest (`presence::inventory_epoch_locked`).
 ///
 /// The log is read for idempotent replay by operation id
 /// (`presence::storage::{inventory, fact}` in aq-server). A repeat of a
@@ -155,12 +158,16 @@ pub async fn presence_operations(
     // $1 = now, $2 = keep per node, $3 = batch size.
     let query = r#"DELETE FROM profiled_presence_operations WHERE (node_id,operation_id) IN (
       SELECT r.node_id,r.operation_id FROM (
-        SELECT o.node_id,o.operation_id,o.expires_at_ms,row_number() OVER (PARTITION BY o.node_id
+        SELECT o.node_id,o.operation_id,o.expires_at_ms,o.kind,o.boot_id,row_number() OVER (PARTITION BY o.node_id
           ORDER BY o.recorded_at_ms DESC,o.sequence DESC,o.operation_id DESC) AS newest
         FROM profiled_presence_operations o) r
       WHERE r.newest>$2 AND r.expires_at_ms<$1
       AND NOT EXISTS(SELECT 1 FROM profiled_inventory_semantic_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
       AND NOT EXISTS(SELECT 1 FROM profiled_material_presence_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
+      AND NOT (r.kind='inventory_v2'
+        AND EXISTS(SELECT 1 FROM profiled_inventory_semantic_heads h WHERE h.node_id=r.node_id AND h.boot_id=r.boot_id)
+        AND EXISTS(SELECT 1 FROM execution_attempts a LEFT JOIN profiled_authority_hot p USING(attempt_id)
+          WHERE a.node_id=r.node_id AND (a.holds_task OR COALESCE(p.state->>'status',a.state->>'status','unknown') NOT IN ('finished','declined','never_granted'))))
       ORDER BY r.newest DESC LIMIT $3)"#;
     statement(pool, query, now, keep, batch).await
 }

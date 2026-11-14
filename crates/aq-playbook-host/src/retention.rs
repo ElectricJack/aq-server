@@ -57,13 +57,17 @@ pub const TABLES: [(&str, &str); 8] = [
         "playbook_admissions",
         "DELETE FROM playbook_admissions WHERE (namespace_id,generation,request_id) IN (SELECT a.namespace_id,a.generation,a.request_id FROM (SELECT namespace_id,generation,request_id,grant_id,grant_revision FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND status='engine_accepted' ORDER BY created_at_ms DESC,request_id DESC OFFSET $3) a JOIN playbook_grants g ON g.grant_id=a.grant_id WHERE g.revoked_at_ms IS NOT NULL OR g.expires_at_ms<=$5 OR g.revision<>a.grant_revision LIMIT $4)",
     ),
-    // Recorded effects, except one whose operation is still running and an
-    // accepted review decision (handle and subject) not yet final and copied.
+    // Recorded effects of finished runs (the run and its root are in the
+    // engine's history, migration 0128): until then the engine may still ask
+    // for the result (reconcile after a lost acknowledgement). Also never one
+    // whose operation is still running, nor an accepted review decision
+    // (handle and subject) not yet final and copied.
     (
         "playbook_effects",
         "DELETE FROM playbook_effects WHERE (namespace_id,generation,intent_id) IN (\
          SELECT e.namespace_id,e.generation,e.intent_id FROM playbook_effects e \
          WHERE e.namespace_id=$1 AND e.generation=$2 AND e.status<>'pending' \
+         AND playbook_run_finished($1,$2,e.run_id) \
          AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.namespace_id=e.namespace_id \
           AND o.generation=e.generation AND o.intent_id=e.intent_id AND o.status='running') \
          AND (e.status<>'accepted' OR e.command_name<>'decision.request' OR e.receipt->'subject' IS NULL \
@@ -78,7 +82,9 @@ pub const TABLES: [(&str, &str); 8] = [
     ),
     (
         "playbook_host_operations",
-        "DELETE FROM playbook_host_operations WHERE operation_id IN (SELECT operation_id FROM playbook_host_operations WHERE namespace_id=$1 AND generation=$2 AND status<>'running' ORDER BY completed_at_ms DESC NULLS LAST,operation_id DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
+        // A completed operation is evidence candidate.publish reads: kept
+        // while the run that requested it is not finished.
+        "DELETE FROM playbook_host_operations WHERE operation_id IN (SELECT o.operation_id FROM playbook_host_operations o WHERE o.namespace_id=$1 AND o.generation=$2 AND o.status<>'running' AND NOT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=o.namespace_id AND e.generation=o.generation AND e.intent_id=o.intent_id AND NOT playbook_run_finished($1,$2,e.run_id)) ORDER BY o.completed_at_ms DESC NULLS LAST,o.operation_id DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
     ),
     // Health scans once reconciled or expired (an expired scan cannot be).
     (
@@ -91,10 +97,12 @@ pub const TABLES: [(&str, &str); 8] = [
     ),
     // Cleared finding episodes (the finding is gone). An open episode is
     // work in progress and never matches. A finding that comes back after
-    // its cleared episode was deleted starts a new episode at revision 1.
+    // its cleared episode was deleted starts a new episode at revision 1, so
+    // none is deleted while an unexpired scan of its partition is still to
+    // be reconciled: that scan's baseline holds the old revisions.
     (
         "playbook_finding_episodes",
-        "DELETE FROM playbook_finding_episodes WHERE (namespace_id,generation,partition,finding_key) IN (SELECT namespace_id,generation,partition,finding_key FROM playbook_finding_episodes WHERE namespace_id=$1 AND generation=$2 AND NOT present ORDER BY last_notified_ms DESC,partition DESC,finding_key DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
+        "DELETE FROM playbook_finding_episodes WHERE (namespace_id,generation,partition,finding_key) IN (SELECT namespace_id,generation,partition,finding_key FROM playbook_finding_episodes WHERE namespace_id=$1 AND generation=$2 AND NOT present ORDER BY last_notified_ms DESC,partition DESC,finding_key DESC OFFSET $3 LIMIT $4) AND NOT EXISTS(SELECT 1 FROM playbook_health_observations s WHERE s.namespace_id=$1 AND s.generation=$2 AND s.partition=playbook_finding_episodes.partition AND s.result IS NULL AND s.expires_at_ms>$5)",
     ),
 ];
 

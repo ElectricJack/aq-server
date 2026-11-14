@@ -2144,6 +2144,51 @@ async fn seed_finished(e: &Env, grant: Uuid, n: i64) {
     ] {
         exec(&pool, &sql, e, grant, n).await;
     }
+    finish_run(e, "run").await;
+}
+
+/// Records `run` as finished in the engine's history (a root run), which is
+/// what lets its effects and host operations be deleted (migration 0128).
+/// These tests open no PostgreSQL engine, so the history table is made here.
+async fn finish_run(e: &Env, run: &str) {
+    let pool = e.f.db.pool().await;
+    sqlx::raw_sql("CREATE SCHEMA IF NOT EXISTS aq_playbooks; CREATE TABLE IF NOT EXISTS aq_playbooks.run_history(namespace text,kind text,item_key text,run_id text,root_id text,sequence bigint,finished_at_ms bigint,public_value jsonb,PRIMARY KEY(namespace,kind,item_key))")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO aq_playbooks.run_history VALUES($1,'runs',$2,$2,$2,0,0,'{}') ON CONFLICT DO NOTHING")
+        .bind(e.service.namespace.engine_namespace())
+        .bind(run)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// A committed effect is what the engine reads back when it lost the
+/// acknowledgement (reconcile), and a completed host operation is evidence
+/// `candidate.publish` reads: neither is deleted while its run is not in the
+/// engine's history, however many newer rows there are.
+#[tokio::test]
+async fn effects_and_host_operations_of_a_live_run_survive_deletion() {
+    let e = setup().await;
+    let old = expired_grant(&e).await;
+    seed_finished(&e, old, 4).await;
+    sqlx::query("UPDATE playbook_effects SET run_id='live' WHERE namespace_id=$1")
+        .bind(e.service.namespace.namespace_id)
+        .execute(&e.f.db.pool().await)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        prune(&e, 1, 500).await;
+    }
+    // The effects, and the operations of the same intents, are all kept.
+    assert_eq!(rows(&e, "playbook_effects").await, 4);
+    assert_eq!(rows(&e, "playbook_host_operations").await, 4);
+    assert_eq!(rows(&e, "playbook_cancellations").await, 1);
+    finish_run(&e, "live").await;
+    prune(&e, 1, 500).await;
+    assert_eq!(rows(&e, "playbook_effects").await, 1);
+    assert_eq!(rows(&e, "playbook_host_operations").await, 1);
 }
 
 const TABLES: [&str; 8] = [
@@ -2379,7 +2424,14 @@ async fn rows_in_progress_or_held_survive_deletion() {
     }
     for (i, table) in TABLES.into_iter().enumerate() {
         // Each table keeps its one newest finished row and all the others.
-        assert_eq!(rows(&e, table).await, before[i] + 1, "{table}");
+        // The cleared episodes all stay: the open scan above is of their
+        // partition, and its baseline holds their revisions.
+        let kept = if table == "playbook_finding_episodes" {
+            4
+        } else {
+            1
+        };
+        assert_eq!(rows(&e, table).await, before[i] + kept, "{table}");
     }
     // The running judgment, unanswered decision and pending effect remain.
     let effects: Vec<String> = sqlx::query_scalar(

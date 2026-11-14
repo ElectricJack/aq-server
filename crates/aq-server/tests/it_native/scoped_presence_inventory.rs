@@ -285,6 +285,27 @@ async fn the_heartbeat_log_keeps_the_newest_operations_and_a_deleted_one_is_not_
     let log = |keep, delete_batch| HeartbeatLog { keep, delete_batch };
     // A receipt that has not expired is kept, however many are newer.
     assert_eq!(presence_operations(pool, 1, &log(1, 9)).await.unwrap(), 0);
+    // While the node has an attempt that is not settled, the inventories of
+    // its current boot are kept: a live phase execution reads the one it was
+    // selected against by revision and digest.
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(live, 0, "the fixture node starts without attempts");
+    let attempt = Uuid::new_v4();
+    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,true,'{\"status\":\"granted\"}')")
+        .bind(attempt).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4())
+        .execute(pool).await.unwrap();
+    assert_eq!(
+        presence_operations(pool, expired, &log(1, 9))
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE execution_attempts SET holds_task=false,state='{\"status\":\"finished\"}' WHERE attempt_id=$1")
+        .bind(attempt).execute(pool).await.unwrap();
     // Bounded batches, oldest first, down to the newest two.
     assert_eq!(
         presence_operations(pool, expired, &log(2, 2))
