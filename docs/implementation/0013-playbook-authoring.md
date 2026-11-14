@@ -91,7 +91,7 @@ handed to the save path; no model ran.
 | 7 | 500 routing runs keep step time flat | The ignored test `real_adapter_pilots::routing_scale::five_hundred_routing_runs_in_one_protected_namespace`, run by hand in a release build. It measures the Host8 routing pilot, not an authored playbook. | See below |
 
 Scale test (acceptance 7): see the coordinator's numbers.
-<!-- scale numbers -->
+Measured 2026-11-14 on commit 37bd30a7 (release build, the Host8 pilot playbook, a shared developer machine under other load): 500 of 500 runs `routed` in 618 s. Slowest tick per run: 184 ms at run 10, 200 ms at run 250, 204 ms at run 500 (1.11x of run 10); over all runs median 187 ms, p95 224 ms, max 348 ms. Server bridge tables at run 500, with `keep_finished` set low by the test: `playbook_outbox` 20, `playbook_effects` 20, `playbook_host_operations` 20, `playbook_admissions` 50 - flat, with effects deleted against the engine's real `run_history` (13,000 rows). This does not yet measure a playbook written through the authoring path.
 
 Earlier runs of the same test on this engine, for comparison: at the final
 vendor (chain B, shared host with load average 7 to 10) all 500 runs ended
