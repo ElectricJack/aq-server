@@ -1557,6 +1557,84 @@ async fn owner_reopens_a_finished_task_only_if_it_never_ran() {
 }
 
 #[tokio::test]
+async fn owner_completes_a_task_by_hand_only_when_nothing_else_owns_its_outcome() {
+    let x = setup().await;
+    let request = |id: Uuid, reason: Option<&str>| {
+        let op = Uuid::new_v4();
+        let mut request = action(
+            "task.complete",
+            "task",
+            id,
+            "3",
+            json!({"operation_id":op,"project_id":x.project(),"expected_version":"3"}),
+        );
+        if let Some(reason) = reason {
+            request["reason"] = json!(reason);
+        }
+        request
+    };
+    let put = |state: &str, metadata: Value| {
+        let id = Uuid::new_v4();
+        let mut task = node(id, x.workspace(), "task", 3);
+        task["task_state"] = json!(state);
+        task["metadata"] = metadata;
+        x.put(task.clone());
+        (id, task)
+    };
+    // An active task nothing holds is completed with one Graph write that
+    // carries the owner's reason.
+    let (id, before) = put("active", json!({}));
+    let mut after = before;
+    after["version"] = json!(4);
+    after["task_state"] = json!("completed");
+    x.reply(200, change_set(vec![after]));
+    let (status, body) = x.act(&request(id, Some("Done by hand"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let posted = x.posts().last().unwrap().clone();
+    assert_eq!(posted["reason"], "Done by hand");
+    assert_eq!(
+        posted["operations"][0]["patch"],
+        json!({"task_state":"completed"})
+    );
+    // Without a reason nothing is admitted.
+    let (id, _) = put("active", json!({}));
+    let posts = x.posts().len();
+    let (status, body) = x.act(&request(id, None)).await;
+    assert!(status.is_client_error(), "{status} {body}");
+    let (status, body) = x.act(&request(id, Some("  "))).await;
+    assert!(status.is_client_error(), "{status} {body}");
+    assert_eq!(x.posts().len(), posts);
+    // Rejected, with nothing written: not active; managed by a playbook;
+    // held by an attempt (the fixture's task has one).
+    let (draft, _) = put("draft", json!({}));
+    let (done, _) = put("completed", json!({}));
+    let (managed, _) = put("active", json!({"aq:playbook_namespace":"ns"}));
+    let held = x.f.selection.lineage.task_id;
+    x.put(node(held, x.workspace(), "task", 3));
+    for (what, id) in [
+        ("draft", draft),
+        ("completed", done),
+        ("playbook", managed),
+        ("held", held),
+    ] {
+        let posts = x.posts().len();
+        let (_, body) = x.act(&request(id, Some("Done by hand"))).await;
+        assert_eq!(body["data"]["disposition"], "rejected", "{what}: {body}");
+        assert_eq!(x.posts().len(), posts, "{what}");
+    }
+    // Graph refuses a parent with an open child as a conflict at the same
+    // version: that is a rejection, not a stale version to retry.
+    let (parent, _) = put("active", json!({}));
+    x.reply(
+        409,
+        json!({"error":{"code":"conflict","message":"open child prevents parent completion"}}),
+    );
+    let (_, body) = x.act(&request(parent, Some("Done by hand"))).await;
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+}
+
+#[tokio::test]
 async fn owner_cancels_tasks_without_reason_or_attempt_and_deletes_without_gate() {
     let x = setup().await;
     for (state, kind) in [

@@ -50,6 +50,11 @@ pub(crate) trait GraphPayload:
     fn never_attempted() -> bool {
         false
     }
+    /// Whether no attempt may hold the task. A holding attempt would keep
+    /// running, and its result could no longer be settled.
+    fn not_held() -> bool {
+        false
+    }
     /// Additional task references that must belong to the subject's project.
     fn tasks(&self) -> Vec<Uuid> {
         vec![]
@@ -132,6 +137,42 @@ impl GraphPayload for aq_human_work::TaskActivate {
         }
         Ok(vec![
             json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"active"}}),
+        ])
+    }
+}
+impl GraphPayload for aq_human_work::TaskComplete {
+    const KIND: &'static str = "task.complete";
+    const GRANT: &'static str = "task.complete";
+    const ENTITY: &'static str = "task";
+    fn operation_id(&self) -> Uuid {
+        self.operation_id
+    }
+    fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+    fn expected(&self) -> &str {
+        &self.expected_version
+    }
+    fn valid(&self) -> bool {
+        true
+    }
+    fn reason_required() -> bool {
+        true
+    }
+    fn not_held() -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        // Settlement completes work that ran. This is for work finished
+        // outside AQ, so never for a task a playbook manages: the playbook
+        // would read the completion as an accepted result it has no receipt for.
+        if c.node["task_state"] != "active"
+            || c.node["metadata"].get("aq:playbook_namespace").is_some()
+        {
+            return Err(ApiError::invalid());
+        }
+        Ok(vec![
+            json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"completed"}}),
         ])
     }
 }
@@ -629,6 +670,8 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task activate adapter");
     r.register(GraphAction::<aq_human_work::TaskReopen>::new(state))
         .expect("task reopen adapter");
+    r.register(GraphAction::<aq_human_work::TaskComplete>::new(state))
+        .expect("task complete adapter");
     r.register(GraphAction::<TaskEdit>::new(state))
         .expect("task edit adapter");
     r.register(GraphAction::<TaskReprioritize>::new(state))
@@ -659,6 +702,8 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task activate schema");
     r.register_schema::<GraphAction<aq_human_work::TaskReopen>>()
         .expect("task reopen schema");
+    r.register_schema::<GraphAction<aq_human_work::TaskComplete>>()
+        .expect("task complete schema");
     r.register_schema::<GraphAction<TaskEdit>>()
         .expect("task edit schema");
     r.register_schema::<GraphAction<TaskReprioritize>>()
@@ -976,11 +1021,12 @@ impl<P: GraphPayload> GraphAction<P> {
                 node: &node,
             })
             .map_err(|_| invalid())?;
-        if P::never_attempted() {
+        if P::never_attempted() || P::not_held() {
             let attempted: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE task_id=$1)",
+                "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE task_id=$1 AND ($2 OR holds_task))",
             )
             .bind(subject)
+            .bind(P::never_attempted())
             .fetch_one(&state.store.pool)
             .await
             .map_err(|_| AppError::Internal)?;
@@ -1018,6 +1064,11 @@ impl<P: GraphPayload> GraphAction<P> {
                     existing::disposition(Disposition::Conflict)
                 } else {
                     match current(rt, workspace, subject, P::ENTITY).await {
+                        // Graph refused the change itself, not its version
+                        // (an open child prevents a parent's completion).
+                        Ok(n) if n["version"].as_u64() == Some(live) => {
+                            existing::disposition(Disposition::Rejected)
+                        }
                         Ok(n) => n["version"].as_u64().map_or_else(
                             || Outcome::conflict(BTreeMap::new()),
                             |v| stale(P::ENTITY, v),

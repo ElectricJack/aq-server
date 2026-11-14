@@ -1649,6 +1649,44 @@
         {
           "properties": {
             "kind": {
+              "const": "task.complete"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:task.complete:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "`task.complete`: the owner closes an active task by hand. The reason is\nthe action's own `reason`, which this kind requires.",
+              "properties": {
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_version"
+              ],
+              "title": "TaskComplete",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "task.create"
             },
             "payload": {
