@@ -182,6 +182,13 @@ impl Route {
     pub fn query(&self) -> Option<&'static [QueryParam]> {
         queries::declared(self.path)
     }
+    /// Whether the route's inline params schema has this property.
+    fn takes(&self, field: &str) -> bool {
+        let Params::Inline(schema) = self.params else {
+            return false;
+        };
+        serde_json::from_str::<Value>(schema).is_ok_and(|s| s["properties"].get(field).is_some())
+    }
     fn segments(&self) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
         self.path.split('/').filter_map(|s| {
             let seg = s.strip_prefix('{')?.strip_suffix('}')?;
@@ -408,7 +415,21 @@ pub fn forward(
             }
             None
         }
-        Body::Params => Some(Value::Object(params)),
+        Body::Params => {
+            // A route that takes the operation ID or a reason in its body
+            // gets the request's own when the params omit them.
+            for (field, value) in [
+                ("operation_id", request.operation_id.map(|op| json!(op))),
+                ("reason", request.reason.as_ref().map(|r| json!(r))),
+            ] {
+                if let Some(value) = value
+                    && route.takes(field)
+                {
+                    params.entry(field).or_insert(value);
+                }
+            }
+            Some(Value::Object(params))
+        }
         Body::Versioned => {
             params.insert("api_version".into(), json!(1));
             Some(Value::Object(params))
