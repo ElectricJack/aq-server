@@ -811,6 +811,63 @@ fn internal_request(
 
 /// Every owner run is an item: one about an item the dashboard cannot open
 /// by id opens the run and names the item; an unknown project is null.
+// Spec 0011 §4 W6: a task routing could not route, once with the owner, is
+// an attention item that opens the task and says why in words.
+#[tokio::test]
+async fn owner_escalated_routing_failure_points_at_the_task() {
+    use aq_internal_work::{Affected, Purpose, Reason, store};
+    use serde_json::json;
+    use uuid::Uuid;
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let task = Uuid::new_v4();
+    let affected = Affected {
+        kind: "task".into(),
+        id: task.to_string(),
+        project_id: Some(f.selection.lineage.project_id),
+    };
+    let words = "The routing document allows no agent to take this task, so it is left unrouted.";
+    let failure = (Reason::NoCandidate, words);
+    let purpose = Purpose::RoutingClassification;
+    let record = |cause: &'static str| {
+        store::record_failure(&pool, purpose, &affected, cause, failure, 1_000)
+    };
+    let run = record("unroutable@3").await.unwrap().unwrap();
+    assert_eq!(
+        record("unroutable@3").await.unwrap(),
+        None,
+        "once per cause"
+    );
+    assert_eq!(store::escalate_due(&pool, 1_000).await.unwrap().len(), 1);
+    (store::mark_owner(&pool, run, "the document forbids it", 2_000).await).unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/overview").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body["data"]["attention"].as_array().unwrap();
+    let item = (items
+        .iter()
+        .find(|v| v["id"] == format!("internal_work:{run}")))
+    .unwrap();
+    assert_eq!(item["subject"], json!({"type": "task", "id": task}));
+    assert_eq!(item["title"], "A task could not be routed");
+    assert_eq!(item["reason"], words);
+    // A route resolves it: the item is gone.
+    assert_eq!(
+        store::resolve_failures(&pool, purpose, &affected)
+            .await
+            .unwrap(),
+        1
+    );
+    let (_, body) = read(&app, "/api/v1/overview").await;
+    let items = body["data"]["attention"].as_array().unwrap();
+    assert!(
+        !items
+            .iter()
+            .any(|v| v["id"] == format!("internal_work:{run}"))
+    );
+}
+
 #[tokio::test]
 async fn owner_escalated_internal_runs_are_never_dropped() {
     use aq_internal_work::store;

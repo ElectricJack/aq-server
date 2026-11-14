@@ -108,7 +108,7 @@ impl Service {
     pub(super) async fn routed_task(
         &self,
         subject: &Value,
-    ) -> Result<std::result::Result<(Uuid, Uuid, Value), &'static str>> {
+    ) -> Result<std::result::Result<(Uuid, (Uuid, Uuid), Value), &'static str>> {
         let ports = self.ports()?;
         let Ok(task) = Uuid::parse_str(text(subject, "id")?) else {
             return Ok(Err("unknown_task"));
@@ -121,7 +121,7 @@ impl Service {
             return Ok(Err("not_on_router"));
         }
         Ok(match ports.graph.node(workspace, task).await? {
-            Some(node) => Ok((task, workspace, node)),
+            Some(node) => Ok((task, (workspace, project), node)),
             None => Err("unknown_task"),
         })
     }
@@ -136,7 +136,7 @@ impl Service {
         let asked = input["subject"]["revision"]
             .as_i64()
             .ok_or(Error::Invalid)?;
-        let (task, workspace, node) = match self.routed_task(&input["subject"]).await? {
+        let (task, (workspace, project), node) = match self.routed_task(&input["subject"]).await? {
             Ok(found) => found,
             Err(reason) => return Ok(result("refused", host9::refusal(id, asked, reason))),
         };
@@ -175,7 +175,7 @@ impl Service {
                 let node = self.ports()?.graph.node(workspace, task).await?;
                 left = node_version(&node.ok_or(Error::Unknown)?)?;
             }
-            self.route_settled(tx, task, left, "unroutable", reasons, None)
+            self.route_settled(tx, (task, project), left, "unroutable", input, None)
                 .await?;
             return Ok(result("recorded", host9::task_output(id, left)));
         }
@@ -188,8 +188,15 @@ impl Service {
         };
         let Some(route) = host9::route_from_input(input, &options, from) else {
             let offers = host9::options_digest(&options);
-            self.route_settled(tx, task, version, "not_offered", reasons, Some(&offers))
-                .await?;
+            self.route_settled(
+                tx,
+                (task, project),
+                version,
+                "not_offered",
+                input,
+                Some(&offers),
+            )
+            .await?;
             return refused("not_offered");
         };
         Ok(match routing.write(at, Some(&route)).await? {
@@ -221,16 +228,20 @@ impl Service {
     }
 
     /// Records why the task is not asked about again (`not_offered`,
-    /// `unroutable`) for this task version, routing artifact and offers.
+    /// `unroutable`) for this task version, routing artifact and offers, and
+    /// raises it (W6), once for this outcome at this task version.
     async fn route_settled(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        task: Uuid,
+        (task, project): (Uuid, Uuid),
         version: i64,
         outcome: &str,
-        reasons: &Value,
+        input: &Value,
         offers: Option<&str>,
     ) -> Result<()> {
+        let reasons = &input["reasons"];
+        self.routing_failure((task, project), outcome, version, input)
+            .await?;
         let (artifact, _) = self.routing_artifact(tx).await?;
         sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,outcome,reasons,artifact_digest,options_digest) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(task_id) DO UPDATE SET task_version=$2,outcome=$4,reasons=$5,artifact_digest=$6,options_digest=$7")
             .bind(task)
@@ -243,5 +254,37 @@ impl Service {
             .execute(&mut **tx)
             .await?;
         Ok(())
+    }
+
+    /// W6: a task routing could not route follows the internal work failure
+    /// path (a supervisor first, then the owner's attention), once per cause.
+    pub(crate) async fn routing_failure(
+        &self,
+        (task, project): (Uuid, Uuid),
+        outcome: &str,
+        version: i64,
+        input: &Value,
+    ) -> Result<bool> {
+        use aq_internal_work::{Affected, Purpose, Reason, store};
+        let (cause, words) = host9::routing_failure(outcome, version, input);
+        let affected = Affected {
+            kind: "task".into(),
+            id: task.to_string(),
+            project_id: Some(project),
+        };
+        let reason = match outcome {
+            "unrouted" => Reason::DeadlineExceeded,
+            _ => Reason::NoCandidate,
+        };
+        let purpose = Purpose::RoutingClassification;
+        let raised = store::record_failure(
+            &self.pool,
+            purpose,
+            &affected,
+            &cause,
+            (reason, &words),
+            self.now()?,
+        );
+        Ok(raised.await.map_err(|_| Error::Unknown)?.is_some())
     }
 }

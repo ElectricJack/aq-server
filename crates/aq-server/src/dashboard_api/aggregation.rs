@@ -816,7 +816,7 @@ async fn internal_work(
 ) -> Result<Contribution> {
     const OPENABLE: [&str; 5] = ["task", "decision", "session", "knowledge", "playbook_run"];
     let mut transaction = tx(runtime).await?;
-    let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
+    let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms,CASE WHEN purpose='routing_classification' AND affected_kind='task' AND request->>'input' ~ '^(not_offered|unroutable|unrouted)@' THEN left(detail,600) END AS unrouted FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
         .bind(scope.project()).fetch_all(&mut *transaction).await?;
     transaction.commit().await?;
     let mut c = Contribution::default();
@@ -845,10 +845,14 @@ async fn internal_work(
         let diagnosis: Option<String> = row.get("diagnosis");
         let since = row.get::<Option<i64>, _>("escalated_at_ms");
         let since = since.map(|ms| timestamp(ms as u64)).transpose()?;
-        let reason = diagnosis
-            .as_deref()
+        // Spec 0011 §4 W6: a task routing could not route says why, in words.
+        let unrouted: Option<String> = row.get("unrouted");
+        let reason = (unrouted.as_deref().or(diagnosis.as_deref()))
             .unwrap_or("A supervisor could not fix it");
-        let title = "Internal work failed";
+        let title = match unrouted {
+            Some(_) => "A task could not be routed",
+            None => "Internal work failed",
+        };
         let mut item = attention(
             AttentionKind::InternalWork,
             subject,

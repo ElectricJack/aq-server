@@ -108,6 +108,9 @@ async fn store(
         return Err(unavailable());
     };
     if status.is_success() && agent_access::settlement_response_valid(&raw) {
+        if route.is_some() {
+            routed(pool, task).await;
+        }
         return Ok(Written::Routed { sequence });
     }
     let code = raw["error"]["code"].as_str();
@@ -125,6 +128,46 @@ async fn store(
         return Ok(Written::Stale);
     }
     Err(unavailable())
+}
+
+/// The task has a route: what was raised about its routing is resolved (spec
+/// 0011 §4 W6) and why it was left unrouted no longer applies. Never fails
+/// the write.
+async fn routed(pool: &PgPool, task: Uuid) {
+    let affected = aq_internal_work::Affected {
+        kind: "task".into(),
+        id: task.to_string(),
+        project_id: None,
+    };
+    let purpose = aq_internal_work::Purpose::RoutingClassification;
+    let resolved = aq_internal_work::store::resolve_failures(pool, purpose, &affected).await;
+    let cleared = sqlx::query(
+        "UPDATE route_needed_emissions SET outcome=NULL,reasons=NULL WHERE task_id=$1 AND outcome IS NOT NULL",
+    )
+    .bind(task)
+    .execute(pool)
+    .await;
+    if resolved.is_err() || cleared.is_err() {
+        tracing::warn!(%task, "routing failure of a routed task not resolved");
+    }
+}
+
+/// Why the task was last left unrouted (`not_offered` or `unroutable`, with
+/// the playbook's reasons), while that still holds.
+pub(crate) async fn unrouted(
+    pool: &PgPool,
+    task: Uuid,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let row: Option<(String, Option<Json<serde_json::Value>>, i64)> = sqlx::query_as(
+        "SELECT outcome,reasons,task_version FROM route_needed_emissions WHERE task_id=$1 AND outcome IS NOT NULL",
+    )
+    .bind(task)
+    .fetch_optional(pool)
+    .await
+    .map_err(db)?;
+    Ok(row.map(|(outcome, reasons, version)| {
+        json!({"outcome": outcome, "reasons": reasons.map(|r| r.0), "task_version": version})
+    }))
 }
 
 /// Every route the task has had, newest first.
@@ -336,9 +379,12 @@ async fn wanted(
     task: &aq_admission::TaskRevision,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id)
-         VALUES($1,0,0,$2,$3,$4,$5) ON CONFLICT(task_id) DO UPDATE
-         SET wanted_version=$2,wanted_at_ms=$3,workspace_id=$4,project_id=$5
+        "INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id,wanted_since_ms)
+         VALUES($1,0,0,$2,$3,$4,$5,$3) ON CONFLICT(task_id) DO UPDATE
+         SET wanted_version=$2,wanted_at_ms=$3,workspace_id=$4,project_id=$5,
+             wanted_since_ms=CASE WHEN route_needed_emissions.wanted_version IS DISTINCT FROM $2
+                 OR route_needed_emissions.wanted_at_ms IS NULL OR route_needed_emissions.wanted_at_ms<$3-$7
+                 THEN $3 ELSE COALESCE(route_needed_emissions.wanted_since_ms,$3) END
          WHERE route_needed_emissions.wanted_version IS DISTINCT FROM $2
             OR route_needed_emissions.wanted_at_ms IS NULL OR route_needed_emissions.wanted_at_ms<=$3-$6",
     )
@@ -348,6 +394,7 @@ async fn wanted(
     .bind(task.workspace_id)
     .bind(project)
     .bind(aq_playbook_domain::host9::ROUTE_WANTED_REFRESH_MS)
+    .bind(aq_playbook_domain::host9::ROUTE_WANTED_FRESH_MS)
     .execute(pool)
     .await
     .map_err(db)?;

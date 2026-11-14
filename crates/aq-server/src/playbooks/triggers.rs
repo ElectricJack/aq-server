@@ -205,7 +205,7 @@ impl Service {
         let (Some(artifact), _) = self.routing_artifact(&mut tx).await? else {
             return Ok(0);
         };
-        let rows = sqlx::query("SELECT r.task_id,r.wanted_version,r.task_version,r.emitted_at_ms,r.outcome,r.artifact_digest,r.options_digest,EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=r.task_id::text AND e.created_at_ms>=r.emitted_at_ms AND NOT playbook_run_finished($1,$2,e.run_id)) AS run_unfinished FROM route_needed_emissions r WHERE r.wanted_at_ms>=$3 AND ($4 OR r.project_id=$5) AND (r.emitted_at_ms=0 OR r.wanted_version<>r.task_version OR GREATEST(r.emitted_at_ms,r.checked_at_ms)<=$6) ORDER BY r.wanted_at_ms,r.task_id LIMIT $7 FOR UPDATE OF r SKIP LOCKED")
+        let rows = sqlx::query("SELECT r.task_id,r.project_id,r.wanted_since_ms,r.wanted_version,r.task_version,r.emitted_at_ms,r.outcome,r.artifact_digest,r.options_digest,EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=r.task_id::text AND e.created_at_ms>=r.emitted_at_ms AND NOT playbook_run_finished($1,$2,e.run_id)) AS run_unfinished FROM route_needed_emissions r WHERE r.wanted_at_ms>=$3 AND ($4 OR r.project_id=$5) AND (r.emitted_at_ms=0 OR r.wanted_version<>r.task_version OR GREATEST(r.emitted_at_ms,r.checked_at_ms)<=$6) ORDER BY r.wanted_at_ms,r.task_id LIMIT $7 FOR UPDATE OF r SKIP LOCKED")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
             .bind(now - host9::ROUTE_WANTED_FRESH_MS)
@@ -244,6 +244,17 @@ impl Service {
                 options_digest: row.get("options_digest"),
                 run_unfinished: row.get("run_unfinished"),
             };
+            // W6: ten minutes ready without a route (and not already raised as
+            // not_offered or unroutable) is raised, once per task version.
+            let since: Option<i64> = row.get("wanted_since_ms");
+            let project: Option<Uuid> = row.get("project_id");
+            if let (None, Some(since), Some(project)) = (&emission.outcome, since, project)
+                && now - since >= host9::UNROUTED_RAISE_MS
+            {
+                let at = (task, project);
+                self.routing_failure(at, "unrouted", version, &serde_json::Value::Null)
+                    .await?;
+            }
             if !host9::route_needed_due(&emission, now, &artifact, offers.as_deref()) {
                 sqlx::query("UPDATE route_needed_emissions SET checked_at_ms=$2 WHERE task_id=$1")
                     .bind(task)
