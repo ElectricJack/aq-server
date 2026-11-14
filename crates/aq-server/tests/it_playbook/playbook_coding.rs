@@ -684,3 +684,31 @@ async fn coding_policy_human_decision_follows_review_and_gates_publish() {
 }
 
 mod artifacts;
+
+/// The coding artifacts keep their digests whatever fills in their registry
+/// and abilities (plan task D4: one identity filler).
+#[test]
+fn seal_keeps_every_pinned_digest() {
+    let built = CodingPolicy::project_default(checks()).build().unwrap();
+    let mut strict = CodingPolicy::project_default(checks());
+    strict.max_repairs = 0;
+    let strict = strict.build().unwrap();
+    let digests = [
+        built.root.digest.as_str(),
+        strict.root.digest.as_str(),
+        built.attempt.digest.as_str(),
+        built.work.digest.as_str(),
+        built.check.digest.as_str(),
+    ];
+    assert_eq!(digests, PINNED, "{digests:#?}");
+}
+/// `aq.coding` (default), `aq.coding` with no repairs and `aq.coding.attempt`
+/// as docs/implementation/D11.md records them, then `aq.coding.work` and
+/// `aq.coding.check`.
+const PINNED: [&str; 5] = [
+    "sha256:d6f7502ca9e157c28feb734511f70b676e533d2260f450f8c9f59a2a961cec21",
+    "sha256:d77c03d8994eb9f3583233257d78813f5606b2189dc162cfbf21a8837e777c47",
+    "sha256:6e9af4fce7f687782b35b4554235e1d610f2e63d43d079e69edb56e3034aa9c8",
+    "sha256:2326ca48c9ab8526bd79ced3f5fc806d0d42be13c161d280e41b895c902e3288",
+    "sha256:7b11ebdcffae86483950f366fa8db6e50b9d6e3ae93943751dfca9c40796e5d3",
+];

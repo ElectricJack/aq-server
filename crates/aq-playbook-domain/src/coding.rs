@@ -29,6 +29,7 @@
 //! receipts; the host's publication guard verifies each in its owning store.
 use super::review_domain::{CatalogProfile, HOST7_CAPABILITIES};
 use aq_playbook_host::model::*;
+use aq_playbooks_compiler::draft::retain_registry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -441,20 +442,13 @@ impl Builder {
                 _ => {}
             }
         }
-        for name in commands.clone() {
-            if let Some(a) = &self.command(&name)?.asynchronous {
-                commands.insert(a.reconciliation_command.clone());
-                events.insert(a.completion_event.clone());
-            }
-        }
-        let mut registry = self.registry.clone();
-        registry.commands.retain(|n, _| commands.contains(n));
-        registry.events.retain(|n, _| events.contains(n));
+        // One identity filler, the authoring tools' own: the contracts the
+        // steps name, each asynchronous command's reconciliation command and
+        // completion event, and the abilities those commands need.
+        let (registry, needed) =
+            retain_registry(&self.registry, &commands, &events).map_err(CodingError::Invalid)?;
         steps.insert("failure".into(), ret("escalated", escalated));
-        let required_capabilities = registry
-            .commands
-            .values()
-            .flat_map(|c| c.capabilities.clone())
+        let required_capabilities = (needed.into_iter())
             .chain(
                 children
                     .iter()
