@@ -10,7 +10,6 @@ use aq_admission::{
     outcome::{OutcomeKind, ReviewRequirement},
 };
 use serde::Deserialize;
-use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,56 +103,6 @@ impl VerifiedReviewEvidence {
             receipt: fact.receipt().artifact().map_err(|_| AppError::Internal)?,
             combined_subject: Some(subject.artifact()?),
             approved: true,
-        })
-    }
-    pub async fn read_locked(
-        state: &crate::AppState,
-        service: &crate::reviews::Service,
-        tx: &mut Transaction<'_, Postgres>,
-        decision: Uuid,
-    ) -> Result<Self, AppError> {
-        // Read immutable identity without locking a decision row; actual common
-        // node/attempt/stop owner locks always precede decision/outbox locks.
-        let report: Uuid = sqlx::query_scalar("SELECT s.report_id FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) WHERE d.decision_id=$1")
-            .bind(decision).fetch_one(&mut **tx).await.map_err(|_| AppError::Internal)?;
-        crate::profiled_execution::results::load_locked(state, tx, report).await?;
-        let (subject, event) = service.completion_in_tx(tx, decision).await?;
-        // completion_in_tx authenticates/decrypts the original typed request,
-        // exact final receipt, eligible actor, subject and retained outbox join.
-        let approved = match event["outcome"].as_str() {
-            Some("approved") => true,
-            Some("rejected") => false,
-            _ => {
-                return Err(AppError::UpdatesUnavailable(
-                    "human code review has no answer".into(),
-                ));
-            }
-        };
-        let actor: Uuid = sqlx::query_scalar(
-            "SELECT actor_id FROM human_decision_finality WHERE decision_id=$1 FOR SHARE",
-        )
-        .bind(decision)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(|_| AppError::Internal)?;
-        let role: Option<String> =
-            sqlx::query_scalar("SELECT role FROM users WHERE id=$1 FOR SHARE")
-                .bind(actor)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(|_| AppError::Internal)?;
-        if role.as_deref() != Some("owner") {
-            return Err(AppError::Forbidden(
-                "original reviewer is no longer an owner".into(),
-            ));
-        }
-        let receipt = serde_json::from_value(event["output"]["receipt"].clone())
-            .map_err(|_| AppError::Internal)?;
-        Ok(Self {
-            subject,
-            receipt,
-            combined_subject: None,
-            approved,
         })
     }
 }

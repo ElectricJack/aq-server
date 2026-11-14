@@ -1,11 +1,81 @@
 //! Explicit optional owner startup; uncertainty never starts a replacement.
 use super::{config::Loaded, driver::Driver, service::Service};
 use crate::{AppState, reviews};
-use aq_playbook_host::{Limits, protected};
+use aq_playbook_host::{Limits, drive::Refused, drive::Step, protected};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
-fn refused() -> anyhow::Error {
-    anyhow::anyhow!("configured playbook owner startup refused")
+fn refused(why: &str) -> anyhow::Error {
+    Refused(why.into()).into()
+}
+/// The owner as serving sees it: none until its engine has opened.
+pub(crate) type Slot = Arc<tokio::sync::Mutex<Option<Runtime>>>;
+/// Serving when the owner could not open at startup: the server runs with the
+/// playbook routes answering "playbooks unavailable: <reason>" (503), and the
+/// open is retried with a backoff (the drive interval, doubling up to the
+/// engine statement timeout). Once it opens, the router `build` makes with
+/// the owner replaces the unavailable one and the owner goes into `slot`.
+pub(crate) fn open_later(
+    state: AppState,
+    config: Arc<Loaded>,
+    failure: anyhow::Error,
+    build: impl Fn(Option<&Runtime>) -> axum::Router + Send + Sync + 'static,
+    slot: Slot,
+    stop: watch::Receiver<bool>,
+) -> axum::Router {
+    use axum::response::IntoResponse;
+    let reason = Arc::new(std::sync::RwLock::new(failure.to_string()));
+    let shown = reason.clone();
+    let unavailable = move |_: crate::authz::RequireOwner| {
+        let reason = shown.read().map(|r| r.clone()).unwrap_or_default();
+        let message = format!("playbooks unavailable: {reason}");
+        let body = serde_json::json!({"error":"playbooks_unavailable","message":message});
+        async move {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(body),
+            )
+        }
+    };
+    let fallback = axum::Router::new()
+        .route("/api/playbooks/{*rest}", axum::routing::any(unavailable))
+        .with_state(state.clone());
+    let current = Arc::new(std::sync::RwLock::new(build(None).merge(fallback)));
+    let serving = current.clone();
+    tokio::spawn(async move {
+        let backoff =
+            aq_playbook_host::drive::Backoff::new(config.interval, config.timeouts.statement());
+        let attempt = || Runtime::start(&state, config.clone());
+        let failed = |error: &anyhow::Error, delay: Duration| {
+            tracing::warn!(%error, ?delay, "playbook owner unavailable; retrying the open");
+            if let Ok(mut reason) = reason.write() {
+                *reason = error.to_string();
+            }
+        };
+        let opened = aq_playbook_host::drive::retry(stop.clone(), backoff, attempt, failed).await;
+        if let Some(mut runtime) = opened {
+            if *stop.borrow() {
+                // Opened after shutdown began: nobody will take it from the slot.
+                return drop(runtime.shutdown().await);
+            }
+            runtime.watch_shutdown(stop);
+            if let Ok(mut current) = current.write() {
+                *current = build(Some(&runtime));
+            }
+            *slot.lock().await = Some(runtime);
+        }
+    });
+    let route = move |request: axum::extract::Request| {
+        let router = serving.read().map(|r| r.clone()).ok();
+        async move {
+            match router {
+                Some(router) => tower::ServiceExt::oneshot(router, request)
+                    .await
+                    .into_response(),
+                None => axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            }
+        }
+    };
+    axum::Router::new().fallback(route)
 }
 pub struct Runtime {
     pub driver: Arc<Driver>,
@@ -18,28 +88,29 @@ pub struct Runtime {
 impl Runtime {
     /// Configuration is authenticated local operator input, never a HTTP payload.
     pub async fn start(state: &AppState, config: Arc<Loaded>) -> anyhow::Result<Self> {
-        tokio::time::timeout(Duration::from_secs(30), Self::start_inner(state, config))
+        let open = config.timeouts.open();
+        tokio::time::timeout(open, Self::start_inner(state, config))
             .await
-            .map_err(|_| refused())?
+            .step("the open passed engine_timeouts.open_ms")?
     }
     async fn start_inner(state: &AppState, config: Arc<Loaded>) -> anyhow::Result<Self> {
         let version: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
                 .fetch_optional(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the schema version")?;
         if crate::STATE_FORMAT_VERSION < 26
             || version.as_deref() != Some(&crate::STATE_FORMAT_VERSION.to_string())
         {
-            return Err(refused());
+            return Err(refused("schema version mismatch"));
         }
         let migrations: Vec<i32> =
             sqlx::query_scalar("SELECT version FROM schema_migrations ORDER BY version")
                 .fetch_all(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the applied migrations")?;
         if migrations != (1..=crate::STATE_FORMAT_VERSION as i32).collect::<Vec<_>>() {
-            return Err(refused());
+            return Err(refused("applied migrations differ"));
         }
         for table in [
             "review_owner_budget",
@@ -56,28 +127,28 @@ impl Runtime {
                 .bind(format!("public.{table}"))
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("checking the bridge tables")?;
             if !present {
-                return Err(refused());
+                return Err(refused("a bridge table is missing"));
             }
         }
         let installed: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=26)")
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
-        let column:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='playbook_namespaces' AND column_name='catalog_profile')").fetch_one(&state.store.pool).await.map_err(|_|refused())?;
+                .step("checking migration 26")?;
+        let column:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='playbook_namespaces' AND column_name='catalog_profile')").fetch_one(&state.store.pool).await.step("checking the namespace columns")?;
         if !installed
             || !column
             || config.connection.get_dbname() != state.store.pool.connect_options().get_database()
         {
-            return Err(refused());
+            return Err(refused("playbook schema or database mismatch"));
         }
         let budget: i64 =
             sqlx::query_scalar("SELECT count(*) FROM review_owner_budget WHERE singleton")
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the review budget")?;
         if budget != 1
             || (state.source_retention.is_none()
                 && config.deployments.iter().any(|d| {
@@ -88,11 +159,12 @@ impl Runtime {
                         .contains("decision.request")
                 }))
         {
-            return Err(refused());
+            return Err(refused("review budget or source retention missing"));
         }
-        config.check_socket().map_err(|_| refused())?;
+        config.check_socket().step("checking the engine socket")?;
         let service = if config.profile == super::review_domain::CatalogProfile::Monitoring6 {
-            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            let graph = state.agent_access.clone();
+            let graph = graph.ok_or_else(|| refused("no graph access"))?;
             Service::new_monitoring6(
                 state,
                 config.namespace.clone(),
@@ -101,12 +173,12 @@ impl Runtime {
             )
             .await
         } else if config.profile.is_host2() {
-            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            let graph = state.agent_access.clone();
+            let graph = graph.ok_or_else(|| refused("no graph access"))?;
             // No production sandbox check executor (server->node check-attempt
-            // execution with profiled check evidence) or judgment provider
-            // (credential lease) exists yet. The ports stay unbound, so
-            // check.request refuses `unavailable` and judgment.request refuses
-            // `no_permitted_profile`; nothing is fabricated.
+            // execution with profiled check evidence) exists yet, so
+            // check.request refuses `unavailable`. judgment.request is served
+            // by internal work (spec 0012 §6) with purpose "playbook call".
             //
             // The D7 integration port binds to D1 delivery only when an
             // integration policy is configured and aq-git (source retention)
@@ -122,7 +194,7 @@ impl Runtime {
                     ))
                         as Arc<dyn super::host_adapters::Integration>)
                 }
-                (Some(_), None) => return Err(refused()),
+                (Some(_), None) => return Err(refused("integration needs source retention")),
                 (None, _) => None,
             };
             Service::new_host2(
@@ -132,7 +204,10 @@ impl Runtime {
                 config.profile,
                 Arc::new(super::host_adapters::GatewayGraph(graph)),
                 None,
-                None,
+                Some(Arc::new(super::internal_judgments::InternalJudgments::new(
+                    state.internal_work.clone(),
+                    aq_internal_work::Purpose::PlaybookCall,
+                ))),
                 integration,
             )
             .await
@@ -145,25 +220,37 @@ impl Runtime {
             )
             .await
         }
-        .map_err(|_| refused())?;
-        service
-            .initialize(config.namespace.owner_user_id)
-            .await
-            .map_err(|_| refused())?;
+        .step("opening the bridge service")?;
+        let mut service = service;
+        service.installation_routing = config.installation_routing;
+        let initialized = service.initialize(config.namespace.owner_user_id).await;
+        if initialized.is_err() {
+            // A stored namespace of another profile or generation: say which,
+            // and what the operator does (there is no move between profiles).
+            let stored = sqlx::query_as("SELECT catalog_profile,generation FROM playbook_namespaces WHERE namespace_id=$1 OR name=$2 LIMIT 1")
+                .bind(config.namespace.namespace_id)
+                .bind(&config.namespace.name)
+                .fetch_optional(&state.store.pool)
+                .await
+                .step("reading the stored namespace")?;
+            let generation = config.namespace.generation;
+            if let Some(why) = config.profile.namespace_refusal(generation, stored) {
+                return Err(refused(&why));
+            }
+        }
+        initialized.step("initializing the namespace")?;
         let factory_config = config.clone();
+        let defaults = Limits::default();
         let limits = Limits {
             work_queue: 8,
             control_queue: 4,
-            engine: aq_playbook_host::runner::EngineConfig {
-                max_runs: 128,
-                max_events: 2048,
-                max_queued_destinations: 256,
-                max_receipts: 4096,
-                max_state_bytes: 8_388_608,
-            },
-            ..Limits::default()
+            request_bytes: config.request_bytes.unwrap_or(defaults.request_bytes),
+            timeouts: config.timeouts,
+            retention: config.retention,
+            engine_retention: config.engine_retention,
+            ..defaults
         };
-        let started = Driver::start(service.clone(), limits, move || {
+        let started = Driver::open(service.clone(), limits, move || {
             factory_config
                 .check_socket()
                 .map_err(|_| aq_playbook_host::Error::Invalid)?;
@@ -176,15 +263,15 @@ impl Runtime {
             protected::storage(
                 client,
                 factory_config.engine_keys.clone(),
-                Duration::from_secs(2),
-                Duration::from_millis(500),
+                factory_config.timeouts.statement(),
+                factory_config.timeouts.lock(),
             )
         });
         let driver = Arc::new(
-            tokio::time::timeout(Duration::from_secs(30), started)
+            tokio::time::timeout(config.timeouts.open(), started)
                 .await
-                .map_err(|_| refused())?
-                .map_err(|_| refused())?,
+                .step("opening the engine (open_ms)")?
+                .map_err(|(_, why)| refused(&format!("opening the engine: {why}")))?,
         );
         let bootstrap = async {
             for deployment in &config.deployments {
@@ -196,11 +283,11 @@ impl Runtime {
                         deployment.expires_at_ms,
                     )
                     .await
-                    .map_err(|_| refused())?;
+                    .step("writing a deployment grant")?;
                 driver
                     .install(deployment.artifact.clone())
                     .await
-                    .map_err(|_| refused())?;
+                    .step("installing a deployment artifact")?;
                 driver
                     .ensure_binding(
                         deployment.binding.clone(),
@@ -209,7 +296,7 @@ impl Runtime {
                         &deployment.scope,
                     )
                     .await
-                    .map_err(|_| refused())?;
+                    .step("activating a deployment binding")?;
             }
             // The frozen startup-metadata profile represents 1..4 configured
             // artifacts. An explicit empty deployment list mounts no historical
@@ -223,9 +310,9 @@ impl Runtime {
                             .iter()
                             .map(|deployment| &deployment.artifact),
                     )
-                    .map_err(|_| refused())?;
+                    .step("recording the loaded definitions")?;
             }
-            driver.recover().await.map_err(|_| refused())?;
+            driver.recover().await.step("recovering the engine")?;
             Ok::<_, anyhow::Error>(())
         }
         .await;
@@ -234,27 +321,31 @@ impl Runtime {
             return Err(error);
         }
         let reviews = Arc::new(reviews::Service::new(state.clone(), config.keys.clone()));
-        let (stop, mut receiver) = watch::channel(false);
+        state.internal_work.authoring().set(driver.clone());
+        tokio::spawn(crate::routing::reconcile(state.clone()));
+        let (stop, receiver) = watch::channel(false);
         driver.set_automatic_state(1);
         let owned = driver.clone();
-        let task = tokio::spawn(async move {
-            let mut timer = tokio::time::interval(config.interval);
-            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {biased; _=receiver.wait_for(|stop|*stop)=>break,_=timer.tick()=>{}}
-                match owned.quantum().await {
-                    Ok(_) | Err(super::domain::Error::Overloaded) => {}
-                    Err(_) => {
-                        owned.set_automatic_state(2);
-                        tracing::warn!(
-                            "playbook drive held after owner uncertainty or refusal; explicit reconciliation required"
-                        );
-                        let _ = receiver.wait_for(|stop| *stop).await;
-                        break;
-                    }
-                }
+        // A failed quantum is retried after a backoff from the drive interval
+        // up to the engine statement timeout; only shutdown stops the drive.
+        let quantum = move || {
+            let owned = owned.clone();
+            async move {
+                let result = match owned.quantum().await {
+                    Ok(_) | Err(super::domain::Error::Overloaded) => Ok(()),
+                    Err(error) => Err(error),
+                };
+                owned.drive_failed(result.is_err());
+                result
             }
-        });
+        };
+        let task = tokio::spawn(aq_playbook_host::drive::run(
+            receiver,
+            config.interval,
+            config.timeouts.statement(),
+            quantum,
+            |error, delay| tracing::warn!(?error, ?delay, "playbook quantum failed; retrying"),
+        ));
         let mut stopping = stop.subscribe();
         let draining = driver.clone();
         let drain = tokio::spawn(async move {
@@ -282,8 +373,9 @@ impl Runtime {
     }
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.stop.send(true);
-        let mut drain = self.drain.take().ok_or_else(refused)?;
-        let result = tokio::time::timeout(Duration::from_secs(10), &mut drain).await;
+        let mut drain = (self.drain.take()).ok_or_else(|| refused("already shut down"))?;
+        let wait = self.driver.deadline.saturating_mul(2);
+        let result = tokio::time::timeout(wait, &mut drain).await;
         if let Some(mut task) = self.task.take()
             && tokio::time::timeout(Duration::from_secs(2), &mut task)
                 .await

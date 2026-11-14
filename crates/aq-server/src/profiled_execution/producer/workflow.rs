@@ -24,12 +24,32 @@ use aq_admission::{
     transport::{Poll, TransportDocument},
 };
 use aq_machine_control::holds;
+use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
 use std::sync::OnceLock;
 use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
+
+/// Where each project's further ready page starts on the next poll (in this
+/// process only: after a restart the rotation starts behind the head page).
+mod rotation {
+    use std::{collections::BTreeMap, sync::Mutex};
+    use uuid::Uuid;
+    static NEXT: Mutex<BTreeMap<Uuid, String>> = Mutex::new(BTreeMap::new());
+    pub(super) fn get(project: Uuid) -> Option<String> {
+        NEXT.lock().ok()?.get(&project).cloned()
+    }
+    pub(super) fn set(project: Uuid, cursor: Option<String>) {
+        if let Ok(mut next) = NEXT.lock() {
+            match cursor {
+                Some(cursor) => next.insert(project, cursor),
+                None => next.remove(&project),
+            };
+        }
+    }
+}
 const MAX_SKIPPED: usize = 8;
 use crate::error::db;
 async fn runtime(
@@ -214,6 +234,8 @@ async fn selection(
             compositions: compiled.candidates.clone(),
             replacement,
             record_refused: false,
+            intelligence_override: compiled.intelligence_override.clone(),
+            route: compiled.route.clone(),
         },
     )
     .await
@@ -232,7 +254,9 @@ async fn refused_successor(
     successor: Option<holds::Successor>,
     skipped: &mut std::collections::BTreeSet<Uuid>,
 ) -> bool {
-    if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) {
+    // Spec 0011 §4: a route this node cannot serve now skips a first attempt for the poll.
+    let unservable = successor.is_none() && unservable_route(decision).is_some();
+    if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) || unservable {
         skipped.insert(decision.inputs.project.lineage.task_id);
         return true;
     }
@@ -242,6 +266,14 @@ async fn refused_successor(
     let (pool, reasons) = (&state.store.pool, &decision.outcome.reason_codes);
     holds::selection_refused(pool, s, reasons, (state.clock)()).await;
     skipped.insert(s.task)
+}
+/// The route reason selection refused a routed task for: no candidate can serve its route
+/// on this node now (spec 0011 §4).
+pub(crate) fn unservable_route(
+    decision: &resolver::Decision,
+) -> Option<aq_selection::RouteRefusal> {
+    decision.inputs.route.as_ref()?;
+    aq_selection::route_refusal(&decision.outcome)
 }
 /// The commit frozen into the export operation key. An immutable policy keeps
 /// its historical key; a named ref adds the commit it resolved to at offer
@@ -455,7 +487,7 @@ async fn offers(
             return Ok(page);
         }
         let mut chosen = None;
-        for candidate in fairness::order(&candidates, &served, polled_at)
+        'projects: for candidate in fairness::order(&candidates, &served, polled_at)
             .into_iter()
             .take(MAX_PROJECTS_PER_POLL)
         {
@@ -471,59 +503,102 @@ async fn offers(
             }
             let record =
                 on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;
-            let ready = on_heap(|| {
-                graph.scheduling_ready_current(
-                    record.binding.graph_workspace_id,
-                    8,
-                    None,
-                    state.clock.as_ref(),
-                )
-            })
-            .await
-            .map_err(|_| refused())?;
-            let mut ready = ready;
-            for candidate in &mut ready.items {
-                if !aq_machine_control::launch::eligible(
-                    &state.store.pool,
-                    candidate.revision.task_id,
-                    auth.id(),
-                    &candidate.node["metadata"],
-                )
-                .await
-                .map_err(db)?
+            // The head page first, as ever. When nothing on it can be offered
+            // and more tasks are ready, one further page a poll, rotating
+            // through the rest: tasks that wait (for a route, or held) at the
+            // head never hide the ready tasks behind them for good.
+            let mut cursor: Option<String> = None;
+            for further in [false, true] {
+                let read = on_heap(|| {
+                    graph.scheduling_ready_current(
+                        record.binding.graph_workspace_id,
+                        8,
+                        cursor.as_deref(),
+                        state.clock.as_ref(),
+                    )
+                })
+                .await;
+                let mut ready = match read {
+                    Ok(ready) => ready,
+                    // A cursor the graph no longer takes: start over next poll.
+                    Err(_) if further => {
+                        rotation::set(policy.project_id, None);
+                        break;
+                    }
+                    Err(_) => return Err(refused()),
+                };
+                let next = ready.next_cursor.clone();
+                for candidate in &mut ready.items {
+                    if !aq_machine_control::launch::eligible(
+                        &state.store.pool,
+                        candidate.revision.task_id,
+                        auth.id(),
+                        &candidate.node["metadata"],
+                    )
+                    .await
+                    .map_err(db)?
+                    {
+                        skipped.insert(candidate.revision.task_id);
+                    }
+                }
+                // Spec 0011 §4, before any context read: a task's route, or its wait for one.
+                let placements =
+                    on_heap(|| crate::routing::placements(state, &record, &ready.items));
+                let placements = placements.await?;
+                let (revision, project) = (record.revision, policy.project_id);
+                let (placed, items) = (&placements, &ready.items);
+                if let Some((task, assessment)) = on_heap(|| {
+                    first_eligible_task(&ready, &skipped, |task| async move {
+                        let placement = placed.get(&task);
+                        if placement == Some(&Placement::Wait) {
+                            return Ok(Assessment::Blocked("route_missing"));
+                        }
+                        let (pool, at) = (&state.store.pool, (state.clock)());
+                        let seen = holds::attempts(pool, task).await;
+                        let a =
+                            replacement::assess_task_for_revision(state, task, polled_at, revision);
+                        let a = a.await?;
+                        if let Assessment::Blocked(reason) = a {
+                            let d = seen.map(|seen| holds::Decision {
+                                project,
+                                task,
+                                reason,
+                                seen,
+                                attempt: None,
+                            });
+                            holds::hold(pool, d, at).await;
+                        } else if placement == Some(&Placement::Reroute) {
+                            let attempt = a.replacement().map(|r| (r.predecessor, seen));
+                            let r = crate::routing::reroute(state, project, items, task, attempt);
+                            r.await;
+                            return Ok(Assessment::Blocked("route_class_unassigned"));
+                        }
+                        Ok(a)
+                    })
+                })
+                .await?
                 {
-                    skipped.insert(candidate.revision.task_id);
+                    let route = match placements.get(&task.task_id) {
+                        Some(Placement::Routed(route)) => Some(route.clone()),
+                        _ => None,
+                    };
+                    chosen = Some((policy, record, ready, task, assessment, route));
+                    break 'projects;
+                }
+                if further {
+                    rotation::set(policy.project_id, next);
+                    break;
+                }
+                cursor = rotation::get(policy.project_id).or(next);
+                if cursor.is_none() {
+                    break;
                 }
             }
-            let (revision, project) = (record.revision, policy.project_id);
-            if let Some((task, assessment)) = on_heap(|| {
-                first_eligible_task(&ready, &skipped, |task| async move {
-                    let (pool, at) = (&state.store.pool, (state.clock)());
-                    let seen = holds::attempts(pool, task).await;
-                    let a = replacement::assess_task_for_revision(state, task, polled_at, revision);
-                    let a = a.await?;
-                    if let Assessment::Blocked(reason) = a {
-                        let d = seen.map(|seen| holds::Decision {
-                            project,
-                            task,
-                            reason,
-                            seen,
-                            attempt: None,
-                        });
-                        holds::hold(pool, d, at).await;
-                    }
-                    Ok(a)
-                })
-            })
-            .await?
-            {
-                chosen = Some((policy, record, ready, task, assessment));
-                break;
-            }
         }
-        let Some((policy, record, ready, task, assessment)) = chosen else {
+        let Some((policy, record, ready, task, assessment, route)) = chosen else {
             return Ok(page);
         };
+        let route = route.as_ref();
         let replacement = assessment.replacement().cloned();
         // R6: a successor's hold is recorded against the attempt count read before its refusal.
         let successor = match &replacement {
@@ -558,8 +633,8 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        let compiled =
-            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
+        let compiled = on_heap(compile).await?;
         super::observation::ReadProvenance::capture(
             &task,
             &ready,
@@ -709,8 +784,8 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        let compiled =
-            on_heap(|| compose::compile(state, &record, auth.id(), &snapshot, &context)).await?;
+        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
+        let compiled = on_heap(compile).await?;
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
         if refused_successor(state, &decision, successor, &mut skipped).await {
             continue;

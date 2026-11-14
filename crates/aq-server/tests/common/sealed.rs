@@ -184,8 +184,8 @@ pub async fn report(pool: &PgPool, node: Uuid, sequence: i64, at_ms: i64) -> Res
 }
 
 /// The SQLSTATE of a launch insert for `node`/`project` at `at_ms` with triggers
-/// on: `54000` is the offer-rate fence, `23503` means the fence passed and the
-/// insert went on to fail on the decision foreign key.
+/// on: `54000` is the 0105 offer-rate fence (removed by 0124), `23503` means no fence
+/// refused and the insert went on to fail on the decision foreign key.
 pub async fn try_offer(pool: &PgPool, node: Uuid, project: Uuid, at_ms: i64) -> String {
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET LOCAL session_replication_role='replica'")

@@ -13,6 +13,9 @@ aq-supervisor-control = { path = "../aq-supervisor-control" }
 aq-human-http = { path = "../aq-human-http" }
 aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-profile-settings = { path = "../aq-profile-settings" }
+aq-routing = { path = "../aq-routing" }
+aq-internal-work = { path = "../aq-internal-work" }
+aq-playbook-authoring = { path = "../aq-playbook-authoring" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"
 http-body = "=1.1.0"
@@ -53,6 +56,8 @@ aq-row-retention = { path = "../aq-row-retention" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-context-renewal = { path = "../aq-context-renewal" }
 aq-playbook-domain = { path = "../aq-playbook-domain" }
+aq-delivery = { path = "../aq-delivery" }
+aq-project-policy = { path = "../aq-project-policy" }
 aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }
 aq-selection = { path = "../aq-selection", version = "=0.1.5" }
@@ -87,7 +92,6 @@ tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-unicode-normalization = "=0.1.26"
 
 [features]
 test-support = ["aq-notifications/test-support"]
@@ -99,7 +103,7 @@ futures-util = "0.3"
 tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-5b86e0f/crates/aq-playbooks-compiler", version = "=0.2.0" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true

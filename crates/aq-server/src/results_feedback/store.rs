@@ -329,6 +329,7 @@ impl From<StoredOutcome> for Outcome {
             receipt_refs: v.receipt_refs,
             affected_entities: v.affected_entities,
             current_versions: Default::default(),
+            reason: None,
         }
     }
 }

@@ -215,7 +215,7 @@ async fn handoff_successor_is_offered_and_granted_from_the_handoff_commit() {
     let (mut c, predecessor) = handed_off().await;
 
     // D5: this poll answered 409 on every retry in the live run.
-    let (status, body) = native_offer::poll(&c).await;
+    let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "the handoff successor is offered: {body}");
     let successor = sole_offer(&body);
     let attempt = successor.offered.offer.binding.attempt_id;

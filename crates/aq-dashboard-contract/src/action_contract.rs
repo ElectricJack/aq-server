@@ -73,6 +73,12 @@ pub struct Operation {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(extend("maxProperties" = 32))]
     pub current_versions: BTreeMap<String, String>,
+    /// Why a `rejected` operation was refused, when its domain owner names a reason (absent
+    /// otherwise). `busy`: the owner's rows were contended, nothing was changed, and a new
+    /// submission may succeed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-z][a-z0-9_]*$"))]
+    pub reason: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum ActionVersion {
@@ -145,6 +151,8 @@ pub struct Outcome {
     pub affected_entities: Vec<EntityRef>,
     /// Conflict evidence only: the live versions a caller must refresh to.
     pub current_versions: BTreeMap<String, String>,
+    /// Rejection only: the reason code the operation records (see [`Operation::reason`]).
+    pub reason: Option<&'static str>,
 }
 impl Outcome {
     pub fn unknown() -> Self {
@@ -153,6 +161,7 @@ impl Outcome {
             receipt_refs: vec![],
             affected_entities: vec![],
             current_versions: BTreeMap::new(),
+            reason: None,
         }
     }
     pub fn conflict(current_versions: BTreeMap<String, String>) -> Self {
@@ -161,6 +170,15 @@ impl Outcome {
             receipt_refs: vec![],
             affected_entities: vec![],
             current_versions,
+            reason: None,
+        }
+    }
+    /// A definite refusal that changed nothing, with its reason code.
+    pub fn refused(reason: &'static str) -> Self {
+        Self {
+            disposition: Disposition::Rejected,
+            reason: Some(reason),
+            ..Self::unknown()
         }
     }
     pub fn confirmed(receipt_refs: Vec<EntityRef>, affected_entities: Vec<EntityRef>) -> Self {
@@ -169,6 +187,7 @@ impl Outcome {
             receipt_refs,
             affected_entities,
             current_versions: BTreeMap::new(),
+            reason: None,
         }
     }
 }

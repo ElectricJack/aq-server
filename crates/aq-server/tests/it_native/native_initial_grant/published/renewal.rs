@@ -61,7 +61,7 @@ async fn cold_setup() -> Prepared {
         String::from_utf8_lossy(&bytes)
     );
     case.request.inventory_sequence = 2;
-    let (status, body) = native_offer::poll(&case).await;
+    let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = serde_json::from_value(body).unwrap() else {
         panic!("expected publication")

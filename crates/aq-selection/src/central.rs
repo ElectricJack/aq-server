@@ -110,6 +110,7 @@ pub fn select_central(
             ceilings: &ceilings,
             allowed_environments: &allowed,
             placement: None,
+            route: None,
             now_ms: input.now_ms,
             global,
             environment_denied: "central_environment_denied",

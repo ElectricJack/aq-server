@@ -1,5 +1,9 @@
 # Authenticated source retention
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](architecture/0006-records-are-rolling.md));
+implementation pending.
+
 AQ-09 exposes bounded source transfer on the worker listener. Node credentials
 are resolved through the ordinary live central verifier. The attempt owner,
 repository UUID, logical identity, binding generation, base OID, session,
@@ -166,7 +170,11 @@ positive. Open tasks never expire through this policy.
 Each release first inspects the handle, then durably records its exact generation,
 refs, reason and operation UUID in `source_retention_releases`. Retries preserve
 that request after socket uncertainty. Only a matching confirmed release records
-`released_at` and the response; import receipts remain historical audit evidence.
+`released_at` and the response. Import receipts and release records leave with
+their task's run records ([spec 0008](specs/0008-sealed-history-retention.md)
+phase B, following
+[architecture 0006](architecture/0006-records-are-rolling.md); pending: today
+they are kept).
 The server never deletes aq-git store paths. Reconstructible cache eviction stays
 with aq-git: `repo.cache-evict` is worker-only and explicitly refuses central
 retained pools. This sweep therefore invokes `retention.release`, leaving object

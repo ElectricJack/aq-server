@@ -7,6 +7,10 @@ implemented. The storage schema is committed in
 These artifacts do not establish configured-store deployment or full paired
 upload/finalize/content and dashboard acceptance; G6/G7 track the remaining work.
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. The budgets and cleanup paragraphs changed.
+
 ## Existing owners and the selected boundary
 
 `aq-admission::transport::ResultReport` has no media reference field. Its source
@@ -136,19 +140,24 @@ rebind retained intents. The local-files design does not support multiple writer
 on different machines; worker nodes upload through a future authenticated port.
 
 The durable intent is a **bounded storage grant**, never execution authority:
-fixed actor/report/storage/policy/input, 30-minute upload expiry, immutable
-seven-day byte retention from admission, and a 10 MiB worst-case physical
+fixed actor/report/storage/policy/input, 30-minute upload expiry, seven-day
+byte retention from admission (sooner when the byte budget needs room, below), and a 10 MiB worst-case physical
 reservation (input + render + preview + bounded per-job staging). Original input
 staging becomes the retained private input; rendering buffers are not extra
 unaccounted disk copies. Each intent has one active physical writer.
 
-Hard initial budgets are 256 MiB installation/64 MiB project bytes, 4096 historical
-intents installation/512 project, eight retained or pending attachments per exact
-report, and two active jobs. Admission locks installation budget, then project
-budget, then actual result authority and intent; it reserves bytes/counts before
-writing. Current reservations plus retained bytes must fit. Finalization converts
-reservation into exact physical retained bytes and releases only the difference.
-Config may lower limits; it cannot expand this contract's hard bounds.
+Initial byte budgets are 256 MiB installation/64 MiB project, over current
+reservations and retained bytes only; eight retained or pending attachments per
+exact report (a limit on one report); and two active jobs (work happening now).
+Nothing counts intents over their lifetime. Admission locks installation budget,
+then project budget, then actual result authority and intent; it reserves bytes
+before writing. When current reservations plus retained bytes would not fit, the
+oldest retained bytes of the project (then of the installation) are deleted
+first, the way the cleanup below deletes expired bytes, so a new capture is not
+refused because old media fills the budget. Only reservations of jobs in progress
+can make an upload wait. Finalization converts reservation into exact physical
+retained bytes and releases only the difference. Config may lower limits; it
+cannot expand this contract's hard bounds.
 
 No transaction spans decoding or filesystem IO. Claim a short fenced write lease,
 perform bounded file work in its private generation directory, fsync files and
@@ -169,13 +178,16 @@ writer/decoder may still write: track active jobs under the store lock. On proce
 restart the old writer is gone before acquiring that same lock. Metadata fencing
 prevents a late worker from committing after cleanup or a newer lease.
 
-Cleanup is bounded owner maintenance: select a small indexed batch of expired or
-rejected intents/expired retained bytes, verify no active physical job, claim a
-cleanup generation, unlink only that intent's known files, fsync, then record
-confirmed absence and release quota. Failure retains budget and a retryable
-cleanup disposition. Keep intent identity, receipt, digests, dimensions, original
-association and an expired/missing tombstone after byte deletion; no physical
-path is returned. External deletion/corruption produces missing/failed, not an
+Cleanup runs by itself on the server's ten-minute retention tick; nobody has to
+call it. Each pass selects a small indexed batch of expired or rejected
+intents/expired retained bytes, verifies no active physical job, claims a cleanup
+generation, unlinks only that intent's known files, fsyncs, then records
+confirmed absence and releases the bytes. Failure keeps the bytes counted and a
+retryable cleanup disposition for the next pass. After byte deletion, keep intent
+identity, receipt, digests, dimensions, original association and an
+expired/missing tombstone while the report exists; they are deleted with the
+report ([spec 0008](0008-sealed-history-retention.md)). No physical path is
+returned. External deletion/corruption produces missing/failed, not an
 available image. Owner access failure never becomes missing or expiry.
 
 There are no media holds or capture-policy consumers in this first slice. Media

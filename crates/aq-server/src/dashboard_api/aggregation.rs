@@ -216,7 +216,7 @@ pub(super) async fn overview(
     // SO-01: results holds node row locks for its whole page while attempts
     // locks each node with a 250 ms timeout. Run concurrently, attempts lost
     // that wait on ~40% of reads, so these two sources run in turn.
-    let ((results, attempts), ready, reviews, settlements, operations) = tokio::join!(
+    let ((results, attempts), ready, reviews, settlements, operations, internal) = tokio::join!(
         Box::pin(async {
             let results = bounded_source(
                 "results",
@@ -250,6 +250,10 @@ pub(super) async fn overview(
         Box::pin(bounded_source(
             "operations",
             operations(state, runtime, user, &scope, &labels, truncated)
+        )),
+        Box::pin(bounded_source(
+            "internal_work",
+            internal_work(state, runtime, &scope, &labels)
         )),
     );
     let counts = Counts {
@@ -285,7 +289,15 @@ pub(super) async fn overview(
         ],
     };
     let decisions = reviews.needs_you.is_some();
-    for c in [attempts, ready, reviews, results, settlements, operations] {
+    for c in [
+        attempts,
+        ready,
+        reviews,
+        results,
+        settlements,
+        operations,
+        internal,
+    ] {
         data.sources.extend(c.sources);
         data.attention.extend(c.attention);
         data.recent_outcomes.extend(c.outcomes);
@@ -790,5 +802,73 @@ async fn operations(
         truncated || rows.len() > MEMBERS,
         Some("dashboard_journal_only"),
     )?);
+    Ok(c)
+}
+
+/// Spec 0012 §8 step 3: one item per internal run a supervisor could not fix.
+/// It opens the affected item when the dashboard can open that kind by id;
+/// otherwise it opens the run, and `impact` names the affected item.
+async fn internal_work(
+    state: &AppState,
+    runtime: &Runtime,
+    scope: &Scope,
+    labels: &BTreeMap<Uuid, ProjectRef>,
+) -> Result<Contribution> {
+    const OPENABLE: [&str; 5] = ["task", "decision", "session", "knowledge", "playbook_run"];
+    let mut transaction = tx(runtime).await?;
+    let rows = sqlx::query("SELECT id,affected_kind,affected_id,project_id,diagnosis,escalated_at_ms,CASE WHEN purpose='routing_classification' AND affected_kind='task' AND request->>'input' ~ '^(not_offered|unroutable|unrouted)@' THEN left(detail,600) END AS unrouted FROM internal_tasks WHERE escalation='owner' AND ($1::uuid IS NULL OR project_id=$1) ORDER BY escalated_at_ms DESC,id LIMIT 101")
+        .bind(scope.project()).fetch_all(&mut *transaction).await?;
+    transaction.commit().await?;
+    let mut c = Contribution::default();
+    for row in rows.iter().take(MEMBERS) {
+        let (run, kind, id): (Uuid, String, String) = (
+            row.get("id"),
+            row.get("affected_kind"),
+            row.get("affected_id"),
+        );
+        let project = row
+            .get::<Option<Uuid>, _>("project_id")
+            .and_then(|id| labels.get(&id).cloned());
+        let affected = id
+            .parse::<Uuid>()
+            .ok()
+            .filter(|_| OPENABLE.contains(&kind.as_str()));
+        let subject = EntityRef {
+            kind: if affected.is_some() {
+                kind.clone()
+            } else {
+                "internal_run".into()
+            },
+            id: affected.unwrap_or(run),
+            revision: None,
+        };
+        let diagnosis: Option<String> = row.get("diagnosis");
+        let since = row.get::<Option<i64>, _>("escalated_at_ms");
+        let since = since.map(|ms| timestamp(ms as u64)).transpose()?;
+        // Spec 0011 §4 W6: a task routing could not route says why, in words.
+        let unrouted: Option<String> = row.get("unrouted");
+        let reason = (unrouted.as_deref().or(diagnosis.as_deref()))
+            .unwrap_or("A supervisor could not fix it");
+        let title = match unrouted {
+            Some(_) => "A task could not be routed",
+            None => "Internal work failed",
+        };
+        let mut item = attention(
+            AttentionKind::InternalWork,
+            subject,
+            project,
+            title,
+            reason,
+            since,
+        );
+        item.id = format!("internal_work:{run}");
+        if affected.is_none() {
+            item.impact = aq_internal_work::Affected::describe(&kind, &id);
+        }
+        c.attention.push(item);
+    }
+    let (n, more) = (c.attention.len(), rows.len() > MEMBERS);
+    c.sources
+        .push(source("internal_work", None, stamp(state)?, n, more, None)?);
     Ok(c)
 }

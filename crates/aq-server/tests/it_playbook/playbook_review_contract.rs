@@ -93,8 +93,6 @@ fn compile_input(registry: Registry) -> aq_playbooks_compiler::CompileInput {
                 required_capabilities: BTreeSet::from(["decision.request".into()]),
             },
             source_map: BTreeMap::new(),
-            questions: vec![],
-            unsupported_features: vec![],
         },
         registry,
         dependencies: BTreeMap::new(),

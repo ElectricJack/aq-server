@@ -6,6 +6,8 @@
 
 **Reconciled:** 2026-10-31, with current component evidence and explicit remaining scope.
 
+**Amended:** 2026-11-13: aligned with the rolling-records principle ([0006](0006-records-are-rolling.md)); implementation pending (§2 usage ledger).
+
 This extends [profiles and tmux terminals](0003-agent-profiles-harnesses-and-terminals.md)
 and [execution recovery](0002-execution-and-recovery.md). Live terminals alone do
 not provide session health, usage accounting, human delivery or resumable waits.
@@ -91,8 +93,11 @@ not a second bill for the same provider call. If evidence is irretrievably lost,
 mark the affected interval incomplete. Never guess token counts from terminal
 characters or equate transcript silence to process death.
 
-AQ stores an append-only usage ledger with correction references and derived
-aggregates by task lineage, attempt, project, provider/account and model. Record
+AQ stores a usage ledger with correction references and derived aggregates by
+task lineage, attempt, project, provider/account and model. Facts are written
+once and corrected by reference, never edited. They are deleted with their run's
+records ([0006](0006-records-are-rolling.md)), after the aggregates that budgets
+read have taken their totals. Record
 input/output/cache/reasoning categories only with their declared semantics;
 providers may report overlapping categories, so do not sum all fields blindly.
 Keep reported zero distinct from unknown. Deduplicate transcript/API sources

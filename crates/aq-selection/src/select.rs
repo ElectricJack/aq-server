@@ -177,11 +177,9 @@ fn select_internal(
             && agent.execution == input.project.execution_profile,
         "profile combination mismatch",
     )?;
-    let intelligence = definitions
-        .intelligence
-        .iter()
-        .find(|i| aq_profiles::key(&i.id, i.version) == agent.intelligence)
-        .unwrap();
+    let routed = input.intelligence_override.as_deref();
+    let intelligence = crate::routed_intelligence(definitions, &agent.intelligence, routed)
+        .ok_or_else(|| SelectionError::Invalid("routed intelligence profile".into()))?;
     let execution = definitions
         .execution
         .iter()
@@ -244,6 +242,7 @@ fn select_internal(
             ceilings: &input.project.ceilings,
             allowed_environments: &input.project.allowed_environments,
             placement: input.placement.as_ref(),
+            route: input.route.as_ref(),
             now_ms: input.now_ms,
             global: global_budget(input, policy),
             environment_denied: "project_environment_denied",

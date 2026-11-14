@@ -17,7 +17,7 @@ def load(name):
     return json.loads((root / 'fixtures' / (name + '.json')).read_text())
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-TYPED = ('task.graph.create', 'task.edit', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.dependency.add',
+TYPED = ('task.graph.create', 'task.edit', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.route.set', 'task.route.clear', 'task.dependency.add',
          'task.dependency.remove', 'knowledge.author', 'knowledge.correct', 'knowledge.verify',
          'knowledge.retire', 'knowledge.restore')
 def validate_task(task):
@@ -128,6 +128,9 @@ def validate_request(value):
             assert value['reason'].strip()
         if kind == 'task.reprioritize':
             assert -1_000_000 <= payload['priority'] <= 1_000_000
+        if kind == 'task.route.set':
+            assert payload['class'].split('-')[0] in ('simple', 'standard', 'complex', 'deep')
+            assert payload['class'].split('-')[1] in ('low', 'medium', 'high', 'max')
     else:
         assert payload['decision_id'] == subject['id'] and payload['schema_version'] == 1
         assert payload['expected_subject']['version'] == '1'
@@ -159,6 +162,12 @@ for disposition in ('pending', 'confirmed', 'conflict', 'rejected', 'unknown'):
         assert not operation['receipt_refs'] and not operation['affected_entities']
     request = load('request-supervisor-message-send')
     assert operation['request_digest'] == 'sha256:' + hashlib.sha256(canonical({'request':request, 'scope':operation['scope']})).hexdigest()
+busy = load('operation-rejected-busy')
+validator.validate(busy)
+assert busy['data']['disposition'] == 'rejected' and busy['data']['reason'] == 'busy'
+assert busy['data']['recovery'] == 'refresh_and_review' and not busy['pending_operations']
+for disposition in ('pending', 'confirmed', 'conflict', 'unknown'):
+    assert 'reason' not in load('operation-' + disposition)['data']
 for status in (401,403,404,409,410,413,422,426,429,503):
     error = load('error-' + str(status))
     validator.validate(error)

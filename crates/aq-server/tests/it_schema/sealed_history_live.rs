@@ -158,36 +158,29 @@ async fn presence_usage_counts_unexpired_reports_and_the_hour() {
         sealed::usage(&pool, "presence_operations", Some(n), NOW, None).await,
         (1, 1028, 1, 1028)
     );
+    // The report rate was removed (0124): its kind counts nothing.
     assert_eq!(
-        sealed::usage(&pool, "presence_rate", Some(n), NOW, None)
-            .await
-            .2,
-        3
+        sealed::usage(&pool, "presence_rate", Some(n), NOW, None).await,
+        (0, 0, 0, 0)
     );
 }
 
+/// The offer rate limits were removed (0124): the two offer kinds count nothing, so a
+/// 0105 fence that a migrating role could not drop never refuses.
 #[tokio::test]
-async fn offer_usage_counts_the_last_hour_per_node_and_project() {
+async fn offer_kinds_count_nothing() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;
     let pool = db.pool().await;
-    let (n, m, p, q) = (
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-    );
-    sealed::offers(&pool, n, p, NOW - 1_000, 3).await;
-    sealed::offers(&pool, n, p, NOW - 3_700_000, 2).await;
-    sealed::offers(&pool, m, q, NOW - 1_000, 1).await;
-    assert_eq!(
-        sealed::usage(&pool, "offers", Some(n), NOW, None).await,
-        (4, 0, 3, 0)
-    );
-    assert_eq!(
-        sealed::usage(&pool, "project_offers", Some(p), NOW, None).await,
-        (4, 0, 3, 0)
-    );
+    let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
+    sealed::offers(&pool, n, p, NOW - 1_000, 31).await;
+    for (kind, scope) in [("offers", n), ("project_offers", p)] {
+        assert_eq!(
+            sealed::usage(&pool, kind, Some(scope), NOW, None).await,
+            (0, 0, 0, 0),
+            "{kind}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -245,8 +238,6 @@ async fn limits_are_the_spec_values() {
             1,
             262_144,
         ),
-        ("offers", "global", 960, None, 1, 0),
-        ("offers", "node", 30, None, 1, 0),
         (
             "phase_terminal",
             "global",
@@ -265,9 +256,6 @@ async fn limits_are_the_spec_values() {
             0,
         ),
         ("presence_operations", "node", 4096, Some(16_777_216), 1, 0),
-        ("presence_rate", "global", 11520, None, 1, 0),
-        ("presence_rate", "node", 720, None, 1, 0),
-        ("project_offers", "project", 240, None, 1, 0),
         (
             "source_exports",
             "global",
@@ -321,28 +309,18 @@ fn row(code: &str, kind: &str, scope: &str, unit: &str, used: i64, limit: i64) -
 }
 
 #[tokio::test]
-async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
+async fn holds_report_the_project_artifact_cap_and_never_an_offer_rate() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;
     let pool = db.pool().await;
     let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
-    sealed::offers(&pool, n, p, NOW - 1_000, 30).await;
+    sealed::offers(&pool, n, p, NOW - 1_000, 31).await;
     let mut tx = sealed::replica(&pool).await;
     for _ in 0..449 {
         sealed::artifact(&mut tx, p, NOW - 1_000).await;
     }
     tx.commit().await.unwrap();
-    assert_eq!(
-        holds(&pool, &[n], &[]).await,
-        vec![row(
-            "history_rate_limited",
-            "offers",
-            "node",
-            "rows",
-            30,
-            30
-        )]
-    );
+    assert_eq!(holds(&pool, &[n], &[]).await, vec![]);
     assert_eq!(
         holds(&pool, &[], &[p]).await,
         vec![row(
@@ -354,150 +332,95 @@ async fn holds_report_the_offer_rate_and_the_project_artifact_cap() {
             512
         )]
     );
-    sealed::offers(&pool, n, p, NOW - 1_000, 1).await;
-    assert_eq!(
-        holds(&pool, &[n], &[]).await,
-        vec![row(
-            "history_rate_limited",
-            "offers",
-            "node",
-            "rows",
-            31,
-            30
-        )]
-    );
 }
 
+/// The offer rate limits were removed (owner, 2026-11-13). More offers in an hour than
+/// they allowed (30 per node, 240 per project, 960 in all) hold nothing, and the insert
+/// that the 0105 fence refused goes on to fail only on the decision FK (23503).
 #[tokio::test]
-async fn offer_rate_fence_refuses_the_thirty_first_offer_in_an_hour() {
+async fn no_offer_rate_holds_or_fences_a_node_a_project_or_the_server() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;
     let pool = db.pool().await;
-    let p = Uuid::new_v4();
-    // 30 offers: the 31st insert is refused by the fence (54000). 29 offers: the
-    // fence passes and the insert goes on to fail on the decision FK (23503).
-    for (seeded, code) in [(30, "54000"), (29, "23503")] {
-        let n = Uuid::new_v4();
-        sealed::offers(&pool, n, p, NOW - 1_000, seeded).await;
-        assert_eq!(sealed::try_offer(&pool, n, p, NOW).await, code);
-    }
-}
-
-#[tokio::test]
-async fn project_and_server_offer_rates_hold_and_fence() {
-    let db = aq_server::test_support::TestDb::create().await;
-    let _store = db.store().await;
-    let pool = db.pool().await;
-    // Project rate: 240 an hour, over distinct nodes so no node cap applies.
-    let p = Uuid::new_v4();
-    sealed::spread_offers(&pool, Some(p), 239, NOW - 1_000).await;
-    assert_eq!(holds(&pool, &[], &[p]).await, vec![]);
+    let (n, p) = (Uuid::new_v4(), Uuid::new_v4());
+    sealed::offers(&pool, n, p, NOW - 1_000, 31).await;
+    assert_eq!(holds(&pool, &[n], &[p]).await, vec![]);
+    assert_eq!(sealed::try_offer(&pool, n, p, NOW).await, "23503");
+    // Project: 241 over distinct nodes.
+    sealed::spread_offers(&pool, Some(p), 210, NOW - 1_000).await;
+    assert_eq!(holds(&pool, &[n], &[p]).await, vec![]);
     assert_eq!(
         sealed::try_offer(&pool, Uuid::new_v4(), p, NOW).await,
         "23503"
     );
-    sealed::spread_offers(&pool, Some(p), 1, NOW - 1_000).await;
+    // Server: 961 over distinct projects and nodes.
+    sealed::spread_offers(&pool, None, 720, NOW - 1_000).await;
+    let m = Uuid::new_v4();
+    assert_eq!(holds(&pool, &[n, m], &[p]).await, vec![]);
     assert_eq!(
-        holds(&pool, &[], &[p]).await,
-        vec![row(
-            "history_rate_limited",
-            "project_offers",
-            "project",
-            "rows",
-            240,
-            240
-        )]
-    );
-    assert_eq!(
-        sealed::try_offer(&pool, Uuid::new_v4(), p, NOW).await,
-        "54000"
-    );
-    // Server rate: 960 an hour over distinct projects and nodes. 240 are in already.
-    sealed::spread_offers(&pool, None, 719, NOW - 1_000).await;
-    let n = Uuid::new_v4();
-    assert!(holds(&pool, &[n], &[]).await.is_empty());
-    assert_eq!(
-        sealed::try_offer(&pool, n, Uuid::new_v4(), NOW).await,
+        sealed::try_offer(&pool, m, Uuid::new_v4(), NOW).await,
         "23503"
     );
-    sealed::spread_offers(&pool, None, 1, NOW - 1_000).await;
-    assert_eq!(
-        holds(&pool, &[n], &[]).await,
-        vec![row(
-            "history_rate_limited",
-            "offers",
-            "global",
-            "rows",
-            960,
-            960
-        )]
-    );
-    assert_eq!(
-        sealed::try_offer(&pool, n, Uuid::new_v4(), NOW).await,
-        "54000"
-    );
+    let fence: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_launch_offer_rate')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!fence, "the 0105 fence is gone");
 }
 
+/// The report rate limits were removed (owner, 2026-11-13). A node past the old 720
+/// reports an hour, and the server past the old 11,520, still report and hold nothing.
+/// The seeded reports are expired (recorded a minute ago) so only the rate could count them.
 #[tokio::test]
-async fn inventory_report_rate_is_720_per_node_and_11520_in_all() {
+async fn no_report_rate_refuses_or_holds_a_node_or_the_server() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;
     let pool = db.pool().await;
-    // The 0029 lifetime counters are no longer charged: a node at their old
+    // The 0029 lifetime counters are not charged either: a node at their old
     // ceiling (4096) still reports.
     let n = sealed::node(&pool).await;
     sqlx::query("INSERT INTO profiled_presence_node_storage(node_id,operations) VALUES($1,4096) ON CONFLICT(node_id) DO UPDATE SET operations=4096")
         .bind(n).execute(&pool).await.unwrap();
-    sealed::inventories(&pool, n, 718, NOW - 1_000).await;
-    assert_eq!(holds(&pool, &[n], &[]).await, vec![]);
-    // Under the limit: reports 719 and 720 are accepted.
+    sealed::inventories(&pool, n, 721, NOW - 60_000).await;
     assert_eq!(sealed::report(&pool, n, 10_001, NOW).await, Ok(()));
     assert_eq!(sealed::report(&pool, n, 10_002, NOW).await, Ok(()));
-    // At the limit: the 721st is refused, and the poll gate holds the node.
+    assert_eq!(holds(&pool, &[n], &[]).await, vec![]);
+    // Server: 16 more nodes of 720 make 12,243 reports in the hour.
+    for _ in 0..16 {
+        sealed::inventories(&pool, Uuid::new_v4(), 720, NOW - 60_000).await;
+    }
+    let m = sealed::node(&pool).await;
+    assert_eq!(sealed::report(&pool, m, 1, NOW).await, Ok(()));
+    assert_eq!(sealed::report(&pool, n, 10_003, NOW).await, Ok(()));
+    assert_eq!(holds(&pool, &[n, m], &[]).await, vec![]);
+}
+
+/// The live-row presence cap stays: 4096 unexpired reports on a node refuse the next
+/// one (54000) and hold the node as a live cap.
+#[tokio::test]
+async fn the_live_presence_cap_still_refuses_and_holds() {
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let n = sealed::node(&pool).await;
+    sealed::inventories(&pool, n, 4095, NOW - 1_000).await;
+    assert_eq!(holds(&pool, &[n], &[]).await, vec![]);
+    assert_eq!(sealed::report(&pool, n, 10_001, NOW).await, Ok(()));
     assert_eq!(
-        sealed::report(&pool, n, 10_003, NOW).await,
+        sealed::report(&pool, n, 10_002, NOW).await,
         Err("54000".to_string())
     );
     assert_eq!(
         holds(&pool, &[n], &[]).await,
         vec![row(
-            "history_rate_limited",
-            "presence_rate",
+            "history_cap_reached",
+            "presence_operations",
             "node",
             "rows",
-            720,
-            720
-        )]
-    );
-    // Server-wide: 11,520 an hour over many nodes. Node n holds 720; 14 nodes of 720 and
-    // one of 719 make 11,519.
-    for _ in 0..14 {
-        sealed::inventories(&pool, Uuid::new_v4(), 720, NOW - 1_000).await;
-    }
-    sealed::inventories(&pool, Uuid::new_v4(), 719, NOW - 1_000).await;
-    let (m, o) = (sealed::node(&pool).await, sealed::node(&pool).await);
-    // Under the limit: the 11,520th report is accepted.
-    assert!(
-        !holds(&pool, &[m], &[])
-            .await
-            .iter()
-            .any(|h| h.1 == "presence_rate")
-    );
-    assert_eq!(sealed::report(&pool, m, 1, NOW).await, Ok(()));
-    // At the limit: the 11,521st is refused, and the gate holds on the server cap.
-    assert_eq!(
-        sealed::report(&pool, o, 1, NOW).await,
-        Err("54000".to_string())
-    );
-    assert_eq!(
-        holds(&pool, &[o], &[]).await,
-        vec![row(
-            "history_rate_limited",
-            "presence_rate",
-            "global",
-            "rows",
-            11_520,
-            11_520
+            4096,
+            4096
         )]
     );
 }
@@ -650,9 +573,6 @@ async fn settled_history_does_not_change_the_holds_or_the_usage() {
         "launch_registrations",
         "phase_terminal",
         "presence_operations",
-        "presence_rate",
-        "offers",
-        "project_offers",
     ];
     let mut before = Vec::new();
     for k in kinds {
@@ -693,9 +613,6 @@ fn scoped_statements(src: &str, live: &str) -> Vec<(String, String)> {
         "launch_registrations",
         "phase_terminal",
         "presence_operations",
-        "presence_rate",
-        "offers",
-        "project_offers",
     ] {
         let at = if kind.ends_with("_exports") {
             src.find("p_kind IN ('source_exports','staging_exports')")
@@ -804,7 +721,7 @@ async fn phase_a_guards_call_the_live_usage() {
         ("profiled_source_export_guard", "source_exports"),
         ("profiled_launch_registration_guard", "launch_registrations"),
         ("profiled_phase_terminal_capacity_guard", "phase_terminal"),
-        ("profiled_presence_operation_guard", "presence_rate"),
+        ("profiled_presence_operation_guard", "presence_operations"),
     ] {
         let src: String = sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname=$1")
             .bind(function)
@@ -815,6 +732,7 @@ async fn phase_a_guards_call_the_live_usage() {
             src.contains(&format!("sealed_history_usage('{kind}'")),
             "{function}"
         );
+        assert!(!src.contains("presence_rate"), "{function}: no report rate");
     }
     let triggers: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('admission_artifact_insert','profiled_source_export_guard','profiled_launch_registration_guard','profiled_phase_terminal_capacity_guard','profiled_presence_operation_guard')")
         .fetch_one(&pool)

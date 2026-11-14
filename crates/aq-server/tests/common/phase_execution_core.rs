@@ -201,7 +201,7 @@ async fn setup_from_presence_observed(
         .await;
         assert_eq!(status, 200, "{body}");
     }
-    let (status, body) = on_heap(|| native_offer::poll(&c)).await;
+    let (status, body) = on_heap(|| native_offer::poll_offered(&c)).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

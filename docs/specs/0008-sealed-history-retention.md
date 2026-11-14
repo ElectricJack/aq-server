@@ -1,6 +1,8 @@
-# 0008: Sealed-history retention (live-only caps, rate limits, deletion after the task closes)
+# 0008: Sealed-history retention (live-only caps, deletion after the task closes)
 
 **Status:** Draft for the owner's review (2026-11-08). The retention rule in §1 is the owner's decision of 2026-11-07. Everything else is a proposal.
+**Implementation (2026-11-12):** phase A (live caps) is merged ([`../implementation/0008-PA-server.md`](../implementation/0008-PA-server.md)). Phase B waits on the owner's answer on results retention. The A1 soak has not run.
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Phase B keeps a rolling set of attempt summaries and one budget summary per task; nothing refuses for history. The offer and worker report rate limits of phase A are removed (owner, 2026-11-13; migration 0124, §7.2).
 **Repositories:** aq-server; aq-dashboard for the contract re-pin and the Settings field.
 **Unblocks:** spec 0007 phase 1 live acceptance, which stopped on a history cap (§1.1).
 
@@ -14,12 +16,17 @@ The owner's rule (2026-11-07) **(owner)**:
 
 - full sealed records are kept while the run is live or its task is open;
 - full records are deleted 7 days after the run has settled **and** its task is closed. The 7 days can be changed in Settings;
-- a summary of about 1 KB per run is kept forever;
-- caps apply only to live rows, plus a rate limit.
+- caps apply only to live rows. (The rate limits on offers and worker reports that went with this point were removed on 2026-11-13, §7.2.)
 
 In the owner's words: "I'm just not sure we need to retain them forever. I don't really understand why we need the records or when we would use them."
 
-What the full records are for, in short: while a run is live they are its authority. Every accept, grant, renewal, stop and settlement re-reads them to prove the run is the one that was offered, which is why they are pinned. After the run settles, the readers that remain are the result and review pages, the session pages, replacement history if the task is reopened, and spend accounting (§8.2). None of those needs the full bytes once the task has been closed for a week; a summary row serves them. This spec is the "explicitly qualified maintenance policy" that AQ-08 asks for.
+The owner's platform rule of 2026-11-13 ([architecture 0006](../architecture/0006-records-are-rolling.md)) **(owner)** replaces the 2026-11-07 point that a summary per run is kept forever: "Just remove all 'limits' and just enforce deleting old records." So:
+
+- a summary of about 1 KB is kept for each of the most recent N settled attempts per project, and older summaries are deleted as new ones are written. N is `summary_keep`, default 10,000 **(proposed default)**;
+- one budget summary per task keeps the counts that the task's budgets read (§8.2). It is one row per task, not per run;
+- nothing refuses new work because of history.
+
+What the full records are for, in short: while a run is live they are its authority. Every accept, grant, renewal, stop and settlement re-reads them to prove the run is the one that was offered, which is why they are pinned. After the run settles, the readers that remain are the result and review pages, the session pages, replacement history if the task is reopened, and spend accounting (§8.2). None of those needs the full bytes once the task has been closed for a week; a summary row serves them, and the budget summary serves the budgets. AQ-08 now names this spec as its deletion rule (amended 2026-11-13).
 
 ### 1.1 What stopped spec 0007 phase 1
 
@@ -29,10 +36,10 @@ The earlier analysis (S16, `.superpowers/sdd/2026-11-07-swarm-p1-workers-as-serv
 
 ## 2. Goals
 
-1. A swarm that runs for months stops on no history cap. Caps count only live rows, and a rate limit bounds growth.
-2. When a cap or the rate limit holds work back, the Swarm page and `GET /api/v1/swarm` say which one and why. A worker never loops on a silent 409.
+1. A swarm that runs for months stops on no history cap. Caps count only live rows: they are controls on work happening now, not caps on history.
+2. When a cap holds work back, the Swarm page and `GET /api/v1/swarm` say which one and why. A worker never loops on a silent 409.
 3. Full records of a run are deleted once the run has settled and its task has been closed for longer than the retention period: 7 days by default, set in Settings.
-4. A summary of about 1 KB per run is kept forever, so task history, session lists, results, cost and replacement history still work after deletion.
+4. A summary of about 1 KB is kept for each of the most recent `summary_keep` settled attempts per project, and one budget summary per task, so task history, session lists, results, cost and replacement budgets still work after deletion. Older summaries are deleted as new ones are written.
 5. Deletion runs in the background, in bounded batches, and never removes a row that something live still references.
 
 ## 3. Non-goals
@@ -73,7 +80,7 @@ Measured on aq-ms1 on 2026-11-08 at state format 102, with read-only queries. Th
 
 ### 5.2 Lifetime caps not reached on the measured path (converted in phase B, author's call)
 
-These are lifetime too, but aq-ms1 wrote zero rows to them in 33 attempts, or they grow per worker restart rather than per attempt. A 650-attempt soak (§11) does not reach them, so phase A leaves them unchanged and phase B converts them with the same live predicate **(author's call)**.
+These are lifetime too, but aq-ms1 wrote zero rows to them in 33 attempts, or they grow per worker restart rather than per attempt. A 650-attempt soak (§11) does not reach them, so phase A leaves them unchanged. Phase B removes each cap: rows of a run are deleted with the run (§8), and rows that belong to a node rather than a run are a rolling set per node. Nothing in this table refuses work after phase B **(2026-11-13, architecture 0006)**. Proposed rolling sizes: B1, the most recent 16 boots per node plus any a live run's registration references; B5, the most recent 64 per node and kind **(proposed defaults)**. B4's monotonic counter is removed; its per-lineage count is a question (§13).
 
 | # | Table | Cap, scope | Enforced at | ms1 rows | Why deferred |
 |---|---|---|---|---|---|
@@ -88,7 +95,7 @@ These are lifetime too, but aq-ms1 wrote zero rows to them in 33 attempts, or th
 
 ### 5.3 Caps that are already bounded by something live (unchanged)
 
-`profiled_launch_artifacts` 128 per attempt (0020:70-71), `profiled_result_reports` 64 per attempt (0024:36), settlement evaluations 16 per attempt (0039:85-87), `agent_graph_operations` 4096 per attempt, `native_registration_receipts` 1024 per (node, boot), result media 8 per report revision, playbook host operations 256 per lineage, source transfers 1024 unreleased (`source_retention.rs:388-395`). Admin-path caps (project bindings, profile catalogs, policies, intelligence operations) grow with operator actions, not with work, and are out of scope.
+`profiled_launch_artifacts` 128 per attempt (0020:70-71), `profiled_result_reports` 64 per attempt (0024:36), settlement evaluations 16 per attempt (0039:85-87), `agent_graph_operations` 4096 per attempt, `native_registration_receipts` 1024 per (node, boot), result media 8 per report revision, playbook host operations 256 per lineage, source transfers 1024 unreleased (`source_retention.rs:388-395`). Their rows leave with their run in phase B. Admin-path caps (project bindings, profile catalogs, policies, intelligence operations) grow with operator actions, not with work. They are out of this spec's scope; architecture 0006 §4 gives their rolling sets.
 
 ### 5.4 Order of the stops
 
@@ -152,13 +159,13 @@ The poll writes some rows before the attempt exists: selection decisions, admiss
 
 For deletion (phase B) a run's records are eligible once the run is not live **and** its task is closed: §8.1.
 
-## 7. Phase A: live-only caps, a rate limit, visible holds (unblocks 0007 phase 1)
+## 7. Phase A: live-only caps, visible holds (unblocks 0007 phase 1)
 
 Phase A deletes nothing.
 
 ### 7.1 Every phase A cap counts only live rows
 
-The cap values stay as they are: the same rows and bytes, per the same scope. Only the counted set changes, from "every row ever" to "live rows" (§6) **(author's call: keep the values; with live counting they become concurrency backstops, far above what a swarm holds at once)**.
+The cap values stay as they are: the same rows and bytes, per the same scope. Only the counted set changes, from "every row ever" to "live rows" (§6) **(author's call: keep the values; with live counting they become concurrency backstops, far above what a swarm holds at once)**. Under architecture 0006 they are controls on work happening now, not caps on history: settled rows never count. Whether to keep them is a question (§13).
 
 One SQL function, `sealed_history_usage(kind, scope, now_ms, exclude)` (migration 0103), computes live usage for every kind. The trigger, the Rust mirror check, the poll gate (§7.3) and the Swarm read (§7.4) all call it, so they cannot drift apart. Its kinds:
 
@@ -173,11 +180,9 @@ One SQL function, `sealed_history_usage(kind, scope, now_ms, exclude)` (migratio
 | `launch_registrations` | node | A8 |
 | `phase_terminal` | node | A1 |
 | `presence_operations` | node | A4 live rows |
-| `presence_rate` | node | A4 reports in the last hour (§7.2) |
-| `offers` | node | the offer rate per node and per server (§7.2) |
-| `project_offers` | project | the offer rate per project (§7.2) |
+The kinds `offers`, `project_offers` (the offer rates) and `presence_rate` (the worker report rate) were removed on 2026-11-13 (§7.2). Migration 0124 keeps them as kinds that count nothing.
 
-Each returns `(total_rows, total_bytes, scope_rows, scope_bytes)`. "Now" is always passed in, never read from the database clock, so it is in the server clock that the injected test clocks drive: triggers pass the incoming row's own timestamp (`NEW.created_at_ms`, `NEW.recorded_at_ms`, the decision's `inputs.now_ms`, the offer's source observation `observed_at_ms`), and Rust passes `now(state)`.
+Each returns `(total_rows, total_bytes, scope_rows, scope_bytes)`. "Now" is always passed in, never read from the database clock, so it is in the server clock that the injected test clocks drive: triggers pass the incoming row's own timestamp (`NEW.created_at_ms`, `NEW.recorded_at_ms`, the decision's `inputs.now_ms`), and Rust passes `now(state)`.
 
 How each enforcement site changes:
 
@@ -186,7 +191,7 @@ How each enforcement site changes:
 | A1 | Migration 0104 replaces `profiled_phase_terminal_capacity_guard`: the count and byte sums come from `sealed_history_usage('phase_terminal', NEW.node_id, 0)`. The DELETE and UPDATE refusal stays. |
 | A2 | Migration 0104 replaces `admission_artifact_insert_guard`: the two `count(*)`/`sum` queries become `sealed_history_usage('admission_artifacts', NEW.owner_key::uuid, NEW.created_at_ms)`. Every other check in the body is kept byte for byte. |
 | A3, A6 | `preparation::retained_quota_locked` (`preparation.rs:480-491`) returns `aq_history_caps::preparation_usage(..)`, which reads `sealed_history_usage('native_preparation', node, 0)`. The tuple shape stays the same, so the four call sites are unchanged. |
-| A4 | Migration 0104 replaces `profiled_presence_operation_guard`: the cap condition uses `sealed_history_usage('presence_operations', NEW.node_id, NEW.recorded_at_ms)`, adds the hour limit (§7.2), and keeps updating the storage counters as statistics. |
+| A4 | Migration 0104 replaces `profiled_presence_operation_guard`: the cap condition uses `sealed_history_usage('presence_operations', NEW.node_id, NEW.recorded_at_ms)`, and keeps updating the storage counters as statistics. (0104 also added an hour limit on reports; 0124 removes it, §7.2.) |
 | A5 | `resolver.rs:340-351` reads `aq_history_caps::usage(.., Kind::IntelligenceDecisions, nil, decision.inputs.now_ms)`. |
 | A7 | `accepted_preparation.rs:65-72` reads `aq_history_caps::usage(.., Kind::V2Proposals, node, 0)`. |
 | A8 | Migration 0104 replaces `profiled_launch_registration_guard` (count from `sealed_history_usage('launch_registrations', NEW.node_id, 0)`); `closure/history.rs:151-156` uses the same function through the crate. |
@@ -195,36 +200,18 @@ How each enforcement site changes:
 
 Rust mirrors must keep working at older state formats: the frozen-profile test fixtures (for example `with_state32_store`) issue grants before the database reaches 0103. The new crate `aq-history-caps` therefore checks `to_regprocedure('sealed_history_usage(text,uuid,bigint,uuid)')` and falls back to the old all-rows query when the function is absent. The old SQL strings move from the aq-server lib into the crate with that fallback, which also pays for the lines the gate adds.
 
-### 7.2 The rate limit
+### 7.2 Rate limits
 
-A lifetime bound is replaced by a bound on the rate. Once phase B deletes records, storage is then bounded by "rate × (retention + time until the task closes)". The unit is the **offered attempt**, because every capped table in §5.1 except A4 grows per offered attempt, and an attempt is what the owner sees **(author's call)**.
+**The rate limits were removed on 2026-11-13 (owner).** Phase A limited offers to 30 per node, 240 per project and 960 per server in any rolling hour (the poll gate and a database fence, migration 0105), and worker presence and inventory reports to 720 per node and 11,520 per server an hour (the presence guard, migration 0104). The owner: "I'm not sure that limit is needed anymore, lets just remove them instead", and for the reports, "Yes remove the worker report limit too". Growth of sealed history and of the report log is bounded by deleting old records (phase B and architecture 0006 §4), not by slowing new work, and a task that fails in a loop is bounded by its own retry, lineage, time and cost budgets. Migration 0124 removes both. Nothing holds or refuses a node, a project or the server for the number of offers it took or reports it sent; the live-row caps (§7.1) still apply.
 
-| Limit | Value | Reasoning |
-|---|---|---|
-| Offers per node per rolling hour | **30** | A slot runs one agent at a time. The fastest window measured on ms1 was 6 offers in 20 minutes on one node (node f85cc3e1, 16:30–16:50 on 2026-11-08), during an acceptance script built from short tasks and handoffs: 18 an hour. 30 leaves headroom over that and is one offer every 2 minutes, sustained. A loop where offers fail immediately (one per poll) is held within the hour. Lineage budgets still bound attempts per task. |
-| Offers per project per rolling hour | **240** | Eight slots, each at its node limit. |
-| Offers per server per rolling hour | **960** | Four projects at their limit. |
-| Inventory reports (A4) per node per rolling hour | **720** | One every 5 s. Measured: one every 41 s typically, one every 11 s at the peak (333 an hour). |
-| Inventory reports per server per rolling hour | **11,520** | Sixteen nodes at their limit. |
-
-Derived row rates at the node limit, from the measured rates per attempt: 444 admission artifacts, 95 decisions, 30 leases, 30 registrations and 27 exports an hour per node. On disk, ms1's sealed tables take 9.8 MB for 33 attempts, about 300 KB per attempt including indexes. A sustained server-wide runaway at 960 offers an hour would therefore add about 290 MB an hour; the hold stops it after the first hour.
-
-The limits are constants in the SQL function `sealed_history_limits()` (migration 0103), not settings **(author's call: the owner asked only for the retention period in Settings; a rate that needs raising is a migration with a reason)**.
-
-Where the rate is enforced:
-
-- **The poll gate** (§7.3) refuses before any history row is written.
-- **A database fence** (migration 0105): a `BEFORE INSERT` trigger on `profiled_launches`, `profiled_launch_offer_rate`, counts offers in the hour before the new offer's source observation, per node, per project and in total, under an advisory lock, and raises `sealed history offer rate`. Only a race between two polls that both passed the gate can reach it, and the next poll's gate then holds visibly.
-- The inventory-report rate is enforced in `profiled_presence_operation_guard` (A4).
-
-Orphan rows (§6.2) are also rate-bounded: pending rows count toward their table's live cap, so at most a cap's worth of orphans can be written per 10 minutes.
+Orphan rows (§6.2) are bounded too: pending rows count toward their table's live cap, so at most a cap's worth of orphans can be written per 10 minutes.
 
 ### 7.3 The poll gate
 
 A new crate, `crates/aq-history-caps`, owns the gate. `offers()` in `profiled_execution/producer/workflow.rs` calls it after the existing `offer_hold` and the `busy` check, and before any selection, export or artifact write:
 
-1. **Node and server holds** (`aq_history_caps::node_holds(conn, node, now_ms, staging)`): the offer rate for the node and the server; live usage plus headroom against each node-scoped and global cap (A1, A2 global, A3, A5, A6, A7, A8, A9 global, A10); inventory reports for the node. Any hold → the poll returns its page with no offers (200), logs `"{code} {subject}: {used} of {limit}; no new offers"` at info, and writes nothing.
-2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): a project with a hold (its offer rate, A2, A9) is dropped from the fair-share candidates before the per-poll project limit, so it is never charged a turn, like a project with no ready task. The poll reads node, server and project holds in one call, `aq_history_caps::poll_gate`, so other projects still get offers.
+1. **Node and server holds** (`aq_history_caps::node_holds(conn, node, now_ms, staging)`): live usage plus headroom against each node-scoped and global cap (A1, A2 global, A3, A4, A5, A6, A7, A8, A9 global, A10). Any hold → the poll returns its page with no offers (200), logs `"{code} {subject}: {used} of {limit}; no new offers"` at info, and writes nothing.
+2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): a project with a hold (A2, A9) is dropped from the fair-share candidates before the per-poll project limit, so it is never charged a turn, like a project with no ready task. The poll reads node, server and project holds in one call, `aq_history_caps::poll_gate`, so other projects still get offers.
 
 Headroom is the most a single offer can add: 64 admission artifacts and 4 MiB, 2 decisions and 16 MiB, 1 export and 4 MiB, 1 lease and 256 KiB of preparation bytes, 1 registration, 1 phase reservation and 1 MiB, and `max_bundle_bytes` of staging **(author's call)**. With headroom, a refusal happens at the gate and not halfway through a poll.
 
@@ -239,7 +226,7 @@ Two new `HoldCode` values (contract `dashboard-read-1`):
 
 | Code | `message` | `remedy` |
 |---|---|---|
-| `history_rate_limited` | `Offer rate limit reached: {used} offers in the last hour (limit {limit})`, or `Inventory report rate limit reached: {used} reports in the last hour (limit {limit})` | `Wait for the hour to pass; if this repeats, look for a task that fails in a loop` |
+| `history_rate_limited` | Unused since 2026-11-13: nothing sends it. It stood for the offer and report rates (§7.2) and stays only because `dashboard-read-1` pins it | — |
 | `history_cap_reached` | `Live {subject} cap reached: {used} of {limit}` (with ` bytes` appended for a byte limit). The subject is one of `admission artifacts`, `selection decisions`, `source exports`, `staging bytes`, `preparation bytes`, `material leases`, `preparation proposals`, `launch registrations`, `phase terminal reservations` or `inventory reports` | `Wait for running agents to settle` |
 
 A project hold's message starts with `Project {project_id}: ` and a server-wide hold's with `Server: `, followed by the text above with a lower-case first letter, for example `Project 0000…0001: live admission artifacts cap reached: 449 of 512`.
@@ -254,27 +241,29 @@ The current maximum on main is 0102. Phase A adds three, contiguous:
 |---|---|
 | `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid[],uuid[],bigint)`, `sealed_history_scoped(text,bigint,uuid,uuid[])`, the view `sealed_live_attempt_ids`; the column `profiled_source_exports.created_at_ms` (nullable; written by the reservation INSERT); indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(prospective_attempt_id)` and `(lease_id) WHERE state='pending'`, `profiled_presence_operations` on `(node_id, recorded_at_ms)`, `(recorded_at_ms)`, `(expires_at_ms)` and `(attempt_id)`, `source_bases(profiled_export_operation_id)`, `admission_artifacts(created_at_ms)`, `intelligence_decisions(((decision#>>'{inputs,now_ms}')::bigint))`, `profiled_source_exports(operation_id) WHERE state='pending'` and `(created_at_ms)`, `source_transfers(transfer_id) WHERE NOT staging_released`, and the partial attempt indexes `execution_attempts(attempt_id) WHERE holds_task`, `execution_attempts(attempt_id)` for released, unsettled `legacy_fixture` attempts, and `profiled_authority_hot(attempt_id)` for an unsettled status. The four indexes on tables the settlement39 catalog attests are listed in that catalog from format 103 on (`aq_history_caps::ATTESTED_INDEXES`); any other index there still fails the attestation. |
 | `0104_sealed_history_live_caps.sql` | `CREATE OR REPLACE` of `admission_artifact_insert_guard`, `profiled_source_export_guard`, `profiled_launch_registration_guard`, `profiled_phase_terminal_capacity_guard` and `profiled_presence_operation_guard`. Names, triggers and every non-quota check are unchanged (the store checks the phase-terminal function by name, `store.rs:314-345`). |
-| `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. |
+| `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. Dropped by 0124. |
 
 The exact bodies are in the phase A plan, `docs/superpowers/plans/2026-11-08-sealed-history-p-a-live-caps.md`.
 
-## 8. Phase B: deletion after the task closes, and the summary
+`0124_remove_rate_limits.sql` (2026-11-13) removes the rate limits (§7.2). The `offers`, `project_offers` and `presence_rate` rows of `sealed_history_limits()` go, and those three kinds of `sealed_history_scoped` count nothing. `profiled_presence_operation_guard` is replaced without its rate branch, keeping its live-row cap. The 0105 trigger and function are dropped. A migrating role that does not own `profiled_launches` leaves the trigger with a warning; the fence then counts no offers, and its function is emptied if the role owns it. The migration sets `lock_timeout` to 5 s, so a busy table fails startup (to be retried) instead of hanging it.
+
+## 8. Phase B: deletion after the task closes, and rolling summaries
 
 ### 8.1 Eligibility
 
 A run's full records are eligible for deletion when all of the following hold, checked in the deleting transaction **(author's call where not (owner))**:
 
 1. the run is not live (§6.1);
-2. its task is closed, and has been closed, with every attempt of the task not live, for longer than the retention period **(owner)**. The clock is DEP6's `retention_tasks.settled_since_ms`: the first time the server saw a fresh Graph read of the task as completed, with all its attempts released and terminal. It was re-checked in this pass (`aq-row-retention/src/lib.rs:19-56`). A reopen resets it. The period is `retention_days`, default 7 **(owner)**;
+2. its task is closed, and has been closed, with every attempt of the task not live, for longer than the retention period **(owner)**. The clock is DEP6's `retention_tasks.settled_since_ms`: the first time the server saw a fresh Graph read of the task as completed, cancelled or retired, with all its attempts released and terminal (DEP6 counts cancelled and retired tasks as settled from 2026-11-13; pending). It was re-checked in this pass (`aq-row-retention/src/lib.rs:19-56`). A reopen resets it. The period is `retention_days`, default 7 **(owner)**;
 3. source GC has finished with the run: no `source_transfers` row of the run has unreleased staging, and the run's task is past `source_retention/gc.rs`'s settled sweep. Source GC reads completions, auto-settlements and transfers, so it must run first;
 4. no open review decision references the run's results;
 5. no active stall quarantine is held only by this run's rows (the quarantine is copied to the summary first, §8.2).
 
 Shared rows are deleted separately, when nothing references them and they are not live: admission artifacts linked by no run, decisions, exports, registration history, and source observations older than the retention cutoff.
 
-### 8.2 The summary row (~1 KB, kept forever)
+### 8.2 The summary row (~1 KB, rolling) and the task budget summary
 
-The table is `attempt_summaries`, with one row per deleted run. Its columns: `attempt_id` (PK), `task_id`, `workspace_id`, `project_id`, `node_id`, `session_id`, `generation`, `deleted_at_ms`, `retention_days`, and `summary JSONB` with `CHECK(octet_length(summary::text) <= 2048)`. The sweeper writes it in the same transaction as the delete, so there is never a moment with neither **(author's call)**. Fields in `summary` (version 1), chosen from the readers below:
+The table is `attempt_summaries`, with one row per deleted run. It keeps the most recent `summary_keep` rows per project (default 10,000, **proposed default**), by `settled_at_ms`. The sweeper deletes the oldest summaries of a project in the transaction that writes a new one, a bounded number per pass. Nothing refuses work when a project has many summaries. Its columns: `attempt_id` (PK), `task_id`, `workspace_id`, `project_id`, `node_id`, `session_id`, `generation`, `deleted_at_ms`, `retention_days`, and `summary JSONB` with `CHECK(octet_length(summary::text) <= 2048)`. The sweeper writes it in the same transaction as the delete, so there is never a moment with neither **(author's call)**. Fields in `summary` (version 1), chosen from the readers below:
 
 - **Times:** `offered_at_ms`, `granted_at_ms`, `started_at_ms`, `stopped_at_ms`, `settled_at_ms`.
 - **State:** `status` (finished, declined, never_granted), `stop_kind`, `cancelled`.
@@ -285,24 +274,26 @@ The table is `attempt_summaries`, with one row per deleted run. Its columns: `at
 - **Lineage (the replacement `Prior` fields):** `predecessor_attempt_id`, `handoff_reason`, `exempt`, `lost_charged`, `released`, `rework`, `unpublished`, `completion_state`, `never_granted`, `quarantined`.
 - **Evidence digests:** `manifest_digest`, `execution_spec_digest`, `selection_digest`, `decision_payload_digest`. These prove which sealed record existed, without its bytes.
 
+Budgets must not depend on summaries that roll away. So the sweeper also keeps **one budget summary per task**, `task_budget_summaries(task_id PK, …)`, updated in the same transaction as each deletion **(author's call)**. It holds what the task's budgets and generations read: attempts charged and exempt per lineage, the never-granted count, the highest generation, lineage time and sandbox minutes used, and whether a quarantine is held. It is one row per task, so it grows with tasks (the product), not with runs. Node spend ceilings read the current month; the sweeper adds a deleted run's priced and VM totals to a per-node month total, and keeps only the current and previous month **(author's call)**.
+
 What each reader reads after deletion. The readers come from the read inventory of 2026-11-08; file:line refers to main at 0102.
 
 | Reader | Today | After deletion |
 |---|---|---|
 | Overview attempt counts (`dashboard_api/aggregation.rs:463-519`) | running and recovering runs only | unchanged; deleting settled rows also fixes its 101-row window |
 | Overview settlements (`aggregation.rs:705`) | newest 26 evaluations per actor | deleted runs drop off; they are more than 7 days past closing **(author's call)** |
-| `/api/v1/sessions` (`dashboard_api/service.rs:593`) | settled sessions listed | the union of live attempts and `attempt_summaries` |
+| `/api/v1/sessions` (`dashboard_api/service.rs:593`) | settled sessions listed | the union of live attempts and `attempt_summaries`; a run whose summary has rolled away is no longer listed |
 | `/api/v1/sessions/{id}` (`service.rs:707-829`, `lifecycle.rs:8`) | full detail | an `archived` session built from the summary: identity, profile, times, status. No terminal, no operations (404 for those) |
 | Session usage (`observations/inspection.rs:28-204`) | projections and priced facts | the summary's usage totals with `usage_complete` |
-| Task history (`agent_access/human/work.rs:178-206`) | attempt_id, session_id, holds_task, status (max 16) | the union with summaries (holds_task false) |
-| Results feed and detail (`results_feedback/store.rs:830`, `profiled_execution/results.rs:311-447`) | re-verifies the full receipt chain per item; one missing item fails the page | archived items are rendered from the summary's outcome fields without re-verification; the detail page shows the archived card |
+| Task history (`agent_access/human/work.rs:178-206`) | attempt_id, session_id, holds_task, status (max 16) | the union with summaries (holds_task false); runs whose summary has rolled away are counted from the task budget summary and shown as "older attempts no longer kept" |
+| Results feed and detail (`results_feedback/store.rs:830`, `profiled_execution/results.rs:311-447`) | re-verifies the full receipt chain per item; one missing item fails the page | archived items are rendered from the summary's outcome fields without re-verification; the detail page shows the archived card; a result whose summary has rolled away returns 404 and drops off the feed |
 | Reviews (`reviews.rs:158-747`) | while a decision is open | not affected: a run with an open decision is not eligible |
 | Notifications `reconcile_tasks` (`notifications/sources.rs:229`) | latest result per task | it must treat a run that moves to summaries as unchanged; phase B tests this |
-| Replacement history (`replacement.rs:57-175`, `aq-profiled-state/src/replacement_sql.rs:6-25`) | full `Prior` for every attempt of the task; a count mismatch blocks the task (`replacement_lineage_history_unknown`) | the union of live rows and summary `Prior` fields, so a reopened task keeps its budgets |
-| Never-granted cap and generations (`no_grant.rs:273-322`, `resolver.rs:59`) | count and max(generation) of the task's attempts | the union with summaries (`generation`, `never_granted`), so generations are never reused |
-| Node spend ceilings (`placement.rs:35-56`, `observations/budget.rs:74`, `vm_time.rs:102-110`) | priced facts and `accounting_vm_time` in the month window | the union with the summary's `priced_microunits` and `vm_*`, so current-month spend is not under-counted |
-| Stall quarantine (`replacement.rs:111`) | `stall_quarantines` (cascades on attempt delete) | the summary's `quarantined` flag |
-| Playbook host (`playbooks/host_adapters.rs:947-1110`) | project_id, selection_digest of past attempts | the summary |
+| Replacement history (`replacement.rs:57-175`, `aq-profiled-state/src/replacement_sql.rs:6-25`) | full `Prior` for every attempt of the task; a count mismatch blocks the task (`replacement_lineage_history_unknown`) | live rows plus the task budget summary's lineage counts, so a reopened task keeps its budgets after its summaries roll away. The count check compares against the budget summary, not against kept summaries |
+| Never-granted cap and generations (`no_grant.rs:273-322`, `resolver.rs:59`) | count and max(generation) of the task's attempts | live rows plus the task budget summary (highest generation, never-granted count), so generations are never reused |
+| Node spend ceilings (`placement.rs:35-56`, `observations/budget.rs:74`, `vm_time.rs:102-110`) | priced facts and `accounting_vm_time` in the month window | live facts plus the per-node month total, so current-month spend is not under-counted |
+| Stall quarantine (`replacement.rs:111`) | `stall_quarantines` (cascades on attempt delete) | the task budget summary's quarantine flag |
+| Playbook host (`playbooks/host_adapters.rs:947-1110`) | project_id, selection_digest of past attempts | the summary while it is kept; after that the attempt is unknown to the host (open question, §13) |
 | `/api/v1/swarm`, capacity | live only | unchanged |
 
 ### 8.3 Relaxing the guards safely
@@ -314,7 +305,7 @@ What each reader reads after deletion. The readers come from the read inventory 
 - **Pin checks** (class c) stay. The order deletes the referencing rows first, so they pass.
 - **The `profiled_auto_settlement_owner` DELETE bug** (§5.5) is fixed to return `OLD` under the ticket.
 - **Store attestations.** The store checks some guard bodies by format: `profiled_sealed_row_guard` in `store/cancellation43.rs`, `result38_catalog`, `settlement39_catalog`. Phase B adds format-gated overrides, as 0102 did for `native_incarnation_guard` (`store/compute41.rs`).
-- **AQ-08.** `docs/implementation/AQ-08-authority-bridge.md:195-197` is amended to name this policy as the qualified maintenance policy.
+- **AQ-08.** `docs/implementation/AQ-08-authority-bridge.md:195-197` is amended (2026-11-13) to name architecture 0006 and this phase as its deletion rule.
 
 ### 8.4 The sweeper
 
@@ -323,14 +314,14 @@ What each reader reads after deletion. The readers come from the read inventory 
 - **One run's transaction:**
   1. lock the run's attempt row;
   2. re-check §8.1;
-  3. compute and insert the summary;
+  3. compute and insert the summary, update the task budget summary and the node month total, and delete the project's oldest summaries beyond `summary_keep`;
   4. insert the ticket;
   5. delete in the order of Appendix B, including the run's observation rows after folding their totals into the summary.
 
   Step 5's observation rows are deleted at the retention period, not DEP6's 14 days. They are part of the run's full record, and the FK to `execution_attempts` forces it **(author's call)**.
-- **The setting.** It lives in a singleton table, `sealed_history_settings(retention_days INT NOT NULL DEFAULT 7 CHECK (retention_days BETWEEN 1 AND 365), generation, updated_by, updated_at)`. The dashboard action `history.retention.set` changes it with a compare-and-swap on `generation`, the pattern of `swarm.availability.set` (`intelligence/availability_action.rs`). Settings shows "Keep full run records for N days after the task closes". The dashboard-read contract adds `history.retention_days`.
-- **Logs.** `table` and `rows_deleted` for every table, and `runs_summarised`.
-- **Phase B also converts the caps in §5.2** to the live predicate.
+- **The setting.** It lives in a singleton table, `sealed_history_settings(retention_days INT NOT NULL DEFAULT 7 CHECK (retention_days BETWEEN 1 AND 365), summary_keep INT NOT NULL DEFAULT 10000, generation, updated_by, updated_at)`. The dashboard action `history.retention.set` changes it with a compare-and-swap on `generation`, the pattern of `swarm.availability.set` (`intelligence/availability_action.rs`). Settings shows "Keep full run records for N days after the task closes". The dashboard-read contract adds `history.retention_days`.
+- **Logs.** `table` and `rows_deleted` for every table, `runs_summarised` and `summaries_deleted`.
+- **Phase B also removes the caps in §5.2**, as §5.2 says. The presence reports of §5.1 A4 that no live run needs are deleted 24 hours after they were recorded **(proposed default)**.
 
 ## 9. Compatibility impact
 
@@ -366,8 +357,8 @@ What each reader reads after deletion. The readers come from the read inventory 
    - the stack runs origin/main with phase A merged, and its database is the one that stopped on 2026-11-07 (512 admission artifacts). The first poll after the upgrade gets an offer;
    - a soak project of trivial tasks ("write a file and finish") is driven through the workers until **at least 650 offered attempts** are recorded in `profiled_launches` since the upgrade, with at least one node taking more than 300 of them;
    - **pass condition:** no poll fails with a cap or quota error. Check this two ways: no server log line "native control request refused" whose reason names a quota or capacity, and no attempt stuck between offer and grant;
-   - every rate-limit hold during the soak appears as `history_rate_limited` on that node in `GET /api/v1/swarm` and on the Swarm page, and clears when the hour's count drops;
-   - **deliberate hold:** with the soak stopped, set the node's slot count so that one machine offers above 30 in an hour (or seed rows as the plan's test does on a copy of the database). The Swarm page then shows the node `holding` with "Offer rate limit reached", and the worker log shows empty polls, not 409s;
+   - no node, project or server is held for the number of offers it took or reports it sent (the rate limits were removed on 2026-11-13, §7.2). Any hold during the soak appears on the Swarm page and in `GET /api/v1/swarm` with its code, and the worker log shows empty polls, not 409s;
+   - **deliberate check:** with the soak stopped, give one node more than 30 offers in the last hour, its project more than 240 and the server more than 960 (or seed rows as `native_offers::history_caps` does, on a copy of the database). The next poll still gets an offer, and the Swarm page shows no hold for it;
    - the evidence (counts per table before and after, the swarm read JSON with the hold, the log excerpts) is written to `docs/implementation/0008-PA-acceptance.md`.
 
 ### Phase B
@@ -375,17 +366,19 @@ What each reader reads after deletion. The readers come from the read inventory 
 1. On a copy of the soak database with the retention period set to 1 day:
    - a sweep deletes every run whose task has been closed for more than 1 day;
    - after the sweep, each such run has exactly one `attempt_summaries` row of at most 2048 bytes (average about 1 KB);
-   - no live run and no open task loses a row.
+   - no live run and no open task loses a row;
+   - with `summary_keep` set to 10, a project with more settled runs keeps exactly its 10 newest summaries, and every task keeps its budget summary.
 2. After the sweep, these all return 200 and show the deleted runs from their summaries: task history, the sessions list, an archived session, the results feed, an archived result and session usage.
-3. Reopening a closed task whose runs were deleted gives it the same replacement budget it had before deletion.
+3. Reopening a closed task whose runs were deleted gives it the same replacement budget it had before deletion, also after its summaries have rolled away.
 4. Every guard refuses a delete outside the sweeper's ticket.
+5. No poll, registration, renewal or settlement is refused for history: a node that has registered more than 1,024 times, and a project with more than `summary_keep` settled runs, still get offers.
 
 ## 12. Delivery phases
 
 | Phase | Work | Depends on |
 |---|---|---|
 | A. Live caps (plan `docs/superpowers/plans/2026-11-08-sealed-history-p-a-live-caps.md`) | §7: migrations 0103–0105, `aq-history-caps`, the poll gate, swarm holds, contract re-pin | — |
-| B. Deletion and summaries | §8: summaries, tickets, guard relaxation, sweeper, Settings, readers on summaries, §5.2 caps | A |
+| B. Deletion and rolling summaries | §8: rolling summaries, task budget summaries, tickets, guard relaxation, sweeper, Settings, readers on summaries, removal of the §5.2 caps | A |
 
 Phase A server: see `docs/implementation/0008-PA-server.md`.
 
@@ -393,7 +386,12 @@ Phase A is what 0007 phase 1 needs. Phase B can follow when the owner has answer
 
 ## 13. Questions for the owner
 
-1. **Result reports and review comments.** A run's result report (its body, evidence and media) and the human review threads on it are linked to the run's sealed records by FKs, so phase B as written deletes them with the run and keeps only the summary's outcome card (§8.2). Is that what you want? The alternative is to keep result reports and their review threads for longer, or forever. That needs the result tables cut loose from the run's records.
+1. **Result reports and review comments.** A run's result report (its body, evidence and media) and the human review threads on it are linked to the run's sealed records by FKs, so phase B as written deletes them with the run and keeps only the summary's outcome card (§8.2). Is that what you want? The alternative is to keep result reports and their review threads for longer, as a rolling set of their own. That needs the result tables cut loose from the run's records.
+2. **`summary_keep`.** The proposed 10,000 summaries per project. After a summary rolls away the run is gone from lists and its result returns 404.
+3. **Phase A live caps.** They count only live rows and are kept as controls on work happening now (§7.1). Keep them, or remove them as well under "remove all limits"?
+4. **B4 per-lineage review count (256).** Is it a budget you set (keep), or a cap (remove)?
+5. **Playbook host reads of old attempts.** Once a summary has rolled away, `playbooks/host_adapters.rs` cannot find that attempt's project or selection digest. Which playbook reads need it, and is "unknown" acceptable?
+6. **Worker report rate (§7.2).** Answered: removed (owner, 2026-11-13, "Yes remove the worker report limit too").
 
 ## Appendix A. Delete-firing triggers (live catalog at format 102)
 

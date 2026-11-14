@@ -342,17 +342,15 @@ impl ActionKind for StartRun {
         operation: &actions::Operation,
     ) -> std::result::Result<Option<Outcome>, ApiError> {
         // Replays only the retained exact first admission keyed by this
-        // operation; the engine admits it at most once.
-        Ok(
-            match self
-                .0
-                .admission(user.id, operation.operation_id, false)
-                .await
-            {
-                Ok(status) => admitted(&status),
-                Err(_) => None,
-            },
-        )
+        // operation. One held with an unknown outcome is looked up, never
+        // admitted again: only the owner's explicit retry may run it twice.
+        let id = operation.operation_id;
+        let held = (self.0.service.admission(user.id, id).await)
+            .is_ok_and(|a| a.status.status == "unknown");
+        Ok(match self.0.admission(user.id, id, held).await {
+            Ok(status) => admitted(&status),
+            Err(_) => None,
+        })
     }
     async fn execute(
         &self,

@@ -59,12 +59,13 @@ pub fn session_id(plan: &CentralPlan) -> Option<Uuid> {
         _ => None,
     }
 }
-pub const SCOPES: [&str; 5] = [
+pub const SCOPES: [&str; 6] = [
     "graph.read",
     "graph.write",
     "enqueue",
     "messaging",
     "decisions",
+    "settings",
 ];
 pub const REPLY_CONTRACT: &str = "supervisor-conversation-reply-1";
 const TOKEN_PREFIX: &str = "aqsv1_";
@@ -178,7 +179,8 @@ pub async fn authenticate(
 
 /// Authenticate inside the transaction that performs the protected operation.
 /// Required scopes: graph.read for graph reads, graph.write for graph mutations,
-/// enqueue for work creation, messaging for replies/mail, decisions for decisions.
+/// enqueue for work creation, messaging for replies/mail, decisions for decisions,
+/// settings for Intelligence settings and internal runs.
 /// Locks the actor before the credential, matching issuance and lifecycle writes.
 /// Keep this transaction open through the protected read or write.
 pub async fn authenticate_in_transaction(

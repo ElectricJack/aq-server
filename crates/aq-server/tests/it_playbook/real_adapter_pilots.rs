@@ -465,6 +465,8 @@ struct Pilot {
     author: AtomicBool,
     /// Moves the remote's main before the next review completes.
     move_base_on_review: AtomicBool,
+    /// `[playbooks.retention]` of the driver `start` builds.
+    retention: aq_playbook_host::retention::Retention,
 }
 
 fn keyring() -> Arc<Keyring> {
@@ -575,6 +577,7 @@ impl Pilot {
             installed: vec![],
             author: AtomicBool::new(true),
             move_base_on_review: AtomicBool::new(false),
+            retention: Default::default(),
         };
         pilot.start().await;
         pilot
@@ -599,6 +602,7 @@ impl Pilot {
             self.service.clone(),
             aq_playbook_host::Limits {
                 transitions: 2,
+                retention: self.retention,
                 ..Default::default()
             },
             protected_factory(&self.f),
@@ -1430,7 +1434,7 @@ async fn pilots_end_to_end() {
     .into_iter()
     .collect();
     let source: Value = serde_json::from_str(include_str!(
-        "../../../../vendor/aq-playbooks-source-0.1.3.json"
+        "../../../../vendor/aq-playbooks-source-0.2.0.json"
     ))
     .unwrap();
     let evidence = json!({
@@ -1445,3 +1449,6 @@ async fn pilots_end_to_end() {
     println!("D11 evidence ({}):\n{evidence:#}", path.display());
     p.driver.take().unwrap().stop().await.unwrap();
 }
+
+#[path = "routing_scale.rs"]
+mod routing_scale;

@@ -37,6 +37,7 @@ enabled = true
 async fn state(db: &TestDb) -> AppState {
     let config = config();
     AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),

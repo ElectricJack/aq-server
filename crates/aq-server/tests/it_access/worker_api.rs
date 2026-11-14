@@ -55,6 +55,7 @@ async fn harness() -> Harness {
     let n = now.clone();
     let clock: Clock = Arc::new(move || *n.lock().unwrap());
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),

@@ -44,7 +44,7 @@ async fn setup_presence() -> Installed {
     let inventory: InventoryReceipt = serde_json::from_slice(&body).unwrap();
     inventory.validate_for(&ready.request).unwrap();
     ready.c.request.inventory_sequence = ready.request.sequence;
-    let (status, body) = native_offer::poll(&ready.c).await;
+    let (status, body) = native_offer::poll_offered(&ready.c).await;
     assert_eq!(status, 200, "{body}");
     let aq_admission::control::ControlReply::Poll(mut page) = serde_json::from_value(body).unwrap()
     else {

@@ -39,18 +39,41 @@ async fn authorize(
         &[],
     )
     .await?;
+    // M2 (owner decision 2026-11-13): a new retry of a task AQ holds (an exhausted retry budget,
+    // a quarantine, ...) cannot take effect, so it is refused with the hold and what the owner
+    // can do, before anything is admitted. A replay of an admitted operation keeps its outcome.
+    if !actions::journal::admitted(&state.store.pool, p.operation_id).await? {
+        let task: Uuid = request
+            .subject
+            .id
+            .parse()
+            .map_err(|_| ApiError::invalid())?;
+        let revision = crate::project_bindings::current(state, p.project_id).await?;
+        let held = replacement::retry_hold(state, task, now(state)?, revision.revision).await?;
+        if let Some((code, budget)) = held {
+            let message = aq_machine_control::holds::retry_refusal(code, budget);
+            let status = axum::http::StatusCode::UNPROCESSABLE_ENTITY;
+            return Err(ApiError::new(status, code, "").with_message(&message));
+        }
+    }
     Ok(Scope::Project {
         project_id: p.project_id,
     })
 }
-/// Fresh task read and version check shared by both kinds.
+fn now(state: &AppState) -> std::result::Result<u64, AppError> {
+    u64::try_from((state.clock)().timestamp_millis())
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or(AppError::Internal)
+}
+/// Fresh task read and version check, with the current project revision.
 async fn fresh(
     state: &AppState,
     runtime: &ReadRuntime,
     user: &User,
     request: &ActionRequest,
     p: &Execution,
-) -> Result<std::result::Result<(Uuid, Value), Outcome>> {
+) -> Result<std::result::Result<(Uuid, Value, u64), Outcome>> {
     let task: Uuid = request.subject.id.parse().map_err(|_| invalid())?;
     let expected = graph_actions::version(&p.expected_version).ok_or_else(invalid)?;
     let a = access(state, runtime, user.clone(), p.project_id).await?;
@@ -67,7 +90,7 @@ async fn fresh(
             [("task".to_string(), live.to_string())].into(),
         )));
     }
-    Ok(Ok((task, raw)))
+    Ok(Ok((task, raw, a.record.revision)))
 }
 fn rejected() -> Outcome {
     existing::disposition(actions::Disposition::Rejected)
@@ -105,22 +128,26 @@ impl ActionKind for TaskRetry {
         p: Execution,
     ) -> Outcome {
         let run = async {
-            let (task, raw) = match fresh(state, &self.0, user, request, &p).await? {
+            let (task, raw, revision) = match fresh(state, &self.0, user, request, &p).await? {
                 Ok(fresh) => fresh,
                 Err(outcome) => return Ok(outcome),
             };
             if raw["task_state"] != "active" {
                 return Ok(rejected());
             }
-            let now = u64::try_from((state.clock)().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(AppError::Internal)?;
-            // B4 alone decides admissibility; an unsettled or exhausted
-            // predecessor is a rejection, never a forced replacement.
-            let assessment = replacement::assess_task(state, task, now).await?;
-            let Some(r) = assessment.replacement() else {
-                return Ok(rejected());
+            // B4 and the offer path's budgets decide admissibility, as the scheduler does: an
+            // unsettled or exhausted predecessor is a rejection, never a forced replacement
+            // (and never a confirmation the offer path would then refuse, M2).
+            let now = now(state)?;
+            let assessment =
+                replacement::assess_task_for_revision(state, task, now, revision).await?;
+            // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
+            let r = match &assessment {
+                replacement::Assessment::Replace(r) => r,
+                replacement::Assessment::Blocked(code) => return Ok(Outcome::refused(code)),
+                replacement::Assessment::Fresh => {
+                    return Ok(Outcome::refused("task_has_no_attempt"));
+                }
             };
             replacement::release(state, task, r).await?;
             Ok::<_, AppError>(Outcome::confirmed(

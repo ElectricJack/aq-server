@@ -12,7 +12,10 @@ synthetic owned SQL projection responses, never evidence of a native process.
 Session identities are historical immutable bindings. Overview counts come from
 bounded owner observations; missing owners produce unknown counts and explicit
 partial coverage. `needs_you` counts the returned attention items (decisions,
-failed results, offline workers, uncertain operations); it is unknown while the
+failed results, offline workers, uncertain operations,
+and failed internal work a supervisor could not fix: its subject is the affected
+item, or `{type: "internal_run", id: <run>}` with `impact` naming the affected
+item when the dashboard cannot open that item by id); it is unknown while the
 decision owner is unavailable and estimated while any source is partial. The
 decision count alone is the `reviews` source total. In the all-projects view
 every enrolled offline worker is attention; one without recorded work in a
@@ -133,11 +136,11 @@ missing or expired context measurement for a natively registered node, and
 `worker_stopped` or `worker_draining` from the worker service state. Offline and
 revoked workers show as state, and a full concurrency ceiling shows as no free
 slots, so neither appears as a hold.
-`history_rate_limited` and `history_cap_reached` (spec 0008) say that the offer rate
-(30 an hour per node, 240 per project, 960 in all), the inventory report rate, or a
-live sealed-history cap holds new offers. On a node they apply to that node; in
-`waiting.reasons`, a message starting `Project <id>:` applies to one project and one
-starting `Server:` to all.
+`history_cap_reached` (spec 0008) says that a live sealed-history cap holds new offers.
+On a node it applies to that node; in `waiting.reasons`, a message starting
+`Project <id>:` applies to one project and one starting `Server:` to all.
+`history_rate_limited` is unused: no server sends it since the offer and worker report
+rate limits were removed on 2026-11-13. It stays in the schema for compatibility.
 `tasks_held` (R6, `waiting.reasons` only) says a project has tasks that a server-side hold
 keeps from being offered: an exhausted retry, time or cost budget, a lost attempt whose
 retry was not admitted, a quarantine, or a successor refused on every poll for 10 minutes.

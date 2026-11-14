@@ -40,7 +40,9 @@ pub(crate) fn mapped(e: McError) -> AppError {
         McError::Refused(m) => AppError::Conflict(m.into()),
         e @ McError::MachineNode(_) => AppError::Conflict(e.to_string()),
         McError::Conflict { .. } => AppError::Conflict("generation".into()),
-        McError::NotFound | McError::Db(_) => AppError::Internal,
+        McError::NotFound => AppError::Internal,
+        // Contention is a retryable 503 (`Busy`, `Retry-After`); other database errors stay 500.
+        McError::Db(e) => crate::error::db(e),
     }
 }
 
@@ -193,4 +195,28 @@ async fn qualifications(
     let auth = authenticate_context(&state, &headers).await?;
     let pin = crate::profiled_execution::context_renewal::record(&state, &auth, &req).await?;
     Ok(Json(pin))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// M1 residual: contention on a machine route is a retryable 503 (`Busy`, `Retry-After`);
+    /// any other database error stays a 500.
+    #[tokio::test]
+    async fn a_contended_database_error_is_busy_and_any_other_is_internal() {
+        let db = crate::test_support::TestDb::create().await;
+        let pool = db.pool().await;
+        let mut held = pool.begin().await.unwrap();
+        let lock = "SELECT pg_advisory_xact_lock(57)";
+        sqlx::query(lock).execute(&mut *held).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL lock_timeout='20ms'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let timeout = sqlx::query(lock).execute(&mut *tx).await.unwrap_err();
+        assert!(matches!(mapped(McError::Db(timeout)), AppError::Busy));
+        let other = McError::Db(sqlx::Error::RowNotFound);
+        assert!(matches!(mapped(other), AppError::Internal));
+    }
 }

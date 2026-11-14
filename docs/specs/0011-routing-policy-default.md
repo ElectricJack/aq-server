@@ -1,0 +1,96 @@
+# Routing
+
+Before a task is handed to a worker, decide how capable a model it needs and
+which kinds of agent may take it. Don't pick the worker, the machine or the
+exact model. Scheduling does that afterwards, within the limits set here,
+from whatever is available at the time.
+
+Route a task when it becomes ready, and again when it is retried or reopened.
+
+## How to decide
+
+Start from what kind of work it is, then adjust for risk.
+
+**By kind of work**
+
+- Features, bug fixes, refactors, tests and docs are Standard, high effort.
+  Most tasks belong here.
+- Chores and syncs are Simple, high effort.
+- Specs, designs, implementation plans and reviews of someone else's work are
+  Complex, high effort.
+- Research is Standard, high effort, unless it is clearly harder, in which
+  case it is Complex, high effort.
+- Deep, high effort, is only for analysis, planning, spec writing, design or
+  review that needs advanced mathematics or unusually hard reasoning. A big
+  task is not a Deep task, and neither is a risky one. Whether a task needs
+  that is your judgement of the task itself, not of how it was labelled.
+- Analysis that doesn't need Deep is Standard, high effort.
+
+If whoever filed the task asked for a level, respect it, but don't go above
+Standard for tests, docs, chores and syncs, or above Complex for ordinary
+implementation work. Asking for Deep is not enough to get it: the task still
+has to need it by the rule above, and otherwise it gets Complex, high effort.
+If the level asked for isn't available, use the nearest available level below
+it. The risk and failure rules still apply to it, as to any level asked for.
+
+A bug fix that has already failed once for a real reason moves up to Complex,
+high effort.
+Failed verification or the agent giving up count. An outage, a lost worker or
+review feedback on finished work do not.
+
+**By risk**
+
+Risk is how much damage the change could do if it is wrong. Judge it
+separately from how hard the work is, and from how well the task is written.
+
+- High risk: merging and publishing, CI gating, crash and session recovery,
+  git branch handling, database migrations and stored data, authentication,
+  permissions and secrets, money and live trading, deleting anything.
+  Treat it as very high when a mistake would be hard to undo or would reach
+  outside the repository.
+- Medium risk: ordinary changes to shared code that other work depends on.
+- Low risk: docs, UI copy, isolated components and tests, where a mistake is
+  visible and cheap to undo.
+
+When a task touches several areas, go by the riskiest. When you can't tell,
+call it medium.
+
+Medium and high risk work is at least Standard, high effort. Very high risk
+work is at least Complex, medium effort, unless it is narrow and covered by a test, in which
+case Standard, high effort is enough.
+
+Never raise the level because providers are busy, and never use a task's
+priority to choose anything. Priority only orders the queue.
+
+## Who may take it
+
+- High and very high risk work goes only to Claude or Codex.
+- Medium risk work goes to Claude or Codex. It may go to a local model only
+  when the task is narrow, covered by a test, and Standard.
+- Low risk work that is narrow and covered by a test should go to a local
+  model first, to save Claude and Codex usage.
+- Anything not mentioned here, takes only low risk work.
+- Design and planning go to Claude first, and to Codex only when Claude can't
+  take them.
+- Art and visual design go to Codex, and wait for it rather than going
+  elsewhere.
+- Never spend Deep on bug fixes, escalated or not.
+- Repairs to a failed integration or build never go to a local model.
+
+"Narrow" means the requirements are settled and the files to change are named
+or obvious. "Covered by a test" means an existing or specified test checks
+the result. Work that needs manual or end-to-end verification is not covered.
+
+## When it goes wrong
+
+- If the risk or the kind of work can't be worked out, don't block the task.
+  Use what is known. An unknown risk counts as medium, and you say that it
+  was assumed. An unknown kind gets at least Standard, high effort. A risk
+  that is known still applies in full. Keep the task on Claude or Codex.
+- If nothing allowed can take the task right now, hold it until something can.
+  That is a wait, not a failure.
+- If nothing allowed could ever take it, leave it unrouted and visible, say
+  why on the task, and raise it for my attention. Never leave a task waiting
+  with no explanation.
+- Always record on the task what was decided and why: the level, who may take
+  it, and anything that raised or lowered the level.

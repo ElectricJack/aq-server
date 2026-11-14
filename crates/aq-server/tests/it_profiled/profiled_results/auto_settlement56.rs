@@ -25,9 +25,9 @@ pub(crate) struct AutoEnv {
     pub(crate) source: Uuid,
     pub(crate) checkpoint: String,
     check_id: String,
-    validator: String,
+    pub(crate) validator: String,
     expected_version: u64,
-    writes: Arc<AtomicUsize>,
+    pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
     _directory: tempfile::TempDir,
 }
@@ -59,6 +59,29 @@ async fn auto_env_profiled(
     process_outcome: Option<aq_admission::transport::ProcessOutcome>,
     graph_profile: Option<Value>,
 ) -> AutoEnv {
+    Box::pin(auto_env_source(
+        delivery,
+        graph_status,
+        keep_checks,
+        process_outcome,
+        graph_profile,
+        true,
+        None,
+    ))
+    .await
+}
+
+/// `changed`: the retained checkpoint is a new commit on the admitted base;
+/// otherwise it is the admitted base itself (the attempt changed no file).
+pub(crate) async fn auto_env_source(
+    delivery: &str,
+    graph_status: axum::http::StatusCode,
+    keep_checks: bool,
+    process_outcome: Option<aq_admission::transport::ProcessOutcome>,
+    graph_profile: Option<Value>,
+    changed: bool,
+    conclusion: Option<&str>,
+) -> AutoEnv {
     let (mut f, _, mut report) = Box::pin(prepare_with_policy_checks(
         true,
         true,
@@ -70,6 +93,9 @@ async fn auto_env_profiled(
     .await;
     if let Some(outcome) = process_outcome {
         report.outcome = outcome;
+    }
+    if let Some(conclusion) = conclusion {
+        report.conclusion = Label::new(conclusion).unwrap();
     }
     let source = Uuid::new_v4();
     report.source_receipt_ids.push(source);
@@ -87,7 +113,10 @@ async fn auto_env_profiled(
         // Acceptance precedes every evidence gate: a non-Success report is
         // refused at once, retained source or not.
         assert_eq!(first.0, "rework_required");
-        assert_eq!(first.1.as_deref(), Some("not_accepted"));
+        assert!(matches!(
+            first.1.as_deref(),
+            Some("not_accepted" | "agent_blocked")
+        ));
     }
 
     // Synthetic retained-source owner row (validation only, not real Git).
@@ -97,7 +126,14 @@ async fn auto_env_profiled(
     let manifest = aq_worker_protocol::TransferManifest {
         transfer_id,
         role: aq_worker_protocol::SourceRole::Checkpoint,
-        checkpoint: f.profiled.source.base.clone(),
+        checkpoint: if changed {
+            aq_worker_protocol::ObjectId {
+                algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
+                hex: "4".repeat(40),
+            }
+        } else {
+            f.profiled.source.base.clone()
+        },
         attempt: aq_worker_protocol::AttemptRef {
             attempt_id: report.binding.attempt_id,
             session_id: match report.binding.session {
@@ -192,7 +228,7 @@ async fn auto_env_profiled(
         .unwrap(),
     ));
     AutoEnv {
-        checkpoint: f.profiled.source.base.hex.clone(),
+        checkpoint: manifest.checkpoint.hex.clone(),
         f,
         report,
         source,
@@ -223,7 +259,13 @@ impl AutoEnv {
             .unwrap()
             .expect("default policy applies")
     }
-    async fn check(&self, source: Uuid, checkpoint: &str, validator: &str, verdict: &str) {
+    pub(crate) async fn check(
+        &self,
+        source: Uuid,
+        checkpoint: &str,
+        validator: &str,
+        verdict: &str,
+    ) {
         sqlx::query("INSERT INTO profiled_check_evidence(attempt_id,check_id,source_operation_id,checkpoint,validator_digest,verdict,evidence,recorded_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(attempt_id,check_id,source_operation_id) DO UPDATE SET checkpoint=EXCLUDED.checkpoint,validator_digest=EXCLUDED.validator_digest,verdict=EXCLUDED.verdict,evidence=EXCLUDED.evidence")
             .bind(self.report.binding.attempt_id).bind(&self.check_id).bind(source)
             .bind(checkpoint).bind(validator).bind(verdict)
@@ -236,7 +278,7 @@ impl AutoEnv {
             .bind(json!({"publisher":"synthetic-delivery-owner"})).bind(NOW as i64)
             .execute(&self.f.db.pool().await).await.unwrap();
     }
-    async fn holds_task(&self) -> bool {
+    pub(crate) async fn holds_task(&self) -> bool {
         sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
             .bind(self.report.binding.attempt_id)
             .fetch_one(&self.f.db.pool().await)
@@ -588,7 +630,7 @@ async fn publish_env_with(outcome: Option<aq_admission::transport::ProcessOutcom
         incomplete_ttl_secs: 60,
     };
     PublishEnv {
-        delivery: aq_server::delivery::DeliveryService::new(pool, &config),
+        delivery: aq_server::delivery::DeliveryService::new(pool, &config.git_socket),
         env,
         socket,
         _git: git,
@@ -678,6 +720,139 @@ async fn retained_result_publishes_then_completes_and_advances_source() {
     assert_eq!(env.writes.load(Ordering::SeqCst), 1);
 }
 
+/// Owner decision 2026-11-13: an attempt that finishes successfully without
+/// changing a file succeeds. Its retained checkpoint is the admitted base, so
+/// required delivery has nothing to publish: no candidate, no push, no
+/// delivery evidence, and the task completes.
+#[tokio::test]
+async fn unchanged_source_completes_without_publication() {
+    use aq_server::profiled_execution::settlement::publication;
+    let env = Box::pin(auto_env_source(
+        "required",
+        axum::http::StatusCode::OK,
+        true,
+        None,
+        None,
+        false,
+        None,
+    ))
+    .await;
+    assert_eq!(env.checkpoint, admitted(&env).await.resolved_object.hex);
+    let (checkpoint, validator) = (env.checkpoint.clone(), env.validator.clone());
+    env.check(env.source, &checkpoint, &validator, "passed")
+        .await;
+    let pool = env.f.db.pool().await;
+    let project = admitted(&env).await.project_id;
+    sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{publication}',$2) WHERE project_id=$1")
+        .bind(project)
+        .bind(json!({"mode":"fast_forward","target":"refs/heads/main"}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let git = tempfile::tempdir().unwrap();
+    let socket = git.path().join("git.sock");
+    let calls = silent_git(&socket);
+    let config = aq_server::source_retention::SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
+        staging_root: git.path().join("staging"),
+        git_root: git.path().join("git"),
+        git_socket: socket,
+        max_staging_bytes: 2097152,
+        max_bundle_bytes: 4096,
+        bulk_concurrency: 2,
+        incomplete_ttl_secs: 60,
+    };
+    let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config.git_socket);
+    let s = publication::deliver_then_settle(&env.f.state, &delivery, env.report.report_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.disposition, AutoDisposition::Confirmed, "{s:?}");
+    assert_eq!(s.evidence["delivery"]["state"], "no_change", "{s:?}");
+    assert_eq!(s.evidence["source"]["changed"], false, "{s:?}");
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1, "one Graph completion");
+    assert!(!env.holds_task().await, "dependents are released");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing sent to aq-git");
+    assert!(evidence_rows(&env).await.is_empty(), "no delivery evidence");
+    assert!(head_of(&env).await.is_none(), "the source head never moves");
+}
+
+/// Review R1-M2: a Failed report whose agent said `Outcome: blocked` is reworked
+/// with the reason `agent_blocked`; any other failure stays `not_accepted`.
+#[tokio::test]
+async fn a_blocked_agent_is_reworked_as_agent_blocked() {
+    use aq_admission::transport::ProcessOutcome;
+    for (conclusion, reason) in [
+        (
+            "Outcome: blocked; Changes: none; Copied: none; Claude exit 0; Result: no access to the repo",
+            "agent_blocked",
+        ),
+        (
+            "Outcome: done; Changes: none; Copied: none; Claude exit 1; Result: crashed",
+            "not_accepted",
+        ),
+    ] {
+        let env = Box::pin(auto_env_source(
+            "not_required",
+            axum::http::StatusCode::OK,
+            false,
+            Some(ProcessOutcome::Failed),
+            None,
+            false,
+            Some(conclusion),
+        ))
+        .await;
+        let s = env.settle().await;
+        env.assert_not_completed(&s, AutoDisposition::ReworkRequired, reason)
+            .await;
+    }
+}
+
+/// Review I-2: a worker report whose agent claimed changes (or copied back
+/// only files Git ignores) while the retained source is unchanged is refused
+/// for rework, never completed as `no_change`; a claim of none completes.
+#[tokio::test]
+async fn claimed_changes_that_did_not_land_are_reworked() {
+    for (conclusion, expected) in [
+        (
+            "Changes: src/lib.rs; Copied: none; Claude exit 0; Result: done",
+            Some("claimed_changes_missing"),
+        ),
+        (
+            "Changes: target/debug/aq-server; Claude exit 0; Summary: built",
+            Some("claimed_changes_missing"),
+        ),
+        (
+            "Changes: none; Copied: target/x; Claude exit 0; Result: CI passes",
+            None,
+        ),
+    ] {
+        let env = Box::pin(auto_env_source(
+            "not_required",
+            axum::http::StatusCode::OK,
+            false,
+            None,
+            None,
+            false,
+            Some(conclusion),
+        ))
+        .await;
+        let s = env.settle().await;
+        match expected {
+            Some(reason) => {
+                env.assert_not_completed(&s, AutoDisposition::ReworkRequired, reason)
+                    .await
+            }
+            None => assert_eq!(
+                s.disposition,
+                AutoDisposition::Confirmed,
+                "{conclusion}: {s:?}"
+            ),
+        }
+    }
+}
+
 #[tokio::test]
 async fn moved_target_is_unpublished_rework_and_never_advances_source() {
     use aq_server::profiled_execution::settlement::publication;
@@ -737,14 +912,14 @@ async fn moved_target_is_unpublished_rework_and_never_advances_source() {
     );
 }
 
-async fn evidence_rows(env: &AutoEnv) -> Vec<(String, Value)> {
+pub(crate) async fn evidence_rows(env: &AutoEnv) -> Vec<(String, Value)> {
     sqlx::query_as("SELECT state,evidence FROM profiled_delivery_evidence WHERE attempt_id=$1")
         .bind(env.report.binding.attempt_id)
         .fetch_all(&env.f.db.pool().await)
         .await
         .unwrap()
 }
-async fn head_of(
+pub(crate) async fn head_of(
     env: &AutoEnv,
 ) -> Option<aq_server::profiled_execution::settlement::publication::SourceHead> {
     let source = admitted(env).await;

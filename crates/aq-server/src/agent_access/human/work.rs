@@ -39,6 +39,18 @@ pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> 
         .collect()
 }
 
+/// A fixed label for an error's kind, for logs: never the variant's payload.
+fn error_class(error: &AppError) -> &'static str {
+    match error {
+        AppError::Conflict(_) => "conflict",
+        AppError::BadRequest(_) => "bad_request",
+        AppError::NotFound(_) => "not_found",
+        AppError::Busy => "busy",
+        AppError::Internal => "internal",
+        _ => "other",
+    }
+}
+
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
 /// the attached execution for one task.
 pub(super) async fn work(
@@ -85,15 +97,29 @@ pub(super) async fn work(
         complete,
     );
     let parent = parent(&raw, w, id)?;
-    finish(
-        &s,
-        &r,
-        a,
-        json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
-            "readiness":readiness,
-            "parent":parent,"execution":execution}),
-    )
-    .await
+    let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
+        "readiness":readiness,
+        "parent":parent,"execution":execution});
+    // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
+    if root["task_state"] == "completed" {
+        let quiet = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT s.evidence#>>'{delivery,state}' FROM profiled_auto_settlements s JOIN execution_attempts e USING(attempt_id) WHERE e.task_id=$1 AND s.disposition='confirmed' ORDER BY s.updated_at_ms DESC LIMIT 1",
+        );
+        let quiet = quiet.bind(id).fetch_optional(&r.pool).await;
+        if matches!(quiet, Ok(Some(Some(ref s))) if s == "no_change") {
+            data["completed_without_changes"] = json!(true);
+        }
+    }
+    let ready = data["readiness"]["state"].as_str().unwrap_or_default();
+    // Optional field: when it cannot be computed the read still succeeds without it.
+    match crate::routing::view(&s, &a.record, id, &raw["node"], ready).await {
+        Ok(Some(routing)) => data["routing"] = routing,
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(task = %id, class = error_class(&error), "task routing view omitted")
+        }
+    }
+    finish(&s, &r, a, data).await
 }
 
 #[derive(Deserialize, Default)]

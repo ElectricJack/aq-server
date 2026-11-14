@@ -74,9 +74,29 @@ pub fn phrase(code: &str) -> String {
         "replacement_successor_stuck" => {
             "its replacement was refused on every poll for 10 minutes (AQ keeps trying it)"
         }
+        "route_class_unassigned" => {
+            "its route names a class with no assigned profile, so it is routed again"
+        }
         _ => return format!("held by the retry policy: {code}"),
     };
     fixed.into()
+}
+
+/// Why an owner Retry of a held task is refused (M2, owner decision 2026-11-13): the hold's
+/// phrase, the charged and allowed attempts for an attempt budget, and what the owner can do.
+/// A retry never overrides a budget. Fixed text and integers only; at most 256 characters.
+pub fn retry_refusal(code: &str, budget: Option<(u32, u32)>) -> String {
+    let facts = budget.map_or(String::new(), |(charged, allowed)| {
+        format!(" ({charged} of {allowed} allowed attempts charged)")
+    });
+    let next = match code.ends_with("_budget_exhausted") {
+        true => "A retry cannot override the budget",
+        false => "A retry cannot clear this hold",
+    };
+    format!(
+        "Retry refused: {}{facts}. {next}: cancel this task and create a new one (re-add its dependencies) to run it again.",
+        phrase(code)
+    )
 }
 
 /// Whether an offer-path refusal is a hold: it stays until an owner acts or the task changes
@@ -562,6 +582,7 @@ mod tests {
             "lost_attempt_release_not_admitted",
             "handoff_successor_stuck",
             "replacement_successor_stuck",
+            "route_class_unassigned",
         ];
         let phrases: std::collections::BTreeSet<String> = known.iter().map(|c| phrase(c)).collect();
         assert_eq!(phrases.len(), known.len(), "one distinct phrase per code");
@@ -586,6 +607,22 @@ mod tests {
             phrase("some_new_code"),
             "held by the retry policy: some_new_code"
         );
+        // A refused retry says why, with the budget, and fits the 256-character error message.
+        assert_eq!(
+            retry_refusal("replacement_policy_retry_budget_exhausted", Some((2, 2))),
+            "Retry refused: the catalog retry policy's maximum attempts are used up (2 of 2 \
+             allowed attempts charged). A retry cannot override the budget: cancel this task \
+             and create a new one (re-add its dependencies) to run it again."
+        );
+        assert!(retry_refusal("stall_quarantined", None).contains("cannot clear this hold"));
+        for code in known {
+            // Only an attempt budget carries the counts.
+            let budget = code
+                .ends_with("retry_budget_exhausted")
+                .then_some((u32::MAX, u32::MAX));
+            let text = retry_refusal(code, budget);
+            assert!(text.chars().count() <= 256, "{code}: {text}");
+        }
     }
     #[test]
     fn holds_are_budget_and_stuck_codes_and_waits_are_not() {
@@ -607,6 +644,7 @@ mod tests {
             "replacement_effects_unreconciled",
             "replacement_lineage_history_unknown",
             "task_already_settled_accepted",
+            "route_class_unassigned",
         ] {
             assert!(!is_hold(code), "{code}");
         }

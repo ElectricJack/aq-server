@@ -788,6 +788,7 @@ enabled=true
     )
     .unwrap();
     let state = aq_server::AppState {
+        internal_work: Default::default(),
         identity: aq_server::identity::verifier_from_config(&config.auth, reqwest::Client::new()),
         config: Arc::new(config),
         store: e.db.store().await,

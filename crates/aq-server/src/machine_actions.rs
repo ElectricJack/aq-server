@@ -209,8 +209,19 @@ impl<D: Desired> ActionKind for SetDesired<D> {
             Err(mc::Error::Conflict { generation }) => {
                 Outcome::conflict(BTreeMap::from([("machine".into(), generation.to_string())]))
             }
-            Err(_) => existing::failure(AppError::Internal),
+            Err(e) => not_applied(e),
         }
+    }
+}
+/// M1 residual: the owner's machine transaction locks every live node row of the machine in id
+/// order (revoke takes the machine lock first; 1 s `OWNER_LOCK_TIMEOUT`) before any write, and
+/// rolls back as a whole. A lock timeout, deadlock or serialization failure therefore changed
+/// nothing: a definite refusal with the reason `busy` (a new submission may succeed), never an
+/// unknown outcome.
+fn not_applied(e: mc::Error) -> Outcome {
+    match e {
+        mc::Error::Db(e) if mc::is_contention(&e) => Outcome::refused("busy"),
+        _ => existing::failure(AppError::Internal),
     }
 }
 fn confirmed(operation_id: Uuid, machine: &str, revision: Option<String>) -> Outcome {
@@ -294,7 +305,7 @@ impl ActionKind for RevokeMachine {
         };
         match run.await {
             Ok(()) => confirmed(p.operation_id, &p.machine, None),
-            Err(_) => existing::failure(AppError::Internal),
+            Err(e) => not_applied(e),
         }
     }
 }

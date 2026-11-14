@@ -149,6 +149,22 @@ pub async fn read(pool: &PgPool) -> Result<Value> {
     tx.commit().await?;
     Ok(out)
 }
+/// Typed [`read`]: the document, its revision and the catalog revision.
+pub async fn document(pool: &PgPool) -> Result<(Document, u64, u64)> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let (catalog_revision, ids) = catalog(&mut tx).await?;
+    let row = sqlx::query("SELECT revision,document FROM intelligence_structure WHERE singleton")
+        .fetch_one(&mut *tx)
+        .await?;
+    let document = decode(&row, &ids)?;
+    tx.commit().await?;
+    let revision = u64::try_from(row.get::<i64, _>("revision")).map_err(|_| Error::Internal)?;
+    let catalog_revision = catalog_revision.parse().map_err(|_| Error::Internal)?;
+    Ok((document, revision, catalog_revision))
+}
 pub async fn operation(pool: &PgPool, actor: Uuid, id: Uuid) -> Result<Value> {
     sqlx::query_scalar("SELECT response FROM intelligence_structure_operations WHERE actor_id=$1 AND operation_id=$2")
         .bind(actor).bind(id).fetch_optional(pool).await?

@@ -1063,6 +1063,13 @@
                 "$ref": "#/components/schemas/HumanExecution"
               }
             ]
+          },
+          "routing": {
+            "$ref": "#/components/schemas/HumanRouting"
+          },
+          "completed_without_changes": {
+            "const": true,
+            "description": "Present on a completed task whose latest confirmed default-policy settlement found no file change (delivery state no_change)."
           }
         },
         "required": [
@@ -1554,6 +1561,143 @@
           "complete"
         ],
         "additionalProperties": false
+      },
+      "HumanRouting": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "routed"
+              },
+              "route": {
+                "type": "object",
+                "properties": {
+                  "class": {
+                    "enum": [
+                      "simple-low",
+                      "simple-medium",
+                      "simple-high",
+                      "simple-max",
+                      "standard-low",
+                      "standard-medium",
+                      "standard-high",
+                      "standard-max",
+                      "complex-low",
+                      "complex-medium",
+                      "complex-high",
+                      "complex-max",
+                      "deep-low",
+                      "deep-medium",
+                      "deep-high",
+                      "deep-max"
+                    ]
+                  },
+                  "harnesses": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
+                  "providers": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
+                  "prefer": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
+                  "lane": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "provider_intent": {
+                    "enum": [
+                      "any",
+                      "pinned"
+                    ]
+                  },
+                  "source": {
+                    "enum": [
+                      "router",
+                      "owner"
+                    ]
+                  },
+                  "policy_digest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "class",
+                  "harnesses",
+                  "providers",
+                  "prefer",
+                  "lane",
+                  "provider_intent",
+                  "source",
+                  "policy_digest"
+                ],
+                "additionalProperties": false
+              },
+              "since_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "state",
+              "route",
+              "since_ms"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "waiting"
+              },
+              "since_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "state",
+              "since_ms"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "unrouted"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        ]
       }
     }
   }

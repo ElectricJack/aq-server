@@ -349,6 +349,10 @@ pub enum AttentionKind {
     Failed,
     UncertainOperation,
     WorkerOffline,
+    // Failed internal work a supervisor could not fix (spec 0012 §8); the
+    // subject is the affected item, not the internal run. A plain comment
+    // keeps the schema a flat enum.
+    InternalWork,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

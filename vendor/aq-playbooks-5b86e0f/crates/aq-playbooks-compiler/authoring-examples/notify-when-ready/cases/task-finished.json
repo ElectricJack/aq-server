@@ -1,0 +1,24 @@
+{
+  "name": "task-finished",
+  "situation": "The change that started the run finished the task",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "completed",
+      "reference": "task-40@2",
+      "subject": {
+        "id": "task-40",
+        "revision": 2
+      }
+    },
+    "correlation": {
+      "operation": "work-op-4"
+    }
+  },
+  "returns": {},
+  "expect": {
+    "outcome": "ended",
+    "calls": []
+  }
+}

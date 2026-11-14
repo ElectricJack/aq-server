@@ -159,6 +159,7 @@ count stays 81.
   Pruning only the unlinked decision rows cannot fix this. Plan task S16
   (decision retention) is held for an owner decision on an attempt-history
   maintenance policy.
+  Superseded 2026-11-13 by [architecture 0006](../architecture/0006-records-are-rolling.md).
 - **Swarm read.** Running agents are counted from the 128 most recent
   attempts. The count is a stated lower bound when more attempts hold tasks.
 - **The handoff successor (S7).** The successor's base is covered at the

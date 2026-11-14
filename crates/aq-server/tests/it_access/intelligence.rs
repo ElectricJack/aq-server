@@ -85,6 +85,7 @@ async fn setup(reg: IntelligenceConfig) -> (TestDb, AppState, Router) {
     let mut cfg = config();
     cfg.intelligence = Some(Arc::new(reg.load().unwrap()));
     let state = AppState {
+        internal_work: Default::default(),
         identity: verifier_from_config(&cfg.auth, reqwest::Client::new()),
         config: Arc::new(cfg),
         store,

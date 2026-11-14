@@ -1,4 +1,8 @@
 //! Fixed host contracts and typed grant scope. No generic SQL/endpoint/command proxy.
+pub mod artifacts;
+pub mod coding;
+pub mod host9;
+pub mod review_domain;
 use aq_playbook_host::{
     model::*,
     runner::{Authority, Intent},
@@ -13,7 +17,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("playbook_invalid_request")]
     Invalid,

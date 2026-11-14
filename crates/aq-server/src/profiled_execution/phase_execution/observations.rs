@@ -213,6 +213,7 @@ async fn binding(state: &AppState, input: &Input) -> Result<FrozenProjectBinding
             agent_profile: profile(&manifest.agent_profile, "agent")?,
             intelligence_profile: profile(&manifest.intelligence_profile, "intelligence")?,
             execution_profile: profile(&manifest.execution_profile, "execution")?,
+            intelligence_override: None,
         },
     )
     .await?;

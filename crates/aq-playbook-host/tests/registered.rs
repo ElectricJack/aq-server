@@ -177,6 +177,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .call(
             Request::AdmitOnce {
                 request: Box::new(request.clone()),
+                requested_at_ms: None,
                 now_ms: 1,
             },
             DEADLINE,
@@ -187,6 +188,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .call(
             Request::AdmitOnce {
                 request: Box::new(request),
+                requested_at_ms: None,
                 now_ms: 2,
             },
             DEADLINE,
@@ -262,6 +264,26 @@ async fn d4_host_catalog_recovery_classes_are_admitted() {
         move |_| {
             Ok(Peer {
                 counts,
+                mode: HostMode::Dispatch,
+            })
+        },
+    )
+    .await;
+    assert!(owner.is_ok());
+    // Host catalog 2.2.0 (sixteen commands) is admitted whole.
+    let registry: Registry = serde_json::from_str(include_str!(
+        "../../../vendor/aq-host-catalog-2.2.0/registry.json"
+    ))
+    .unwrap();
+    assert_eq!(registry.commands.len(), 16);
+    let owner = Owner::start_registered(
+        "host-2-2-0".into(),
+        aq_playbook_host::Limits::default(),
+        registry,
+        || Ok(MemoryStorage::default()),
+        move |_| {
+            Ok(Peer {
+                counts: Counts::default(),
                 mode: HostMode::Dispatch,
             })
         },

@@ -584,7 +584,9 @@ Fixed on `ms1/retry` (aq-worker), each as its own commit:
   last stream-json `result` event has `subtype == "success"` and
   `is_error == false`; the agent's final text has its own `Changes:` line; and
   the copied-back change set is not empty. Anything else is `Failed`, and D3
-  sends it to rework. A unit test covers each refusal case.
+  sends it to rework. A unit test covers each refusal case. (2026-11-13: the
+  owner removed the non-empty change set condition. A run that changes no file
+  succeeds and is not published; see `docs/status.md`.)
 - **Template scan (CI).** The sandbox credential scanner refused the
   aq-worker binary because `RUNNER` contained a credential-labelled shell
   assignment (`credentials=false`). The flag is renamed `login_file`, and the

@@ -268,6 +268,8 @@ impl Registry {
                 command.name,
                 "task.edit"
                     | "task.reprioritize"
+                    | "task.route.set"
+                    | "task.route.clear"
                     | "task.dependency.add"
                     | "task.dependency.remove"
             ) {

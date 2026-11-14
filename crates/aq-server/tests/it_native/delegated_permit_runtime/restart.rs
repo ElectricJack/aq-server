@@ -90,6 +90,7 @@ key_file={}
             .database(input["database"].as_str().unwrap());
     let now = input["now"].as_i64().unwrap();
     let state = aq_server::AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store: aq_server::store::Store::connect_with(options)
             .await

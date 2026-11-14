@@ -45,6 +45,7 @@ enabled=true
     ))
     .unwrap();
     let state = AppState {
+        internal_work: Default::default(),
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),
         config: Arc::new(config),
         store,
@@ -55,7 +56,12 @@ enabled=true
     let pool = db.pool().await;
     (db, aq_server::build_admin_router(state), pool)
 }
-async fn call(app: &Router, path: &str, body: Option<Value>, csrf: bool) -> (StatusCode, Value) {
+pub(crate) async fn call(
+    app: &Router,
+    path: &str,
+    body: Option<Value>,
+    csrf: bool,
+) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .uri(path)
         .method(if body.is_some() { "POST" } else { "GET" })
@@ -381,7 +387,7 @@ async fn catalogs_require_owner_and_csrf_and_reject_bad_ids() {
 
 // Intelligence Settings: real owner routes and transaction boundaries.
 const INTELLIGENCE_SETTINGS: &str = "/api/settings/intelligence";
-async fn settings_fixture() -> (TestDb, Router, sqlx::PgPool, Value, Uuid) {
+pub(crate) async fn settings_fixture() -> (TestDb, Router, sqlx::PgPool, Value, Uuid) {
     let (db, app, pool) = setup().await;
     let catalog = seed();
     assert_eq!(

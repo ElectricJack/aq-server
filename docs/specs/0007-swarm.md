@@ -2,6 +2,8 @@
 
 **Status:** Approved by the owner on 2026-11-07 (brainstorming session; builder-check answers folded in). Cloudflare §7.5 follows the recommendation (manual tokens).
 **Controls correction, 2026-11-11 (owner):** provider concurrency allocation sliders and burn estimates belong in a compact Swarm header row; the existing Intelligence settings row gains one Max agents column for the selected provider. This supersedes the earlier Settings › Swarm and Normal/Reduced controls.
+**Implementation (2026-11-12):** phase 1 accepted live on 2026-11-09 (aq-worker `docs/implementation/0007-P1.md`, rerun 4). Phase 2 merged. Phase 3 controls are a draft (aq-server #131, aq-dashboard #105) deployed on `aq-ms1`. Phases 4 (boat) and 5 (macOS) not started. Current state: [`../status.md`](../status.md).
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Saved control versions are a rolling set (§9).
 **Repositories:** aq-server, aq-worker, aq-dashboard.
 **Mockup:** `aq-dashboard/docs/design/swarm-tree-v4.html` (revised controls prototype, labelled sample data). `swarm-tree-v3.html` and `14-swarm-tree-v3.png` retain the earlier tree reference. React Flow plus dagre remain the tree libraries.
 
@@ -219,7 +221,7 @@ Until the deferred design (§3):
 - **Data model:**
   - machines vs nodes;
   - live CPU and RAM reporting;
-  - how independent provider caps and sparse provider-class overrides are stored and versioned;
+  - how independent provider caps and sparse provider-class overrides are stored and versioned. Sliders save often, so saved versions and their receipts are a rolling set: the most recent 100 per kind **(proposed default)**, the oldest deleted on save. A save is never refused because the history is full;
   - how running agents map to authoritative routing classes (model-name guesses are insufficient for enforcing limits);
   - how "holding back" reasons are computed and exposed.
 - **Migration:** how the existing B4 per-project replacement budgets and any remaining per-project pool settings migrate to the swarm controls.

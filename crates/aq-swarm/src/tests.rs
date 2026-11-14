@@ -639,19 +639,17 @@ fn busy_node_is_not_held_for_a_lapsed_capability_report() {
 
 #[test]
 fn history_holds_join_the_node_and_the_waiting_reasons() {
-    use aq_history_caps::{Code, Hold, Scope};
+    use aq_history_caps::{Hold, Scope};
     let mut i = input(vec![node(1, "a", WorkerHealth::Online, Some(1), 0, vec![])]);
     i.history = vec![
         Hold {
-            code: Code::RateLimited,
-            kind: "offers".into(),
+            kind: "presence_operations".into(),
             scope: Scope::Node(uid(1)),
             bytes: false,
-            used: 30,
-            limit: 30,
+            used: 4096,
+            limit: 4096,
         },
         Hold {
-            code: Code::CapReached,
             kind: "admission_artifacts".into(),
             scope: Scope::Project(uid(7)),
             bytes: false,
@@ -661,10 +659,11 @@ fn history_holds_join_the_node_and_the_waiting_reasons() {
     ];
     let s = assemble(i).unwrap();
     let n = &s.machines[0].nodes[0];
-    assert_eq!(codes(&n.holding), vec![HoldCode::HistoryRateLimited]);
+    // The rate limits were removed (2026-11-13): a history hold is always a live cap.
+    assert_eq!(codes(&n.holding), vec![HoldCode::HistoryCapReached]);
     assert_eq!(
         n.holding[0].message,
-        "Offer rate limit reached: 30 offers in the last hour (limit 30)"
+        "Live inventory reports cap reached: 4096 of 4096"
     );
     assert!(matches!(s.machines[0].state, MachineState::Holding));
     assert!(

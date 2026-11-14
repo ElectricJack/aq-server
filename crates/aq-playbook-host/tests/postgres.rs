@@ -2,7 +2,7 @@
 mod common;
 use aq_playbook_host::{Limits, Owner, Request, protected};
 use aq_playbooks_postgres::ProtectionKeyring;
-use aq_playbooks_runner::{RunStatus, Storage};
+use aq_playbooks_runner::{InspectionKind, InspectionQuery, RunStatus, Storage};
 use std::{collections::BTreeMap, time::Duration};
 const TIMEOUT: Duration = Duration::from_secs(5);
 fn url() -> String {
@@ -60,11 +60,10 @@ async fn protected_actual_engine_exclusive_owner_restart_and_key_failure() {
     let expected_run = run.clone();
     tokio::task::spawn_blocking(move || {
         let store = backend(&connect);
+        // The finished run left the State as history in the commit that
+        // finished it.
         let snapshot = store.load(&check_ns).unwrap();
-        assert_eq!(
-            snapshot.state.runs[&expected_run].status,
-            RunStatus::Completed
-        );
+        assert!(snapshot.state.runs.get(&expected_run).is_none());
     })
     .await
     .unwrap();
@@ -74,15 +73,24 @@ async fn protected_actual_engine_exclusive_owner_restart_and_key_failure() {
         .unwrap();
     let page = restarted
         .call(
-            Request::Runs {
-                after: None,
-                limit: 10,
+            Request::Inspect {
+                query: InspectionQuery {
+                    kind: InspectionKind::Runs,
+                    run: None,
+                    after: None,
+                    limit: 10,
+                },
             },
             TIMEOUT,
         )
         .await
         .unwrap();
     assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["id"], run.as_str());
+    assert_eq!(
+        page["items"][0]["status"],
+        serde_json::to_value(RunStatus::Completed).unwrap()
+    );
     restarted.call(Request::Stop, TIMEOUT).await.unwrap();
     drop(restarted);
     tokio::task::spawn_blocking(move||{

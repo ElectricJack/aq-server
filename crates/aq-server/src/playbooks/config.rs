@@ -36,7 +36,24 @@ struct Configuration {
     engine_keyring_file: PathBuf,
     protection: ProtectionConfig,
     drive_interval_ms: u64,
+    /// `[playbooks.engine_timeouts]`; defaults 30 s statement, 500 ms lock.
+    #[serde(default)]
+    engine_timeouts: aq_playbook_host::protected::Timeouts,
+    /// `[playbooks.retention]`; defaults keep 10,000 finished rows, delete 500.
+    #[serde(default)]
+    retention: aq_playbook_host::retention::Retention,
+    /// `[playbooks.engine_retention]`; the engine's defaults.
+    #[serde(default)]
+    engine_retention: aq_playbook_host::engine_retention::EngineRetention,
+    /// Largest request to the engine owner, in bytes; an install carries its
+    /// whole artifact. Default 262,144; the host accepts 1,024 to 1,048,576.
+    #[serde(default)]
+    request_bytes: Option<usize>,
     deployments: Vec<DeploymentInput>,
+    /// R1: `work.read`, `work.route`, `work.unroutable` and `judgment.assess`
+    /// serve a task of any project on the automatic router (`host_v9` only).
+    #[serde(default)]
+    installation_routing: bool,
     /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
     #[serde(default)]
     integration: Option<IntegrationInput>,
@@ -103,6 +120,8 @@ enum Profile {
     Host7,
     #[serde(rename = "host_v8")]
     Host8,
+    #[serde(rename = "host_v9")]
+    Host9,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +149,11 @@ pub struct Loaded {
     socket_owner_uid: u32,
     port: u16,
     pub(crate) interval: Duration,
+    pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
+    pub(crate) retention: aq_playbook_host::retention::Retention,
+    pub(crate) engine_retention: aq_playbook_host::engine_retention::EngineRetention,
+    pub(crate) request_bytes: Option<usize>,
+    pub(crate) installation_routing: bool,
     pub(crate) deployments: Vec<Deployment>,
     pub(crate) profile: CatalogProfile,
     pub(crate) integration: Option<IntegrationSettings>,
@@ -197,7 +221,11 @@ impl Configuration {
             Profile::Monitoring6 => CatalogProfile::Monitoring6,
             Profile::Host7 => CatalogProfile::Host7,
             Profile::Host8 => CatalogProfile::Host8,
+            Profile::Host9 => CatalogProfile::Host9,
         };
+        if self.installation_routing && profile != CatalogProfile::Host9 {
+            return Err("playbook installation_routing requires the host_v9 profile");
+        }
         if self.integration.is_some() && !profile.is_host2() {
             return Err("playbook integration requires the host_v7 or host_v8 profile");
         }
@@ -216,6 +244,9 @@ impl Configuration {
             || n.name.len() > 128
             || n.name.contains('\0')
             || !(250..=60000).contains(&self.drive_interval_ms)
+            || !self.engine_timeouts.valid()
+            || !self.retention.valid()
+            || !self.engine_retention.valid()
             || self.deployments.len() > 4
         {
             return Err("invalid playbook owner identity or bounds");
@@ -344,6 +375,11 @@ impl Configuration {
             socket_owner_uid: self.socket_owner_uid,
             port,
             interval: Duration::from_millis(self.drive_interval_ms),
+            timeouts: self.engine_timeouts,
+            retention: self.retention,
+            engine_retention: self.engine_retention,
+            request_bytes: self.request_bytes,
+            installation_routing: self.installation_routing,
             deployments,
             profile,
             integration,

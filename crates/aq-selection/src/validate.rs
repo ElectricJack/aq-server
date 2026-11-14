@@ -133,6 +133,15 @@ pub(crate) fn validate(
     ] {
         text(value)?;
     }
+    if let Some(routed) = &input.intelligence_override {
+        text(routed)?;
+    }
+    if let Some(r) = &input.route {
+        for limit in [&r.harnesses, &r.providers, &r.prefer] {
+            bounds(limit, 32)?;
+            limit.iter().try_for_each(|v| text(v))?;
+        }
+    }
     bounds(&input.project.allowed_environments, 32)?;
     ensure(
         !input.project.allowed_environments.is_empty()
@@ -227,7 +236,7 @@ pub(crate) fn validate(
                 && composition.agent_profile.identity
                     == format!("agent:{}", input.project.agent_profile)
                 && composition.intelligence_profile.identity
-                    == format!("intelligence:{}", input.project.intelligence_profile)
+                    == format!("intelligence:{}", input.intelligence_key())
                 && composition.execution_profile.identity
                     == format!("execution:{}", input.project.execution_profile),
             "composition binding mismatch",
@@ -235,17 +244,17 @@ pub(crate) fn validate(
         for (namespace, key, source) in [
             (
                 "agent",
-                &input.project.agent_profile,
+                input.project.agent_profile.as_str(),
                 &composition.agent_profile,
             ),
             (
                 "intelligence",
-                &input.project.intelligence_profile,
+                input.intelligence_key(),
                 &composition.intelligence_profile,
             ),
             (
                 "execution",
-                &input.project.execution_profile,
+                input.project.execution_profile.as_str(),
                 &composition.execution_profile,
             ),
         ] {

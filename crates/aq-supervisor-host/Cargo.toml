@@ -8,6 +8,8 @@ publish.workspace = true
 reqwest.workspace = true
 aq-supervisor-control = { path = "../aq-supervisor-control" }
 aq-swarm-settings = { path = "../aq-swarm-settings" }
+aq-internal-work = { path = "../aq-internal-work" }
+aq-intelligence-config = { path = "../aq-intelligence-config" }
 aq-command-registry = { path = "../aq-command-registry" }
 aq-central-authority = { path = "../aq-central-authority" }
 aq-server = { path = "../aq-server" }
@@ -25,8 +27,16 @@ tokio.workspace = true
 uuid.workspace = true
 libc = "0.2"
 zeroize = "1"
+sha2.workspace = true
+chrono.workspace = true
+
+[features]
+# A non-root test identity for the native runs (no uid drop, no chown).
+# Enabled only by this crate's own dev-dependency below.
+test-support = []
 
 [dev-dependencies]
+aq-supervisor-host = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 aq-server = { path = "../aq-server", features = ["test-support"] }

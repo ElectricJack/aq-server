@@ -256,6 +256,7 @@ async fn bootstrap_lists_pending_operations() {
             affected_entities: vec![],
             recovery: Recovery::LookupOriginal,
             current_versions: Default::default(),
+            reason: None,
         };
         if (n >= 100 || n % 3 != 0) && n != 103 && n != 105 {
             sqlx::query("INSERT INTO dashboard_operations(operation_id,principal_id,kind,scope,request_digest,disposition,response,created_at,updated_at) VALUES($1,$2,'supervisor.message.send',$3,$4,$5,$6,to_timestamp(1000),to_timestamp(1000))")

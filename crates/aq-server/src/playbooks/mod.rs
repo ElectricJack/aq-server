@@ -3,13 +3,14 @@
 pub mod actions;
 pub mod api;
 pub mod artifacts;
-pub mod coding;
+pub use aq_playbook_domain::coding;
 pub mod domain;
 pub mod driver;
 pub mod host_adapters;
+pub mod internal_judgments;
 pub mod service;
 
-pub mod review_domain;
+pub use aq_playbook_domain::review_domain;
 
 pub mod config;
 pub mod runtime;

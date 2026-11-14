@@ -2,10 +2,13 @@
 //! PostgreSQL through the production service owners. The sandbox check
 //! executor and the judgment provider are in-memory fakes of the injected
 //! ports (no real sandbox, provider or network); every receipt disposition
-//! comes from an executor-reported stop, never from the host.
-use crate::common;
+//! comes from an executor-reported stop, never from the host. The
+//! internal-work judgment tests run the production provider against a local
+//! fake endpoint instead.
+use crate::common::{self, fake_api};
 use aq_playbook_host::runner::{CancellationResult, Intent, IntentStatus};
 use aq_server::{
+    InternalWork,
     playbooks::{
         domain::*,
         host_adapters::{
@@ -13,6 +16,7 @@ use aq_server::{
             CheckRun, CheckStop, HostResult, JudgmentProvider, JudgmentReply, JudgmentRequest,
             PinnedCheck, PinnedOutcome, ProviderFailure, WorkGraph,
         },
+        internal_judgments::InternalJudgments,
         review_domain::{CatalogProfile, HOST7_CAPABILITIES},
         service::*,
     },
@@ -214,6 +218,7 @@ impl Host {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn run(&self, id: &str, name: &str, input: Value) -> HostResult {
@@ -479,7 +484,7 @@ async fn check_request_runs_in_sandbox_and_reports_typed_outcome() {
         Value::Null,
     );
     assert_eq!(checks.starts(), 4);
-    // At most 8 executions per subject and check.
+    // Eight executions of one subject and check.
     for i in 0..7 {
         h.accepted(
             &format!("unit-{i}"),
@@ -489,17 +494,15 @@ async fn check_request_runs_in_sandbox_and_reports_typed_outcome() {
         .await;
     }
     assert_eq!(checks.starts(), 11);
-    refused(
-        h.run(
-            "unit-8",
-            "check.request",
-            check_input("unit", &validator(1), 1),
-        )
-        .await,
-        "execution_limit",
-        Value::Null,
-    );
-    assert_eq!(checks.starts(), 11);
+    // No lifetime limit per subject and check (architecture 0006): a ninth
+    // execution starts too.
+    h.accepted(
+        "unit-8",
+        "check.request",
+        check_input("unit", &validator(1), 1),
+    )
+    .await;
+    assert_eq!(checks.starts(), 12);
     // Unknown handles are refused, never invented.
     assert_eq!(h.get(&Uuid::new_v4().to_string()).await.outcome, "refused");
     // Undeclared fields (a shell command, a pre-set result) never reach an adapter.
@@ -964,4 +967,229 @@ async fn judgment_request_respects_budget_and_records_provenance() {
         ("refused", &json!("no_permitted_profile"))
     );
     assert_eq!(r.output["provenance"], Value::Null);
+}
+
+/// Internal work over the fixture's own catalog, made active: its profile
+/// `engineering` lists `fixture-a`/`model-a` first, which resolves by API key
+/// to `endpoint` at the effort its model choice names. `profile` is the
+/// internal work default (`None`: unset).
+pub(crate) async fn internal_work(
+    f: &common::profiled::Fixture,
+    endpoint: String,
+    profile: Option<&str>,
+) -> (InternalWork, tempfile::TempDir) {
+    use aq_intelligence_config::{CredentialConfig, IntelligenceConfig};
+    use aq_selection::{AuthorizedCredential, CredentialKind};
+    let pool = f.db.pool().await;
+    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
+    let catalog = aq_profiles::ValidatedCatalog::from_artifact(
+        raw["catalog_artifact_json"].as_str().unwrap().as_bytes(),
+    )
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
+         VALUES($1,$2,$3,1) ON CONFLICT DO NOTHING",
+    )
+    .bind(catalog.digest())
+    .bind(catalog.canonical_bytes().unwrap())
+    .bind(f.actor)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+        .bind(catalog.digest())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
+        .bind(json!({"default_profile_id": profile, "overrides": {}}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let registry = IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
+        revision: 1,
+        credentials: vec![CredentialConfig {
+            kind: CredentialKind::ApiKey,
+            allowed_backends: aq_selection::default_allowed_backends(),
+            credential: AuthorizedCredential {
+                profile: common::profiled::artifact("fixture-a-key", b"fixture-a-key"),
+                provider: "fixture-a".into(),
+                account_reference: "fixture-a-account".into(),
+                endpoint_reference: "fixture-a-endpoint".into(),
+                revision: 1,
+                enabled: true,
+                provisionable: false,
+                material_owner: None,
+                allowed_backends: aq_selection::default_allowed_backends(),
+            },
+            allowed_node_ids: vec![],
+            allow_enrolled_nodes: true,
+            secret_file: None,
+            delivery_mode: None,
+        }],
+        qualified_harnesses: vec![],
+    }
+    .load()
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("key");
+    std::fs::write(&secret, format!("{SECRET}\n")).unwrap();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Settings offer the catalog's `fixture-a` choice at effort `medium`.
+    let preferences = dir.path().join("models.json");
+    let choices = json!([{"provider": "fixture-a", "model": "model-a", "harness": "codex",
+        "reasoning_configuration_reference": "reasoning-a@1", "reasoning": "medium"}]);
+    std::fs::write(&preferences, choices.to_string()).unwrap();
+    let config = aq_internal_work::InternalWorkConfig {
+        api: vec![aq_internal_work::ApiEndpoint {
+            provider: "fixture-a".into(),
+            endpoint,
+            secret_file: secret,
+        }],
+        poll_ms: 20,
+        enabled: true,
+    };
+    let work = InternalWork::new(
+        pool,
+        aq_server::system_clock(),
+        Some(&config),
+        Some(Arc::new(registry)),
+        Some(preferences),
+    )
+    .unwrap();
+    (work, dir)
+}
+
+/// The internal task rows a playbook judgment created: (purpose,
+/// affected_kind, affected_id, reason).
+async fn internal_tasks(pool: &sqlx::PgPool) -> Vec<(String, String, String, Option<String>)> {
+    sqlx::query_as("SELECT purpose,affected_kind,affected_id,reason FROM internal_tasks")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn judgment_request_is_served_by_internal_work_and_records_its_provider_and_model() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let answer = r#"{"choice": "isolated", "rationale": "The change touches shared state."}"#;
+    let (endpoint, seen) = fake_api::serve(200, fake_api::completed(answer)).await;
+    let (work, _dir) = internal_work(&f, endpoint, Some("engineering")).await;
+    let (_stop, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(work.clone().serve(rx));
+    let judgments = InternalJudgments::new(work, aq_internal_work::Purpose::PlaybookCall);
+    let h = host(&f, None, Some(Arc::new(judgments))).await;
+    let work_item = json!({"id": "work-1", "revision": 1});
+
+    let handle = h
+        .accepted(
+            "judge-iw",
+            "judgment.request",
+            judgment_input("isolate?", work_item.clone()),
+        )
+        .await;
+    let (outcome, output) = h.settled(&handle).await;
+    assert_eq!(outcome, "assessed", "{output}");
+    assert_eq!(output["choice"], "isolated");
+    assert_eq!(output["rationale"], "The change touches shared state.");
+    let p = &output["provenance"];
+    assert_eq!(p["provider"], "fixture-a");
+    assert_eq!(p["model"], "model-a");
+    assert_eq!(p["credential_profile"], "internal-work");
+    assert_eq!(
+        p["usage"],
+        json!({"input_tokens": 12, "output_tokens": 5, "cost_microunits": 0})
+    );
+    assert!(
+        !output.to_string().contains(SECRET),
+        "no secret in provenance"
+    );
+    {
+        let seen = seen.lock().unwrap();
+        let seen = &seen.bodies;
+        assert_eq!(seen.len(), 1, "one provider request");
+        let prompt = seen[0]["input"].as_str().unwrap();
+        assert!(prompt.contains("isolate?") && prompt.contains("Work item summary."));
+    }
+    let rows = internal_tasks(&pool).await;
+    assert_eq!(
+        rows,
+        [(
+            "playbook_call".to_string(),
+            "playbook_operation".to_string(),
+            handle,
+            None
+        )]
+    );
+}
+
+#[tokio::test]
+async fn judgment_request_with_no_internal_profile_fails_provider_unavailable() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let (endpoint, seen) = fake_api::serve(200, fake_api::completed("{}")).await;
+    let (work, _dir) = internal_work(&f, endpoint, None).await;
+    let judgments = InternalJudgments::new(work, aq_internal_work::Purpose::PlaybookCall);
+    let h = host(&f, None, Some(Arc::new(judgments))).await;
+
+    let handle = h
+        .accepted(
+            "judge-np",
+            "judgment.request",
+            judgment_input("isolate?", json!({"id": "work-1", "revision": 1})),
+        )
+        .await;
+    let (outcome, output) = h.settled(&handle).await;
+    assert_eq!(
+        (outcome.as_str(), &output["reason"]),
+        ("failed", &json!("provider_unavailable"))
+    );
+    assert_eq!(output["provenance"], Value::Null);
+    assert!(seen.lock().unwrap().bodies.is_empty(), "nothing sent");
+    let rows = internal_tasks(&pool).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].3.as_deref(), Some("no_candidate"));
+}
+
+/// The former retention bounds on host operations (10,000 per namespace, 256
+/// per subject, 8 per subject revision and check) no longer refuse work.
+#[tokio::test]
+async fn a_namespace_keeps_admitting_past_the_old_lifetime_caps() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let checks = Arc::new(FakeChecks::default());
+    checks.pinned.lock().unwrap().insert(
+        "work-1".into(),
+        PinnedOutcome {
+            revision: 1,
+            required_checks: vec![PinnedCheck {
+                id: "unit".into(),
+                validator: validator(1),
+            }],
+        },
+    );
+    *checks.script.lock().unwrap() = BTreeMap::from([("unit".into(), CheckObservation::Running)]);
+    let h = host(&f, Some(checks.clone()), None).await;
+    // 10,000 finished operations, 256 of them for work-1 and 8 of those its
+    // revision 1 "unit" check.
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,output,created_at_ms,completed_at_ms) SELECT gen_random_uuid(),$1,$2,'old-'||i,'check.request',CASE WHEN i<=256 THEN 'work-1' ELSE 'work-'||i END,CASE WHEN i<=8 THEN 1 ELSE 2 END,'unit','{}','passed','{}',$3,$3 FROM generate_series(1,10000) i")
+        .bind(h.service.namespace.namespace_id)
+        .bind(h.service.namespace.generation)
+        .bind(h.now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    h.accepted(
+        "past-caps",
+        "check.request",
+        check_input("unit", &validator(1), 1),
+    )
+    .await;
+    assert_eq!(checks.starts(), 1);
 }

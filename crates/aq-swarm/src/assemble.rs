@@ -218,12 +218,9 @@ pub fn hold(code: HoldCode) -> HoldReason {
             "Every slot on an eligible machine is busy",
             Some("Wait for a running agent to finish, or add a machine"),
         ),
-        HistoryRateLimited => (
-            "Offer rate limit reached",
-            Some(
-                "Wait for the hour to pass; if this repeats, look for a task that fails in a loop",
-            ),
-        ),
+        // Unused: the rate limits were removed on 2026-11-13 and nothing produces this
+        // code. It stays only because the pinned dashboard-read-1 schema lists it.
+        HistoryRateLimited => ("Rate limit reached", None),
         HistoryCapReached => (
             "Live history cap reached",
             Some("Wait for running agents to settle"),
@@ -264,10 +261,7 @@ pub fn task_hold_reasons(counts: &[(Uuid, String, i64)]) -> Vec<HoldReason> {
 /// A spec 0008 history hold with its own counted message.
 pub fn history_reason(h: &aq_history_caps::Hold) -> HoldReason {
     HoldReason {
-        code: match h.code {
-            aq_history_caps::Code::RateLimited => HoldCode::HistoryRateLimited,
-            aq_history_caps::Code::CapReached => HoldCode::HistoryCapReached,
-        },
+        code: HoldCode::HistoryCapReached,
         message: h.message(),
         remedy: Some(h.remedy().into()),
     }

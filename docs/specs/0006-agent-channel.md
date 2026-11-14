@@ -1,6 +1,6 @@
 # Agent channel: the `aq` CLI from inside a sandbox
 
-**Status:** Approved by the owner on 2026-11-06 (decisions in §13). Implementation in progress.
+**Status:** Approved by the owner on 2026-11-06 (decisions in §13). Phases 1 to 6 are merged and proven live on `aq-ms1`. Phase 7 stopped before removing the old path, and the boat channel is a design note only (aq-worker `docs/implementation/0006-P7.md`). Current state: [`../status.md`](../status.md).
 
 **Date:** 2026-11-06
 

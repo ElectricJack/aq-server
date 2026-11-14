@@ -124,6 +124,7 @@ impl ActualSelectionFixture {
             agent_profile: profiles.agent_profile.clone(),
             intelligence_profile: profiles.intelligence_profile.clone(),
             execution_profile: profiles.execution_profile.clone(),
+            intelligence_override: None,
         };
         let current = aq_server::project_bindings::check_eligibility(
             &self.env.state,
@@ -210,6 +211,7 @@ enabled=true
         .validate(&config.projects)
         .map_err(anyhow::Error::msg)?;
     let state = AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store,
         identity: Arc::new(aq_server::identity::DevIdentity::new(

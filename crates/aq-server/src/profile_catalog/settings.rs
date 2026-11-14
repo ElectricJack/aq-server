@@ -6,7 +6,7 @@ use axum::{
     routing::get,
 };
 use serde_json::Value;
-pub(super) fn error(error: aq_profile_settings::Error) -> AppError {
+pub(crate) fn error(error: aq_profile_settings::Error) -> AppError {
     match error {
         aq_profile_settings::Error::Invalid(m) => AppError::BadRequest(m),
         aq_profile_settings::Error::Conflict(m) => AppError::Conflict(m),
@@ -23,8 +23,8 @@ pub(crate) fn choices(state: &AppState) -> Vec<ModelChoice> {
         config.intelligence_preferences_file.as_deref(),
     )
 }
-pub(super) fn routes() -> Router<AppState> {
-    http::routes(get(read).post(save), get(operation))
+pub(crate) fn routes() -> Router<AppState> {
+    http::routes(get(read).post(save), get(operation)).merge(crate::routing::settings_routes())
 }
 async fn read(
     State(state): State<AppState>,
@@ -42,17 +42,13 @@ async fn save(
     OriginalUri(uri): OriginalUri,
     Json(request): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    http::save(
-        &state.store.pool,
-        actor.id,
-        request,
-        &choices(&state),
-        (state.clock)().timestamp_millis(),
-        uri.path(),
-    )
-    .await
-    .map(Json)
-    .map_err(error)
+    let now = (state.clock)().timestamp_millis();
+    let pool = &state.store.pool;
+    let saved = http::save(pool, actor.id, request, &choices(&state), now, uri.path()).await;
+    let saved = saved.map_err(error)?;
+    // The routing document or what Settings offers may have changed.
+    crate::routing::author(&state).await;
+    Ok(Json(saved))
 }
 async fn operation(
     State(state): State<AppState>,

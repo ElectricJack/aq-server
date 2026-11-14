@@ -7,13 +7,16 @@ pub mod config;
 pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod delegated_permits;
-pub mod delivery;
+pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
 pub mod execution_permits;
 pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
+mod internal_work;
+mod playbook_authoring;
+pub use internal_work::InternalWork;
 pub mod lifecycle_artifacts;
 pub mod machine_actions;
 pub mod machine_api;
@@ -33,6 +36,7 @@ pub mod repository_onboarding;
 pub mod result_media;
 pub mod results_feedback;
 pub mod reviews;
+pub mod routing;
 pub mod row_retention;
 pub mod session_access;
 pub mod source_retention;
@@ -104,6 +108,7 @@ pub struct AppState {
     pub store: Store,
     pub identity: Arc<dyn IdentityVerifier>,
     pub clock: Clock,
+    pub internal_work: InternalWork,
 }
 
 impl AppState {
@@ -112,7 +117,7 @@ impl AppState {
     pub fn delivery(&self) -> Option<delivery::DeliveryService> {
         self.source_retention
             .as_ref()
-            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config))
+            .map(|r| delivery::DeliveryService::new(self.store.pool.clone(), &r.config.git_socket))
     }
     pub(crate) fn terminal_read_view(&self) -> Self {
         Self {
@@ -315,6 +320,8 @@ pub fn build_admin_router_with_optional_owners(
         .merge(terminal::api::human_routes(state.clone()))
         .merge(manual_agents::service(&state).human_routes())
         .merge(profile_catalog::admin_routes())
+        .merge(internal_work::admin_routes())
+        .merge(playbook_authoring::admin_routes())
         .merge(swarm_settings::routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())
@@ -411,7 +418,7 @@ fn build_worker_router_inner(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
-        .merge(manual_agents::supervisor_reads(&state))
+        .merge(manual_agents::supervisor_nests(&state))
         .merge(source_retention::machine_routes(state.clone()))
         .merge(lifecycle_artifacts::routes(state.clone()))
         .merge(execution_permits::routes(state.clone()))
@@ -471,22 +478,17 @@ async fn run_with_listeners_and_dashboard(
         }
         None => None,
     };
-    let mut policy_runtime = match state.config.playbooks.as_ref() {
-        Some(config) => match playbooks::runtime::Runtime::start(&state, config.clone()).await {
-            Ok(runtime) => Some(runtime),
-            Err(error) => {
-                if let Some(runtime) = &media_runtime
-                    && runtime.shutdown().await.is_err()
-                {
-                    return Err(error.context("media cleanup also failed during startup"));
-                }
-                return Err(error);
+    // A failed engine open does not stop the server (see `open_later`).
+    let policy_slot = playbooks::runtime::Slot::default();
+    let mut unopened = None;
+    if let Some(config) = state.config.playbooks.as_ref() {
+        match playbooks::runtime::Runtime::start(&state, config.clone()).await {
+            Ok(mut runtime) => {
+                runtime.watch_shutdown(rx.clone());
+                *policy_slot.lock().await = Some(runtime);
             }
-        },
-        None => None,
-    };
-    if let Some(runtime) = &mut policy_runtime {
-        runtime.watch_shutdown(rx.clone());
+            Err(error) => unopened = Some((config.clone(), error)),
+        }
     }
 
     let notification_task = tokio::spawn(notifications::runtime::run(
@@ -504,6 +506,11 @@ async fn run_with_listeners_and_dashboard(
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
     let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
+    let internal_work_task = tokio::spawn(state.internal_work.clone().serve(rx.clone()));
+    if let Err(error) = routing::ensure_source(&state.store.pool).await {
+        tracing::warn!(?error, "the routing source record was not written");
+    }
+    let authoring_task = tokio::spawn(aq_playbook_authoring::serve(state.clone(), rx.clone()));
     tokio::spawn(async move {
         shutdown.await;
         let _ = tx.send(true);
@@ -511,13 +518,29 @@ async fn run_with_listeners_and_dashboard(
     let wait = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let admin_app = build_admin_router_with_optional_owners(
-        state.clone(),
-        policy_runtime.as_ref().map(|r| r.driver.clone()),
-        policy_runtime.as_ref().map(|r| r.reviews.clone()),
-        dashboard,
-        media_runtime.clone(),
-    );
+    let build = {
+        let (state, media) = (state.clone(), media_runtime.clone());
+        move |runtime: Option<&playbooks::runtime::Runtime>| {
+            build_admin_router_with_optional_owners(
+                state.clone(),
+                runtime.map(|r| r.driver.clone()),
+                runtime.map(|r| r.reviews.clone()),
+                dashboard.clone(),
+                media.clone(),
+            )
+        }
+    };
+    let admin_app = match unopened {
+        None => build(policy_slot.lock().await.as_ref()),
+        Some((config, failure)) => playbooks::runtime::open_later(
+            state.clone(),
+            config,
+            failure,
+            build,
+            policy_slot.clone(),
+            rx.clone(),
+        ),
+    };
     let worker_app = build_worker_router(state);
     let serving = tokio::try_join!(
         async {
@@ -553,7 +576,11 @@ async fn run_with_listeners_and_dashboard(
     let _ = expiry_task.await;
     stall_task.abort();
     let _ = stall_task.await;
-    let policy_shutdown = match policy_runtime {
+    internal_work_task.abort();
+    let _ = internal_work_task.await;
+    authoring_task.abort();
+    let _ = authoring_task.await;
+    let policy_shutdown = match policy_slot.lock().await.take() {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
     };
@@ -600,13 +627,22 @@ pub async fn build_state(
         Some(settings) => Some(Arc::new(source_retention::Runtime::new(settings.clone())?)),
         None => None,
     };
+    let clock = system_clock();
+    let internal_work = InternalWork::new(
+        store.pool.clone(),
+        clock.clone(),
+        config.internal_work.as_ref(),
+        config.intelligence.clone(),
+        config.intelligence_preferences_file.clone(),
+    )?;
     Ok(AppState {
         agent_access,
         source_retention,
         identity: identity::verifier_from_config(&config.auth, http),
         config: Arc::new(config),
         store,
-        clock: system_clock(),
+        clock,
+        internal_work,
     })
 }
 

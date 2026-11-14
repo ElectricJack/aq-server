@@ -1,5 +1,9 @@
 # Central intelligence selection (AQ-20)
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. Only the receipt and retention paragraphs changed.
+
 The independently testable `aq-selection` crate resolves explicit AQ-18 policies
 against trusted project, installed harness/credential, availability and budget
 facts. The server module `intelligence` owns persistent facts and metadata
@@ -126,7 +130,8 @@ Machine routes on the worker listener use existing node credentials:
   manufacture a sealed selection binding.
 
 JSON mutation records deny unknown and duplicate known fields. Scope/sequence
-receipts survive TTL expiry; expiry does not permit replay or erase cooldown
+receipts outlive TTL expiry, because they are kept as the rolling sets below;
+while a receipt is kept, expiry does not permit replay or erase cooldown
 history. Owner operation receipts permit exact replay after configuration
 changes, under current owner authorization. Worker receipts additionally require
 current node authorization/boot; they do not resuscitate stale incarnations.
@@ -138,12 +143,18 @@ source/scope, while independent restrictive evidence remains conservative. TTL
 and cooldown are at most one hour; worker classifier feedback uses server-owned
 30-second TTL/cooldown.
 
-Retention refuses further mutation at 1,024 observation scopes, 10,000 owner
-receipts or 16 MiB receipt JSONB; machine receipts share 4,096 entries/16 MiB per
-node and 128 KiB per snapshot. Credential definition history is bounded at 1,024.
-Decision metadata is bounded at 1,024 artifacts, 8 MiB per artifact and 64 MiB
-retained JSONB. Checks include the incoming uncompressed JSONB size; exact replay
-does not consume capacity. No silent eviction removes a replay fence.
+No mutation is refused because a store is full. Receipts are rolling sets, and
+the oldest are deleted on insert: the most recent 10,000 owner receipts within
+16 MiB, the most recent 4,096 machine receipts within 16 MiB per node, and the
+most recent 1,024 credential definition revisions **(proposed defaults: the
+former caps)**. Observation scopes whose observations have all expired leave with
+them (DEP6, 30 days). Decision metadata counts live rows and leaves with its run
+([spec 0008](0008-sealed-history-retention.md)). 128 KiB per snapshot and 8 MiB
+per decision artifact are limits on one input and stay; checks include the
+incoming uncompressed JSONB size. A replay fence leaves only with its receipt. A
+repeat after that follows architecture 0006 §1 point 4: a worker repeat from an
+old boot is refused, as today; any other repeat is accepted as new and checked
+against current configuration and authorization.
 
 ## Trusted resolution and actual admission boundary
 

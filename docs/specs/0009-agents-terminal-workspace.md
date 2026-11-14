@@ -1,6 +1,7 @@
 # Agents terminal workspace and retained session history
 
 Date: 2026-11-10. Status: implementation authorized by the owner.
+2026-11-13: aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. §5.2 and §5.3 changed: the newest output is kept, old output and old sessions are deleted.
 
 The owner approved the proposed Terminals / Swarm / History direction and asked
 for this implementation specification followed by implementation by Terra agents.
@@ -198,18 +199,24 @@ stopped sessions. A revoked/wrong node remains refused. Worker and server restar
 resume from persisted identities and offsets; no duplicate text is created.
 
 **(implementation decision)** Protocol bounds: each chunk at most 32 KiB of UTF-8
-text; at most one upload per session in flight; 64 MiB retained normalized output
-per session; worker raw spool at most 128 MiB per session. Bound line/chunk parser
-state independently. On a size limit or capture loss, keep the existing transcript
-and set coverage `partial` with a reason; never let a full archive block or kill
-the interactive agent. No silent first-byte/tail truncation.
+text; at most one upload per session in flight; at most 64 MiB of normalized output
+kept per session; worker raw spool at most 128 MiB per session. Bound line/chunk parser
+state independently. Both are rolling: when a new chunk would pass the limit, the
+oldest chunks are deleted first, so the newest output is always kept. When old
+output is deleted or capture is lost, set coverage `partial` with a reason and the
+first sequence still kept; never let a full archive block or kill the interactive
+agent. Deletion is never silent.
 
 ### 5.3 Retention and preexisting sessions
 
-Keep archived normalized output until an explicit future retention/deletion policy
-is approved. Do not attach these rows to the seven-day sealed-attempt cleanup or
-the existing one-day manual roster filter. Closed transcripts are cold reads, not
-resident runtime screens. Apply the size caps and paginated reads to bound work.
+Archived sessions are a rolling set ([architecture 0006](../architecture/0006-records-are-rolling.md)). The server
+keeps the sessions that ended within the last 90 days **(proposed default)** and
+deletes older ones, with their chunks, on its ten-minute retention tick, a bounded
+batch per pass. This is separate from the seven-day sealed-attempt cleanup and the
+one-day manual roster filter. A read of a session whose oldest chunks were deleted
+starts at the first kept sequence. A deleted session is no longer listed. Closed
+transcripts are cold reads, not resident runtime screens. Apply the per-session
+limit and paginated reads to bound work.
 
 Existing sessions cannot acquire missing earlier history retroactively. If a safe
 capture upgrade can attach to an existing session without restarting it, mark the
@@ -349,7 +356,8 @@ No model invocations are needed for automated tests. Label fixtures as fixtures.
    the test server and retrieve/search beginning, middle and final output.
 6. Retry chunks after a lost reply and restart the recording process: exactly one
    copy of each chunk remains. Test conflicting retries, gaps, wrong/revoked node,
-   late final uploads, limits, partial capture, invalid UTF-8/control boundaries,
+   late final uploads, limits (past 64 MiB the newest output is kept and the oldest
+   deleted), partial capture, invalid UTF-8/control boundaries,
    and credential patterns split across chunks. Test search crossing boundaries.
 7. History list reaches sessions older than one day and beyond 256 records;
    paging has no duplicates/omissions. A known unrecorded old session is distinct

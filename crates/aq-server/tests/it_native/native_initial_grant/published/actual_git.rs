@@ -157,7 +157,7 @@ async fn setup_actual() -> Actual {
         seed,
         base,
     } = setup_actual_unpublished().await;
-    let (status, body) = native_offer::poll(&case).await;
+    let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

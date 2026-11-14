@@ -1,0 +1,16 @@
+{
+  "document": "stuck/phone-call.md",
+  "why": "This version asks for something no command can do. Do not leave the sentence out and do not send a message instead: give up with unable, naming the sentence, and end.",
+  "run": [
+    "unable",
+    "--line",
+    "14",
+    "No command this playbook may use can make a phone call: it can read a task and send a message, and nothing else."
+  ],
+  "writes": {
+    "kind": "unable",
+    "reason": "No command this playbook may use can make a phone call: it can read a task and send a message, and nothing else.",
+    "line": 14,
+    "sentence": "If it still has no description after a day, phone the person on duty."
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "document": "stuck/urgent.md",
+  "why": "This version tests something no command returns: nothing the playbook can read says whether a task is urgent. Never stand another field in for it (the kind, a word in the title): that draft would check, its cases would pass because you wrote them, and it would save. Ask, name the sentence, and end.",
+  "run": [
+    "ask",
+    "--line",
+    "6",
+    "The document gives an urgent task one minute, but nothing this playbook can read says whether a task is urgent: it sees only a task's kind, title and description and who filed it. How should an urgent task be recognised, or should this sentence go?"
+  ],
+  "writes": {
+    "kind": "question",
+    "question": "The document gives an urgent task one minute, but nothing this playbook can read says whether a task is urgent: it sees only a task's kind, title and description and who filed it. How should an urgent task be recognised, or should this sentence go?",
+    "sentences": [
+      {
+        "line": 6,
+        "text": "If the task is marked urgent, give it one minute instead."
+      }
+    ]
+  }
+}

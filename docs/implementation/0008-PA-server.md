@@ -1,5 +1,7 @@
 # Spec 0008 phase A: live-only history caps (aq-server)
 
+**Superseded in part (2026-11-13):** the rate limits below (`offers`, `project_offers` and the 0105 fence; `presence_rate` and the presence guard's hourly report cap) were removed by the owner; migration 0124 drops them (spec 0008 §7.2). This page is the historical record of phase A.
+
 Plan: `docs/superpowers/plans/2026-11-08-sealed-history-p-a-live-caps.md`,
 aq-server tasks 1-9, branch `swarm/p1-live-caps`. The dashboard re-pin (D1) is in
 the aq-dashboard repo.

@@ -1,0 +1,48 @@
+{
+  "name": "task-not-readable",
+  "situation": "The task's project is one whose tasks cannot be read",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "ensured",
+      "reference": "task-40@2",
+      "subject": {
+        "id": "task-40",
+        "revision": 2
+      }
+    },
+    "correlation": {
+      "operation": "work-op-7"
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "refused",
+        "output": {
+          "reference": "task-40@2",
+          "subject": {
+            "id": "task-40",
+            "revision": 2
+          },
+          "reason": "not_on_router"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "unreadable",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-40",
+            "revision": 2
+          }
+        }
+      }
+    ]
+  }
+}

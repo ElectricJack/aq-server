@@ -374,11 +374,21 @@ async fn evaluate_locked(
         Acceptance::Accepted
     };
     // The exact retained source is the central receipt pinned by this report.
-    let mut source = None;
+    let (mut source, mut lineage_unknown) = (None, false);
     for op in &r.report.source_receipt_ids {
         match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
             Ok(confirmed) => {
-                source = Some((*op, confirmed.manifest.checkpoint.hex.clone()));
+                // Review C-1: judged against the lineage's original base, never a handoff
+                // successor's own starting commit (its predecessor's saved edits).
+                let m = &confirmed.manifest;
+                let task = r.spec.task.task_id;
+                let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
+                // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
+                // the gate holds only a report that would otherwise succeed.
+                let base = base.await?;
+                lineage_unknown = base.is_none();
+                let changed = base.is_none_or(|base| m.checkpoint.hex != base);
+                source = Some((*op, m.checkpoint.hex.clone(), changed));
                 break;
             }
             Err(crate::error::AppError::Conflict(_)) => {}
@@ -391,7 +401,7 @@ async fn evaluate_locked(
     for check in &r.outcome.required_checks {
         let verdict = match &source {
             None => CheckVerdict::Missing,
-            Some((op, checkpoint)) => {
+            Some((op, checkpoint, _)) => {
                 let found: Option<String> = sqlx::query_scalar("SELECT verdict FROM profiled_check_evidence WHERE attempt_id=$1 AND check_id=$2 AND source_operation_id=$3 AND checkpoint=$4 AND validator_digest=$5")
                     .bind(attempt).bind(check.id.as_str()).bind(op).bind(checkpoint).bind(check.validator.digest.as_str())
                     .fetch_optional(&mut **tx).await.map_err(db)?;
@@ -408,7 +418,9 @@ async fn evaluate_locked(
     }
     let delivery_state = match &source {
         None => DeliveryState::Missing,
-        Some((op, _)) => {
+        // An unchanged source has nothing to publish (owner decision 2026-11-13).
+        Some((_, _, false)) => DeliveryState::NoChange,
+        Some((op, _, true)) => {
             let found: Option<String> = sqlx::query_scalar(
                 "SELECT state FROM profiled_delivery_evidence WHERE attempt_id=$1 AND source_operation_id=$2",
             )
@@ -426,9 +438,21 @@ async fn evaluate_locked(
             }
         }
     };
+    let unchanged = matches!(source, Some((_, _, false)));
+    let conclusion = r.report.conclusion.as_str();
+    let claimed = aq_profiled_state::claim::claims_changes(conclusion);
+    let failed = matches!(
+        r.report.outcome,
+        aq_admission::transport::ProcessOutcome::Failed
+    );
+    let attributable = r.is_current_report_head && v.cancellation_id.is_none() && !v.revoked;
+    let agent_blocked = failed && attributable && aq_profiled_state::claim::blocked(conclusion);
     let verdict = policy::evaluate(&policy::Gate {
         acceptance,
         source_retained: source.is_some(),
+        claimed_changes_missing: unchanged && claimed,
+        agent_blocked,
+        lineage_unknown,
         checks: &checks,
         delivery,
         delivery_state,
@@ -438,7 +462,7 @@ async fn evaluate_locked(
         "policy": r.outcome.validation_policy,
         "report": r.receipt_artifact,
         "accepted": {"current_report_head": r.is_current_report_head, "stopped": v.stopped, "cancelled": v.cancellation_id.is_some(), "revoked": v.revoked, "holds_task": v.holds_task},
-        "source": source.as_ref().map(|(op, checkpoint)| json!({"operation_id": op, "checkpoint": checkpoint})),
+        "source": source.as_ref().map(|(op, checkpoint, changed)| json!({"operation_id": op, "checkpoint": checkpoint, "changed": changed})),
         "checks": check_evidence,
         "delivery": {"policy": delivery, "state": delivery_state},
     });

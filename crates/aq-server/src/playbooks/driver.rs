@@ -3,7 +3,7 @@
 use super::{domain::*, service::*};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
-    model::CommandContract,
+    model::{CommandContract, EventEnvelope},
     runner::{
         Authority, CancellationResult, DispatchResult, EventDisposition, Host, Intent,
         KeyedAdmissionDisposition, KeyedAdmissionReceipt, Storage,
@@ -14,23 +14,37 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-const CALL: Duration = Duration::from_secs(5);
 fn host_error(error: aq_playbook_host::Error) -> Error {
     match error {
         aq_playbook_host::Error::Overloaded => Error::Overloaded,
         _ => Error::Unknown,
     }
 }
-// Capacity refuses new work without preventing already retained work from
-// reaching its bounded drain and tick. Other failures keep their semantics.
-fn defer_capacity<T>(result: Result<T>, overloaded: &mut bool) -> Result<()> {
-    match result {
-        Ok(_) => Ok(()),
-        Err(Error::Overloaded) => {
-            *overloaded = true;
-            Ok(())
+/// An engine answer to a new event or admission: an unknown outcome or a
+/// storage failure is `Unknown` (left pending, delivered again); a refusal
+/// is `Invalid` (held).
+fn delivery_error(error: aq_playbook_host::Error) -> Error {
+    match error {
+        aq_playbook_host::Error::Overloaded => Error::Overloaded,
+        aq_playbook_host::Error::Unknown | aq_playbook_host::Error::Stopped => Error::Unknown,
+        _ => Error::Invalid,
+    }
+}
+/// What a quantum deferred. Capacity defers new work without preventing
+/// retained work from reaching its drain and tick; any other failure of one
+/// stage is kept, one reason per stage, while the rest of the quantum runs.
+#[derive(Default)]
+struct Partial {
+    overloaded: bool,
+    reasons: Vec<String>,
+}
+impl Partial {
+    fn defer<T>(&mut self, what: &str, result: Result<T>) {
+        match result {
+            Ok(_) => {}
+            Err(Error::Overloaded) => self.overloaded = true,
+            Err(error) => self.reasons.push(format!("{what}: {error}")),
         }
-        Err(error) => Err(error),
     }
 }
 struct MailHost {
@@ -267,6 +281,7 @@ impl MailHost {
         super::host_adapters::HOST5_COMMANDS.contains(&name)
             || (self.service.profile.is_host2()
                 && super::host_adapters::HOST7_COMMANDS.contains(&name))
+            || self.service.profile.commands().contains(&name)
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
@@ -307,6 +322,14 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
+    pub(super) deadline: Duration,
+    tick_deadline: Duration,
+    /// Rolling deletion: one bridge table per quantum, in turn.
+    retention: aq_playbook_host::retention::Retention,
+    pruned: std::sync::atomic::AtomicUsize,
+    /// Why the last quantum failed or skipped a source; `None` when clean.
+    reason: Mutex<Option<String>>,
     automatic: std::sync::atomic::AtomicU8,
     stopped_ack: std::sync::atomic::AtomicBool,
     /// Set once an installed artifact consumes the exact graph event contract.
@@ -331,6 +354,20 @@ impl Driver {
         S: Storage + 'static,
         F: FnOnce() -> std::result::Result<S, aq_playbook_host::Error> + Send + 'static,
     {
+        let opened = Self::open(service, limits, factory).await;
+        opened.map_err(|(error, _)| error)
+    }
+    /// [`Self::start`]; a failure comes with its cause in words (no secrets).
+    pub(super) async fn open<S, F>(
+        service: Service,
+        limits: Limits,
+        factory: F,
+    ) -> std::result::Result<Self, (Error, String)>
+    where
+        S: Storage + 'static,
+        F: FnOnce() -> std::result::Result<S, aq_playbook_host::Error> + Send + 'static,
+    {
+        let lost = |error: Error| (error, "the acquired runtime owner was lost".to_string());
         #[cfg(feature = "test-support")]
         let lose_decision_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(feature = "test-support")]
@@ -339,7 +376,11 @@ impl Driver {
         let lose_host_reply: Arc<Mutex<Option<String>>> = Arc::default();
         #[cfg(feature = "test-support")]
         let host_command_fault = lose_host_reply.clone();
-        let expected = service.runtime_revision().await?;
+        let expected = (service.runtime_revision().await)
+            .map_err(|e| (e, "reading the runtime revision".into()))?;
+        let deadline = limits.timeouts.call_deadline(1);
+        let tick_deadline = (limits.timeouts).call_deadline(limits.transitions as u32);
+        let retention = limits.retention;
         let handle = tokio::runtime::Handle::current();
         let host_service = service.clone();
         let namespace = service.namespace.engine_namespace();
@@ -385,18 +426,22 @@ impl Driver {
             },
         )
         .await
-        .map_err(host_error)?;
-        let runtime = proof
-            .lock()
-            .map_err(|_| Error::Unknown)?
-            .take()
-            .ok_or(Error::Unknown)?;
+        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|(why, error)| (error, why))?;
+        let taken = proof.lock().map_err(|_| Error::Unknown);
+        let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
+        let runtime = runtime.map_err(lost)?;
         Ok(Self {
             owner,
             service,
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            deadline,
+            tick_deadline,
+            retention,
+            pruned: Default::default(),
+            reason: Mutex::default(),
             automatic: std::sync::atomic::AtomicU8::new(0),
             stopped_ack: std::sync::atomic::AtomicBool::new(false),
             graph_consumer: std::sync::atomic::AtomicBool::new(false),
@@ -413,12 +458,21 @@ impl Driver {
         self.automatic
             .store(state, std::sync::atomic::Ordering::SeqCst);
     }
+    /// The automatic drive's last quantum failed (5) or succeeded again (1).
+    pub(crate) fn drive_failed(&self, failed: bool) {
+        let (from, to) = if failed { (1, 5) } else { (5, 1) };
+        let ordering = std::sync::atomic::Ordering::SeqCst;
+        let _ = self
+            .automatic
+            .compare_exchange(from, to, ordering, ordering);
+    }
     pub(crate) fn automatic_state(&self) -> &'static str {
         match self.automatic.load(std::sync::atomic::Ordering::SeqCst) {
             1 => "active",
             2 => "held",
             3 => "stopping",
             4 => "stopped",
+            5 => "retrying",
             _ => "manual",
         }
     }
@@ -450,7 +504,7 @@ impl Driver {
                 Request::Install {
                     artifact: Box::new(artifact),
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(host_error)?;
@@ -497,14 +551,20 @@ impl Driver {
                     artifact,
                     authority: active_authority,
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(host_error)?;
-        self.owner
-            .call(Request::Binding { binding }, CALL)
-            .await
-            .map_err(|_| Error::Unknown)
+        let current = Request::Binding {
+            binding: binding.clone(),
+        };
+        let active = (self.owner.call(current, self.deadline).await).map_err(|_| Error::Unknown)?;
+        // The server's record of the engine's binding (every activation
+        // path ends here), from the engine's own answer.
+        if let Some(artifact) = active["artifact"].as_str() {
+            self.service.binding_activated(&binding, artifact).await?;
+        }
+        Ok(active)
     }
     /// Recovery=false permits one exact retained first admission only under current
     /// grant. Recovery=true is lookup-only and cannot create a missing engine run.
@@ -524,7 +584,7 @@ impl Driver {
                 Request::Admission {
                     key: retained.status.engine_key.clone(),
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(host_error)?;
@@ -543,18 +603,19 @@ impl Driver {
                 .call(
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
+                        requested_at_ms: None,
                         now_ms: (self.service_clock()),
                     },
-                    CALL,
+                    self.deadline,
                 )
                 .await
             {
                 Ok(value) => value,
-                Err(aq_playbook_host::Error::Overloaded) => return Err(Error::Overloaded),
-                Err(_) => {
-                    let _ = self.service.hold_admission(&self.runtime, id).await;
+                Err(aq_playbook_host::Error::Stale(_)) => {
+                    let _ = self.service.hold(&self.runtime, false, id, "stale").await;
                     return Err(Error::Unknown);
                 }
+                Err(error) => return Err(delivery_error(error)),
             };
             let result: KeyedAdmissionDisposition = serde_json::from_value(value)?;
             result.receipt
@@ -572,7 +633,7 @@ impl Driver {
                 Request::Recover {
                     now_ms: self.service_clock(),
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(|_| Error::Unknown)
@@ -611,74 +672,107 @@ impl Driver {
     /// At most two admissions and events, 64 destinations/event, and one
     /// eight-transition tick. Overlap refuses without growing a waiter queue.
     pub async fn quantum(&self) -> Result<serde_json::Value> {
+        let mut partial = Partial::default();
+        let result = self.quantum_with(&mut partial).await;
+        if let Err(error) = &result
+            && *error != Error::Overloaded
+            && partial.reasons.is_empty()
+        {
+            partial.reasons.push(format!("quantum failed: {error}"));
+        }
+        let reasons = partial.reasons.join("; ");
+        *self.reason.lock().map_err(|_| Error::Unknown)? = (!reasons.is_empty()).then_some(reasons);
+        result
+    }
+    /// The drive's reason for its last failed or partial quantum.
+    pub(crate) fn drive_reason(&self) -> Option<String> {
+        self.reason.lock().ok().and_then(|reason| reason.clone())
+    }
+    async fn quantum_with(&self, partial: &mut Partial) -> Result<serde_json::Value> {
         let mut cursor = self.gate.try_lock().map_err(|_| Error::Overloaded)?;
-        let mut overloaded = false;
         let pending = self.service.pending_admissions(&self.runtime, 2).await?;
         for id in &pending {
             let result = self
                 .admission(self.service.namespace.owner_user_id, *id, false)
                 .await;
             if matches!(result, Err(Error::Overloaded)) {
-                overloaded = true;
+                partial.overloaded = true;
                 continue;
             }
-            if result.is_err() {
-                // Retain failed/uncertain immutable work visibly. A poison or
-                // expired first page must not starve every later admission.
-                self.service.hold_admission(&self.runtime, *id).await?;
+            // A refused admission is held visibly, so a poison or expired first
+            // page cannot starve later ones. An unknown outcome stays pending
+            // with the reason `uncertain`, behind the other pending ones: the
+            // engine answers duplicate when it is delivered again.
+            if let Err(error) = result {
+                let reason = (error == Error::Unknown).then_some("uncertain");
+                let hold =
+                    (self.service).hold(&self.runtime, false, *id, reason.unwrap_or("refused"));
+                hold.await?;
             }
         }
-        defer_capacity(
+        partial.defer(
+            "expiring decisions",
             self.service.expire_decisions(&self.runtime, 2).await,
-            &mut overloaded,
-        )?;
-        defer_capacity(
+        );
+        partial.defer(
+            "collecting decision events",
             self.service.collect_decision_events(&self.runtime, 2).await,
-            &mut overloaded,
-        )?;
+        );
         if self
             .graph_consumer
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            defer_capacity(
+            partial.defer(
+                "collecting graph events",
                 self.service.collect_graph_events(&self.runtime, 2).await,
-                &mut overloaded,
-            )?;
+            );
         }
         if self
             .settlement_consumer
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            defer_capacity(
+            partial.defer(
+                "collecting settlement events",
                 self.service
                     .collect_settlement_events(&self.runtime, 2)
                     .await,
-                &mut overloaded,
-            )?;
+            );
         }
+        partial.defer(
+            "asking for routes",
+            self.service.collect_route_needed(&self.runtime, 8).await,
+        );
+        partial.defer(
+            "expiring judgments",
+            self.service.expire_assessments(&self.runtime, 2).await,
+        );
         // Catalog profile 7 work.ensure completion (aq.operation.updated).
-        defer_capacity(
+        partial.defer(
+            "collecting work completions",
             self.service
                 .collect_work_completions(&self.runtime, 2)
                 .await,
-            &mut overloaded,
-        )?;
+        );
         if self.service.profile == super::review_domain::CatalogProfile::Monitoring6
             && self
                 .schedule_consumer
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
-            defer_capacity(
+            partial.defer(
+                "collecting schedule events",
                 self.service.collect_schedule_events(&self.runtime, 2).await,
-                &mut overloaded,
-            )?;
+            );
         }
-        let page = self.service.outbox(&self.runtime, *cursor, 2).await?;
-        if page.is_empty() {
+        // A row that cannot be decrypted ends the page before it: event
+        // delivery waits there (until the keyring is fixed or the owner holds
+        // the row) while effects are still cancelled and runs still tick.
+        let (page, undecryptable) = self.service.outbox_page(&self.runtime, *cursor, 2).await?;
+        if page.is_empty() && undecryptable.is_none() {
             *cursor = 0;
         }
-        for (sequence, id, event) in &page {
-            if self.service.profile.is_host2()
+        for (sequence, id, event, accepted) in &page {
+            if !accepted
+                && self.service.profile.is_host2()
                 && !self
                     .declared_events
                     .lock()
@@ -702,101 +796,116 @@ impl Driver {
                 *cursor = *sequence;
                 continue;
             }
-            let delivery: Result<()> = async {
-                let result = self
-                    .owner
-                    .call(
-                        Request::Event {
-                            authenticated_producer: event.producer.clone(),
-                            epoch: 0,
-                            event: Box::new(event.clone()),
-                            now_ms: self.service_clock(),
-                        },
-                        CALL,
-                    )
-                    .await
-                    .map_err(host_error)?;
-                let receipt: EventDisposition = serde_json::from_value(result)?;
-                self.owner
-                    .call(
-                        Request::Fanout {
-                            event_key: receipt.key.clone(),
-                            limit: 64,
-                            now_ms: self.service_clock(),
-                        },
-                        CALL,
-                    )
-                    .await
-                    .map_err(host_error)?;
-                let status = self
-                    .owner
-                    .call(
-                        Request::EventStatus {
-                            event_key: receipt.key.clone(),
-                        },
-                        CALL,
-                    )
-                    .await
-                    .map_err(host_error)?;
-                let complete = status["pending"].as_u64().ok_or(Error::Unknown)? == 0;
-                self.service
-                    .acknowledge_event(&self.runtime, *id, receipt, complete)
-                    .await?;
-                Ok(())
+            match self.deliver(*id, event, *accepted).await {
+                Err(Error::Overloaded) => {
+                    partial.overloaded = true;
+                    break;
+                }
+                // An unknown outcome leaves the row as it is (delivered again);
+                // a refusal is that row's outcome: hold it and go on.
+                Err(Error::Unknown) | Ok(()) => {}
+                Err(_) => {
+                    let held = self.service.hold(&self.runtime, true, *id, "refused");
+                    held.await?
+                }
             }
-            .await;
-            if matches!(delivery, Err(Error::Overloaded)) {
-                overloaded = true;
-                break;
-            }
-            delivery?;
             *cursor = *sequence;
         }
-        self.owner
-            .call(
-                Request::CancelEffects {
-                    now_ms: self.service_clock(),
-                },
-                CALL,
-            )
-            .await
-            .map_err(host_error)?;
-        let tick = self
-            .owner
-            .call(
-                Request::Tick {
-                    now_ms: self.service_clock(),
-                },
-                CALL,
-            )
-            .await
-            .map_err(host_error)?;
-        if matches!(
-            self.service.profile,
-            super::review_domain::CatalogProfile::Monitoring6
-                | super::review_domain::CatalogProfile::Host7
-                | super::review_domain::CatalogProfile::Host8
-        ) {
-            defer_capacity(
+        let now_ms = self.service_clock();
+        let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
+        let cancelled = cancel.await.map_err(host_error);
+        partial.defer("cancelling effects", cancelled.clone());
+        cancelled?;
+        let now_ms = self.service_clock();
+        let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
+        let tick = ticked.await.map_err(host_error);
+        partial.defer("ticking runs", tick.clone());
+        let tick = tick?;
+        if self.service.profile.has_findings() {
+            partial.defer(
+                "sending finding notifications",
                 self.service
                     .flush_finding_notifications(&self.runtime, 2)
                     .await,
-                &mut overloaded,
-            )?;
+            );
         }
-        if overloaded {
+        let table = self
+            .pruned
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pruned = self.service.prune(&self.runtime, &self.retention, table);
+        partial.defer("deleting finished rows", pruned.await);
+        if partial.overloaded {
             return Err(Error::Overloaded);
+        }
+        if let Some(reason) = undecryptable {
+            partial.reasons.push(reason);
+            return Err(Error::Unknown);
         }
         Ok(
             serde_json::json!({"admissions_checked":pending.len(),"events_checked":page.len(),"tick":tick}),
         )
+    }
+    /// One outbox row. A row the engine has accepted is never sent as a new
+    /// event again; it only continues its fan-out. An accepted event the
+    /// engine no longer remembers has nothing queued that holds it (what is
+    /// left is blocked by its input), so its row is complete.
+    async fn deliver(&self, id: Uuid, event: &EventEnvelope, accepted: bool) -> Result<()> {
+        if !accepted {
+            let request = Request::Event {
+                authenticated_producer: event.producer.clone(),
+                epoch: 0,
+                event: Box::new(event.clone()),
+                requested_at_ms: None,
+                now_ms: self.service_clock(),
+            };
+            let receipt = match self.owner.call(request, self.deadline).await {
+                Err(aq_playbook_host::Error::Stale(_)) => {
+                    return self.service.hold(&self.runtime, true, id, "stale").await;
+                }
+                result => serde_json::from_value(result.map_err(delivery_error)?)?,
+            };
+            self.service
+                .acknowledge_event(&self.runtime, id, receipt, false)
+                .await?;
+        }
+        let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+        let fanout = Request::Fanout {
+            event_key: key.clone(),
+            limit: 64,
+            now_ms: self.service_clock(),
+        };
+        let status = match self.owner.call(fanout, self.deadline).await {
+            Ok(_) => {
+                self.owner
+                    .call(
+                        Request::EventStatus {
+                            event_key: key.clone(),
+                        },
+                        self.deadline,
+                    )
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        let complete = match status {
+            Ok(status) => status["pending"].as_u64().ok_or(Error::Unknown)? == 0,
+            // Forgotten: `Fanout` does not find the event itself (another
+            // missing record fails the fan-out), or `EventStatus` does not.
+            Err(aq_playbook_host::Error::NotFound(what)) if what == key => true,
+            Err(aq_playbook_host::Error::Invalid) => true,
+            Err(error) => return Err(host_error(error)),
+        };
+        if complete {
+            self.service.complete_event(&self.runtime, id).await?;
+        }
+        Ok(())
     }
     pub async fn inspect_binding(&self, binding: String) -> Result<serde_json::Value> {
         if binding.is_empty() || binding.len() > 128 || binding.contains('\0') {
             return Err(Error::Invalid);
         }
         self.owner
-            .call(Request::Binding { binding }, CALL)
+            .call(Request::Binding { binding }, self.deadline)
             .await
             .map_err(|_| Error::Unknown)
     }
@@ -814,7 +923,7 @@ impl Driver {
                         limit: 1,
                     },
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(|_| Error::Unknown)
@@ -823,17 +932,26 @@ impl Driver {
         if run.is_empty() || run.len() > 512 {
             return Err(Error::Invalid);
         }
-        self.owner
-            .call(
-                Request::Cancel {
-                    run,
-                    now_ms: self.service_clock(),
-                },
-                CALL,
-            )
-            .await
-            .map_err(host_error)?;
-        Ok(())
+        let cancel = Request::Cancel {
+            run: run.clone(),
+            now_ms: self.service_clock(),
+        };
+        match self.owner.call(cancel, self.deadline).await {
+            Ok(_) => Ok(()),
+            // A finished run has left the engine State (it is history), so the
+            // engine no longer finds it. Cancelling it stays the no-op it is
+            // for a terminal run.
+            Err(aq_playbook_host::Error::Engine(_)) if self.finished(run).await? => Ok(()),
+            Err(error) => Err(host_error(error)),
+        }
+    }
+    async fn finished(&self, run: String) -> Result<bool> {
+        let page = self.inspect_run(run.clone()).await?;
+        let Some(status) = page["items"][0]["status"].as_str() else {
+            // Rolled out of history too: finished if AQ admitted it.
+            return self.service.admitted_run(&run).await;
+        };
+        Ok(matches!(status, "completed" | "failed" | "cancelled"))
     }
     /// Startup replay never changes an existing activation or renews authority.
     pub(crate) async fn ensure_binding(
@@ -850,7 +968,7 @@ impl Driver {
                 Request::Binding {
                     binding: binding.clone(),
                 },
-                CALL,
+                self.deadline,
             )
             .await
         {
@@ -859,7 +977,8 @@ impl Driver {
                 if old.artifact != artifact || old.authority != expected {
                     return Err(Error::Conflict);
                 }
-                Ok(())
+                // Active since an earlier start: recorded all the same.
+                self.service.binding_activated(&binding, &artifact).await
             }
             Err(aq_playbook_host::Error::Invalid) => {
                 self.activate(binding, artifact, grant, 1).await?;
@@ -870,7 +989,11 @@ impl Driver {
     }
     /// D9: the binding's active artifact digest; `None` if never activated.
     pub(crate) async fn binding_artifact(&self, binding: String) -> Result<Option<String>> {
-        match self.owner.call(Request::Binding { binding }, CALL).await {
+        match self
+            .owner
+            .call(Request::Binding { binding }, self.deadline)
+            .await
+        {
             Ok(value) => {
                 let a: aq_playbook_host::runner::Activation = serde_json::from_value(value)?;
                 Ok(Some(a.artifact))
@@ -887,7 +1010,11 @@ impl Driver {
         if binding.is_empty() || binding.len() > 128 || binding.contains('\0') {
             return Err(Error::Invalid);
         }
-        match self.owner.call(Request::Binding { binding }, CALL).await {
+        match self
+            .owner
+            .call(Request::Binding { binding }, self.deadline)
+            .await
+        {
             Ok(value) => Ok(Some(serde_json::from_value(value)?)),
             Err(aq_playbook_host::Error::Invalid) => Ok(None),
             Err(_) => Err(Error::Unknown),
@@ -897,13 +1024,15 @@ impl Driver {
     /// business grant. Stop is attempted even if central fencing is uncertain.
     pub(crate) async fn shutdown(&self) -> Result<()> {
         let fence = self.service.retire_for_shutdown(&self.runtime).await;
-        let stop = self.owner.call(Request::Stop, CALL).await;
-        stop_acknowledged(&self.stopped_ack, stop)?;
+        let stop = self.owner.call(Request::Stop, self.deadline).await;
+        if !aq_playbook_host::drive::stop_acknowledged(&self.stopped_ack, stop) {
+            return Err(Error::Unknown);
+        }
         fence
     }
     pub async fn stop(&self) -> Result<()> {
         self.service.retire_runtime(&self.runtime).await?;
-        match self.owner.call(Request::Stop, CALL).await {
+        match self.owner.call(Request::Stop, self.deadline).await {
             Ok(_) => {
                 self.stopped_ack
                     .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -937,11 +1066,6 @@ impl Driver {
     pub async fn test_collect_graph_events(&self) -> Result<usize> {
         self.service.collect_graph_events(&self.runtime, 2).await
     }
-    pub async fn test_collect_work_completions(&self) -> Result<usize> {
-        self.service
-            .collect_work_completions(&self.runtime, 2)
-            .await
-    }
     pub async fn test_collect_settlement_events(&self) -> Result<usize> {
         self.service
             .collect_settlement_events(&self.runtime, 2)
@@ -959,50 +1083,13 @@ impl Driver {
                     authenticated_producer: event.producer.clone(),
                     epoch: 0,
                     event: Box::new(event),
+                    requested_at_ms: None,
                     now_ms: self.service_clock(),
                 },
-                CALL,
+                self.deadline,
             )
             .await
             .map_err(host_error)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
-    }
-}
-
-// A closed channel is not engine release evidence. Only an exact successful
-// Stop response, retained for this Driver, permits idempotent closed replay.
-fn stop_acknowledged(
-    known: &std::sync::atomic::AtomicBool,
-    response: std::result::Result<serde_json::Value, aq_playbook_host::Error>,
-) -> Result<()> {
-    match response {
-        Ok(_) => {
-            known.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-        Err(aq_playbook_host::Error::Stopped)
-            if known.load(std::sync::atomic::Ordering::SeqCst) =>
-        {
-            Ok(())
-        }
-        Err(_) => Err(Error::Unknown),
-    }
-}
-#[cfg(test)]
-mod shutdown_tests {
-    use super::*;
-    #[test]
-    fn closed_queue_is_unknown_until_exact_stop_ack_for_this_driver() {
-        let known = std::sync::atomic::AtomicBool::new(false);
-        assert_eq!(
-            stop_acknowledged(&known, Err(aq_playbook_host::Error::Stopped)),
-            Err(Error::Unknown)
-        );
-        stop_acknowledged(&known, Ok(serde_json::Value::Null)).unwrap();
-        stop_acknowledged(&known, Err(aq_playbook_host::Error::Stopped)).unwrap();
-        assert_eq!(
-            stop_acknowledged(&known, Err(aq_playbook_host::Error::Unknown)),
-            Err(Error::Unknown)
-        );
     }
 }
