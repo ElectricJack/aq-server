@@ -506,7 +506,6 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
             "drive_interval_ms=250\nprovider_token=\"not-allowed\"",
         ),
         timeouts("statement_ms=0"),
-        timeouts("statement_ms=30001"),
         timeouts("statement_ms=1000\nlock_ms=1001"),
         timeouts("idle_ms=1"),
     ] {
@@ -514,6 +513,8 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
     }
     // The engine session deadlines are configuration (defaults 30 s / 500 ms).
     assert!(toml::from_str::<Config>(&timeouts("statement_ms=2000\nlock_ms=100")).is_ok());
+    // No upper bound: a long drain may need more than 30 s per statement.
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000")).is_ok());
     let dsn = s._dir.path().join("dsn");
     private(
         &dsn,
@@ -591,6 +592,67 @@ async fn startup_missing_registered_schema_refuses_before_engine_creation() {
     .await
     .unwrap();
     assert!(!schema);
+}
+/// A failed engine open does not stop the server: it starts, the playbook
+/// routes answer "playbooks unavailable: <reason>", and the open is retried
+/// with a backoff until it succeeds.
+#[tokio::test]
+async fn a_failed_engine_open_starts_the_server_unavailable_and_retries() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    // Another owner holds the engine namespace, so this server cannot open it.
+    let holder = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    let (base, stop, task) = launch(s.f.state.clone()).await;
+    let c = client();
+    let mut unavailable = None;
+    for _ in 0..200 {
+        assert!(
+            !task.is_finished(),
+            "a failed engine open stopped the server"
+        );
+        if let Ok(r) = c
+            .get(format!("{base}/api/playbooks/status"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+        {
+            unavailable = Some((r.status().as_u16(), r.json::<Value>().await.unwrap()));
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let (code, body) = unavailable.expect("server never answered");
+    assert_eq!(code, 503, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("playbooks unavailable: "),
+        "{body}"
+    );
+    holder.driver.stop().await.unwrap();
+    holder.shutdown().await.unwrap();
+    for _ in 0..400 {
+        let r = c
+            .get(format!("{base}/api/playbooks/status"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+            .unwrap();
+        if r.status().is_success() {
+            stop.send(()).unwrap();
+            task.await.unwrap().unwrap();
+            return;
+        }
+        assert!(!task.is_finished());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the engine open was not retried");
 }
 #[tokio::test]
 async fn changed_bootstrap_binding_is_refused_and_successful_stop_replay_is_exact() {

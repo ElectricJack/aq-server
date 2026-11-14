@@ -1551,12 +1551,8 @@ async fn a_row_that_always_fails_is_held_and_later_rows_are_delivered() {
         .await
         .unwrap();
     assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
-    sqlx::query("UPDATE playbook_outbox SET event_digest=$2 WHERE event_id=$1")
-        .bind(broken)
-        .bind("0".repeat(64))
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Its stored event no longer matches its record (another producer).
+    mismatch(&e, broken).await;
     for _ in 0..3 {
         let later = graph_event(&e).await;
         assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
@@ -1605,24 +1601,13 @@ async fn held_work_shows_its_reason_and_retries_as_a_new_delivery() {
         .await
         .unwrap();
     assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
-    let digest: String =
-        sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE event_id=$1")
+    let producer: String =
+        sqlx::query_scalar("SELECT producer FROM playbook_outbox WHERE event_id=$1")
             .bind(event)
             .fetch_one(&pool)
             .await
             .unwrap();
-    let set_digest = |value: String| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query("UPDATE playbook_outbox SET event_digest=$2 WHERE event_id=$1")
-                .bind(event)
-                .bind(value)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-    };
-    set_digest("0".repeat(64)).await;
+    mismatch(&e, event).await;
     driver.quantum().await.unwrap();
     let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
     let (code, status) = api(
@@ -1643,7 +1628,7 @@ async fn held_work_shows_its_reason_and_retries_as_a_new_delivery() {
         status["held_events"][0]["held_reason"], "invalid",
         "{status}"
     );
-    set_digest(digest).await;
+    set_outbox(&e, event, "producer", &producer).await;
     let retry = format!("/api/playbooks/events/{event}/retry");
     let (code, body) = api(app.clone(), "POST", &retry, true, json!({})).await;
     assert_eq!(code, 200, "{body}");
@@ -1801,11 +1786,251 @@ async fn cancelling_a_finished_run_is_confirmed_and_an_unknown_run_is_not() {
     let run = admission.receipt.unwrap().run_id;
     let view = driver.inspect_run(run.clone()).await.unwrap();
     assert_eq!(view["items"][0]["status"], "completed", "{view}");
+    driver.cancel_run(run.clone()).await.unwrap();
+    // A run AQ admitted that has also rolled out of history is still finished.
+    // (The test bypasses the engine's writer trigger to simulate the trim.)
+    let mut trim = e.f.db.pool().await.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *trim)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM aq_playbooks.run_history WHERE run_id=$1")
+        .bind(&run)
+        .execute(&mut *trim)
+        .await
+        .unwrap();
+    trim.commit().await.unwrap();
     driver.cancel_run(run).await.unwrap();
     assert_eq!(
         driver.cancel_run("run-ffffffffffffffff".into()).await,
         Err(Error::Unknown)
     );
+    driver.stop().await.unwrap();
+}
+
+/// A driver with the graph-event consumers `runs` and `blocked` active.
+async fn consumers(e: &Env) -> Arc<aq_server::playbooks::driver::Driver> {
+    let driver = aq_server::playbooks::driver::Driver::start(
+        e.service.clone(),
+        aq_playbook_host::Limits::default(),
+        protected_factory(source_url(e)),
+    )
+    .await
+    .unwrap();
+    for (binding, blocked) in [("runs", false), ("blocked", true)] {
+        let a = trigger_artifact(binding, blocked);
+        let hash = a.digest.clone();
+        driver.install(a).await.unwrap();
+        driver
+            .activate(binding.into(), hash, e.grant, 1)
+            .await
+            .unwrap();
+    }
+    Arc::new(driver)
+}
+async fn set_outbox(e: &Env, event: Uuid, column: &str, value: &str) {
+    sqlx::query(&format!(
+        "UPDATE playbook_outbox SET {column}=$2 WHERE event_id=$1"
+    ))
+    .bind(event)
+    .bind(value)
+    .execute(&e.f.db.pool().await)
+    .await
+    .unwrap();
+}
+/// The outbox row's stored event no longer matches its record: another
+/// producer (the graph source row is marked delivered so it is not collected
+/// again under its own producer).
+async fn mismatch(e: &Env, event: Uuid) {
+    set_outbox(e, event, "producer", "aq.host.bridge@1").await;
+    sqlx::query("UPDATE agent_graph_outbox SET delivered=true WHERE event_id=$1")
+        .bind(event)
+        .execute(&e.f.db.pool().await)
+        .await
+        .unwrap();
+}
+/// Retrying a held row the engine had accepted resumes its fan-out: it is
+/// never sent as a new event, so no second run starts once the engine has
+/// forgotten the event.
+#[tokio::test]
+async fn retrying_a_held_accepted_event_resumes_its_fanout_without_a_second_run() {
+    let e = setup_with(true).await;
+    let driver = consumers(&e).await;
+    let first = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), false)
+    );
+    assert_eq!(finished_runs(&e).await, 1);
+    let producer: String =
+        sqlx::query_scalar("SELECT producer FROM playbook_outbox WHERE event_id=$1")
+            .bind(first)
+            .fetch_one(&e.f.db.pool().await)
+            .await
+            .unwrap();
+    mismatch(&e, first).await;
+    // The outbox cursor wraps first, then reaches the row again.
+    for _ in 0..2 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(outbox_status(&e, first).await, ("unknown".into(), false));
+    set_outbox(&e, first, "producer", &producer).await;
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let retry = format!("/api/playbooks/events/{first}/retry");
+    let (code, body) = api(app, "POST", &retry, true, json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), false)
+    );
+    e.f.time.store(
+        NOW as i64 + 86_400_000 + 60_000,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), true)
+    );
+    assert_eq!(finished_runs(&e).await, 1);
+    driver.stop().await.unwrap();
+}
+
+/// A queued event that cannot be decrypted is a keyring problem, not a bad
+/// row: the quantum fails with that reason and the row stays queued, so
+/// fixing the keyring recovers it without a retry.
+#[tokio::test]
+async fn an_undecryptable_queued_event_fails_the_quantum_with_its_reason() {
+    let e = setup_with(true).await;
+    let driver = consumers(&e).await;
+    let event = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    set_outbox(&e, event, "key_id", "missing").await;
+    assert!(driver.quantum().await.is_err());
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let (_, status) = api(app, "GET", "/api/playbooks/status", false, json!(null)).await;
+    let reason = status["automatic_driver_reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("cannot decrypt queued events"), "{status}");
+    assert_eq!(outbox_status(&e, event).await, ("pending".into(), false));
+    set_outbox(&e, event, "key_id", "test").await;
+    driver.quantum().await.unwrap();
+    assert_eq!(outbox_status(&e, event).await.0, "engine_accepted");
+    driver.stop().await.unwrap();
+}
+
+/// An engine commit that fails for storage (here: a lock wait past the lock
+/// timeout) leaves a never-accepted event and admission pending, not held;
+/// the next quantum delivers both.
+#[tokio::test]
+async fn a_storage_failure_leaves_new_work_pending_and_it_is_delivered_after() {
+    let e = setup_with(true).await;
+    let driver = consumers(&e).await;
+    let a = pure_artifact();
+    let hash = a.digest.clone();
+    driver.install(a).await.unwrap();
+    let activation = driver
+        .activate("pure".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    let id = Uuid::new_v4();
+    e.service
+        .prepare(
+            e.f.actor,
+            PrepareRequest {
+                request_id: id,
+                grant_id: e.grant,
+                grant_revision: 1,
+                binding: "pure".into(),
+                expected_activation_revision: activation["revision"].as_u64().unwrap(),
+                entry: "main".into(),
+                input: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+    let event = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    let pool = e.f.db.pool().await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM aq_playbooks.namespaces FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let _ = driver.quantum().await;
+    let held = e.service.admission(e.f.actor, id).await.unwrap().status;
+    assert_eq!(held.status, "pending");
+    assert_eq!(outbox_status(&e, event).await, ("pending".into(), false));
+    lock.rollback().await.unwrap();
+    for _ in 0..2 {
+        driver.quantum().await.unwrap();
+    }
+    let admitted = e.service.admission(e.f.actor, id).await.unwrap().status;
+    assert_eq!(admitted.status, "engine_accepted");
+    assert_eq!(outbox_status(&e, event).await.0, "engine_accepted");
+    driver.stop().await.unwrap();
+}
+
+/// A collector that fails on a bad source item (here: a graph operation whose
+/// binding has no task id) does not stop the quantum: queued events are
+/// delivered, admissions admitted and runs advance; the reason is shown.
+#[tokio::test]
+async fn a_failing_collector_does_not_stop_delivery_admission_or_runs() {
+    let e = setup_with(true).await;
+    let driver = consumers(&e).await;
+    let good = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    let pool = e.f.db.pool().await;
+    sqlx::query("UPDATE agent_launch_bindings SET binding=jsonb_set(binding,'{task_id}','\"bad\"') WHERE attempt_id=$1")
+        .bind(e.attempt)
+        .execute(&pool)
+        .await
+        .unwrap();
+    graph_event(&e).await;
+    let a = pure_artifact();
+    let hash = a.digest.clone();
+    driver.install(a).await.unwrap();
+    let activation = driver
+        .activate("pure".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    let id = Uuid::new_v4();
+    e.service
+        .prepare(
+            e.f.actor,
+            PrepareRequest {
+                request_id: id,
+                grant_id: e.grant,
+                grant_revision: 1,
+                binding: "pure".into(),
+                expected_activation_revision: activation["revision"].as_u64().unwrap(),
+                entry: "main".into(),
+                input: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(outbox_status(&e, good).await.0, "engine_accepted");
+    let admission = e.service.admission(e.f.actor, id).await.unwrap().status;
+    let run = admission.receipt.expect("admitted").run_id;
+    let view = driver.inspect_run(run).await.unwrap();
+    assert_eq!(view["items"][0]["status"], "completed", "{view}");
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let (_, status) = api(app, "GET", "/api/playbooks/status", false, json!(null)).await;
+    let reason = status["automatic_driver_reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("graph events"), "{status}");
     driver.stop().await.unwrap();
 }
 

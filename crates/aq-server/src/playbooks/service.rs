@@ -1000,15 +1000,18 @@ impl Service {
         limit: u32,
     ) -> Result<Vec<(i64, Uuid, EventEnvelope)>> {
         let page = self.outbox_page(owner, after, limit).await?;
+        let page = page.map_err(|_| Error::Unknown)?;
         Ok(page.into_iter().map(|(s, id, e, _)| (s, id, e)).collect())
     }
-    /// [`Self::outbox`], each row with whether the engine accepted it.
+    /// [`Self::outbox`], each row with whether the engine accepted it (its
+    /// receipt is recorded). A queued event that cannot be decrypted is the
+    /// keyring's problem, not the row's: the page fails with that reason.
     pub(super) async fn outbox_page(
         &self,
         owner: &RuntimeOwner,
         after: i64,
         limit: u32,
-    ) -> Result<Vec<(i64, Uuid, EventEnvelope, bool)>> {
+    ) -> Result<std::result::Result<Vec<(i64, Uuid, EventEnvelope, bool)>, &'static str>> {
         if after < 0 || !(1..=16).contains(&limit) {
             return Err(Error::Invalid);
         }
@@ -1029,25 +1032,33 @@ impl Service {
             };
             let aad = self.aad("aq.playbooks.outbox", id, &digest)?;
             let producer: String = row.get("producer");
-            let event = (self.keys.open(&aad, &sealed).ok())
-                .and_then(|bytes| serde_json::from_slice::<EventEnvelope>(&bytes).ok())
-                .filter(|event| {
-                    super::domain::digest(event).is_ok_and(|d| d == digest)
-                        && event.event_id == id.to_string()
-                        && event.producer == producer
-                        && aq_playbook_host::model::validate_event(event, &self.profile.registry())
-                            .is_ok()
-                });
+            let bytes = match self.keys.open(&aad, &sealed) {
+                Ok(bytes) => bytes,
+                Err(crate::protected_storage::Error::MissingKey) => {
+                    return Ok(Err(
+                        "cannot decrypt queued events: keyring has no key for one",
+                    ));
+                }
+                Err(_) => return Ok(Err("cannot decrypt queued events: keyring or stored event")),
+            };
+            let event = (serde_json::from_slice::<EventEnvelope>(&bytes).ok()).filter(|event| {
+                super::domain::digest(event).is_ok_and(|d| d == digest)
+                    && event.event_id == id.to_string()
+                    && event.producer == producer
+                    && aq_playbook_host::model::validate_event(event, &self.profile.registry())
+                        .is_ok()
+            });
             let Some(event) = event else {
-                // A row that can never be delivered is held, not retried forever.
+                // A row whose event does not match its record is held, not
+                // retried forever.
                 sqlx::query("UPDATE playbook_outbox SET status='unknown',held_reason='invalid' WHERE namespace_id=$1 AND generation=$2 AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
                 continue;
             };
-            let accepted = row.get::<String, _>("status") == "engine_accepted";
+            let accepted = row.get::<Option<Value>, _>("engine_receipt").is_some();
             result.push((row.get("sequence"), id, event, accepted));
         }
         tx.commit().await?;
-        Ok(result)
+        Ok(Ok(result))
     }
     pub async fn acknowledge_event(
         &self,

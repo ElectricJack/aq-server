@@ -96,9 +96,18 @@ impl Timeouts {
     pub fn lock(&self) -> Duration {
         Duration::from_millis(self.lock_ms)
     }
-    /// What [`storage`] accepts: 1 ms to 30 s, the lock wait at most the statement.
+    /// What [`storage`] accepts: positive, the lock wait at most the statement.
     pub fn valid(&self) -> bool {
-        (1..=30_000).contains(&self.statement_ms) && (1..=self.statement_ms).contains(&self.lock_ms)
+        self.statement_ms > 0 && (1..=self.statement_ms).contains(&self.lock_ms)
+    }
+    /// How long a caller waits for an owner call that makes `commits`
+    /// commits: each may take the whole statement timeout, plus one request
+    /// queued ahead of it and one lock wait. Never below the statement
+    /// timeout, so a slow commit fails in PostgreSQL before the caller gives up.
+    pub fn call_deadline(&self, commits: u32) -> Duration {
+        self.statement()
+            .saturating_mul(commits.max(1).saturating_add(1))
+            .saturating_add(self.lock())
     }
 }
 /// Call inside Owner::start's factory. Connection establishment must have its own
@@ -111,7 +120,6 @@ pub fn storage(
     lock_timeout: Duration,
 ) -> Result<PostgresStorage, Error> {
     if statement_timeout.as_millis() == 0
-        || statement_timeout > Duration::from_secs(30)
         || lock_timeout.as_millis() == 0
         || lock_timeout > statement_timeout
     {
@@ -143,7 +151,19 @@ mod tests {
         assert!(parsed.valid());
         let set: Timeouts = serde_json::from_str(r#"{"statement_ms":2000,"lock_ms":100}"#).unwrap();
         assert!(set.valid() && set.statement().as_millis() == 2000);
-        for (statement, lock) in [(0, 0), (30_001, 500), (1000, 1001), (1000, 0)] {
+        // No upper bound: a long legacy drain may need more than 30 s.
+        let long = Timeouts {
+            statement_ms: 120_000,
+            lock_ms: 500,
+        };
+        assert!(long.valid());
+        // A call waits for its own commits plus one queued request ahead.
+        assert_eq!(long.call_deadline(1).as_millis(), 2 * 120_000 + 500);
+        assert_eq!(
+            Timeouts::default().call_deadline(8).as_millis(),
+            9 * 30_000 + 500
+        );
+        for (statement, lock) in [(0, 0), (1000, 1001), (1000, 0)] {
             let t = Timeouts {
                 statement_ms: statement,
                 lock_ms: lock,

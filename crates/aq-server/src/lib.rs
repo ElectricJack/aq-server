@@ -476,22 +476,17 @@ async fn run_with_listeners_and_dashboard(
         }
         None => None,
     };
-    let mut policy_runtime = match state.config.playbooks.as_ref() {
-        Some(config) => match playbooks::runtime::Runtime::start(&state, config.clone()).await {
-            Ok(runtime) => Some(runtime),
-            Err(error) => {
-                if let Some(runtime) = &media_runtime
-                    && runtime.shutdown().await.is_err()
-                {
-                    return Err(error.context("media cleanup also failed during startup"));
-                }
-                return Err(error);
+    // A failed engine open does not stop the server (see `open_later`).
+    let policy_slot = playbooks::runtime::Slot::default();
+    let mut unopened = None;
+    if let Some(config) = state.config.playbooks.as_ref() {
+        match playbooks::runtime::Runtime::start(&state, config.clone()).await {
+            Ok(mut runtime) => {
+                runtime.watch_shutdown(rx.clone());
+                *policy_slot.lock().await = Some(runtime);
             }
-        },
-        None => None,
-    };
-    if let Some(runtime) = &mut policy_runtime {
-        runtime.watch_shutdown(rx.clone());
+            Err(error) => unopened = Some((config.clone(), error)),
+        }
     }
 
     let notification_task = tokio::spawn(notifications::runtime::run(
@@ -517,13 +512,29 @@ async fn run_with_listeners_and_dashboard(
     let wait = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let admin_app = build_admin_router_with_optional_owners(
-        state.clone(),
-        policy_runtime.as_ref().map(|r| r.driver.clone()),
-        policy_runtime.as_ref().map(|r| r.reviews.clone()),
-        dashboard,
-        media_runtime.clone(),
-    );
+    let build = {
+        let (state, media) = (state.clone(), media_runtime.clone());
+        move |runtime: Option<&playbooks::runtime::Runtime>| {
+            build_admin_router_with_optional_owners(
+                state.clone(),
+                runtime.map(|r| r.driver.clone()),
+                runtime.map(|r| r.reviews.clone()),
+                dashboard.clone(),
+                media.clone(),
+            )
+        }
+    };
+    let admin_app = match unopened {
+        None => build(policy_slot.lock().await.as_ref()),
+        Some((config, failure)) => playbooks::runtime::open_later(
+            state.clone(),
+            config,
+            failure,
+            build,
+            policy_slot.clone(),
+            rx.clone(),
+        ),
+    };
     let worker_app = build_worker_router(state);
     let serving = tokio::try_join!(
         async {
@@ -561,7 +572,7 @@ async fn run_with_listeners_and_dashboard(
     let _ = stall_task.await;
     internal_work_task.abort();
     let _ = internal_work_task.await;
-    let policy_shutdown = match policy_runtime {
+    let policy_shutdown = match policy_slot.lock().await.take() {
         Some(runtime) => runtime.shutdown().await,
         None => Ok(()),
     };

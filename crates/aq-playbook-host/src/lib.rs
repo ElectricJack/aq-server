@@ -78,6 +78,8 @@ pub struct Limits {
     pub response_bytes: usize,
     pub transitions: usize,
     pub engine: EngineConfig,
+    /// Engine session deadlines; the owner-call deadlines derive from them.
+    pub timeouts: protected::Timeouts,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -88,6 +90,7 @@ impl Default for Limits {
             response_bytes: 262_144,
             transitions: 8,
             engine: EngineConfig::default(),
+            timeouts: protected::Timeouts::default(),
         }
     }
 }
@@ -98,6 +101,7 @@ impl Limits {
             || !(1024..=1_048_576).contains(&self.request_bytes)
             || !(1024..=1_048_576).contains(&self.response_bytes)
             || !(1..=64).contains(&self.transitions)
+            || !self.timeouts.valid()
             || self.engine.max_runs == 0
             || self.engine.max_events == 0
             || self.engine.max_runs > 10_000
@@ -588,6 +592,9 @@ fn runner_error(e: aq_playbooks_runner::Error) -> Error {
         aq_playbooks_runner::Error::Exhausted(_) => Error::Overloaded,
         stale @ aq_playbooks_runner::Error::Stale { .. } => Error::Stale(stale.to_string()),
         aq_playbooks_runner::Error::NotFound(what) => Error::NotFound(what),
+        // The commit failed in storage, or its outcome is not known: the
+        // caller delivers the request again (the engine answers a duplicate).
+        aq_playbooks_runner::Error::Storage(_) => Error::Unknown,
         other => Error::Engine(other.to_string()),
     }
 }

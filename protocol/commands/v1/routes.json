@@ -58,6 +58,7 @@
     {"path": "/api/playbooks/runs/{id}/cancel", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/status", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/stop", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
+    {"path": "/api/playbooks/{*rest}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) answer while the playbook owner is not open: 503 \"playbooks unavailable: <reason>\"; the owner routes replace it once the engine opens."},
     {"path": "/api/profiles/catalogs", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/profiles/catalogs/activate", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/profiles/catalogs/{digest}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},

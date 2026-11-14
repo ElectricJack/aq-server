@@ -20,10 +20,16 @@ impl Service {
         let view = |(id, producer, at, reason)| serde_json::json!({"event_id":id,"producer":producer,"created_at_ms":at,"held_reason":reason});
         Ok(rows.into_iter().map(view).collect())
     }
-    /// A held outbox event goes back to the queue: a new delivery.
+    /// Whether AQ admitted `run` (its receipt is recorded).
+    pub(crate) async fn admitted_run(&self, run: &str) -> Result<bool> {
+        let admitted = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND receipt->>'run_id'=$3)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(run);
+        Ok(admitted.fetch_one(&self.pool).await?)
+    }
+    /// A held outbox event goes back to the queue: a new delivery, unless
+    /// the engine accepted it: then it resumes its fan-out, never a new event.
     pub(crate) async fn retry_event(&self, actor: Uuid, id: Uuid) -> Result<()> {
         self.authorize_inspection(actor).await?;
-        let retried = sqlx::query("UPDATE playbook_outbox SET status='pending',held_reason=NULL WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='unknown'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&self.pool).await?;
+        let retried = sqlx::query("UPDATE playbook_outbox SET status=CASE WHEN engine_receipt IS NULL THEN 'pending' ELSE 'engine_accepted' END,held_reason=NULL WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='unknown'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&self.pool).await?;
         (retried.rows_affected() == 1)
             .then_some(())
             .ok_or(Error::Conflict)

@@ -18,6 +18,8 @@ async fn storage_report(p: &Pilot) -> String {
     for (table, filter) in [
         ("aq_playbooks.runtime_index", ""),
         ("aq_playbooks.inspection_rows", ""),
+        // Finished runs and their items (the live-state engine's history).
+        ("aq_playbooks.run_history", ""),
         ("aq_playbooks.catalog_rows", ""),
         ("aq_playbooks.namespaces", ""),
         ("aq_playbooks.disposal_tombstones", ""),
@@ -42,6 +44,13 @@ async fn storage_report(p: &Pilot) -> String {
     .await
     .unwrap();
     out.push(format!("inspection_kinds={kinds:?}"));
+    let history: (i64, Option<i64>) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE kind='runs'),pg_total_relation_size('aq_playbooks.run_history') FROM aq_playbooks.run_history",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    out.push(format!("run_history(runs,total_bytes)={history:?}"));
     let size: Vec<(Option<i32>, Option<i32>, i64)> = sqlx::query_as(
         "SELECT pg_column_size(encrypted_snapshot),pg_column_size(snapshot),revision FROM aq_playbooks.namespaces",
     )
