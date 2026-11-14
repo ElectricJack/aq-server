@@ -100,6 +100,26 @@ v1 differed: its `default-assignment-routing` playbook both classified the
 task and chose the route. In v2 the playbook cannot claim a worker or bypass
 admission.
 
+**Playbook authoring ([spec 0013](specs/0013-playbook-authoring.md)) is
+Tested on `feat/internal-work`, not deployed** (2026-11-14). Built: engine
+0.2.0 vendored; profile `host_v9` on host catalog 2.2.0 with `work.read`,
+`work.route`, `work.unroutable` and `judgment.assess`; the server originates
+`aq.work.route_needed`; a document saved in Settings is authored by an
+internal-work agent into a playbook that the server seals again, checks
+against its cases, installs and activates, with rollback and a sources API
+for other documents; routing runs on that path and no server code decides a
+route; a task that cannot be routed is raised once per cause. Not yet proven:
+no real model has authored a playbook (every test hands the save path a
+prepared outcome), the real-login checks, routing of every kind the document
+names, and the 500-run scale check on an authored playbook (it still measures
+the Host8 pilot, which is also the one open finding of
+`scripts/check-authoring-inventory.sh`). Evidence, gaps and follow-ups:
+[`implementation/0013-playbook-authoring.md`](implementation/0013-playbook-authoring.md).
+The live check is the operator's
+[`operations/0013-live-authoring-runbook.md`](operations/0013-live-authoring-runbook.md).
+Items 2 to 6 below are built on that branch at this level; the table above
+describes `main` and the running stack.
+
 What the routing policy layer still needs, in dependency order:
 
 1. A routing policy document in Settings, carried over from the v1 playbook's

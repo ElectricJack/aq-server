@@ -141,7 +141,10 @@ pub struct Route {
     pub lane: Option<String>,
     pub provider_intent: ProviderIntent,
     pub reasons: Vec<RouteReason>,
-    pub classification: Option<classify::Classification>,
+    /// Always absent on new routes; kept so stored routes keep their shape.
+    /// A route history row written before playbook routing may hold the old
+    /// classifier's answer here.
+    pub classification: Option<serde_json::Value>,
     pub policy_digest: Option<String>,
     pub structure_revision: Option<u64>,
     pub source: Source,
