@@ -27,6 +27,10 @@ use zeroize::Zeroizing;
 
 /// Every run's environment besides `HOME`, `PATH`, `CLAUDE_CONFIG_DIR` and
 /// the token.
+/// How much of what an agent harness printed outside its event stream is
+/// kept for a failure's detail.
+const STRAY_BYTES: usize = 600;
+
 const ENVIRONMENT: [(&str, &str); 5] = [
     ("DISABLE_AUTOUPDATER", "1"),
     ("DISABLE_TELEMETRY", "1"),
@@ -105,15 +109,30 @@ async fn attempt(
         command
             .env("PATH", place.path(true))
             .env("TMPDIR", place.tmp());
+        // What the harness says when it cannot start goes to its standard
+        // error: send that to the event stream, where lines that are not
+        // events are kept (redacted, capped) for the failure's detail.
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| match libc::dup2(1, 2) {
+                -1 => Err(std::io::Error::last_os_error()),
+                _ => Ok(()),
+            });
+        }
     }
     // The redaction takes every login's secrets, read once the native has
     // ended, and this run's token.
     if work.is_some() {
         let prompt = validate::agent_prompt(&claimed.request);
         let (mut transcript, mut result) = (agent::Transcript::default(), None);
+        let mut stray = String::new();
         let mut each = |line: &[u8]| match serde_json::from_slice::<Value>(line) {
             Ok(event) if event["type"] == "result" => result = Some(event),
             Ok(event) => transcript.claude(&event),
+            Err(_) if stray.len() < STRAY_BYTES => {
+                stray.extend(String::from_utf8_lossy(line).chars().take(STRAY_BYTES));
+                stray.push(' ');
+            }
             Err(_) => {}
         };
         let mut lines = agent::Lines::default();
@@ -133,7 +152,7 @@ async fn attempt(
             None if status.success() => None,
             None => Some((
                 Reason::ProviderError,
-                format!("native exited with {status}"),
+                format!("native exited with {status}: {}", redact(stray.trim())),
             )),
         };
         let limit = claimed.request.max_output_bytes;
