@@ -570,7 +570,7 @@ impl Service {
             match self.check_source(&mut tx, text(subject, "id")?).await? {
                 CheckSource::Input => Some(Some(input["source"].clone())),
                 CheckSource::Candidate(oid)
-                    if self.profile == CatalogProfile::Host8 && oid != input["source"] =>
+                    if self.profile.has_prepared_source() && oid != input["source"] =>
                 {
                     None
                 }

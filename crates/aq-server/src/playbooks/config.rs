@@ -46,6 +46,10 @@ struct Configuration {
     #[serde(default)]
     engine_retention: aq_playbook_host::engine_retention::EngineRetention,
     deployments: Vec<DeploymentInput>,
+    /// R1: `work.read`, `work.route`, `work.unroutable` and `judgment.assess`
+    /// serve a task of any project on the automatic router (`host_v9` only).
+    #[serde(default)]
+    installation_routing: bool,
     /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
     #[serde(default)]
     integration: Option<IntegrationInput>,
@@ -112,6 +116,8 @@ enum Profile {
     Host7,
     #[serde(rename = "host_v8")]
     Host8,
+    #[serde(rename = "host_v9")]
+    Host9,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,6 +148,7 @@ pub struct Loaded {
     pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
     pub(crate) retention: aq_playbook_host::retention::Retention,
     pub(crate) engine_retention: aq_playbook_host::engine_retention::EngineRetention,
+    pub(crate) installation_routing: bool,
     pub(crate) deployments: Vec<Deployment>,
     pub(crate) profile: CatalogProfile,
     pub(crate) integration: Option<IntegrationSettings>,
@@ -209,7 +216,11 @@ impl Configuration {
             Profile::Monitoring6 => CatalogProfile::Monitoring6,
             Profile::Host7 => CatalogProfile::Host7,
             Profile::Host8 => CatalogProfile::Host8,
+            Profile::Host9 => CatalogProfile::Host9,
         };
+        if self.installation_routing && profile != CatalogProfile::Host9 {
+            return Err("playbook installation_routing requires the host_v9 profile");
+        }
         if self.integration.is_some() && !profile.is_host2() {
             return Err("playbook integration requires the host_v7 or host_v8 profile");
         }
@@ -362,6 +373,7 @@ impl Configuration {
             timeouts: self.engine_timeouts,
             retention: self.retention,
             engine_retention: self.engine_retention,
+            installation_routing: self.installation_routing,
             deployments,
             profile,
             integration,

@@ -796,7 +796,12 @@ fn accepts(registry: &Registry, artifact: &Registry) -> bool {
             .all(|(name, contract)| registry.events.get(name) == Some(contract))
 }
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
-    const COMMANDS: [&str; 12] = [
+    // Host catalog 2.2.0: the twelve commands of 2.0.0 and 2.1.0 plus four.
+    const COMMANDS: [&str; 16] = [
+        "work.read",
+        "work.route",
+        "work.unroutable",
+        "judgment.assess",
         "context.read",
         "work.ensure",
         "work.change",
@@ -810,7 +815,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "operation.get",
         "operation.cancel",
     ];
-    if registry.commands.len() > 12
+    if registry.commands.len() > COMMANDS.len()
         || registry.events.len() > 16
         || !bounded_json(registry, 262_144)
         || registry.commands.iter().any(|(name, c)| {
