@@ -20,9 +20,11 @@ pub mod agent_task;
 mod catalog;
 mod queries;
 pub mod routes;
+mod subjects;
 mod summaries;
 pub use catalog::catalog;
 pub use queries::QueryParam;
+pub use subjects::{Id as SubjectId, SubjectRule, subject as subject_rule};
 pub use summaries::{PLACEHOLDER_SUMMARY, action_summary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,12 +457,17 @@ pub fn forward(
                         .and_then(|v| v.as_str()?.parse().ok())
                 })
                 .ok_or(BuildError("a mutation needs an operation_id"))?;
-            let subject = request
-                .subject
-                .clone()
-                .ok_or(BuildError("an action needs a subject"))?;
+            // An explicit subject is sent as given; otherwise it follows
+            // from the params by the kind's rule (subjects.rs).
+            let (subject, derived) = match &request.subject {
+                Some(subject) => (subject.clone(), Map::new()),
+                None => derive_subject(spec.name, &mut params)?,
+            };
+            let expected = request.expected_versions.clone().unwrap_or(derived);
+            // Every payload carries the operation ID.
+            params.entry("operation_id").or_insert(json!(op));
             let mut action = json!({"operation_id":op,"kind":spec.name,"subject":subject,
-                "expected_versions":request.expected_versions.clone().unwrap_or_default(),"payload":params});
+                "expected_versions":expected,"payload":params});
             if let Some(reason) = &request.reason {
                 action["reason"] = json!(reason);
             }
@@ -472,6 +479,32 @@ pub fn forward(
         uri,
         body,
     })
+}
+/// The subject and expected versions of `kind` from its params. A param
+/// that only names the subject is taken out of `params` (the payload).
+fn derive_subject(
+    kind: &str,
+    params: &mut Map<String, Value>,
+) -> Result<(Value, Map<String, Value>), BuildError> {
+    const MISSING: BuildError =
+        BuildError("an action needs its subject: the id param its schema names, or `subject`");
+    let rule = subjects::subject(kind).ok_or(BuildError("an action needs a subject"))?;
+    let id = match rule.id {
+        SubjectId::Fixed(id) => id.to_owned(),
+        SubjectId::Payload(p) => params.get(p).and_then(scalar).ok_or(MISSING)?,
+        SubjectId::Param(p) => params.remove(p).as_ref().and_then(scalar).ok_or(MISSING)?,
+    };
+    let mut subject = json!({"type":rule.entity,"id":id});
+    let mut expected = Map::new();
+    if let Some((param, key)) = rule.revision {
+        let revision = params
+            .get(param)
+            .and_then(scalar)
+            .ok_or(BuildError("an action needs the version it expects"))?;
+        subject["revision"] = json!(revision);
+        expected.insert(key.into(), json!(revision));
+    }
+    Ok((subject, expected))
 }
 fn graph_defaults(defaults: &str) -> Map<String, Value> {
     serde_json::from_str(defaults).unwrap_or_default()
@@ -560,6 +593,12 @@ pub fn document(
                     let renamed: Map<String, Value> =
                         r.rename.iter().map(|(f, p)| ((*p).into(), json!(f))).collect();
                     entry["graph_query"] = json!({"kind":kind,"defaults":graph_defaults(defaults),"rename":renamed});
+                }
+                // How the action's subject follows from the params.
+                if r.body == Body::Action
+                    && let Some(rule) = subjects::subject(c.name)
+                {
+                    entry["subject"] = rule.describe();
                 }
                 if matches!(r.params, Params::Ref(_) | Params::Inline(_) | Params::Path) {
                     entry["params_schema"] = schema;
