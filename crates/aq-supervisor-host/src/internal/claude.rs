@@ -255,6 +255,10 @@ fn write_settings(
         .mode(if agent { 0o644 } else { 0o600 })
         .open(path)?
         .write_all(body.to_string().as_bytes())?;
+    // `mode` is narrowed by the host's umask; an agent must read its file.
+    let mode = if agent { 0o644 } else { 0o600 };
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     if identity.drop_privileges {
         let id = Some(identity.run_as);
         if !agent {

@@ -68,6 +68,8 @@ pub(super) fn prepare(
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(bin.join(name))?
             .write_all(shim(name, cwd, &libexec.join(name))?.as_bytes())?;
+        // `mode` is narrowed by the host's umask; the agent must run it.
+        std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))?;
     }
     if identity.drop_privileges {
         hand_over(cwd, identity.run_as)?;
