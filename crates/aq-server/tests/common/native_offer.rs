@@ -32,7 +32,7 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task; mode 10 completes it.
+    /// A second ready task of lower priority, listed only in mode 7 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
     pub second_task: Uuid,
     /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
     pub metadata: Arc<std::sync::Mutex<Value>>,
@@ -142,12 +142,16 @@ pub async fn setup() -> Case {
                 node["task_state"] = json!("completed");
             }
             let value = if uri.path().ends_with("/ready") {
+                // Mode 11: two pages, the second task behind a cursor.
+                let behind = uri.query().is_some_and(|q| q.contains("cursor=page-2"));
                 let items = match mode {
                     3 => vec![],
                     7 => vec![node, second],
+                    11 if behind => vec![second],
                     _ => vec![node],
                 };
-                json!({"items":items,"next_cursor":null})
+                let next = (mode == 11 && !behind).then_some("page-2");
+                json!({"items":items,"next_cursor":next})
             } else if uri.path().ends_with("/context")
                 && uri.path().contains(&second_task.to_string())
             {

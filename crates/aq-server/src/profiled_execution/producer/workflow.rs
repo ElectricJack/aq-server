@@ -31,6 +31,25 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
+
+/// Where each project's further ready page starts on the next poll (in this
+/// process only: after a restart the rotation starts behind the head page).
+mod rotation {
+    use std::{collections::BTreeMap, sync::Mutex};
+    use uuid::Uuid;
+    static NEXT: Mutex<BTreeMap<Uuid, String>> = Mutex::new(BTreeMap::new());
+    pub(super) fn get(project: Uuid) -> Option<String> {
+        NEXT.lock().ok()?.get(&project).cloned()
+    }
+    pub(super) fn set(project: Uuid, cursor: Option<String>) {
+        if let Ok(mut next) = NEXT.lock() {
+            match cursor {
+                Some(cursor) => next.insert(project, cursor),
+                None => next.remove(&project),
+            };
+        }
+    }
+}
 const MAX_SKIPPED: usize = 8;
 use crate::error::db;
 async fn runtime(
@@ -468,7 +487,7 @@ async fn offers(
             return Ok(page);
         }
         let mut chosen = None;
-        for candidate in fairness::order(&candidates, &served, polled_at)
+        'projects: for candidate in fairness::order(&candidates, &served, polled_at)
             .into_iter()
             .take(MAX_PROJECTS_PER_POLL)
         {
@@ -484,71 +503,96 @@ async fn offers(
             }
             let record =
                 on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;
-            let ready = on_heap(|| {
-                graph.scheduling_ready_current(
-                    record.binding.graph_workspace_id,
-                    8,
-                    None,
-                    state.clock.as_ref(),
-                )
-            })
-            .await
-            .map_err(|_| refused())?;
-            let mut ready = ready;
-            for candidate in &mut ready.items {
-                if !aq_machine_control::launch::eligible(
-                    &state.store.pool,
-                    candidate.revision.task_id,
-                    auth.id(),
-                    &candidate.node["metadata"],
-                )
-                .await
-                .map_err(db)?
-                {
-                    skipped.insert(candidate.revision.task_id);
-                }
-            }
-            // Spec 0011 §4, before any context read: a task's route, or its wait for one.
-            let placements = on_heap(|| crate::routing::placements(state, &record, &ready.items));
-            let placements = placements.await?;
-            let (revision, project) = (record.revision, policy.project_id);
-            let (placed, items) = (&placements, &ready.items);
-            if let Some((task, assessment)) = on_heap(|| {
-                first_eligible_task(&ready, &skipped, |task| async move {
-                    let placement = placed.get(&task);
-                    if placement == Some(&Placement::Wait) {
-                        return Ok(Assessment::Blocked("route_missing"));
-                    }
-                    let (pool, at) = (&state.store.pool, (state.clock)());
-                    let seen = holds::attempts(pool, task).await;
-                    let a = replacement::assess_task_for_revision(state, task, polled_at, revision);
-                    let a = a.await?;
-                    if let Assessment::Blocked(reason) = a {
-                        let d = seen.map(|seen| holds::Decision {
-                            project,
-                            task,
-                            reason,
-                            seen,
-                            attempt: None,
-                        });
-                        holds::hold(pool, d, at).await;
-                    } else if placement == Some(&Placement::Reroute) {
-                        let attempt = a.replacement().map(|r| (r.predecessor, seen));
-                        let r = crate::routing::reroute(state, project, items, task, attempt);
-                        r.await;
-                        return Ok(Assessment::Blocked("route_class_unassigned"));
-                    }
-                    Ok(a)
+            // The head page first, as ever. When nothing on it can be offered
+            // and more tasks are ready, one further page a poll, rotating
+            // through the rest: tasks that wait (for a route, or held) at the
+            // head never hide the ready tasks behind them for good.
+            let mut cursor: Option<String> = None;
+            for further in [false, true] {
+                let read = on_heap(|| {
+                    graph.scheduling_ready_current(
+                        record.binding.graph_workspace_id,
+                        8,
+                        cursor.as_deref(),
+                        state.clock.as_ref(),
+                    )
                 })
-            })
-            .await?
-            {
-                let route = match placements.get(&task.task_id) {
-                    Some(Placement::Routed(route)) => Some(route.clone()),
-                    _ => None,
+                .await;
+                let mut ready = match read {
+                    Ok(ready) => ready,
+                    // A cursor the graph no longer takes: start over next poll.
+                    Err(_) if further => {
+                        rotation::set(policy.project_id, None);
+                        break;
+                    }
+                    Err(_) => return Err(refused()),
                 };
-                chosen = Some((policy, record, ready, task, assessment, route));
-                break;
+                let next = ready.next_cursor.clone();
+                for candidate in &mut ready.items {
+                    if !aq_machine_control::launch::eligible(
+                        &state.store.pool,
+                        candidate.revision.task_id,
+                        auth.id(),
+                        &candidate.node["metadata"],
+                    )
+                    .await
+                    .map_err(db)?
+                    {
+                        skipped.insert(candidate.revision.task_id);
+                    }
+                }
+                // Spec 0011 §4, before any context read: a task's route, or its wait for one.
+                let placements =
+                    on_heap(|| crate::routing::placements(state, &record, &ready.items));
+                let placements = placements.await?;
+                let (revision, project) = (record.revision, policy.project_id);
+                let (placed, items) = (&placements, &ready.items);
+                if let Some((task, assessment)) = on_heap(|| {
+                    first_eligible_task(&ready, &skipped, |task| async move {
+                        let placement = placed.get(&task);
+                        if placement == Some(&Placement::Wait) {
+                            return Ok(Assessment::Blocked("route_missing"));
+                        }
+                        let (pool, at) = (&state.store.pool, (state.clock)());
+                        let seen = holds::attempts(pool, task).await;
+                        let a =
+                            replacement::assess_task_for_revision(state, task, polled_at, revision);
+                        let a = a.await?;
+                        if let Assessment::Blocked(reason) = a {
+                            let d = seen.map(|seen| holds::Decision {
+                                project,
+                                task,
+                                reason,
+                                seen,
+                                attempt: None,
+                            });
+                            holds::hold(pool, d, at).await;
+                        } else if placement == Some(&Placement::Reroute) {
+                            let attempt = a.replacement().map(|r| (r.predecessor, seen));
+                            let r = crate::routing::reroute(state, project, items, task, attempt);
+                            r.await;
+                            return Ok(Assessment::Blocked("route_class_unassigned"));
+                        }
+                        Ok(a)
+                    })
+                })
+                .await?
+                {
+                    let route = match placements.get(&task.task_id) {
+                        Some(Placement::Routed(route)) => Some(route.clone()),
+                        _ => None,
+                    };
+                    chosen = Some((policy, record, ready, task, assessment, route));
+                    break 'projects;
+                }
+                if further {
+                    rotation::set(policy.project_id, next);
+                    break;
+                }
+                cursor = rotation::get(policy.project_id).or(next);
+                if cursor.is_none() {
+                    break;
+                }
             }
         }
         let Some((policy, record, ready, task, assessment, route)) = chosen else {

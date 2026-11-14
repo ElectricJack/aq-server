@@ -142,7 +142,7 @@ async fn routed(pool: &PgPool, task: Uuid) {
     let purpose = aq_internal_work::Purpose::RoutingClassification;
     let resolved = aq_internal_work::store::resolve_failures(pool, purpose, &affected).await;
     let cleared = sqlx::query(
-        "UPDATE route_needed_emissions SET outcome=NULL,reasons=NULL WHERE task_id=$1 AND outcome IS NOT NULL",
+        "UPDATE route_needed_emissions SET wanted_at_ms=NULL,outcome=NULL,reasons=NULL WHERE task_id=$1",
     )
     .bind(task)
     .execute(pool)
@@ -331,6 +331,7 @@ pub async fn placements(
         record.binding.project_id,
     );
     let mut assigned = std::collections::BTreeMap::new();
+    let mut routed_ids = vec![];
     for task in ready {
         let (id, metadata) = (task.revision.task_id, &task.node["metadata"]);
         let attempts = ended.get(&id).map_or(0, |n| *n as u64);
@@ -350,6 +351,8 @@ pub async fn placements(
         }
         if placement == Placement::Wait {
             wanted(pool, now, project, &task.revision).await?;
+        } else if matches!(placement, Placement::Routed(_)) {
+            routed_ids.push(id);
         }
         if let Placement::Routed(route) = &placement {
             let known = assigned.get(&route.c).copied();
@@ -365,6 +368,14 @@ pub async fn placements(
         if placement != Placement::Unchanged {
             out.insert(task.revision.task_id, placement);
         }
+    }
+    // A task seen with a route no longer waits for one.
+    if !routed_ids.is_empty() {
+        sqlx::query("UPDATE route_needed_emissions SET wanted_at_ms=NULL WHERE task_id=ANY($1) AND wanted_at_ms IS NOT NULL")
+            .bind(&routed_ids)
+            .execute(pool)
+            .await
+            .map_err(db)?;
     }
     Ok(out)
 }

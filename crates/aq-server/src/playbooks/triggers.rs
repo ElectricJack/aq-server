@@ -205,7 +205,7 @@ impl Service {
         let (Some(artifact), _) = self.routing_artifact(&mut tx).await? else {
             return Ok(0);
         };
-        let rows = sqlx::query("SELECT r.task_id,r.project_id,r.wanted_since_ms,r.wanted_version,r.task_version,r.emitted_at_ms,r.outcome,r.artifact_digest,r.options_digest,EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=r.task_id::text AND e.created_at_ms>=r.emitted_at_ms AND NOT playbook_run_finished($1,$2,e.run_id)) AS run_unfinished FROM route_needed_emissions r WHERE r.wanted_at_ms>=$3 AND ($4 OR r.project_id=$5) AND (r.emitted_at_ms=0 OR r.wanted_version<>r.task_version OR GREATEST(r.emitted_at_ms,r.checked_at_ms)<=$6) ORDER BY r.wanted_at_ms,r.task_id LIMIT $7 FOR UPDATE OF r SKIP LOCKED")
+        let rows = sqlx::query("SELECT r.task_id,r.project_id,r.wanted_since_ms,r.wanted_version,r.task_version,r.emitted_at_ms,r.outcome,r.artifact_digest,r.options_digest,EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=r.task_id::text AND e.created_at_ms>=r.emitted_at_ms AND e.created_at_ms>$8 AND NOT playbook_run_finished($1,$2,e.run_id)) AS run_unfinished FROM route_needed_emissions r WHERE r.wanted_at_ms>=$3 AND ($4 OR r.project_id=$5) AND (r.emitted_at_ms=0 OR r.wanted_version<>r.task_version OR GREATEST(r.emitted_at_ms,r.checked_at_ms)<=$6) ORDER BY r.wanted_at_ms,r.task_id LIMIT $7 FOR UPDATE OF r SKIP LOCKED")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
             .bind(now - host9::ROUTE_WANTED_FRESH_MS)
@@ -213,6 +213,7 @@ impl Service {
             .bind(self.namespace.project_id)
             .bind(now - host9::ROUTE_NEEDED_REPEAT_MS)
             .bind(i64::from(limit))
+            .bind(now - host9::ROUTE_RUN_BOUND_MS)
             .fetch_all(&mut *tx)
             .await?;
         let settled = |row: &sqlx::postgres::PgRow| row.get::<Option<String>, _>("outcome");

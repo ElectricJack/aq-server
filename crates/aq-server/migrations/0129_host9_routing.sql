@@ -35,5 +35,18 @@ ALTER TABLE route_needed_emissions
  ADD COLUMN wanted_at_ms BIGINT,
  ADD COLUMN wanted_since_ms BIGINT,
  ADD COLUMN checked_at_ms BIGINT NOT NULL DEFAULT 0;
+-- What the playbook owner last activated in the engine for a binding, by any
+-- path (configured deployments at startup, the owner's activate and rollback,
+-- authoring): the server's own record of the engine's binding, read where the
+-- engine cannot be asked (inside a dispatch, and by the route_needed source).
+CREATE TABLE playbook_engine_bindings (
+ namespace_id UUID NOT NULL,
+ generation BIGINT NOT NULL,
+ binding TEXT NOT NULL,
+ artifact TEXT NOT NULL,
+ at_ms BIGINT NOT NULL,
+ PRIMARY KEY(namespace_id,generation,binding),
+ FOREIGN KEY(namespace_id,generation) REFERENCES playbook_namespaces(namespace_id,generation)
+);
 SET LOCAL lock_timeout TO DEFAULT;
 UPDATE meta SET value='129' WHERE key='state_format_version';

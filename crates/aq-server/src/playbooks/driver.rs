@@ -555,10 +555,16 @@ impl Driver {
             )
             .await
             .map_err(host_error)?;
-        self.owner
-            .call(Request::Binding { binding }, self.deadline)
-            .await
-            .map_err(|_| Error::Unknown)
+        let current = Request::Binding {
+            binding: binding.clone(),
+        };
+        let active = (self.owner.call(current, self.deadline).await).map_err(|_| Error::Unknown)?;
+        // The server's record of the engine's binding (every activation
+        // path ends here), from the engine's own answer.
+        if let Some(artifact) = active["artifact"].as_str() {
+            self.service.binding_activated(&binding, artifact).await?;
+        }
+        Ok(active)
     }
     /// Recovery=false permits one exact retained first admission only under current
     /// grant. Recovery=true is lookup-only and cannot create a missing engine run.
@@ -971,7 +977,8 @@ impl Driver {
                 if old.artifact != artifact || old.authority != expected {
                     return Err(Error::Conflict);
                 }
-                Ok(())
+                // Active since an earlier start: recorded all the same.
+                self.service.binding_activated(&binding, &artifact).await
             }
             Err(aq_playbook_host::Error::Invalid) => {
                 self.activate(binding, artifact, grant, 1).await?;

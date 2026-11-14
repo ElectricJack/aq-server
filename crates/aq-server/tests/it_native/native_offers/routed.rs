@@ -283,6 +283,29 @@ async fn route_is_ignored_for_a_binding_pinned_to_a_named_profile() {
     assert_eq!(waiting(&c).await, 0);
 }
 
+/// Codex review 1: a task that waits at the head of the ready list does not hide the ready
+/// tasks behind it. When the head page offers nothing, each poll also reads one further page.
+#[tokio::test]
+async fn a_waiting_task_at_the_head_does_not_hide_the_ready_tasks_behind_it() {
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    routing(&c, true).await;
+    c.mode.store(11, Ordering::SeqCst);
+    assert_eq!(not_offered(&c).await, 0);
+    let wanted: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT task_id FROM route_needed_emissions ORDER BY wanted_at_ms,task_id",
+    )
+    .fetch_all(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        wanted.len(),
+        2,
+        "the task on the second page waits for a route too"
+    );
+    assert!(wanted.contains(&c.env.lineage.task_id) && wanted.contains(&c.second_task));
+}
+
 /// Tasks recorded as waiting for a route.
 async fn waiting(c: &Case) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM route_needed_emissions")
@@ -329,6 +352,14 @@ async fn a_task_retried_after_routing_is_routed_again() {
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(attempts(&c).await, 2);
+    // Codex review 6: placement saw it routed, so it no longer waits for a route.
+    let still: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM route_needed_emissions WHERE wanted_at_ms IS NOT NULL",
+    )
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(still, 0);
 }
 
 #[tokio::test]

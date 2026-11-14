@@ -389,6 +389,11 @@ pub const ROUTE_WANTED_REFRESH_MS: i64 = 30_000;
 /// A row placement has not refreshed for this long is no longer waiting.
 pub const ROUTE_WANTED_FRESH_MS: i64 = 300_000;
 
+/// A run that read the task this long ago no longer holds back a new ask,
+/// whether or not its end is on record (run history is a rolling record and
+/// may not be readable).
+pub const ROUTE_RUN_BOUND_MS: i64 = 900_000;
+
 /// One task's `route_needed_emissions` row, as the emitter reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Emission {
