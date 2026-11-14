@@ -58,9 +58,11 @@ This answers the question of what to do with limits on work happening now
 (for example the counts of attempts that may be live at once). They are not
 removed by the rolling rule, but none may be a constant in code or a number in
 a migration. The offer rate limits (30 offers per machine, 240 per project and
-960 per server an hour) were not made settings: the owner removed them on
-2026-11-13 ("I'm not sure that limit is needed anymore, lets just remove them
-instead"; spec 0008 §7.2, migration 0124).
+960 per server an hour) and the worker report rate limits (720 reports per
+node and 11,520 per server an hour) were not made settings: the owner removed
+them on 2026-11-13 ("I'm not sure that limit is needed anymore, lets just
+remove them instead"; "Yes remove the worker report limit too"; spec 0008
+§7.2, migration 0124).
 
 1. Every limit that can hold, slow or refuse work is a value in Settings, with
    a default, shown in the dashboard next to what it limits, and changeable by
@@ -91,8 +93,8 @@ These stay, and a spec that keeps one says why:
   per request, a per-response cap.
 - **Controls on work happening at this moment:** concurrency, the owner's
   swarm matrix, worker slots, live-row backstops that count only work in
-  progress. (Offers per node per hour was one until the owner removed the
-  offer rate limits on 2026-11-13.)
+  progress. (Offers and worker reports per node per hour were ones until the
+  owner removed those rate limits on 2026-11-13.)
 - **Budgets the owner set on purpose:** per-task retry, time and cost
   budgets, sandbox-minute budgets, provider quota. Deleting old attempts must
   keep the counts these budgets read. The store that deletes an attempt first
@@ -213,6 +215,7 @@ Decided, so no longer open:
   pending ([0005](0005-sandboxed-execution-and-deployment-topology.md) §4
   step 7, SBX22).
 - **Limits on work happening now.** Answered by §1a: they are settings.
-- **Offer rate limits (owner, 2026-11-13).** Removed, not made settings
-  (spec 0008 §7.2). Per-task retry budgets remain the guard against a task
-  that fails in a loop.
+- **Offer and worker report rate limits (owner, 2026-11-13).** Removed, not
+  made settings (spec 0008 §7.2). Per-task retry budgets remain the guard
+  against a task that fails in a loop; the heartbeat log is bounded by
+  deleting old reports (§4).

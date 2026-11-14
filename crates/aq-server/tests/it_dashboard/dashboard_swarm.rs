@@ -473,10 +473,11 @@ async fn renewed_node_has_no_measurement_hold() {
     assert!(measurement_holds(&body).is_empty(), "{body}");
 }
 
-/// The offer rate limits were removed (owner, 2026-11-13): a node and its project past
-/// the old limits show no hold. The inventory report rate still holds the node.
+/// The offer and worker report rate limits were removed (owner, 2026-11-13): a node and
+/// its project past the old offer limits, and a node past the old 720 reports an hour,
+/// show no hold, and nothing reads `history_rate_limited`.
 #[tokio::test]
-async fn swarm_shows_no_offer_rate_hold_and_the_inventory_report_rate_hold() {
+async fn swarm_shows_no_rate_hold_past_the_old_offer_and_report_limits() {
     let now = common::profiled::NOW;
     let f = common::profiled::fixture().await;
     let pool = f.db.pool().await;
@@ -491,35 +492,28 @@ async fn swarm_shows_no_offer_rate_hold_and_the_inventory_report_rate_hold() {
     let project = f.selection.lineage.project_id;
     common::sealed::offers(&pool, f.node.node_id, project, now as i64 - 1_000, 31).await;
     common::sealed::spread_offers(&pool, Some(project), 210, now as i64 - 1_000).await;
+    common::sealed::inventories(&pool, f.node.node_id, 721, now as i64 - 60_000).await;
     let app = aq_server::build_admin_router(f.state.clone());
-    let node_of = |body: &Value| {
-        body["data"]["machines"]
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let node = body["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .find(|n| n["node"]["id"] == json!(f.node.node_id.to_string()))
+        .unwrap();
+    assert!(
+        !node["holding"]
             .as_array()
             .unwrap()
             .iter()
-            .flat_map(|m| m["nodes"].as_array().unwrap())
-            .find(|n| n["node"]["id"] == json!(f.node.node_id.to_string()))
-            .unwrap()
-            .clone()
-    };
-    let (status, body) = read(&app, "/api/v1/swarm").await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        !body.to_string().contains("history_rate_limited"),
-        "no offer-rate hold: {body}"
-    );
-    common::sealed::inventories(&pool, f.node.node_id, 720, now as i64 - 1_000).await;
-    let (status, body) = read(&app, "/api/v1/swarm").await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let node = node_of(&body);
-    assert!(
-        node["holding"].as_array().unwrap().contains(&json!({
-            "code": "history_rate_limited",
-            "message": "Inventory report rate limit reached: 720 reports in the last hour (limit 720)",
-            "remedy": "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop"
-        })),
+            .any(|h| h["code"].as_str().unwrap().starts_with("history_")),
         "{node}"
     );
+    let text = body.to_string();
+    assert!(!text.contains("history_rate_limited"), "{text}");
+    assert!(!text.contains("rate limit reached"), "{text}");
 }
 
 #[test]

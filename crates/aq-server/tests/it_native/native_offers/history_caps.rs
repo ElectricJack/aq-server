@@ -1,6 +1,7 @@
 //! Spec 0008 phase A history holds on the poll. The offer rate limits (30 per node,
-//! 240 per project, 960 per server in an hour) were removed on 2026-11-13 (owner):
-//! more offers than that in an hour hold nothing. A live cap still holds a project.
+//! 240 per project, 960 per server in an hour) and the worker report rate limits (720
+//! per node, 11,520 per server) were removed on 2026-11-13 (owner): more than that in
+//! an hour holds nothing. A live cap still holds a project.
 use crate::common::{
     native_offer::{self, Case},
     sealed,
@@ -71,6 +72,26 @@ async fn a_node_a_project_and_the_server_past_the_old_offer_rates_are_not_held()
         !body.to_string().contains("Offer rate limit"),
         "no offer-rate hold: {body}"
     );
+}
+
+/// More worker reports in the last hour than the removed report rate allowed, for the
+/// node (721 against 720) and the server (12,241 against 11,520): no hold, and the poll
+/// offers work. The reports are a minute old (expired), so no live cap counts them.
+#[tokio::test]
+async fn a_node_and_the_server_past_the_old_report_rates_are_not_held() {
+    let c = native_offer::setup().await;
+    let pool = &c.env.env.pool;
+    let now = (c.env.env.state.clock)().timestamp_millis();
+    let id = node(&c).await;
+    sealed::inventories(pool, id, 721, now - 60_000).await;
+    assert_eq!(gate(&c, id, now).await, (false, false, vec![]), "node: 721");
+    for _ in 0..16 {
+        sealed::inventories(pool, Uuid::new_v4(), 720, now - 60_000).await;
+    }
+    assert_eq!(gate(&c, id, now).await, (false, false, vec![]), "server");
+    let (status, body) = native_offer::poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered(&body), 1, "{body}");
 }
 
 /// A project at its artifact cap is dropped before the per-poll project limit (4)

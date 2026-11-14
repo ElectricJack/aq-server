@@ -252,24 +252,17 @@ pub fn catalog_matches(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Code {
-    /// The inventory report rate (`presence_rate`). The offer rate limits were removed by
-    /// migration 0124 (owner, 2026-11-13).
-    RateLimited,
-    CapReached,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Node(Uuid),
     Project(Uuid),
     Global,
 }
 
-/// One limit that holds new offers back.
+/// One live-row cap that holds new offers back. The rate limits (offers, worker
+/// reports) were removed by migration 0124 (owner, 2026-11-13), so every hold is a
+/// `history_cap_reached`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hold {
-    pub code: Code,
     /// A `sealed_history_limits()` kind, or `staging_exports`.
     pub kind: String,
     pub scope: Scope,
@@ -291,10 +284,7 @@ fn capitalised(s: &str) -> String {
 
 impl Hold {
     pub fn code_name(&self) -> &'static str {
-        match self.code {
-            Code::RateLimited => "history_rate_limited",
-            Code::CapReached => "history_cap_reached",
-        }
+        "history_cap_reached"
     }
     pub fn subject(&self) -> &'static str {
         match (self.kind.as_str(), self.bytes) {
@@ -313,16 +303,11 @@ impl Hold {
     }
     pub fn message(&self) -> String {
         let (used, limit) = (self.used, self.limit);
-        let body = match self.code {
-            Code::RateLimited => format!(
-                "inventory report rate limit reached: {used} reports in the last hour (limit {limit})"
-            ),
-            Code::CapReached => format!(
-                "live {} cap reached: {used} of {limit}{}",
-                self.subject(),
-                if self.bytes { " bytes" } else { "" }
-            ),
-        };
+        let body = format!(
+            "live {} cap reached: {used} of {limit}{}",
+            self.subject(),
+            if self.bytes { " bytes" } else { "" }
+        );
         match self.scope {
             Scope::Node(_) => capitalised(&body),
             Scope::Project(p) => format!("Project {p}: {body}"),
@@ -330,12 +315,7 @@ impl Hold {
         }
     }
     pub fn remedy(&self) -> &'static str {
-        match self.code {
-            Code::RateLimited => {
-                "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop"
-            }
-            Code::CapReached => "Wait for running agents to settle",
-        }
+        "Wait for running agents to settle"
     }
     pub fn log_line(&self) -> String {
         format!(
@@ -349,7 +329,7 @@ impl Hold {
     }
 }
 
-type HoldRow = (String, String, String, Option<Uuid>, String, i64, i64);
+type HoldRow = (String, String, Option<Uuid>, String, i64, i64);
 
 async fn sql_holds(
     conn: &mut PgConnection,
@@ -358,7 +338,7 @@ async fn sql_holds(
     now_ms: u64,
 ) -> Result<Vec<Hold>, sqlx::Error> {
     let rows: Vec<HoldRow> = sqlx::query_as(
-        "SELECT hold_code,hold_kind,hold_scope,hold_scope_id,hold_unit,hold_used,hold_limit FROM sealed_history_holds($1,$2,$3)",
+        "SELECT hold_kind,hold_scope,hold_scope_id,hold_unit,hold_used,hold_limit FROM sealed_history_holds($1,$2,$3)",
     )
     .bind(nodes)
     .bind(projects)
@@ -367,12 +347,7 @@ async fn sql_holds(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(code, kind, scope, id, unit, used, limit)| Hold {
-            code: if code == "history_rate_limited" {
-                Code::RateLimited
-            } else {
-                Code::CapReached
-            },
+        .map(|(kind, scope, id, unit, used, limit)| Hold {
             scope: match (scope.as_str(), id) {
                 ("node", Some(n)) => Scope::Node(n),
                 ("project", Some(p)) => Scope::Project(p),
@@ -404,7 +379,6 @@ pub async fn holds(
         let limit = ms(max);
         if used.saturating_add(ms(bundle)) > limit {
             holds.push(Hold {
-                code: Code::CapReached,
                 kind: "staging_exports".into(),
                 scope: Scope::Global,
                 bytes: true,
@@ -492,9 +466,8 @@ mod tests {
     }
     use super::*;
 
-    fn hold(code: Code, kind: &str, scope: Scope, bytes: bool, used: i64, limit: i64) -> Hold {
+    fn hold(kind: &str, scope: Scope, bytes: bool, used: i64, limit: i64) -> Hold {
         Hold {
-            code,
             kind: kind.into(),
             scope,
             bytes,
@@ -503,51 +476,37 @@ mod tests {
         }
     }
 
+    /// The offer and report rate limits were removed (owner, 2026-11-13): every hold is
+    /// a live cap, and none speaks of a rate.
     #[test]
-    fn inventory_rate_message_and_remedy() {
-        let h = hold(
-            Code::RateLimited,
+    fn every_hold_is_a_live_cap_and_none_names_a_rate() {
+        for kind in [
+            "offers",
+            "project_offers",
             "presence_rate",
-            Scope::Node(Uuid::nil()),
-            false,
-            720,
-            720,
-        );
-        assert_eq!(
-            h.message(),
-            "Inventory report rate limit reached: 720 reports in the last hour (limit 720)"
-        );
-        assert_eq!(
-            h.remedy(),
-            "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop"
-        );
-        assert_eq!(h.code_name(), "history_rate_limited");
-        let server = Hold {
-            scope: Scope::Global,
-            ..h
-        };
-        assert_eq!(
-            server.message(),
-            "Server: inventory report rate limit reached: 720 reports in the last hour (limit 720)"
-        );
-    }
-
-    /// The offer rate limits were removed (owner, 2026-11-13): no hold speaks of offers.
-    #[test]
-    fn no_hold_message_names_an_offer_rate() {
-        for code in [Code::RateLimited, Code::CapReached] {
-            for kind in ["offers", "project_offers", "presence_rate"] {
-                let h = hold(code, kind, Scope::Node(Uuid::nil()), false, 31, 30);
-                assert!(!h.message().contains("ffer rate"), "{}", h.message());
-                assert!(!h.remedy().contains("task that fails"), "{}", h.remedy());
-            }
+            "presence_operations",
+        ] {
+            let h = hold(kind, Scope::Node(Uuid::nil()), false, 31, 30);
+            assert_eq!(h.code_name(), "history_cap_reached");
+            assert!(!h.message().contains("rate"), "{}", h.message());
+            assert_eq!(h.remedy(), "Wait for running agents to settle");
         }
+        assert_eq!(
+            hold(
+                "presence_operations",
+                Scope::Node(Uuid::nil()),
+                false,
+                4096,
+                4096
+            )
+            .message(),
+            "Live inventory reports cap reached: 4096 of 4096"
+        );
     }
 
     #[test]
     fn project_cap_message() {
         let h = hold(
-            Code::CapReached,
             "admission_artifacts",
             Scope::Project(Uuid::from_u128(1)),
             false,
@@ -565,7 +524,6 @@ mod tests {
     #[test]
     fn server_bytes_message() {
         let h = hold(
-            Code::CapReached,
             "native_preparation",
             Scope::Global,
             true,
@@ -577,7 +535,6 @@ mod tests {
             "Server: live preparation bytes cap reached: 4194000 of 4194304 bytes"
         );
         let leases = hold(
-            Code::CapReached,
             "native_preparation",
             Scope::Node(Uuid::nil()),
             false,

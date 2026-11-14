@@ -1,9 +1,14 @@
--- Spec 0008: the offer rate limits are removed (owner, 2026-11-13: "lets just remove
--- them"). Growth of sealed history is bounded by deleting old records (architecture
+-- Spec 0008: the rate limits are removed (owner, 2026-11-13). Offers: "lets just remove
+-- them instead"; worker reports: "Yes remove the worker report limit too". Growth of
+-- sealed history and of the report log is bounded by deleting old records (architecture
 -- 0006), and a task that fails in a loop by its retry, lineage, time and cost budgets.
--- Gone: the 30 per node, 240 per project and 960 per server offers an hour of
--- sealed_history_limits() (0103), and the fence 0105 put on profiled_launches. The
--- inventory report rate (presence_rate) and the live-row caps stay.
+-- Gone: the offer rows of sealed_history_limits() (30 per node, 240 per project, 960 per
+-- server an hour) and the fence 0105 put on profiled_launches; the report rows (720 per
+-- node, 11,520 per server an hour) and the rate branch of the 0104 presence guard. The
+-- live-row caps stay, including the presence guard's live cap.
+-- A lock that is not granted in 5 s fails this migration (55P03) instead of hanging
+-- startup: the whole migration transaction rolls back and the server exits, to retry.
+SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION sealed_history_limits()
 RETURNS TABLE(kind TEXT, scope TEXT, max_rows BIGINT, max_bytes BIGINT, headroom_rows BIGINT, headroom_bytes BIGINT)
 LANGUAGE sql IMMUTABLE AS $$
@@ -19,8 +24,6 @@ LANGUAGE sql IMMUTABLE AS $$
   ('phase_terminal','node',16,16777216,1,1048576),
   ('presence_operations','global',65536,268435456,1,0),
   ('presence_operations','node',4096,16777216,1,0),
-  ('presence_rate','global',11520,NULL,1,0),
-  ('presence_rate','node',720,NULL,1,0),
   ('source_exports','global',4096,268435456,1,4202496),
   ('source_exports','project',256,67108864,1,4202496),
   ('v2_proposals','global',4096,NULL,1,0),
@@ -99,39 +102,69 @@ BEGIN
   RETURN QUERY SELECT o.node_id,count(*)::BIGINT,COALESCE(sum(octet_length(o.request_bytes)+octet_length(o.receipt_bytes)+1024),0)::BIGINT
    FROM profiled_presence_operations o
    WHERE o.expires_at_ms>p_now_ms OR (o.attempt_id=ANY(live) AND o.kind='presence') GROUP BY o.node_id;
- ELSIF p_kind='presence_rate' THEN
-  RETURN QUERY SELECT o.node_id,count(*)::BIGINT,0::BIGINT
-   FROM profiled_presence_operations o WHERE o.recorded_at_ms>p_now_ms-3600000 GROUP BY o.node_id;
- ELSIF p_kind IN ('offers','project_offers') THEN
-  -- Removed by 0124: no offer rate. An empty kind, so a 0105 fence that the
+ ELSIF p_kind IN ('presence_rate','offers','project_offers') THEN
+  -- Removed by 0124: no report or offer rate. Empty kinds, so a 0105 fence that the
   -- migrating role could not drop counts no offers and never refuses.
   RETURN;
  ELSE
   RAISE EXCEPTION 'unknown sealed history kind %',p_kind;
  END IF;
 END $$;
+-- The 0104 guard without its report rate: the body checks and the live-row cap are kept
+-- byte for byte, and the storage counters still saturate as statistics.
+CREATE OR REPLACE FUNCTION profiled_presence_operation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE g profiled_presence_storage%ROWTYPE; n profiled_presence_node_storage%ROWTYPE; incoming BIGINT; q JSONB; a JSONB; u RECORD;
+BEGIN
+ q:=convert_from(NEW.request_bytes,'UTF8')::JSONB; a:=convert_from(NEW.receipt_bytes,'UTF8')::JSONB;
+ IF (q->>'operation_id')::UUID IS DISTINCT FROM NEW.operation_id OR (q#>>'{identity,node_id}')::UUID IS DISTINCT FROM NEW.node_id
+ OR (q#>>'{identity,boot_id}')::UUID IS DISTINCT FROM NEW.boot_id OR (q->>'sequence')::BIGINT IS DISTINCT FROM NEW.sequence
+ OR (CASE WHEN NEW.kind='inventory_v2' THEN a#>>'{inventory,request_digest}' ELSE a->>'request_digest' END) IS DISTINCT FROM NEW.request_digest
+ OR (a#>>'{identity,node_id}')::UUID IS DISTINCT FROM NEW.node_id OR (a#>>'{identity,boot_id}')::UUID IS DISTINCT FROM NEW.boot_id
+ OR (a->>'recorded_at_ms')::BIGINT IS DISTINCT FROM NEW.recorded_at_ms
+ OR (a->>'expires_at_ms')::BIGINT IS DISTINCT FROM NEW.expires_at_ms OR q->>'schema_version' IS DISTINCT FROM '1' OR a->>'schema_version' IS DISTINCT FROM '1'
+ THEN RAISE EXCEPTION 'presence operation body scope'; END IF;
+ IF NEW.kind='inventory_v2' AND ((a#>>'{inventory,revision}')::BIGINT IS DISTINCT FROM NEW.inventory_revision OR a#>>'{inventory,snapshot_digest}' IS DISTINCT FROM NEW.snapshot_digest)
+ THEN RAISE EXCEPTION 'inventory body receipt scope'; END IF;
+ IF NEW.kind='presence' AND ((q#>>'{binding,attempt_id}')::UUID IS DISTINCT FROM NEW.attempt_id OR (q->>'lease_id')::UUID IS DISTINCT FROM NEW.lease_id OR (q->>'grant_id')::UUID IS DISTINCT FROM NEW.grant_id
+ OR a->'binding' IS DISTINCT FROM q->'binding' OR (a->>'operation_id')::UUID IS DISTINCT FROM NEW.operation_id OR (a->>'sequence')::BIGINT IS DISTINCT FROM NEW.sequence)
+ THEN RAISE EXCEPTION 'presence attempt lease scope'; END IF;
+ incoming:=octet_length(NEW.request_bytes)::BIGINT+octet_length(NEW.receipt_bytes)::BIGINT+1024;
+ SELECT * INTO g FROM profiled_presence_storage WHERE singleton FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'presence storage owner missing'; END IF;
+ INSERT INTO profiled_presence_node_storage(node_id) VALUES(NEW.node_id) ON CONFLICT DO NOTHING;
+ SELECT * INTO n FROM profiled_presence_node_storage WHERE node_id=NEW.node_id FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'presence node storage missing'; END IF;
+ SELECT * INTO u FROM sealed_history_usage('presence_operations',NEW.node_id,NEW.recorded_at_ms);
+ IF u.total_rows>=65536 OR u.scope_rows>=4096 OR u.total_bytes+incoming>268435456 OR u.scope_bytes+incoming>16777216
+ THEN RAISE EXCEPTION 'scoped presence retention capacity' USING ERRCODE='54000'; END IF;
+ UPDATE profiled_presence_storage SET operations=LEAST(operations+1,65536),logical_bytes=LEAST(logical_bytes+incoming,268435456) WHERE singleton;
+ UPDATE profiled_presence_node_storage SET operations=LEAST(operations+1,4096),logical_bytes=LEAST(logical_bytes+incoming,16777216) WHERE node_id=NEW.node_id;
+ RETURN NEW;
+END $$;
 -- 0105 created the trigger and its function as the migrating role, on a table that
--- role created (0010), so this role can drop both. A role that cannot (it owns
--- neither) leaves them in place: the fence then counts no offers (above) and never
--- refuses, and this migration still applies.
+-- role created (0010), so this role can drop both. A role that cannot drop the trigger
+-- leaves it: the fence then counts no offers (above), but its advisory lock still
+-- serialises launch inserts, so a function the role owns is emptied. This migration
+-- applies either way.
 DO $$
 DECLARE fence REGPROCEDURE := to_regprocedure('profiled_launch_offer_rate()');
+ owns_fence BOOLEAN;
 BEGIN
+ owns_fence := fence IS NOT NULL AND pg_has_role((SELECT p.proowner FROM pg_proc p WHERE p.oid=fence),'USAGE');
  IF EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('profiled_launches')
    AND t.tgname='profiled_launch_offer_rate' AND NOT t.tgisinternal) THEN
   IF pg_has_role((SELECT c.relowner FROM pg_class c WHERE c.oid=to_regclass('profiled_launches')),'USAGE') THEN
    DROP TRIGGER profiled_launch_offer_rate ON profiled_launches;
+  ELSIF owns_fence THEN
+   EXECUTE 'CREATE OR REPLACE FUNCTION profiled_launch_offer_rate() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$';
+   RAISE WARNING 'offer rate fence left on profiled_launches: % does not own the table; its function was emptied', current_user;
   ELSE
-   RAISE WARNING 'offer rate fence left on profiled_launches: % does not own the table; it counts no offers', current_user;
+   RAISE WARNING 'offer rate fence left on profiled_launches: % owns neither the table nor its function; it counts no offers but still serialises launch inserts', current_user;
   END IF;
  END IF;
- IF fence IS NOT NULL THEN
-  IF pg_has_role((SELECT p.proowner FROM pg_proc p WHERE p.oid=fence),'USAGE')
-    AND NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgfoid=fence) THEN
-   DROP FUNCTION profiled_launch_offer_rate();
-  ELSE
-   RAISE WARNING 'profiled_launch_offer_rate() left in place: not owned by % or still in use', current_user;
-  END IF;
+ IF owns_fence AND NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgfoid=fence) THEN
+  DROP FUNCTION profiled_launch_offer_rate();
  END IF;
 END $$;
+SET LOCAL lock_timeout TO DEFAULT;
 UPDATE meta SET value='124' WHERE key='state_format_version';

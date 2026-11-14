@@ -256,8 +256,8 @@ pub enum HoldCode {
     NoMachineOnline,
     NoEligibleMachine,
     NoFreeSlot,
-    // Spec 0008: the inventory report rate limit holds new work. The offer rate limits
-    // that also used this code were removed on 2026-11-13; the code stays for the wire.
+    // Unused: no server sends it. Spec 0008's offer and worker report rate limits were
+    // removed on 2026-11-13; the code stays only because dashboard-read-1 pins it.
     HistoryRateLimited,
     // Spec 0008: a live sealed-history cap holds new work.
     HistoryCapReached,
