@@ -389,6 +389,11 @@ pub const ROUTE_WANTED_REFRESH_MS: i64 = 30_000;
 /// A row placement has not refreshed for this long is no longer waiting.
 pub const ROUTE_WANTED_FRESH_MS: i64 = 300_000;
 
+/// A run that read the task this long ago no longer holds back a new ask,
+/// whether or not its end is on record (run history is a rolling record and
+/// may not be readable).
+pub const ROUTE_RUN_BOUND_MS: i64 = 900_000;
+
 /// One task's `route_needed_emissions` row, as the emitter reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Emission {
@@ -448,6 +453,63 @@ pub fn route_needed_event(
         observed_at_ms: Some(now_ms),
         payload: json!({"subject": {"id": task.to_string(), "revision": revision}}),
     })
+}
+
+// --------------------------------------------------- routing failures (W6)
+
+/// A ready task still without a route after this long is raised.
+pub const UNROUTED_RAISE_MS: i64 = 600_000;
+
+/// The reasons a playbook gave, as a sentence: each reason's own words, or
+/// its code when it has none.
+fn reason_words(reasons: &Value) -> String {
+    let words: Vec<&str> = (reasons.as_array().into_iter().flatten())
+        .filter_map(|r| {
+            r["detail"]
+                .as_str()
+                .filter(|d| !d.trim().is_empty())
+                .or(r["code"].as_str())
+        })
+        .collect();
+    match words.is_empty() {
+        true => "none given".into(),
+        false => words.join(" "),
+    }
+}
+
+/// Why a task that could not be routed is raised, once per cause: the cause
+/// key (the outcome at the task version) and what happened in the owner's
+/// words. `input` is the `work.route` or `work.unroutable` input, or null
+/// for a task that only waited.
+pub fn routing_failure(outcome: &str, version: i64, input: &Value) -> (String, String) {
+    let list = |name: &str| {
+        let names = names(&input[name]);
+        (!names.is_empty()).then(|| format!(", {name} {}", names.join(", ")))
+    };
+    let words = match outcome {
+        "not_offered" => format!(
+            "The routing playbook chose level {}{}{} for this task, but nothing in Settings can \
+             take it there. Assign a profile to that level in Settings > Intelligence (or add the \
+             harness or provider to it), change the routing document, or set the task's route \
+             yourself. The playbook's reasons: {}",
+            input["level"].as_str().unwrap_or("unknown"),
+            list("harnesses").unwrap_or_default(),
+            list("providers").unwrap_or_default(),
+            reason_words(&input["reasons"]),
+        ),
+        "unroutable" => format!(
+            "The routing document allows no agent to take this task, so it is left unrouted. \
+             Change the task or the routing document, or set the task's route yourself. The \
+             playbook's reasons: {}",
+            reason_words(&input["reasons"]),
+        ),
+        _ => "This task has been ready for more than 10 minutes and has no route. The routing \
+              playbook has not routed it: its run may have failed or be stuck, or its judgment \
+              may have failed. Look at the playbook runs for this task, or set the task's route \
+              yourself."
+            .to_string(),
+    };
+    (format!("{outcome}@{version}"), words)
 }
 
 #[cfg(test)]
@@ -829,5 +891,31 @@ mod tests {
         );
         assert!(event.correlation.is_empty());
         assert_eq!(event.producer, "aq.host.bridge@1");
+    }
+    #[test]
+    fn a_routing_failure_is_keyed_by_cause_and_version_and_says_what_to_do() {
+        let input = json!({"level": "deep-high", "harnesses": ["claude"], "providers": [],
+            "reasons": [{"code": "deep_reserved", "detail": "Hard analysis needs Deep."}, {"code": "policy"}]});
+        let (cause, words) = routing_failure("not_offered", 4, &input);
+        assert_eq!(cause, "not_offered@4");
+        assert!(
+            words.contains("level deep-high, harnesses claude for this task"),
+            "{words}"
+        );
+        assert!(
+            words.ends_with("The playbook's reasons: Hard analysis needs Deep. policy"),
+            "{words}"
+        );
+        assert_ne!(routing_failure("not_offered", 5, &input).0, cause);
+        let (cause, words) = routing_failure(
+            "unroutable",
+            4,
+            &json!({"reasons": [{"code": "policy", "detail": "Never route payroll work."}]}),
+        );
+        assert_eq!(cause, "unroutable@4");
+        assert!(words.contains("allows no agent") && words.ends_with("Never route payroll work."));
+        let (cause, words) = routing_failure("unrouted", 4, &Value::Null);
+        assert_eq!(cause, "unrouted@4");
+        assert!(words.contains("more than 10 minutes"));
     }
 }

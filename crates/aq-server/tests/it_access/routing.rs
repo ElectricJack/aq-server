@@ -462,6 +462,66 @@ async fn call(app: &Router, method: &str, body: Option<Value>) -> (StatusCode, V
     )
 }
 
+/// Spec 0011 §4 W6: while routing has left a task without a route, the route read says why,
+/// and the failure raised for it is open. A route (here the owner's) resolves both.
+#[tokio::test]
+async fn a_route_resolves_what_was_raised_and_the_read_stops_saying_unrouted() {
+    use aq_internal_work::{Affected, Purpose, Reason, store};
+    let e = setup().await;
+    let app = owner_app(&e).await;
+    let read = || async {
+        let request = axum::http::Request::get(format!("/api/tasks/{}/routes", e.task))
+            .header("x-aq-dev-email", "owner@localhost")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice::<Value>(&bytes).unwrap()
+    };
+    assert_eq!(read().await, json!({"items": []}));
+    let reasons = json!([{"code": "policy", "detail": "Never route payroll work."}]);
+    sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,outcome,reasons) VALUES($1,3,1,'unroutable',$2)")
+        .bind(e.task)
+        .bind(&reasons)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let affected = Affected {
+        kind: "task".into(),
+        id: e.task.to_string(),
+        project_id: None,
+    };
+    let purpose = Purpose::RoutingClassification;
+    let failure = (
+        Reason::NoCandidate,
+        "The routing document allows no agent to take this task.",
+    );
+    let raised = store::record_failure(&e.pool, purpose, &affected, "unroutable@3", failure, 1);
+    let raised = raised.await.unwrap().unwrap();
+    assert_eq!(
+        read().await,
+        json!({"items": [], "unrouted": {"outcome": "unroutable", "reasons": reasons, "task_version": 3}})
+    );
+    // A stale write changes nothing; a route that is written resolves it.
+    assert_eq!(
+        e.write(2, &route(Source::Owner)).await.unwrap(),
+        Written::Stale
+    );
+    assert!(read().await.get("unrouted").is_some());
+    assert!(matches!(
+        e.write(3, &route(Source::Owner)).await.unwrap(),
+        Written::Routed { .. }
+    ));
+    let body = read().await;
+    assert_eq!(body.get("unrouted"), None);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    let run = store::get(&e.pool, raised).await.unwrap().unwrap();
+    assert_eq!(run.escalation, "resolved");
+    // Nothing is left for the escalation step to send anywhere.
+    assert!(store::escalate_due(&e.pool, 2).await.unwrap().is_empty());
+}
+
 /// Spec 0013 §7: the switch needs an active routing playbook. None can be active yet (the
 /// decision table is retired), so turning routing on is refused; turning it off always works.
 #[tokio::test]

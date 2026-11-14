@@ -62,7 +62,8 @@ async fn switch(
 }
 
 /// `GET /api/tasks/{id}/routes`: every route the task has had, newest first, with its reasons
-/// and classification; a cleared route is `route: null`.
+/// and classification; a cleared route is `route: null`. `unrouted` is present while routing
+/// has left the task without a route: `{outcome, reasons, task_version}`.
 async fn routes(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -72,7 +73,12 @@ async fn routes(
     let items: Vec<Value> = (items.iter())
         .map(|r| json!({"sequence":r.sequence,"at_ms":r.at_ms,"route":r.route}))
         .collect();
-    Ok(Json(json!({"items":items})))
+    let mut body = json!({"items":items});
+    // Why routing left the task without a route, while that holds.
+    if let Some(unrouted) = super::unrouted(&state.store.pool, task).await? {
+        body["unrouted"] = unrouted;
+    }
+    Ok(Json(body))
 }
 
 fn compact(route: &CompactRoute) -> Value {

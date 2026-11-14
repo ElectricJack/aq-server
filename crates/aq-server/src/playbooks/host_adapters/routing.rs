@@ -108,7 +108,7 @@ impl Service {
     pub(super) async fn routed_task(
         &self,
         subject: &Value,
-    ) -> Result<std::result::Result<(Uuid, Uuid, Value), &'static str>> {
+    ) -> Result<std::result::Result<(Uuid, (Uuid, Uuid), Value), &'static str>> {
         let ports = self.ports()?;
         let Ok(task) = Uuid::parse_str(text(subject, "id")?) else {
             return Ok(Err("unknown_task"));
@@ -121,7 +121,7 @@ impl Service {
             return Ok(Err("not_on_router"));
         }
         Ok(match ports.graph.node(workspace, task).await? {
-            Some(node) => Ok((task, workspace, node)),
+            Some(node) => Ok((task, (workspace, project), node)),
             None => Err("unknown_task"),
         })
     }
@@ -136,7 +136,7 @@ impl Service {
         let asked = input["subject"]["revision"]
             .as_i64()
             .ok_or(Error::Invalid)?;
-        let (task, workspace, node) = match self.routed_task(&input["subject"]).await? {
+        let (task, (workspace, project), node) = match self.routed_task(&input["subject"]).await? {
             Ok(found) => found,
             Err(reason) => return Ok(result("refused", host9::refusal(id, asked, reason))),
         };
@@ -175,12 +175,12 @@ impl Service {
                 let node = self.ports()?.graph.node(workspace, task).await?;
                 left = node_version(&node.ok_or(Error::Unknown)?)?;
             }
-            self.route_settled(tx, task, left, "unroutable", reasons, None)
+            self.route_settled(tx, (task, project), left, "unroutable", input, None)
                 .await?;
             return Ok(result("recorded", host9::task_output(id, left)));
         }
         let options = routing.options().await?;
-        let (artifact_digest, source_revision) = self.routing_artifact(tx).await?;
+        let (artifact_digest, source_revision) = self.deciding_artifact(tx, task).await?;
         let from = Provenance {
             artifact_digest: artifact_digest.as_deref(),
             source_revision,
@@ -188,50 +188,107 @@ impl Service {
         };
         let Some(route) = host9::route_from_input(input, &options, from) else {
             let offers = host9::options_digest(&options);
-            self.route_settled(tx, task, version, "not_offered", reasons, Some(&offers))
-                .await?;
+            self.route_settled(
+                tx,
+                (task, project),
+                version,
+                "not_offered",
+                input,
+                Some(&offers),
+            )
+            .await?;
             return refused("not_offered");
         };
-        Ok(match routing.write(at, Some(&route)).await? {
-            Written::Routed { .. } => result("routed", host9::routed_output(id, version, &route)),
-            Written::Stale => return stale(),
-        })
+        if routing.write(at, Some(&route)).await? == Written::Stale {
+            return stale();
+        }
+        // The task has its route: it no longer waits, and nothing more is asked.
+        sqlx::query("UPDATE route_needed_emissions SET wanted_at_ms=NULL,outcome=NULL,reasons=NULL WHERE task_id=$1")
+            .bind(task)
+            .execute(&mut **tx)
+            .await?;
+        Ok(result("routed", host9::routed_output(id, version, &route)))
     }
 
-    /// The active artifact of the routing binding and the source revision it
-    /// was authored from: the active authoring run, else the newest
-    /// activation in this namespace's ledger.
+    /// The artifact the engine has active on the routing binding (what the
+    /// playbook owner last activated there, by any path) and the source
+    /// revision it was authored from, when it was authored.
     pub(crate) async fn routing_artifact(
         &self,
         db: &mut PgConnection,
     ) -> Result<(Option<String>, Option<u64>)> {
-        let authored: Option<(String, i64)> = sqlx::query_as("SELECT r.artifact_digest,r.source_revision FROM playbook_authoring_runs r JOIN playbook_sources s ON s.id=r.source_id WHERE s.binding=$1 AND r.status='saved' AND r.active")
-            .bind(host9::ROUTING_BINDING)
-            .fetch_optional(&mut *db)
-            .await?;
-        if let Some((digest, revision)) = authored {
-            return Ok((Some(digest), u64::try_from(revision).ok()));
-        }
-        let activated = sqlx::query_scalar("SELECT artifact FROM playbook_activations WHERE namespace_id=$1 AND binding=$2 AND kind<>'install' ORDER BY seq DESC LIMIT 1")
+        let active: Option<String> = sqlx::query_scalar("SELECT artifact FROM playbook_engine_bindings WHERE namespace_id=$1 AND generation=$2 AND binding=$3")
             .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
             .bind(host9::ROUTING_BINDING)
             .fetch_optional(&mut *db)
             .await?;
-        Ok((activated, None))
+        self.authored(db, active).await
+    }
+
+    /// `artifact` with the source revision of the authoring run that saved it.
+    async fn authored(
+        &self,
+        db: &mut PgConnection,
+        artifact: Option<String>,
+    ) -> Result<(Option<String>, Option<u64>)> {
+        let revision: Option<i64> = sqlx::query_scalar("SELECT source_revision FROM playbook_authoring_runs WHERE artifact_digest=$1 AND status='saved' ORDER BY id DESC LIMIT 1")
+            .bind(&artifact)
+            .fetch_optional(&mut *db)
+            .await?;
+        Ok((artifact, revision.and_then(|r| u64::try_from(r).ok())))
+    }
+
+    /// The artifact that decides about `task`: the one that was active when
+    /// the server asked for its route (the run that answers started under
+    /// it), else the active one. A run that began under an earlier artifact
+    /// never speaks for a later one.
+    async fn deciding_artifact(
+        &self,
+        db: &mut PgConnection,
+        task: Uuid,
+    ) -> Result<(Option<String>, Option<u64>)> {
+        let asked: Option<Option<String>> = sqlx::query_scalar("SELECT artifact_digest FROM route_needed_emissions WHERE task_id=$1 AND emitted_at_ms>0 AND outcome IS NULL")
+            .bind(task)
+            .fetch_optional(&mut *db)
+            .await?;
+        match asked.flatten() {
+            Some(asked) => self.authored(db, Some(asked)).await,
+            None => self.routing_artifact(db).await,
+        }
+    }
+
+    /// Records what the playbook owner activated in the engine for a binding.
+    pub(crate) async fn binding_activated(&self, binding: &str, artifact: &str) -> Result<()> {
+        sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,$2,$3,$4,$5) ON CONFLICT(namespace_id,generation,binding) DO UPDATE SET artifact=$4,at_ms=$5 WHERE playbook_engine_bindings.artifact<>$4")
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(binding)
+            .bind(artifact)
+            .bind(self.now()?)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Records why the task is not asked about again (`not_offered`,
-    /// `unroutable`) for this task version, routing artifact and offers.
+    /// `unroutable`) for this task version, routing artifact and offers, and
+    /// raises it (W6), once for this outcome at this task version.
     async fn route_settled(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        task: Uuid,
+        (task, project): (Uuid, Uuid),
         version: i64,
         outcome: &str,
-        reasons: &Value,
+        input: &Value,
         offers: Option<&str>,
     ) -> Result<()> {
-        let (artifact, _) = self.routing_artifact(tx).await?;
+        let reasons = &input["reasons"];
+        self.routing_failure((task, project), outcome, version, input)
+            .await?;
+        // Settled under the artifact that was asked (the row's), not one
+        // activated since: a new artifact is a new cause and asks again.
+        let (artifact, _) = self.deciding_artifact(tx, task).await?;
         sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,outcome,reasons,artifact_digest,options_digest) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(task_id) DO UPDATE SET task_version=$2,outcome=$4,reasons=$5,artifact_digest=$6,options_digest=$7")
             .bind(task)
             .bind(version)
@@ -243,5 +300,37 @@ impl Service {
             .execute(&mut **tx)
             .await?;
         Ok(())
+    }
+
+    /// W6: a task routing could not route follows the internal work failure
+    /// path (a supervisor first, then the owner's attention), once per cause.
+    pub(crate) async fn routing_failure(
+        &self,
+        (task, project): (Uuid, Uuid),
+        outcome: &str,
+        version: i64,
+        input: &Value,
+    ) -> Result<bool> {
+        use aq_internal_work::{Affected, Purpose, Reason, store};
+        let (cause, words) = host9::routing_failure(outcome, version, input);
+        let affected = Affected {
+            kind: "task".into(),
+            id: task.to_string(),
+            project_id: Some(project),
+        };
+        let reason = match outcome {
+            "unrouted" => Reason::DeadlineExceeded,
+            _ => Reason::NoCandidate,
+        };
+        let purpose = Purpose::RoutingClassification;
+        let raised = store::record_failure(
+            &self.pool,
+            purpose,
+            &affected,
+            &cause,
+            (reason, &words),
+            self.now()?,
+        );
+        Ok(raised.await.map_err(|_| Error::Unknown)?.is_some())
     }
 }

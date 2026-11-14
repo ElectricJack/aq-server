@@ -166,7 +166,9 @@ impl authoring::Deployer for AppState {
         if current
             .is_some_and(|a| a.artifact == digest && Some(&a.authority) == authority.as_ref().ok())
         {
-            return Ok(());
+            // Already there: make sure the server's own record of it exists.
+            let recorded = driver.service.binding_activated(binding, digest).await;
+            return recorded.map_err(engine);
         }
         let activated = driver
             .activate(binding.into(), digest.into(), grant, revision)

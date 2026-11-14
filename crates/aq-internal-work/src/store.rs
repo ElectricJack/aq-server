@@ -175,6 +175,101 @@ pub async fn submit_failed(
     insert(pool, Uuid::new_v4(), request, &[], failure, None, now_ms).await
 }
 
+/// Records a failure the server itself found (spec 0011 §4 W6: a task that
+/// cannot be routed), so that it follows the failure path of spec 0012 §8:
+/// a `failed` run with no candidate and `escalate`, which the escalation
+/// step sends to a supervisor and then the owner. Once per `cause` for the
+/// affected item and purpose, whatever became of the earlier one: `None`
+/// when that cause is already on record. `detail` says what happened in the
+/// owner's words; a retry of the run only asks a model to restate it.
+pub async fn record_failure(
+    pool: &PgPool,
+    purpose: Purpose,
+    affected: &Affected,
+    cause: &str,
+    failure: (Reason, &str),
+    now_ms: i64,
+) -> Result<Option<Uuid>> {
+    let request = Request {
+        purpose,
+        instructions: format!(
+            "Say in one sentence what the owner should do about this: {}",
+            failure.1
+        ),
+        input: cause.into(),
+        answer: AnswerShape::Json {
+            schema: serde_json::json!({"type": "object"}),
+        },
+        blocking: false,
+        affected: affected.clone(),
+        deadline_ms: *crate::DEADLINE_MS.start(),
+        max_output_bytes: 4096,
+        escalate: true,
+        profile_override: None,
+        agent: None,
+    };
+    request.validate()?;
+    let mut tx = pool.begin().await?;
+    // One writer per item and cause, so two servers record it once.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!(
+            "aq.internal-work.failure/{}/{}/{cause}",
+            affected.kind, affected.id
+        ))
+        .execute(&mut *tx)
+        .await?;
+    let known: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM internal_tasks WHERE affected_kind=$1 AND affected_id=$2
+             AND purpose=$3 AND retry_of IS NULL AND jsonb_array_length(candidates)=0
+             AND request->>'input'=$4)",
+    )
+    .bind(&affected.kind)
+    .bind(&affected.id)
+    .bind(to_text(&purpose))
+    .bind(cause)
+    .fetch_one(&mut *tx)
+    .await?;
+    if known {
+        return Ok(None);
+    }
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO internal_tasks(id,purpose,request,candidates,status,blocking,deadline_at_ms,
+             created_at_ms,finished_at_ms,reason,detail,affected_kind,affected_id,project_id,escalate)
+         VALUES($1,$2,$3,'[]','failed',FALSE,$4,$4,$4,$5,$6,$7,$8,$9,TRUE)",
+    )
+    .bind(id)
+    .bind(to_text(&purpose))
+    .bind(to_json(&request))
+    .bind(now_ms)
+    .bind(to_text(&failure.0))
+    .bind(failure.1)
+    .bind(&affected.kind)
+    .bind(&affected.id)
+    .bind(affected.project_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(id))
+}
+
+/// Resolves every failure [`record_failure`] recorded for the affected item
+/// under `purpose` that is not resolved yet: its cause is gone (the task got
+/// a route). Returns how many.
+pub async fn resolve_failures(pool: &PgPool, purpose: Purpose, affected: &Affected) -> Result<u64> {
+    let resolved = sqlx::query(
+        "UPDATE internal_tasks SET escalation='resolved' WHERE affected_kind=$1 AND affected_id=$2
+             AND purpose=$3 AND status='failed' AND escalate AND retry_of IS NULL
+             AND jsonb_array_length(candidates)=0 AND escalation<>'resolved'",
+    )
+    .bind(&affected.kind)
+    .bind(&affected.id)
+    .bind(to_text(&purpose))
+    .execute(pool)
+    .await?;
+    Ok(resolved.rows_affected())
+}
+
 /// [`submit`], or [`submit_failed`] with `no_candidate` and `failure` as the
 /// detail, for a retry: the link to the earlier run is part of the insert, so
 /// the escalation step never sees the retry unlinked.
