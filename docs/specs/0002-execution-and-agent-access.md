@@ -1,6 +1,6 @@
 # Daemon execution coordination and remote agent access
 
-**Status:** Current implementation contract; foundations and scoped services exist, native execution/result integration remains open.
+**Status:** Current implementation contract. Native execution, result recording and automatic settlement run live on the local `aq-ms1` stack on one machine (MS1, 2026-11-06; swarm phase 1, 2026-11-09). No second machine has taken a queued task, and nothing is hosted. Current state: [`../status.md`](../status.md).
 
 **Date:** 2026-10-30
 

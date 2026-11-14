@@ -2,7 +2,7 @@
 //! pinned selection policy would refuse is blocked before selection, so it is
 //! skipped instead of failing the poll. An actual mounted publication pins the
 //! policy; the failure owner facts are synthetic.
-use crate::common::native_offer::{fail_and_release, pin_policy, poll, setup};
+use crate::common::native_offer::{fail_and_release, pin_policy, poll_offered, setup};
 use aq_admission::control::{ControlReply, decode_reply};
 use aq_server::profiled_execution::replacement::{self, Assessment};
 
@@ -10,7 +10,7 @@ use aq_server::profiled_execution::replacement::{self, Assessment};
 async fn pinned_policy_budget_blocks_before_selection() {
     let mut c = setup().await;
     pin_policy(&mut c, |p| p.max_attempts = 1).await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

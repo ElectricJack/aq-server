@@ -11,6 +11,11 @@ mod feedback;
 pub use feedback::*;
 mod placement;
 pub use placement::*;
+mod route;
+pub use aq_routing::RouteLimits;
+pub use route::{
+    RouteRefusal, is_automatic_router, route_refusal, routed_intelligence, router_of_launch,
+};
 mod select;
 mod validate;
 pub use aq_session_protocol::{ArtifactRef, Digest, Scope, Text, Validate};

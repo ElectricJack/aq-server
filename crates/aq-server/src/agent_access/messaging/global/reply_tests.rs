@@ -38,6 +38,23 @@ fn artifact() -> ArtifactRef {
         digest: Digest::of(b"fixture"),
     }
 }
+const STOP: Event = Event::Cancel {
+    reason: CancelReason::Operator,
+};
+/// Authentication rechecks the actor's owner approval: configure it as an owner does.
+async fn configure(store: crate::store::Store, actor: Uuid) {
+    use super::super::reservations::{Disposition, ReservationOwner};
+    let at = chrono::DateTime::from_timestamp_millis(1).unwrap();
+    let email = "owner@localhost";
+    let user = store.bootstrap_owner(email, "dev", email, at);
+    let user = user.await.unwrap().unwrap();
+    let sql = "SELECT json_build_object('operation_id',gen_random_uuid(),'actor_id',$1,'expected_actor_revision',0,'policy',json_build_object('schema_version',1,'kind','global_supervisor_reservation','actor_id',$1,'conversation_id',conversation_id,'enabled',true))::text FROM global_supervisor_conversation";
+    let query = sqlx::query_scalar(sql).bind(actor);
+    let request: String = query.fetch_one(&store.pool).await.unwrap();
+    let owner = ReservationOwner::with_pool(store.pool);
+    let receipt = owner.configure_actor(&user, request.as_bytes()).await;
+    assert!(receipt.unwrap().disposition == Disposition::Configured);
+}
 struct Fixture {
     db: TestDb,
     pool: PgPool,
@@ -48,7 +65,7 @@ struct Fixture {
 impl Fixture {
     async fn new(version: u32) -> Self {
         let db = TestDb::create().await;
-        drop(db.store_at_version(version).await);
+        let store = db.store_at_version(version).await;
         let pool = db.pool().await;
         let examples: Value = serde_json::from_str(include_str!(
             "../../../../../aq-central-authority/artifacts/examples.json"
@@ -58,6 +75,7 @@ impl Fixture {
         else {
             panic!("plan")
         };
+        configure(store, plan.subject.actor_id()).await;
         let owner = SessionOwner::new(pool.clone(), FixtureVerifier);
         owner.prepare(plan.clone(), clock(1000)).await.unwrap();
         let launch = HostLaunchRef {
@@ -176,12 +194,7 @@ async fn supervisor_credentials_revoke_on_stop_loss_and_expiry() {
         let f = Fixture::new(51).await;
         let token = f.token().await;
         let (event, at) = match end {
-            "stop" => (
-                Event::Cancel {
-                    reason: CancelReason::Operator,
-                },
-                2000,
-            ),
+            "stop" => (STOP, 2000),
             "lost" => (
                 Event::HostLost {
                     binding: f.launch.binding.clone(),
@@ -230,13 +243,7 @@ async fn supervisor_reply_rechecks_lifecycle_and_token_inside_write() {
     let principal = authenticate(&f.pool, &replacement, "messaging", 2000)
         .await
         .unwrap();
-    f.report(
-        Event::Cancel {
-            reason: CancelReason::Operator,
-        },
-        2000,
-    )
-    .await;
+    f.report(STOP, 2000).await;
     assert!(matches!(
         f.write(&replacement, &principal).await,
         Err(AppError::Unauthenticated(_))
@@ -271,13 +278,7 @@ async fn supervisor_write_authentication_holds_lifecycle_and_credential_locks() 
         );
     }
     tx.commit().await.unwrap();
-    f.report(
-        Event::Cancel {
-            reason: CancelReason::Operator,
-        },
-        2000,
-    )
-    .await;
+    f.report(STOP, 2000).await;
     assert!(f.revoked().await.is_some());
 }
 
@@ -285,13 +286,7 @@ async fn supervisor_write_authentication_holds_lifecycle_and_credential_locks() 
 async fn supervisor_credential_upgrade_revokes_preexisting_inactive_tokens() {
     let f = Fixture::new(48).await;
     let token = f.token().await;
-    f.report(
-        Event::Cancel {
-            reason: CancelReason::Operator,
-        },
-        2000,
-    )
-    .await;
+    f.report(STOP, 2000).await;
     assert_eq!(
         f.revoked().await,
         None,

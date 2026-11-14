@@ -11,10 +11,7 @@ impl Service {
     /// D8 findings run on Monitoring6 and, since D11, on Host7/Host8 (catalog
     /// 2.0.0/2.1.0 findings.reconcile is byte-identical to 1.0.0).
     fn findings_profile(&self) -> Result<()> {
-        if !matches!(
-            self.profile,
-            CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
-        ) {
+        if !self.profile.has_findings() {
             return Err(Error::Forbidden);
         }
         Ok(())
@@ -39,18 +36,6 @@ impl Service {
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(partition).fetch_all(&mut **tx).await?;
         let baseline: BTreeMap<_, _> = rows.into_iter().collect();
         let value = serde_json::to_value(&baseline)?;
-        self.budget(
-            tx,
-            0,
-            0,
-            0,
-            0,
-            serde_json::to_vec(&value)?.len() as i64
-                + observation.len() as i64
-                + partition.len() as i64
-                + 4096,
-        )
-        .await?;
         sqlx::query("INSERT INTO playbook_health_observations(namespace_id,generation,observation,partition,baseline,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6)")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(partition).bind(value).bind(self.now()?.checked_add(ttl_ms).ok_or(Error::Invalid)?).execute(&mut **tx).await?;
         Ok(baseline)
@@ -101,8 +86,6 @@ impl Service {
             if row.get::<i64, _>("expires_at_ms") <= self.now()? {
                 return Err(Error::Forbidden);
             }
-            self.budget(&mut tx, 0, 0, 0, 0, evaluation.len() as i64)
-                .await?;
             sqlx::query("UPDATE playbook_health_observations SET evaluation=$4,complete=$5 WHERE namespace_id=$1 AND generation=$2 AND observation=$3")
                 .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(evaluation).bind(complete).execute(&mut *tx).await?;
         }
@@ -200,10 +183,6 @@ impl Service {
                         .any(|(key, r)| baseline.get(key) != Some(&r.get::<i64, _>("revision"))));
                 outcome = if conflicts { "conflict" } else { "reconciled" };
                 if !conflicts {
-                    let new_count = seen.iter().filter(|k| !current.contains_key(**k)).count();
-                    if current.len() + new_count > 100 {
-                        return Err(Error::Overloaded);
-                    }
                     for f in findings {
                         let key = text(f, "key")?;
                         let evidence = text(f, "evidence")?;
@@ -242,7 +221,6 @@ impl Service {
                     }
                 }
                 let receipt = result(outcome);
-                self.budget(&mut tx, 0, 0, 0, 0, 4096).await?;
                 sqlx::query("UPDATE playbook_health_observations SET request_digest=$4,result=$5 WHERE namespace_id=$1 AND generation=$2 AND observation=$3")
                     .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(hash).bind(json!({"outcome":receipt.outcome,"output":receipt.output})).execute(&mut *tx).await?;
             }
@@ -262,15 +240,6 @@ impl Service {
         notify: bool,
     ) -> Result<()> {
         let now = self.now()?;
-        self.budget(
-            tx,
-            0,
-            0,
-            0,
-            0,
-            (partition.len() + key.len() + evidence.len()) as i64 + 4096,
-        )
-        .await?;
         sqlx::query("INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(namespace_id,generation,partition,finding_key) DO UPDATE SET revision=EXCLUDED.revision,present=EXCLUDED.present,evidence=EXCLUDED.evidence,last_notified_ms=CASE WHEN $9 THEN EXCLUDED.last_notified_ms ELSE playbook_finding_episodes.last_notified_ms END")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(partition).bind(key).bind(revision).bind(present).bind(evidence).bind(now).bind(notify).execute(&mut **tx).await?;
         if notify {
@@ -278,8 +247,10 @@ impl Service {
                 "aq.finding.notification",
                 self.namespace.namespace_id,
                 self.namespace.generation,
-                &digest(&(partition, key, revision))?,
+                &digest(&(partition, key, revision, now))?,
             )?;
+            // The time is part of the identity: a cleared episode is deleted in
+            // time, and the finding's next episode starts at revision 1 again.
             // Evidence stays in AQ; the deliberate summary identifies the
             // episode. Delivery routing belongs to the notifications owner.
             let request = SendRequest {
@@ -306,7 +277,6 @@ impl Service {
                 ),
                 ttl_ms: 86_400_000,
             };
-            self.budget(tx, 0, 0, 0, 0, 4096).await?;
             sqlx::query("INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request) VALUES($1,$2,$3,$4)")
                 .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(notification).bind(serde_json::to_value(request)?).execute(&mut **tx).await?;
         }

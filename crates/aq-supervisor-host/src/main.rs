@@ -51,14 +51,17 @@ async fn run() -> Result<()> {
         return aq_supervisor_host::adapter::native(std::path::Path::new(&args[2]), &args[3]).await;
     }
     ensure!(
-        args.len() == 3 && matches!(args[1].as_str(), "run" | "stop" | "status"),
-        "usage: aq-supervisor-host run|stop|status CONFIG"
+        args.len() == 3 && matches!(args[1].as_str(), "run" | "stop" | "status" | "internal"),
+        "usage: aq-supervisor-host run|stop|status|internal CONFIG"
     );
     ensure!(
         unsafe { libc::geteuid() } == 0,
         "host requires separated root and native identities"
     );
     let path = PathBuf::from(&args[2]);
+    if args[1] == "internal" {
+        return aq_supervisor_host::internal::run(&path).await;
+    }
     let (c, digest) = Config::load(&path)?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)

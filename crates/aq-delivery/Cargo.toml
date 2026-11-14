@@ -1,0 +1,24 @@
+[package]
+name = "aq-delivery"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Central delivery primitives over the aq-git socket: candidates, publication policy and reconciliation"
+
+[dependencies]
+async-trait.workspace = true
+aq-worker-protocol.workspace = true
+chrono.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+unicode-normalization = "=0.1.26"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

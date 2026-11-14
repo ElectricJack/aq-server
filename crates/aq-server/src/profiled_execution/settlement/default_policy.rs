@@ -42,6 +42,9 @@ pub(super) enum DeliveryState {
     Published,
     Unpublished,
     Indeterminate,
+    /// The retained source is the admitted base: the attempt changed no file
+    /// and there is nothing to deliver (owner decision 2026-11-13).
+    NoChange,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Acceptance {
@@ -54,6 +57,12 @@ pub(super) enum Acceptance {
 pub(super) struct Gate<'a> {
     pub acceptance: Acceptance,
     pub source_retained: bool,
+    /// The retained source is unchanged, yet the worker's report claims changes.
+    pub claimed_changes_missing: bool,
+    /// A refused (Failed) report whose agent said `Outcome: blocked` (R1-M2).
+    pub agent_blocked: bool,
+    /// The lineage's base is past the handoff bound (R1-M1, R2-M1).
+    pub lineage_unknown: bool,
     pub checks: &'a [CheckVerdict],
     pub delivery: Delivery,
     pub delivery_state: DeliveryState,
@@ -68,6 +77,7 @@ pub(super) enum Verdict {
 /// Source precedes checks because check evidence binds the retained source.
 pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
     match g.acceptance {
+        Acceptance::Refused if g.agent_blocked => return Verdict::Rework("agent_blocked"),
         Acceptance::Refused => return Verdict::Rework("not_accepted"),
         Acceptance::NotStopped => return Verdict::Hold("not_stopped"),
         Acceptance::Accepted => {}
@@ -75,11 +85,17 @@ pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
     if !g.source_retained {
         return Verdict::Hold("source_not_retained");
     }
+    if g.claimed_changes_missing {
+        return Verdict::Rework("claimed_changes_missing");
+    }
     if g.checks.contains(&CheckVerdict::Failed) {
         return Verdict::Rework("required_check_failed");
     }
     if g.checks.contains(&CheckVerdict::Missing) {
         return Verdict::Hold("required_check_evidence_missing");
+    }
+    if g.lineage_unknown {
+        return Verdict::Hold("lineage_history_unknown");
     }
     if g.delivery == Delivery::Required {
         match g.delivery_state {
@@ -89,6 +105,7 @@ pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
             // Server-owned evidence that required delivery definitively did not
             // publish refuses the result, like a failed required check.
             DeliveryState::Unpublished => return Verdict::Rework("delivery_unpublished"),
+            DeliveryState::NoChange => {}
         }
     }
     Verdict::Complete
@@ -101,6 +118,9 @@ mod tests {
         Gate {
             acceptance: Acceptance::Accepted,
             source_retained: true,
+            claimed_changes_missing: false,
+            agent_blocked: false,
+            lineage_unknown: false,
             checks,
             delivery: Delivery::Required,
             delivery_state: DeliveryState::Published,
@@ -144,6 +164,30 @@ mod tests {
         }
         g.delivery = Delivery::NotRequired;
         assert_eq!(evaluate(&g), Verdict::Complete);
+        // A retained source equal to the admitted base has nothing to deliver.
+        g.delivery = Delivery::Required;
+        g.delivery_state = DeliveryState::NoChange;
+        assert_eq!(evaluate(&g), Verdict::Complete);
+        g.checks = &[Failed];
+        assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
+        g.claimed_changes_missing = true;
+        assert_eq!(evaluate(&g), Verdict::Rework("claimed_changes_missing"));
+        g.acceptance = Acceptance::Refused;
+        g.agent_blocked = true;
+        assert_eq!(evaluate(&g), Verdict::Rework("agent_blocked"));
+    }
+    /// R2-M1: an unknown lineage holds only a report that would otherwise settle
+    /// as success; a refused report or a failed check is reworked as normal.
+    #[test]
+    fn an_unknown_lineage_holds_only_what_would_otherwise_succeed() {
+        use CheckVerdict::*;
+        let mut g = gate(&[Passed]);
+        g.lineage_unknown = true;
+        assert_eq!(evaluate(&g), Verdict::Hold("lineage_history_unknown"));
+        g.checks = &[Failed];
+        assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
+        g.acceptance = Acceptance::Refused;
+        assert_eq!(evaluate(&g), Verdict::Rework("not_accepted"));
     }
     #[test]
     fn default_policy_offers_name_the_policy_actor() {

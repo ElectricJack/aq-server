@@ -59,6 +59,7 @@ async fn admin_and_worker_listen_on_separate_ports() {
     let store = db.store().await;
     let config = config::load(std::path::Path::new("../../vault.example")).unwrap();
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: verifier_from_config(&config.auth, reqwest::Client::new()),

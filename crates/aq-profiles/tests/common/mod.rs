@@ -50,6 +50,7 @@ pub fn request(c: &ValidatedCatalog) -> CompileRequest {
         assignment: context("assignment:1", "Exact assigned outcome.\n", true),
         context: vec![],
         overrides: vec![],
+        intelligence_override: None,
     }
 }
 pub fn access() -> String {

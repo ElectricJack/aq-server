@@ -1,0 +1,44 @@
+{
+  "commands_added": [
+    "judgment.assess",
+    "work.read",
+    "work.route",
+    "work.unroutable"
+  ],
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "events_added": [
+    "aq.judgment.assessed",
+    "aq.work.route_needed"
+  ],
+  "fingerprint": "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a",
+  "supersedes": {
+    "fingerprint": "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716",
+    "version": "2.1.0"
+  },
+  "version": "2.2.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

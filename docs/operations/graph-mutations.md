@@ -1,5 +1,9 @@
 # Durable agent graph mutation delivery
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. The intent journal and receipt paragraphs changed.
+
 AQ-07 admits finite scoped graph operations into AQ PostgreSQL before any graph
 write. It uses aq-graph's public API and ordinary workspace service credential;
 workers receive neither that credential nor graph database access.
@@ -20,8 +24,8 @@ operator must provision an ordinary graph writer whose actual actor matches
 Without the actor setting, mutation admission refuses `unsupported_capability`.
 This version supports one configured service binding, scoped by the upstream
 credential's workspace. AQ records origin, actor, credential verifier, workspace,
-operation class and the selected v1 indefinite receipt-retention contract per
-intent. No secret token is stored in an operation or returned to an agent.
+operation class and the selected receipt-retention contract (aq-graph keeps
+receipts for a window, below) per intent. No secret token is stored in an operation or returned to an agent.
 Changing origin/actor/credential mapping holds existing uncertain intent for
 manual reconciliation. Retain the original protected service binding through
 recovery; never recover under a fresh actor/key just because a credential rotated.
@@ -78,22 +82,29 @@ Created-record reservations are cumulative per attempt. Only confirmed findings
 receive the profile's optional `include_created_by_attempt` read grant; a draft
 or unknown receipt cannot create that grant.
 
-Each attempt retains at most 4096 operation intents and 32 MiB of conservative
-logical reservation. The reservation counts canonical request, mapped request and
-policy bytes plus 32 KiB for bounded status/outbox growth. PostgreSQL/index
-physical overhead belongs to installation storage policy. The count/byte aggregate
-is indexed and serialized by the existing attempt authority lock. New admission
-returns `overloaded` before insertion when full; exact replay and recovery still
-work. Rejected and uncertain intent is retained, never pruned to make quota.
+Each attempt keeps its unresolved operation intents, and its settled intents as
+a rolling set: the most recent 4096 and 32 MiB of conservative logical
+reservation **(proposed default: the former cap)**. The reservation counts
+canonical request, mapped request and policy bytes plus 32 KiB for bounded
+status/outbox growth. PostgreSQL/index physical overhead belongs to installation
+storage policy. The count/byte aggregate is indexed and serialized by the
+existing attempt authority lock. New admission deletes the attempt's oldest
+settled intents when the set is full; it returns `overloaded` only when
+unresolved intents alone fill the reservation, which is work happening now.
+Uncertain intent is never deleted while it is uncertain. Rejected intent is
+settled and rolls with the rest.
 
 An operation ID binds the complete canonical integer-only request and original
 binding. Changed bytes conflict; identical replay reuses the immutable mapped
 payload and `aq-agent-v1:<operation UUID>` key. The graph operation class is fixed
 to `/mutations` or `/changesets`, scoped by service actor/workspace. The selected
-graph contract retains pilot receipts indefinitely and checks identical-key replay
-before reapplying CAS guards. Qualification verifies a lost receipt after a real
-commit can replay successfully despite the now-stale original CAS, without a
-second history entry. Draft responses can materialize omitted optional fields
+graph contract keeps receipts for a window (7 days, aq-graph spec 0001; pending)
+and checks identical-key replay before reapplying CAS guards. Qualification
+verifies a lost receipt after a real commit can replay successfully despite the
+now-stale original CAS, without a second history entry, inside that window. AQ
+retries an uncertain intent with its original key only inside the window. After
+it, the graph would accept the old key as new, so AQ resolves the intent by
+reading current graph state instead of replaying. Draft responses can materialize omitted optional fields
 as declared defaults. The gateway validates the ordered plan after removing only
 those no-effect defaults; the original stored request remains unchanged. A
 [captured native draft fixture](../../protocol/agent-access/v1/fixtures/native-draft-normalization.json)

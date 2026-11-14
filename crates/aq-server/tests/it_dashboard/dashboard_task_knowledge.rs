@@ -329,6 +329,168 @@ async fn task_reprioritize_preserves_other_metadata() {
     );
 }
 
+/// Activates a catalog with profile `careful` and assigns it to standard-high.
+async fn assign_standard_high(x: &Fixture) {
+    let pool = x.f.db.pool().await;
+    let pool = &pool;
+    let base = aq_profiles::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
+    )
+    .unwrap();
+    let instructions = base.artifact().instructions.clone();
+    let mut catalog = base.artifact().catalog.clone();
+    let mut careful = catalog.intelligence[0].clone();
+    careful.id = "careful".into();
+    careful.version = 3;
+    catalog.intelligence.push(careful);
+    let validated = aq_profiles::validate(catalog, instructions).unwrap();
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)")
+        .bind(validated.digest())
+        .bind(validated.canonical_bytes().unwrap())
+        .bind(owner)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
+        .bind(validated.digest())
+        .execute(pool)
+        .await
+        .unwrap();
+    let parents: Vec<Value> = ["simple", "standard", "complex", "deep"]
+        .iter()
+        .map(|id| json!({"id": id, "description": ""}))
+        .collect();
+    sqlx::query(
+        "UPDATE intelligence_structure SET revision=revision+1, document=$1 WHERE singleton",
+    )
+    .bind(json!({"routing_markdown":"","parents":parents,
+            "assignments":[{"profile_id":"careful","parent_id":"standard","effort":"high"}]}))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+fn route_action(kind: &str, task: Uuid, version: &str, x: &Fixture, fields: Value) -> Value {
+    let op = Uuid::new_v4();
+    let mut payload =
+        json!({"operation_id":op,"project_id":x.project(),"expected_version":version});
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    action(kind, "task", task, version, payload)
+}
+
+#[tokio::test]
+async fn task_route_set_writes_an_owner_route_and_is_refused_for_an_unassigned_class() {
+    let x = setup().await;
+    assign_standard_high(&x).await;
+    let task = x.f.selection.lineage.task_id;
+    x.put(node(task, x.workspace(), "task", 5));
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
+    let (status, body) = x
+        .act(&route_action(
+            "task.route.set",
+            task,
+            "5",
+            &x,
+            json!({"class":"standard-high","harnesses":["codex"]}),
+        ))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let posts = x.posts();
+    assert_eq!(posts.len(), 1);
+    let metadata = &posts[0]["operations"][0]["patch"]["metadata"];
+    assert_eq!(metadata["example:weight"], 2);
+    assert_eq!(metadata["aq:route"]["c"], "standard-high");
+    assert_eq!(metadata["aq:route"]["h"], json!(["codex"]));
+    assert_eq!(metadata["aq:route"]["s"], "owner");
+    let history = aq_server::routing::history(&x.f.db.pool().await, task)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    let route = history[0].route.as_ref().unwrap();
+    assert_eq!(route.reasons[0].code, "owner_set");
+    assert_eq!(route.policy_digest, None);
+
+    let (status, body) = x
+        .act(&route_action(
+            "task.route.set",
+            task,
+            "6",
+            &x,
+            json!({"class":"simple-low"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        x.posts().len(),
+        1,
+        "an unassigned class never reaches Graph"
+    );
+}
+
+#[tokio::test]
+async fn task_route_clear_removes_it() {
+    let x = setup().await;
+    assign_standard_high(&x).await;
+    let task = x.f.selection.lineage.task_id;
+    x.put(node(task, x.workspace(), "task", 5));
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
+    let (_, body) = x
+        .act(&route_action(
+            "task.route.set",
+            task,
+            "5",
+            &x,
+            json!({"class":"standard-high"}),
+        ))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let mut routed = node(task, x.workspace(), "task", 6);
+    routed["metadata"] = x.posts()[0]["operations"][0]["patch"]["metadata"].clone();
+    x.put(routed);
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 7)]));
+    let (status, body) = x
+        .act(&route_action("task.route.clear", task, "6", &x, json!({})))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let posts = x.posts();
+    let metadata = &posts[1]["operations"][0]["patch"]["metadata"];
+    assert!(metadata.get("aq:route").is_none(), "{metadata}");
+    assert_eq!(metadata["example:weight"], 2);
+    let history = aq_server::routing::history(&x.f.db.pool().await, task)
+        .await
+        .unwrap();
+    assert!(
+        history[0].route.is_none(),
+        "the clear is the newest history row"
+    );
+}
+
+#[tokio::test]
+async fn stale_task_version_is_reported_as_stale() {
+    let x = setup().await;
+    assign_standard_high(&x).await;
+    let task = x.f.selection.lineage.task_id;
+    x.put(node(task, x.workspace(), "task", 7));
+    for (kind, fields) in [
+        ("task.route.set", json!({"class":"standard-high"})),
+        ("task.route.clear", json!({})),
+    ] {
+        let (status, body) = x.act(&route_action(kind, task, "5", &x, fields)).await;
+        assert_eq!(
+            body["data"]["disposition"], "conflict",
+            "{kind} {status} {body}"
+        );
+        assert_eq!(body["data"]["current_versions"], json!({"task":"7"}));
+    }
+    assert!(x.posts().is_empty());
+}
+
 #[tokio::test]
 async fn graph_timeout_after_commit_reconciles_with_original_change_set() {
     let x = setup().await;
@@ -597,6 +759,11 @@ async fn task_retry_creates_replacement_attempt() {
     // B4 alone decides: an unsettled predecessor is never force-replaced.
     let (status, body) = x.act(&retry(Uuid::new_v4())).await;
     assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
+    // Review M-5: the receipt names the reason.
+    assert_eq!(
+        body["data"]["reason"], "replacement_prior_execution_uncertain",
+        "{body}"
+    );
     assert!(holds().await, "rejected retry leaves the claim untouched");
 
     hot.status = Status::Finished;
@@ -621,8 +788,36 @@ async fn task_retry_creates_replacement_attempt() {
         .execute(&pool)
         .await
         .unwrap();
+    // Retry decides as the offer path does (M2), which also requires that the
+    // predecessor's input pins the current project revision: a synthetic
+    // linked source export (guards bypassed in this disposable database).
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM project_execution_bindings WHERE project_id=$1")
+            .bind(x.project())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let export = Uuid::new_v4();
+    let request = json!({"project_revision": revision}).to_string();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO profiled_source_exports(operation_id,project_id,request_bytes,request_digest,reserved_bytes,charged_bytes,state) VALUES($1,$2,convert_to($3,'UTF8'),encode(sha256(convert_to($3,'UTF8')),'hex'),1048577,1048577,'pending')")
+        .bind(export).bind(x.project()).bind(&request).execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "INSERT INTO profiled_launch_source_exports(attempt_id,operation_id) VALUES($1,$2)",
+    )
+    .bind(predecessor)
+    .bind(export)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
 
-    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
+    let confirmed_retry = retry(Uuid::new_v4());
+    let (status, body) = x.act(&confirmed_retry).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
     assert_eq!(
@@ -652,6 +847,17 @@ async fn task_retry_creates_replacement_attempt() {
         x.posts().is_empty(),
         "retry never writes Graph task lifecycle"
     );
+    // Review M-3: once the task is held (here quarantined), a NEW retry is refused with
+    // the hold, but a replay of the admitted operation keeps its recorded outcome.
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'synthetic stall','owner','{}',$3,1)")
+        .bind(predecessor).bind(task).bind(Uuid::new_v4())
+        .execute(&pool).await.unwrap();
+    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "stall_quarantined", "{body}");
+    let (status, body) = x.act(&confirmed_retry).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
 }
 
 fn graph_create(project: Uuid, first: Uuid, second: Uuid, edge: Uuid) -> Value {

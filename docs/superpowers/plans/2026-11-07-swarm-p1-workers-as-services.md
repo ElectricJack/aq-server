@@ -1241,6 +1241,8 @@ It is also stored under `CHECK (attempts_started > 0)` in `profiled_replacement_
 
 ### S10: Per-boot registration receipt cap (aq-server) — Sonnet
 
+Superseded 2026-11-13 by [architecture 0006](../../architecture/0006-records-are-rolling.md).
+
 Each slot attempt registers a new boot, so the lifetime cap of 1,024 receipts per node (`registration.rs:198-208`) would end a slot after 1,024 attempts. Make the cap per boot.
 
 **Files:**

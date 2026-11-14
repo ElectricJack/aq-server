@@ -204,9 +204,19 @@ pub struct SwarmAgent {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub harness: Option<String>,
+    /// Legacy model-based palette hint; routing_profile identifies the enforced class.
     pub intelligence_class: Option<IntelligenceClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_profile: Option<RoutingProfile>,
     pub terminal: Option<EntityRef>,
     pub started_at: Option<Timestamp>,
+}
+/// The authoritative intelligence profile pinned for this attempt.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingProfile {
+    pub id: String,
+    pub display_name: String,
 }
 /// Swarm-wide reasons why new work cannot start now.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -246,7 +256,8 @@ pub enum HoldCode {
     NoMachineOnline,
     NoEligibleMachine,
     NoFreeSlot,
-    // Spec 0008: an offer or inventory report rate limit holds new work.
+    // Unused: no server sends it. Spec 0008's offer and worker report rate limits were
+    // removed on 2026-11-13; the code stays only because dashboard-read-1 pins it.
     HistoryRateLimited,
     // Spec 0008: a live sealed-history cap holds new work.
     HistoryCapReached,

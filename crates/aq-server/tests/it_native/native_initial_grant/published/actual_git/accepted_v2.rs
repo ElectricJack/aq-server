@@ -130,7 +130,7 @@ async fn actual_retained_source_reads_after_proposal_expiry_use_only_owned_v2_le
     let mut actual = setup_actual_unpublished().await;
     configure(&mut actual.case).await;
     let c = &actual.case;
-    let (status, body) = native_offer::poll(c).await;
+    let (status, body) = native_offer::poll_offered(c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

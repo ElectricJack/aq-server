@@ -136,7 +136,7 @@ async fn authenticated_other_node_cannot_read_or_poison_foreign_original_proposa
     registration::register(&c.env.env.state, &b_auth, &register)
         .await
         .unwrap();
-    let (status, body) = common::native_offer::poll(&c).await;
+    let (status, body) = common::native_offer::poll_offered(&c).await;
     assert_eq!(status, 200);
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

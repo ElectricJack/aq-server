@@ -1,5 +1,9 @@
 # Durable task and session mail
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending.
+
 AQ-11 provides scoped logical mail and outbound worker delivery records. It does
 not type into terminals, send Discord notifications or assert that an agent
 understood a message. Those mechanisms consume these durable identities later.
@@ -96,9 +100,10 @@ agent inbox shows its own attempt's evidence.
 State format 5 adds mailbox heads/messages, operation receipts, agent receipts
 and node deliveries. Migration is additive and runs through normal Store startup;
 older state formats remain readable by this binary. No production database was
-used for qualification. Cleanup/retention and administrative reconciliation of
-unknown deliveries require explicit future policy; this version does not delete
-mail, reset cursors, retry unknown injection or send human notifications.
+used for qualification. Read and expired mail is deleted by DEP6 ([row retention](row-retention.md)),
+following architecture 0006. Administrative reconciliation of unknown deliveries
+requires explicit future policy; this version does not reset cursors, retry
+unknown injection or send human notifications.
 
 Node acknowledgements currently require live attempt authority. If revocation or
 expiry wins before a handed-off acknowledgement, the persisted pending delivery

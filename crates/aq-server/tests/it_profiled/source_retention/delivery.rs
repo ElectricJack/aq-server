@@ -16,7 +16,7 @@ pub(super) fn service(h: &Harness) -> DeliveryService {
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
     };
-    DeliveryService::new(h.pool.clone(), &config)
+    DeliveryService::new(h.pool.clone(), &config.git_socket)
 }
 pub(super) fn context(h: &Harness) -> OperationContext {
     OperationContext {

@@ -1,7 +1,7 @@
 # AQ playbook owner foundation
 
 An internal embedding of the exact aq-playbooks source pinned in
-`vendor/aq-playbooks-source-0.1.3.json`. By default, no domain commands or events
+`vendor/aq-playbooks-source-0.2.0.json`. By default, no domain commands or events
 are registered. Explicit AQ adapters remain the embedding owner's responsibility.
 The CLI and synthetic host are not dependencies. There is no automatic driver,
 production registration, worker launch, supervisor, notification dispatcher or
@@ -64,7 +64,10 @@ trusted exact finite registry and an owning DomainHost factory after actual
 engine namespace acquisition. It supports only the twelve specified command
 names and reconcilable effects; installation/restart rejects changed or unknown
 contracts. This is not a wire-supplied authority permit. The concrete AQ service
-adapter lives in aq-server and currently registers only message.send.
+adapter lives in aq-server (`crates/aq-server/src/playbooks/host_adapters.rs`).
+It registers all twelve commands. `judgment.request` is served by the server's
+internal work service (`playbooks/internal_judgments.rs`). `check.request` has no
+executor bound, so it refuses (`playbooks/runtime.rs`).
 
 The0.1.1 version consumed the separately qualified exact a463e59 source publication
 (runner/Postgres0.1.1, unchanged model0.1.0); the original42/0.1.0 vendor source
@@ -111,3 +114,26 @@ Retire a prior owner before deployment; do not apply this candidate to an active
 legacy database as a metadata preview. The consumer source qualification and
 no-canonical-change boundary are tracked in
 [API-05 current catalog](../../docs/implementation/API-05-current-catalog.md).
+
+## Live-state engine (0.2.0, 5b86e0f)
+
+The host consumes exact component source 5b86e0f (model, compiler, runner,
+postgres, simulation and CLI all 0.2.0), pinned in
+`vendor/aq-playbooks-source-0.2.0.json`. This engine drains a namespace an
+older engine wrote, a bounded amount per commit. `Limits::engine_retention`
+(`[playbooks.engine_retention]`: `event_replay_ms`, `admission_replay_ms`,
+`replay_keep`, `history_keep`, `audit_ms`; the engine's defaults) is written
+into the namespace's retention policy at open, in one commit, only when it
+differs from the stored policy. A finished run leaves the
+State as history; `Request::Inspect` serves live State plus history, while
+`Request::Runs` lists live runs only. `Request::AdmitOnce` and `Request::Event`
+take an optional `requested_at_ms` and call the engine's `admit_once_at` /
+`admit_event_at`; aq-server sends `None`. A repeat of a forgotten key with an
+old request time would return the new `Error::Stale`, the outcome of that one
+request; `Error::NotFound` names what the engine no longer holds (a forgotten
+event, for `Fanout`). `drive::run` and `drive::retry` drive and reopen with a
+bounded backoff; `protected::Timeouts` are the engine session deadlines. The engine has no namespace limits: the
+`EngineConfig` limits in `Limits` are accepted and ignored. A storage wrapper
+must forward `persists_history`, `history_page` and `delete_history`, or
+`Engine::new` refuses it. See
+[the vendor note](../../docs/implementation/playbook-authoring-B1-interim-vendor.md).

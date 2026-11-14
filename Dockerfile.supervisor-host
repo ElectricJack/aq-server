@@ -19,7 +19,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=aq-supervisor-host-release,sharing=locked,target=/build/target \
     find crates vendor protocol -type f -exec touch {} + \
     && cargo build --locked --release -p aq-supervisor-host --bins \
-    && mkdir /out && cp target/release/aq-supervisor-host target/release/aq-session-host /out/
+    && cargo build --locked --release --manifest-path vendor/aq-playbooks-5b86e0f/Cargo.toml \
+        --target-dir target/aq-playbooks -p aq-playbooks-cli --bin aq-playbooks \
+    && mkdir /out && cp target/release/aq-supervisor-host target/release/aq-session-host \
+        target/aq-playbooks/release/aq-playbooks /out/
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tmux libssl3 \
     && rm -rf /var/lib/apt/lists/* \
@@ -29,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && install -d -m 700 -o 10001 -g 10001 /workspace
 COPY --from=build /out/aq-supervisor-host /usr/local/bin/aq-supervisor-host
 COPY --from=build /out/aq-session-host /usr/local/bin/aq-session-host
+# The engine's authoring tools, off PATH: an authoring agent reaches them
+# only through the shim the host writes into its run (spec 0013 §4.2).
+COPY --from=build /out/aq-playbooks /usr/local/libexec/aq-playbooks
 # Root owns transport/credential; only the native child runs as 10001.
 # Run in a private PID namespace without a Docker socket or privileged mode.
 USER 0:0

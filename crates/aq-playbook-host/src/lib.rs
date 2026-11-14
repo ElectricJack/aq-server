@@ -17,7 +17,10 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+pub mod drive;
+pub mod engine_retention;
 pub mod protected;
+pub mod retention;
 pub use aq_playbooks_model as model;
 pub use aq_playbooks_postgres as postgres_storage;
 pub use aq_playbooks_runner as runner;
@@ -56,6 +59,15 @@ pub enum Error {
     Unknown,
     #[error("engine refused: {0}")]
     Engine(String),
+    /// The engine no longer remembers this event or admission key and its
+    /// request time is older than the replay window. Nothing was written;
+    /// the outcome belongs to this one request.
+    #[error("{0}")]
+    Stale(String),
+    /// The engine does not hold what the request names (for an event:
+    /// it has forgotten it).
+    #[error("engine: not found: {0}")]
+    NotFound(String),
     #[error("synchronous owner thread could not start")]
     Thread,
 }
@@ -68,6 +80,12 @@ pub struct Limits {
     pub response_bytes: usize,
     pub transitions: usize,
     pub engine: EngineConfig,
+    /// Engine session deadlines; the owner-call deadlines derive from them.
+    pub timeouts: protected::Timeouts,
+    /// Rolling deletion of the server's finished bridge rows.
+    pub retention: retention::Retention,
+    /// The engine's replay windows and rolling sizes, applied at open.
+    pub engine_retention: engine_retention::EngineRetention,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -78,6 +96,9 @@ impl Default for Limits {
             response_bytes: 262_144,
             transitions: 8,
             engine: EngineConfig::default(),
+            timeouts: protected::Timeouts::default(),
+            retention: retention::Retention::default(),
+            engine_retention: engine_retention::EngineRetention::default(),
         }
     }
 }
@@ -88,6 +109,9 @@ impl Limits {
             || !(1024..=1_048_576).contains(&self.request_bytes)
             || !(1024..=1_048_576).contains(&self.response_bytes)
             || !(1..=64).contains(&self.transitions)
+            || !self.timeouts.valid()
+            || !self.retention.valid()
+            || !self.engine_retention.valid()
             || self.engine.max_runs == 0
             || self.engine.max_events == 0
             || self.engine.max_runs > 10_000
@@ -124,6 +148,9 @@ pub enum Request {
     },
     AdmitOnce {
         request: Box<KeyedAdmissionRequest>,
+        /// When the host first created this admission (its own clock).
+        #[serde(default)]
+        requested_at_ms: Option<i64>,
         now_ms: i64,
     },
     Admission {
@@ -133,6 +160,10 @@ pub enum Request {
         authenticated_producer: String,
         epoch: u64,
         event: Box<EventEnvelope>,
+        /// When the host first created this event (its own clock), not the
+        /// event's business time.
+        #[serde(default)]
+        requested_at_ms: Option<i64>,
         now_ms: i64,
     },
     Fanout {
@@ -373,6 +404,15 @@ impl Owner {
                         let _ = engine.release();
                         return Err(Error::Invalid);
                     }
+                    if let Some(policy) = shared
+                        .limits
+                        .engine_retention
+                        .changed(&state.retention.policy)
+                        && let Err(error) = engine.set_retention_policy(policy)
+                    {
+                        let _ = engine.release();
+                        return Err(engine_error(error));
+                    }
                     Ok(engine)
                 });
                 let engine = match result {
@@ -569,13 +609,11 @@ impl Owner {
 fn runner_error(e: aq_playbooks_runner::Error) -> Error {
     match e {
         aq_playbooks_runner::Error::Exhausted(_) => Error::Overloaded,
-        // The pinned runner reports atomic namespace limits as this refusal.
-        // Preserve its type here without changing the vendored engine API.
-        aq_playbooks_runner::Error::Refused(reason)
-            if reason == "namespace retention/admission quota exhausted" =>
-        {
-            Error::Overloaded
-        }
+        stale @ aq_playbooks_runner::Error::Stale { .. } => Error::Stale(stale.to_string()),
+        aq_playbooks_runner::Error::NotFound(what) => Error::NotFound(what),
+        // The commit failed in storage, or its outcome is not known: the
+        // caller delivers the request again (the engine answers a duplicate).
+        aq_playbooks_runner::Error::Storage(_) => Error::Unknown,
         other => Error::Engine(other.to_string()),
     }
 }
@@ -631,10 +669,16 @@ fn execute<S: Storage>(
             let event = snapshot.events.get(&event_key).ok_or(Error::Invalid)?;
             serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.iter().filter(|d|d.run.is_none()).count()})
         }
-        Request::AdmitOnce { request, now_ms } => {
-            serde_json::to_value(engine.admit_once(*request, now_ms).map_err(runner_error)?)
-                .map_err(engine_error)?
-        }
+        Request::AdmitOnce {
+            request,
+            requested_at_ms,
+            now_ms,
+        } => serde_json::to_value(
+            engine
+                .admit_once_at(*request, requested_at_ms, now_ms)
+                .map_err(runner_error)?,
+        )
+        .map_err(engine_error)?,
         Request::Admission { key } => {
             serde_json::to_value(engine.admission_receipt(&key).map_err(engine_error)?)
                 .map_err(engine_error)?
@@ -652,10 +696,17 @@ fn execute<S: Storage>(
             authenticated_producer,
             epoch,
             event,
+            requested_at_ms,
             now_ms,
         } => serde_json::to_value(
             engine
-                .admit_event_in_epoch(&authenticated_producer, *event, epoch, now_ms)
+                .admit_event_at(
+                    &authenticated_producer,
+                    *event,
+                    epoch,
+                    requested_at_ms,
+                    now_ms,
+                )
                 .map_err(runner_error)?,
         )
         .map_err(engine_error)?,
@@ -745,7 +796,12 @@ fn accepts(registry: &Registry, artifact: &Registry) -> bool {
             .all(|(name, contract)| registry.events.get(name) == Some(contract))
 }
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
-    const COMMANDS: [&str; 12] = [
+    // Host catalog 2.2.0: the twelve commands of 2.0.0 and 2.1.0 plus four.
+    const COMMANDS: [&str; 16] = [
+        "work.read",
+        "work.route",
+        "work.unroutable",
+        "judgment.assess",
         "context.read",
         "work.ensure",
         "work.change",
@@ -759,7 +815,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "operation.get",
         "operation.cancel",
     ];
-    if registry.commands.len() > 12
+    if registry.commands.len() > COMMANDS.len()
         || registry.events.len() > 16
         || !bounded_json(registry, 262_144)
         || registry.commands.iter().any(|(name, c)| {

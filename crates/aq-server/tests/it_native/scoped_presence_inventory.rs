@@ -250,6 +250,123 @@ async fn immutable_operation_bytes_and_derived_head_revisions_cannot_be_retimed_
         first.inventory.snapshot_digest
     );
 }
+/// Architecture 0006: the heartbeat log is a rolling record. Row retention
+/// keeps a node's newest operations and deletes older ones in bounded
+/// batches; the operation the head names and unexpired receipts stay. A
+/// repeat of a deleted operation id is refused, never applied a second time.
+#[tokio::test]
+async fn the_heartbeat_log_keeps_the_newest_operations_and_a_deleted_one_is_not_applied_twice() {
+    use aq_server::row_retention::{HeartbeatLog, presence_operations};
+    let c = setup().await;
+    let pool = &c.c.env.env.pool;
+    let node = c.request.identity.node_id;
+    record(&c, &c.request).await;
+    let mut last = c.request.clone();
+    for _ in 0..4 {
+        last = next_inventory(&last);
+        record(&c, &last).await;
+    }
+    let sequences = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT sequence FROM profiled_presence_operations WHERE node_id=$1 ORDER BY 1",
+        )
+        .bind(node)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+    let first = c.request.sequence as i64;
+    assert_eq!(sequences().await, (first..first + 5).collect::<Vec<_>>());
+    let expired: i64 =
+        sqlx::query_scalar("SELECT max(expires_at_ms)+1 FROM profiled_presence_operations")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let log = |keep, delete_batch| HeartbeatLog { keep, delete_batch };
+    // A receipt that has not expired is kept, however many are newer.
+    assert_eq!(presence_operations(pool, 1, &log(1, 9)).await.unwrap(), 0);
+    // While the node has an attempt that is not settled, the inventories of
+    // its current boot are kept: a live phase execution reads the one it was
+    // selected against by revision and digest.
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(live, 0, "the fixture node starts without attempts");
+    let attempt = Uuid::new_v4();
+    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,true,'{\"status\":\"granted\"}')")
+        .bind(attempt).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4())
+        .execute(pool).await.unwrap();
+    assert_eq!(
+        presence_operations(pool, expired, &log(1, 9))
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE execution_attempts SET holds_task=false,state='{\"status\":\"finished\"}' WHERE attempt_id=$1")
+        .bind(attempt).execute(pool).await.unwrap();
+    // Bounded batches, oldest first, down to the newest two.
+    assert_eq!(
+        presence_operations(pool, expired, &log(2, 2))
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(sequences().await, [first + 2, first + 3, first + 4]);
+    assert_eq!(
+        presence_operations(pool, expired, &log(2, 2))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        presence_operations(pool, expired, &log(2, 2))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(sequences().await, [first + 3, first + 4]);
+    // The rows stay immutable: no UPDATE even for row retention, and no
+    // ordinary DELETE.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL aq.row_retention='on'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let update = "UPDATE profiled_presence_operations SET sequence=sequence+100 WHERE node_id=$1";
+    assert!(
+        sqlx::query(update)
+            .bind(node)
+            .execute(&mut *tx)
+            .await
+            .is_err()
+    );
+    tx.rollback().await.unwrap();
+    let delete = "DELETE FROM profiled_presence_operations WHERE node_id=$1";
+    assert!(sqlx::query(delete).bind(node).execute(pool).await.is_err());
+    // The deleted first heartbeat again: refused, nothing written, head unchanged.
+    let head = epoch(&c).await;
+    let state = &c.c.env.env.state;
+    assert!(
+        inventory::record(state, &auth(&c).await, &c.request)
+            .await
+            .is_err()
+    );
+    assert_eq!(sequences().await, [first + 3, first + 4]);
+    assert_eq!(epoch(&c).await, head);
+    // The operation the head names is never deleted, even with keep 1 of
+    // newer rows: here it is the newest, so exactly it remains.
+    assert_eq!(
+        presence_operations(pool, expired, &log(1, 9))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(sequences().await, [first + 4]);
+    // The current heartbeat still replays its receipt.
+    record(&c, &last).await;
+}
 /// Live acceptance D11: inventory-v2 answered an unlogged 500 while a
 /// concurrent owner (a renewal reads the snapshot row FOR SHARE) held the
 /// node's snapshot row. A lock timeout is a retryable 503, never a 500.
@@ -339,8 +456,31 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
     let (status, _, body) = post_inventory(&c, &c.request).await;
     assert_eq!(status, 200, "{body}");
     c.c.request.inventory_sequence = c.request.sequence;
-    let (status, body) = common::native_offer::poll(&c.c).await;
-    assert_eq!(status, 200, "{body}");
+    // Poll may return an empty page after 750 ms while its assembly continues
+    // in the background. Wait for the actual offer before testing row locks.
+    let mut last_body = Value::Null;
+    let offered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let (status, body) = common::native_offer::poll(&c.c).await;
+            assert_eq!(status, 200, "{body}");
+            last_body = body;
+            let aq_admission::control::ControlReply::Poll(page) =
+                aq_admission::control::decode_reply(&serde_json::to_vec(&last_body).unwrap())
+                    .unwrap()
+            else {
+                panic!("{last_body}")
+            };
+            if !page.offers.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        offered.is_ok(),
+        "initial poll did not publish the fixture attempt: {last_body}"
+    );
     let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
     let node = c.request.identity.node_id;
     let attempt: Uuid = sqlx::query_scalar(

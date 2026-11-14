@@ -39,24 +39,15 @@ pub async fn choices(
             {
                 continue;
             }
-            let Some(m) = choices.iter().find(|m| {
-                m.provider == c["provider"]
-                    && m.model == c["model"]
-                    && m.reasoning_configuration_reference == c["reasoning_configuration_reference"]
-                    && m.harness == harness
-            }) else {
+            let named = |key: &str| c[key].as_str().unwrap_or_default();
+            let names = (
+                named("provider"),
+                named("model"),
+                named("reasoning_configuration_reference"),
+            );
+            let Some(m) = aq_profile_settings::choice_for(choices, names, harness) else {
                 continue;
             };
-            let supported: &[&str] = if harness == "codex" {
-                &[
-                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-                ]
-            } else {
-                &["default", "off", "low", "medium", "high", "xhigh", "max"]
-            };
-            if !supported.contains(&m.reasoning.as_str()) {
-                continue;
-            }
             out.push(json!({"catalog_digest":catalog_digest,"profile_id":profile["id"],"profile_version":profile["version"],"candidate_id":c["id"],"name":profile["name"].as_str().unwrap_or(profile["id"].as_str().unwrap_or("Profile")),"provider":m.provider,"model":m.model,"reasoning":m.reasoning,"reasoning_configuration_reference":m.reasoning_configuration_reference,"options":m.options,"harness":harness}));
         }
     }

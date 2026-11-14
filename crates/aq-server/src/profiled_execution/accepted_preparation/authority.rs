@@ -8,8 +8,6 @@ enum OriginalPreparation {
         receipt_digest: aq_admission::Digest,
     },
     AcceptedV2 {
-        proposal: Box<Proposal>,
-        request: Box<AcceptRequest>,
         receipt: Box<AcceptedReceipt>,
         receipt_digest: aq_admission::Digest,
     },
@@ -28,33 +26,6 @@ impl PreparationAuthority {
                 ("accepted_preparation_v2", receipt_digest)
             }
             OriginalPreparation::Refresh(value) => value.origin(),
-        }
-    }
-    pub fn phase_context(&self) -> Option<(&Proposal, &AcceptRequest)> {
-        match &self.original {
-            OriginalPreparation::Legacy { .. } | OriginalPreparation::Refresh(_) => None,
-            OriginalPreparation::AcceptedV2 {
-                proposal, request, ..
-            } => Some((proposal, request)),
-        }
-    }
-
-    pub fn accepted_receipt(&self) -> Option<&AcceptedReceipt> {
-        match &self.original {
-            OriginalPreparation::Legacy { .. } | OriginalPreparation::Refresh(_) => None,
-            OriginalPreparation::AcceptedV2 { receipt, .. } => Some(receipt),
-        }
-    }
-    pub fn refresh_context(
-        &self,
-    ) -> Option<(
-        &aq_admission::preparation_refresh_v1::Proposal,
-        &aq_admission::preparation_refresh_v1::AcceptRequest,
-        &aq_admission::preparation_refresh_v1::AcceptedReceipt,
-    )> {
-        match &self.original {
-            OriginalPreparation::Refresh(value) => Some(value.context()),
-            _ => None,
         }
     }
     pub fn window(&self) -> (u64, u64) {
@@ -118,8 +89,6 @@ pub(crate) async fn load_preparing_locked(
     let digest = a.digest().map_err(|_| refused())?;
     Ok(PreparationAuthority {
         original: OriginalPreparation::AcceptedV2 {
-            proposal: Box::new(p),
-            request: Box::new(q),
             receipt: Box::new(a),
             receipt_digest: digest,
         },

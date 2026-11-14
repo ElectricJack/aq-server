@@ -1,0 +1,160 @@
+{
+  "name": "judgment-fails",
+  "situation": "The judgment fails, so the task is treated as high risk",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-12",
+        "revision": 4
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-12@4",
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          },
+          "facts": {
+            "kind": "",
+            "title": "Cache parsed settings",
+            "description": "Settings are parsed on every request; parse them once.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none"
+          }
+        }
+      }
+    ],
+    "judgment.assess": [
+      {
+        "outcome": "failed",
+        "output": {
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          },
+          "reason": "provider_unavailable"
+        }
+      }
+    ],
+    "work.route": [
+      {
+        "outcome": "routed",
+        "output": {
+          "reference": "route-1",
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          },
+          "harnesses": [
+            "claude",
+            "codex"
+          ],
+          "providers": [],
+          "prefer": []
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "routed",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          }
+        }
+      },
+      {
+        "command": "judgment.assess",
+        "input": {
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          },
+          "question": "How much damage could this change do if it is wrong? High risk is anything that touches stored data, permissions or money. Low risk is docs, wording and tests. Everything else is medium risk. Answer unknown if you cannot tell.",
+          "context": {
+            "items": [
+              {
+                "label": "Title",
+                "text": "Cache parsed settings"
+              },
+              {
+                "label": "Description",
+                "text": "Settings are parsed on every request; parse them once."
+              }
+            ]
+          },
+          "fields": [
+            {
+              "id": "risk",
+              "description": "How much damage the change could do if it is wrong.",
+              "choices": [
+                "low",
+                "medium",
+                "high",
+                "unknown"
+              ]
+            }
+          ],
+          "flags": [
+            {
+              "id": "small_and_tested",
+              "description": "The work is small, its requirements are settled, and a test checks the result."
+            }
+          ],
+          "rationale_max_bytes": 512,
+          "budget": {
+            "deadline_ms": 180000,
+            "max_output_tokens": 1024
+          }
+        }
+      },
+      {
+        "command": "work.route",
+        "input": {
+          "subject": {
+            "id": "task-12",
+            "revision": 4
+          },
+          "level": "complex-high",
+          "harnesses": [
+            "claude",
+            "codex"
+          ],
+          "providers": [],
+          "prefer": [],
+          "hold": false,
+          "reasons": [
+            {
+              "code": "classification_failed",
+              "detail": "The risk could not be judged, so the task is treated as high risk."
+            },
+            {
+              "code": "raised_for_risk",
+              "detail": "High risk work is Complex, high effort."
+            },
+            {
+              "code": "harnesses_limited",
+              "detail": "Only Claude or Codex may take high risk work."
+            }
+          ],
+          "classification": null
+        }
+      }
+    ]
+  }
+}

@@ -55,6 +55,10 @@ both return neutral 404. A missing row means **admission unknown**. Preserve the
 original ID and request bytes. Operation responses identify the digest, scope,
 created/updated timestamps, subject refs, receipt refs, affected entities and
 permitted recovery. Confirmed means only the effects named in that receipt.
+A `rejected` operation may carry a `reason` code when its domain owner names
+one. `busy` means the owner's rows were contended (for example a machine
+action's 1 s lock timeout): nothing was changed, and a new submission under a
+new operation ID may succeed.
 
 Ordinary terminal receipts survive at least 90 days after their last update.
 Pending and unknown operations never expire. Retirement erases response details
@@ -177,6 +181,13 @@ subject revision and the single `expected_versions` entry (`task` or
   Graph's cap; schema `maxLength` values count characters and are upper bounds.
 - `task.reprioritize` writes Graph metadata `aq:priority` (integer in
   -1,000,000..1,000,000, higher first) and preserves other metadata keys.
+- `task.route.set` puts an owner route on the task: `class` is
+  `<parent>-<effort>` (for example `standard-high`), with optional `harnesses`
+  and `providers` limits. It is refused (`422`) when Settings assigns no profile
+  to the class. `task.route.clear` removes the route and has no fields beyond
+  the common ones. Both write Graph metadata `aq:route` against the expected
+  task version and record the change in the route history; a stale version
+  returns a `conflict`.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
   `task.dependency.remove` removes `edge_id` at `edge_version`.
 - `task.cancel` records Graph task lifecycle `canceled`, including draft tasks

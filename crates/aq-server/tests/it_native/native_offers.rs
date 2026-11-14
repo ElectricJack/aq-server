@@ -4,7 +4,7 @@ use aq_admission::{
     Digest,
     control::{ControlReply, decode_reply},
 };
-use common::native_offer::{poll, setup};
+use common::native_offer::{poll, poll_offered, setup};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::sync::atomic::Ordering;
@@ -18,11 +18,13 @@ mod history_caps;
 mod holds;
 #[path = "native_offers/lost.rs"]
 mod lost;
+#[path = "native_offers/routed.rs"]
+mod routed;
 
 #[tokio::test]
 async fn offered_window_preserves_five_seconds_of_fresh_facts_and_allows_delayed_accept() {
     let c = setup().await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {
@@ -43,7 +45,7 @@ async fn offered_window_preserves_five_seconds_of_fresh_facts_and_allows_delayed
 #[tokio::test]
 async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without_grant() {
     let c = setup().await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {
@@ -94,7 +96,7 @@ async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without
         original["native_offer"],
         serde_json::to_value(native).unwrap()
     );
-    let (status, replayed) = poll(&c).await;
+    let (status, replayed) = poll_offered(&c).await;
     assert_eq!(status, 200, "{replayed}");
     let ControlReply::Poll(replayed) =
         decode_reply(&serde_json::to_vec(&replayed).unwrap()).unwrap()
@@ -267,7 +269,7 @@ async fn startup_context_carries_the_task_thread() {
     )
     .await
     .unwrap();
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let manifest: Value = sqlx::query_scalar("SELECT launch_manifest FROM profiled_launches")
         .fetch_one(pool)
@@ -347,7 +349,7 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
     )
     .await
     .unwrap();
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offers(body), 1);
 }
@@ -365,14 +367,14 @@ fn poll_offers(body: &Value) -> Vec<aq_admission::startup::NativeOffer> {
 async fn refused_successor_is_skipped_and_other_work_is_offered() {
     let mut c = setup().await;
     common::native_offer::pin_policy(&mut c, |p| p.max_attempts = 1).await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let first = poll_offers(&body).remove(0);
     let t1 = c.env.lineage.task_id;
     assert_eq!(first.offered.offer.manifest.bindings.task_id, t1);
     common::native_offer::fail_and_release(&c, first.offered.offer.binding.attempt_id).await;
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(
         status, 200,
         "a refused successor never fails the poll: {body}"
@@ -462,7 +464,7 @@ async fn owner_availability_off_makes_no_offer_and_no_decision() {
     }
     assert_eq!(decisions().await, before);
     set_availability(&c, true, "2").await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(poll_offers(&body).len(), 1, "{body}");
 }
@@ -493,7 +495,7 @@ async fn owner_availability_on_outlives_the_attestation_window() {
         .await
         .unwrap();
     assert_eq!(rows, 0, "the switch writes no observation row");
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(poll_offers(&body).len(), 1, "{body}");
 }
@@ -546,7 +548,7 @@ async fn stop_committed_after_the_gate_publishes_no_offer() {
 async fn backstop_refused_successor_is_skipped_within_the_poll() {
     let mut c = setup().await;
     common::native_offer::pin_policy(&mut c, |p| p.max_attempts = 1).await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let first = poll_offers(&body).remove(0);
     let (t1, attempt) = (
@@ -567,7 +569,7 @@ async fn backstop_refused_successor_is_skipped_within_the_poll() {
         .unwrap();
     tx.commit().await.unwrap();
     c.mode.store(7, Ordering::SeqCst);
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let offers = poll_offers(&body);
     assert_eq!(
@@ -685,4 +687,94 @@ async fn switch_of_a_demoted_owner_makes_no_offer() {
         .unwrap();
     let (status, body) = poll(&c).await;
     assert!(poll_offers_or_none(status, &body), "{status} {body}");
+}
+
+#[tokio::test]
+async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_admitted() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let class = c
+        .env
+        .frozen
+        .intelligence_profile
+        .rsplit_once('@')
+        .unwrap()
+        .0;
+    let provider = c.env.input.credentials[0].provider.clone();
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(serde_json::json!([{"provider":provider,"intelligence_class":class,"limit":0}]))
+        .execute(pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(
+            status, 200,
+            "capacity is an ordinary retryable poll: {body}"
+        );
+        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+        else {
+            panic!("{body}")
+        };
+        assert!(page.offers.is_empty());
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_attempts")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0,
+        "a ceiling must not consume a task claim or retry attempt"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_stopped_dispositions")
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0,
+        "waiting cannot retire or terminally dispose the task"
+    );
+    let wait: (String, String, String) = sqlx::query_as(
+        "SELECT provider,intelligence_class,reason FROM swarm_waiting WHERE task_id=$1",
+    )
+    .bind(c.env.lineage.task_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        wait,
+        (
+            provider.clone(),
+            class.into(),
+            aq_swarm_settings::admission::CEILING.into()
+        )
+    );
+    sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
+        .bind(serde_json::json!([{"provider":provider,"intelligence_class":class,"limit":1}]))
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(
+        page.offers.len(),
+        1,
+        "raising the matching cell admits the original queued task"
+    );
+    assert_eq!(
+        page.offers[0].offered.offer.manifest.bindings.task_id,
+        c.env.lineage.task_id
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM swarm_waiting WHERE task_id=$1")
+            .bind(c.env.lineage.task_id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        0
+    );
 }

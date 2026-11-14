@@ -236,6 +236,7 @@ pub(super) fn assemble(
         host,
         startup_file,
         resource_admission,
+        swarm_profile: Some(profile.clone()),
         subscription: Some(crate::config::Subscription {
             server_origin: config.server_origin.clone(),
             instructions,
@@ -299,7 +300,7 @@ mod tests {
             actor: prior.subject.actor_id(),
             enabled: true,
             revision: 1,
-            profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","catalog_digest":Digest::of(b"catalog")}),
+            profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","catalog_digest":Digest::of(b"catalog"),"profile_id":"engineering","profile_version":1,"reasoning_configuration_reference":"medium"}),
             owner: Some(Uuid::new_v4()),
             project: None,
             label: "Global supervisor".into(),
@@ -320,6 +321,10 @@ mod tests {
         )
         .unwrap();
         candidate.host.digest().unwrap();
+        assert_eq!(
+            candidate.swarm_profile.as_ref().unwrap()["profile_id"],
+            "engineering"
+        );
         crate::validate_join(&candidate.central, &candidate.host).unwrap();
         assert!(
             candidate

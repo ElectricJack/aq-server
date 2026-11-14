@@ -1,5 +1,5 @@
 //! Revisioned central project policy. Graph tasks and Git bindings remain external.
-pub mod domain;
+pub use aq_project_policy as domain;
 mod external;
 use crate::{AppState, authz::RequireOwner, error::AppError};
 use aq_profiles::ValidatedCatalog;
@@ -142,7 +142,7 @@ pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<Stri
         row.get("active_digest"),
     ))
 }
-async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
+pub(crate) async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
     let bytes: Vec<u8> =
         sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
             .bind(digest)
@@ -461,7 +461,29 @@ pub(crate) async fn check_execution_eligibility(
     id: Uuid,
     request: &EligibilityRequest,
 ) -> Result<Eligibility> {
-    check_eligibility_current(state, id, request, true).await
+    let routed = routed_launch(state, id, request).await?;
+    check_eligibility_current(state, id, routed.as_ref().unwrap_or(request), true).await
+}
+/// Spec 0011 §4: a routed launch's intelligence profile is its class profile, outside the
+/// binding's allowlist; it is checked as an override of the agent's automatic router.
+async fn routed_launch(
+    state: &AppState,
+    id: Uuid,
+    request: &EligibilityRequest,
+) -> Result<Option<EligibilityRequest>> {
+    let record = current(state, id).await?;
+    let allowed = &record.binding.allowed_intelligence_profiles;
+    if request.intelligence_override.is_some() || allowed.contains(&request.intelligence_profile) {
+        return Ok(None);
+    }
+    let catalog = catalog(state, &record.binding.catalog_digest).await?;
+    let (agent, launched) = (&request.agent_profile, &request.intelligence_profile);
+    let router = aq_selection::router_of_launch(&catalog.artifact().catalog, agent, launched);
+    Ok(router.map(|router| EligibilityRequest {
+        intelligence_profile: router.into(),
+        intelligence_override: Some(launched.clone()),
+        ..request.clone()
+    }))
 }
 async fn check_eligibility_current(
     state: &AppState,
@@ -519,10 +541,12 @@ async fn check_eligibility_current(
             .push("project_changed_during_external_validation".into());
     }
     let artifact = &catalog.artifact().catalog;
+    let routed = request.intelligence_override.as_deref();
     if !artifact.agents.iter().any(|a| {
         aq_profiles::key(&a.id, a.version) == request.agent_profile
             && a.intelligence == request.intelligence_profile
             && a.execution == request.execution_profile
+            && aq_selection::routed_intelligence(artifact, &a.intelligence, routed).is_some()
     }) || !artifact.execution.iter().any(|e| {
         aq_profiles::key(&e.id, e.version) == request.execution_profile
             && e.environments.contains(&request.environment)
@@ -585,6 +609,7 @@ pub(crate) async fn fence_for_offer(
         agent_profile: frozen.agent_profile.clone(),
         intelligence_profile: frozen.intelligence_profile.clone(),
         execution_profile: frozen.execution_profile.clone(),
+        intelligence_override: None,
     };
     let now = (state.clock)();
     let live = node

@@ -1405,8 +1405,6 @@ fn review_policy_artifact(input: serde_json::Value) -> aq_playbook_host::model::
         proposal: aq_playbooks_compiler::Proposal {
             playbook,
             source_map: BTreeMap::new(),
-            questions: vec![],
-            unsupported_features: vec![],
         },
         registry: aq_server::playbooks::review_domain::CatalogProfile::HumanReview2.registry(),
         dependencies: BTreeMap::new(),

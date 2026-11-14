@@ -238,3 +238,53 @@ fn updates_section_is_optional_strict_and_absolute() {
     let err = load(vault_with(&rel).path()).unwrap_err().to_string();
     assert!(err.contains("updates.spool_dir"), "{err}");
 }
+
+#[test]
+fn internal_work_section_is_optional_strict_and_defaulted() {
+    let cfg = load(vault_with(VALID).path()).unwrap();
+    assert!(cfg.internal_work.is_none());
+    let empty = format!("{VALID}\n[internal_work]\n");
+    let section = load(vault_with(&empty).path())
+        .unwrap()
+        .internal_work
+        .unwrap();
+    assert!(section.api.is_empty() && section.enabled && section.poll_ms == 200);
+    let full = format!(
+        "{VALID}\n[internal_work]\npoll_ms = 50\nenabled = false\napi = [{{provider = \"openai\", endpoint = \"https://api.example/v1/responses\", secret_file = \"/run/key\"}}]\n"
+    );
+    let section = load(vault_with(&full).path())
+        .unwrap()
+        .internal_work
+        .unwrap();
+    assert_eq!((section.poll_ms, section.enabled), (50, false));
+    assert_eq!(section.api[0].provider, "openai");
+    let unknown = format!("{VALID}\n[internal_work]\nworkers = 2\n");
+    assert!(load(vault_with(&unknown).path()).is_err());
+    let nested = format!(
+        "{VALID}\n[internal_work]\napi = [{{provider = \"o\", endpoint = \"e\", secret_file = \"/k\", model = \"m\"}}]\n"
+    );
+    assert!(load(vault_with(&nested).path()).is_err());
+}
+
+#[test]
+fn playbook_authoring_section_is_optional_strict_and_bounded() {
+    let cfg = load(vault_with(VALID).path()).unwrap();
+    assert_eq!(cfg.playbook_authoring, Default::default());
+    assert_eq!(cfg.playbook_authoring.keep_finished_runs, 50);
+    let set =
+        format!("{VALID}\n[playbook_authoring]\nkeep_finished_runs = 5\ndeadline_ms = 600000\n");
+    let section = load(vault_with(&set).path()).unwrap().playbook_authoring;
+    assert_eq!(
+        (section.keep_finished_runs, section.deadline_ms),
+        (5, 600_000)
+    );
+    assert_eq!(section.max_turns, 200);
+    let unknown = format!("{VALID}\n[playbook_authoring]\nworkers = 2\n");
+    assert!(load(vault_with(&unknown).path()).is_err());
+    // A deadline internal work would refuse is refused at load.
+    let long = format!("{VALID}\n[playbook_authoring]\ndeadline_ms = 1800001\n");
+    let err = load(vault_with(&long).path()).unwrap_err().to_string();
+    assert!(err.contains("playbook_authoring"), "{err}");
+    let none = format!("{VALID}\n[playbook_authoring]\nkeep_finished_runs = 0\n");
+    assert!(load(vault_with(&none).path()).is_err());
+}

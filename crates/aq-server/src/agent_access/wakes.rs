@@ -18,8 +18,6 @@ use sqlx::{Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// Launch or ack failures tolerated after admission before escalation.
-pub const MAX_LAUNCH_FAILURES: i32 = 3;
 /// Retention holds tolerated before escalation (retention never self-heals).
 pub const MAX_RETENTION_HOLDS: i32 = 3;
 /// Recheck delay for a held wake (no eligible node, missing retention).
@@ -611,71 +609,6 @@ pub async fn winner(state: &AppState, wait_id: Uuid) -> Result<Option<Admission>
         attachment: serde_json::from_value(row.get("attachment"))?,
         differences: row.get("differences"),
     }))
-}
-
-/// Bounded launch/ack recovery: a failed winner opens the next dispatch
-/// generation until `MAX_LAUNCH_FAILURES`, then the wake escalates. Returns
-/// the wake's resulting state.
-pub async fn record_launch_failure(
-    state: &AppState,
-    admission_id: Uuid,
-    reason: &str,
-) -> Result<String> {
-    let reason = if reason.is_empty() || reason.len() > 256 {
-        "launch_failed"
-    } else {
-        reason
-    };
-    let at = i64_of(now(state))?;
-    let mut tx = state.store.pool.begin().await?;
-    let row = sqlx::query("SELECT a.intent_id,a.dispatch_generation,a.state AS admission_state,w.dispatch_generation AS current,w.state,w.launch_failures FROM agent_wait_wake_admissions a JOIN agent_wait_wakes w USING(intent_id) WHERE a.admission_id=$1 FOR UPDATE OF w")
-        .bind(admission_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(WaitError("not_found"))?;
-    let intent: Uuid = row.get("intent_id");
-    let wake_state: String = row.get("state");
-    if row.get::<String, _>("admission_state") != "offered"
-        || row.get::<i64, _>("dispatch_generation") != row.get::<i64, _>("current")
-        || wake_state != "admitted"
-    {
-        tx.rollback().await?;
-        return Ok(wake_state);
-    }
-    sqlx::query(
-        "UPDATE agent_wait_wake_admissions SET state='failed',failure=$2 WHERE admission_id=$1",
-    )
-    .bind(admission_id)
-    .bind(reason)
-    .execute(&mut *tx)
-    .await?;
-    let failures = row.get::<i32, _>("launch_failures") + 1;
-    let next = if failures >= MAX_LAUNCH_FAILURES {
-        "escalated"
-    } else {
-        "resume_pending"
-    };
-    sqlx::query("UPDATE agent_wait_wakes SET launch_failures=$2,state=$3,reason=$4,dispatch_generation=dispatch_generation+CASE WHEN $3='resume_pending' THEN 1 ELSE 0 END,next_due_ms=0,updated_at_ms=$5 WHERE intent_id=$1")
-        .bind(intent)
-        .bind(failures)
-        .bind(next)
-        .bind(reason)
-        .bind(at)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(next.to_owned())
-}
-
-/// Owner early resume: labelled `manual_override`, due now. Age (the wait's
-/// creation time) and the lineage budgets are unchanged.
-pub async fn manual_resume(state: &AppState, wait_id: Uuid) -> Result<bool> {
-    let updated = sqlx::query("UPDATE agent_wait_wakes SET manual_override=TRUE,next_due_ms=0,updated_at_ms=$2 WHERE wait_id=$1 AND state='resume_pending'")
-        .bind(wait_id)
-        .bind(i64_of(now(state))?)
-        .execute(&state.store.pool)
-        .await?;
-    Ok(updated.rows_affected() == 1)
 }
 
 /// Background loop; the periodic pass is the source of wake liveness.

@@ -328,31 +328,14 @@ async fn schedule_survives_restart_without_double_fire() {
     assert_eq!(e.s.put_schedule(&next, changed, 1).await.unwrap(), 2);
     assert_eq!(e.s.collect_schedule_events(&next, 2).await.unwrap(), 1);
     assert_eq!(e.s.outbox(&next, 0, 4).await.unwrap().len(), 2);
-    let pool = e.f.db.pool().await;
-    sqlx::query("UPDATE playbook_namespaces SET outbox_count=16384 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
     let tomorrow = DailySchedule {
         schedule_id: Uuid::new_v4(),
         ..schedule
     };
     e.s.put_schedule(&next, tomorrow, 0).await.unwrap();
-    assert_eq!(
-        e.s.collect_schedule_events(&next, 2).await,
-        Err(Error::Overloaded)
-    );
-    sqlx::query("UPDATE playbook_namespaces SET outbox_count=2 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        e.s.collect_schedule_events(&next, 2).await.unwrap(),
-        1,
-        "refusal must not advance the cursor"
-    );
+    // No outbox lifetime cap (architecture 0006): the new schedule's
+    // occurrence is collected however many events came before.
+    assert_eq!(e.s.collect_schedule_events(&next, 2).await.unwrap(), 1);
 }
 impl Env {
     fn intent(&self, id: &str, name: &str, input: Value) -> Intent {
@@ -376,6 +359,7 @@ impl Env {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn scan(&self, name: &str, complete: bool) {
@@ -410,39 +394,6 @@ async fn findings_reconcile_preserves_episode_and_notification_identity() {
         .await
         .unwrap();
     e.scan("one", false).await;
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=8192 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        e.findings(
-            "first",
-            "one",
-            json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}])
-        )
-        .await,
-        Err(Error::Overloaded)
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM playbook_finding_episodes")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM playbook_finding_notifications")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=0 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
 
     let first = e
         .findings(
@@ -536,6 +487,62 @@ async fn findings_reconcile_preserves_episode_and_notification_identity() {
             .await
             .unwrap(),
         3
+    );
+}
+/// Architecture 0006: cleared episodes are not a cap. A partition with more
+/// than the old 100 cleared episodes still reconciles a new finding, and the
+/// rolling deletion keeps only the newest cleared ones; an open episode stays.
+#[tokio::test]
+async fn reconcile_works_past_100_cleared_episodes_and_old_cleared_ones_are_deleted() {
+    let e = setup().await;
+    let pool = e.f.db.pool().await;
+    let (ns, g) = (e.s.namespace.namespace_id, e.s.namespace.generation);
+    sqlx::query("INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) SELECT $1,$2,'workers','gone-'||i,2,false,'node/a',i FROM generate_series(1,150) i")
+        .bind(ns).bind(g).execute(&pool).await.unwrap();
+    e.scan("more", true).await;
+    let finding = json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]);
+    let result = e.findings("more", "more", finding).await.unwrap();
+    assert_eq!(result.outcome, "reconciled");
+    let episodes = aq_playbook_host::retention::TABLES.len() - 1;
+    assert_eq!(
+        aq_playbook_host::retention::TABLES[episodes].0,
+        "playbook_finding_episodes"
+    );
+    let retention = aq_playbook_host::retention::Retention {
+        keep_finished: 10,
+        delete_batch: 100,
+    };
+    // An unexpired scan still to be reconciled holds the partition's old
+    // revisions in its baseline: no cleared episode is deleted under it.
+    e.scan("waiting", true).await;
+    assert_eq!(e.s.prune(&e.owner, &retention, episodes).await.unwrap(), 0);
+    e.f.time
+        .fetch_add(60_001, std::sync::atomic::Ordering::SeqCst);
+    let mut deleted = vec![];
+    for _ in 0..3 {
+        deleted.push(e.s.prune(&e.owner, &retention, episodes).await.unwrap());
+    }
+    assert_eq!(deleted, [100, 40, 0]);
+    let kept: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT finding_key,present FROM playbook_finding_episodes WHERE namespace_id=$1 ORDER BY last_notified_ms,finding_key",
+    )
+    .bind(ns)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept.len(), 11);
+    assert_eq!(kept[0], ("gone-141".into(), false));
+    assert_eq!(kept[9], ("gone-150".into(), false));
+    assert_eq!(kept[10], ("offline".into(), true));
+    // A cleared finding whose episode was deleted comes back as a new one.
+    e.scan("back", true).await;
+    let back = json!([
+        {"key":"offline","expected_revision":1,"evidence":"node/a"},
+        {"key":"gone-1","expected_revision":0,"evidence":"node/b"}
+    ]);
+    assert_eq!(
+        e.findings("back", "back", back).await.unwrap().outcome,
+        "reconciled"
     );
 }
 #[tokio::test]
@@ -803,7 +810,7 @@ fn protected_factory(
 #[tokio::test]
 async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
     use aq_server::playbooks::driver::Driver;
-    for refusal in ["schedule", "notification_capacity", "notification_scope"] {
+    for refusal in ["notification_capacity", "notification_scope"] {
         let e = setup().await;
         let pool = e.f.db.pool().await;
         let date = chrono::DateTime::from_timestamp_millis(common::profiled::NOW as i64)
@@ -821,39 +828,21 @@ async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
             .await
             .unwrap();
         e.s.collect_schedule_events(&e.owner, 2).await.unwrap();
-        if refusal == "schedule" {
-            e.s.put_schedule(
-                &e.owner,
-                DailySchedule {
-                    schedule_id: Uuid::new_v4(),
-                    ..schedule
-                },
-                0,
-            )
-            .await
-            .unwrap();
-            sqlx::query("UPDATE playbook_namespaces SET outbox_count=16384 WHERE namespace_id=$1")
-                .bind(e.s.namespace.namespace_id)
+        e.scan("blocked-notification", false).await;
+        e.findings(
+            "blocked-notification",
+            "blocked-notification",
+            json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]),
+        )
+        .await
+        .unwrap();
+        if refusal == "notification_capacity" {
+            sqlx::query("UPDATE notification_budget SET message_count=4096")
                 .execute(&pool)
                 .await
                 .unwrap();
         } else {
-            e.scan("blocked-notification", false).await;
-            e.findings(
-                "blocked-notification",
-                "blocked-notification",
-                json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]),
-            )
-            .await
-            .unwrap();
-            if refusal == "notification_capacity" {
-                sqlx::query("UPDATE notification_budget SET message_count=4096")
-                    .execute(&pool)
-                    .await
-                    .unwrap();
-            } else {
-                sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','false'::jsonb)").execute(&pool).await.unwrap();
-            }
+            sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','false'::jsonb)").execute(&pool).await.unwrap();
         }
         e.s.retire_runtime(&e.owner).await.unwrap();
         let driver = Driver::start(
@@ -896,36 +885,19 @@ async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
             runs.items[0].status, "completed",
             "{refusal}: accepted run must tick"
         );
-        sqlx::query("UPDATE playbook_namespaces SET outbox_count=1 WHERE namespace_id=$1")
-            .bind(e.s.namespace.namespace_id)
-            .execute(&pool)
-            .await
-            .unwrap();
         sqlx::query("UPDATE notification_budget SET message_count=0")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','true'::jsonb)").execute(&pool).await.unwrap();
         driver.quantum().await.unwrap();
-        if refusal == "schedule" {
-            assert_eq!(
-                driver
-                    .inspect_runs(e.f.actor, Default::default())
-                    .await
-                    .unwrap()
-                    .items
-                    .len(),
-                2
-            );
-        } else {
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notification_messages")
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap(),
-                1
-            );
-        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notification_messages")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
         driver.stop().await.unwrap();
     }
 }
@@ -1051,4 +1023,202 @@ async fn different_producers_with_same_event_uuid_acknowledge_independently() {
         .await
         .unwrap();
     assert!(e.s.outbox(&e.owner, 0, 2).await.unwrap().is_empty());
+}
+
+/// A playbook with no commands, as an authoring run would seal it for
+/// `binding`; `purpose` makes two of them differ.
+fn authored(binding: &str, purpose: &str) -> Artifact {
+    Artifact::seal(ArtifactContent {
+        format_version: 1,
+        compiler: "authoring deployment test".into(),
+        source: SourceBinding {
+            digest: hash_bytes(purpose.as_bytes()),
+            header: SourceHeader {
+                format_version: 1,
+                id: binding.into(),
+                scope: "project".into(),
+                interfaces: BTreeSet::from(["main".into()]),
+                definitions: BTreeSet::new(),
+            },
+        },
+        playbook: Playbook {
+            id: binding.into(),
+            purpose: purpose.into(),
+            scope: "project".into(),
+            entries: BTreeMap::from([(
+                "main".into(),
+                EntryPoint {
+                    input: Schema::Null,
+                    outcomes: BTreeMap::from([("ok".into(), Schema::Null)]),
+                    start: "done".into(),
+                },
+            )]),
+            steps: BTreeMap::from([(
+                "done".into(),
+                Step {
+                    op: Operation::Return {
+                        outcome: "ok".into(),
+                        output: Expr::literal(Value::Null),
+                    },
+                    edges: BTreeMap::new(),
+                    on_error: None,
+                },
+            )]),
+            triggers: vec![],
+            limits: Limits::default(),
+            required_capabilities: BTreeSet::new(),
+        },
+        registry: Registry::default(),
+        dependencies: BTreeMap::new(),
+        definitions: BTreeMap::new(),
+        source_map: BTreeMap::new(),
+    })
+    .unwrap()
+}
+
+/// Playbook authoring (spec 0013 ruling R2, plan task C4) on the real engine
+/// and grant tables: the server's grant for a source never expires and is
+/// reused, a changed set of abilities replaces it, the owner's own grants
+/// keep their 24 hour cap, and what is active survives a restart.
+#[tokio::test]
+async fn an_authored_playbook_runs_under_a_source_grant_that_never_expires() {
+    use aq_playbook_authoring::{self as authoring, Deployer};
+    use aq_server::playbooks::driver::Driver;
+    const SOURCE: &str = "probe";
+    const BINDING: &str = "aq.probe";
+    let e = setup().await;
+    e.s.retire_runtime(&e.owner).await.unwrap();
+    let start = || {
+        Driver::start(
+            e.s.clone(),
+            aq_playbook_host::Limits::default(),
+            protected_factory(&e),
+        )
+    };
+    let driver = Arc::new(start().await.unwrap());
+    let state = e.f.state.clone();
+    state.internal_work.test_engine(driver.clone());
+    let pool = e.f.db.pool().await;
+    let names =
+        |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
+    let record = authoring::SourceRecord {
+        id: SOURCE.into(),
+        kind: authoring::SourceKind::Registered,
+        binding: BINDING.into(),
+        scope: "project".into(),
+        purpose: "Probe".into(),
+        judgment_purpose: aq_internal_work::Purpose::PlaybookCall,
+        commands: BTreeSet::new(),
+        events: BTreeSet::new(),
+        capabilities: names(&["context.read"]),
+        facts: vec![],
+        revision: 0,
+    };
+    authoring::register(&pool, &record, "A document.\n")
+        .await
+        .unwrap();
+
+    // Saving a source twice reuses its grant, which never expires.
+    let caps = names(&["context.read"]);
+    let (grant, revision) = state.ensure_grant(SOURCE, &caps).await.unwrap();
+    assert_eq!(
+        state.ensure_grant(SOURCE, &caps).await.unwrap(),
+        (grant, revision)
+    );
+    let expiry = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (i64, Option<i64>)>(
+                "SELECT expires_at_ms,revoked_at_ms FROM playbook_grants WHERE grant_id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(expiry(grant).await, (i64::MAX, None));
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_source_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 1);
+
+    let (first, second) = (authored(BINDING, "first"), authored(BINDING, "second"));
+    state.install(&first).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &first.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], first.digest);
+    // Activating what is active already changes nothing.
+    state
+        .activate(SOURCE, BINDING, &first.digest)
+        .await
+        .unwrap();
+    let again = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(again["revision"], bound["revision"]);
+
+    // 25 hours later the source grant still authorizes; the owner's does not.
+    e.f.time
+        .fetch_add(25 * 3_600_000, std::sync::atomic::Ordering::SeqCst);
+    state.install(&second).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+    let owners = driver
+        .activate("aq.other".into(), first.digest.clone(), e.grant, 1)
+        .await;
+    assert!(matches!(owners, Err(Error::Forbidden)), "{owners:?}");
+    // An owner grant asked for longer than 24 hours is still refused.
+    let now = (e.f.state.clock)().timestamp_millis();
+    let long =
+        e.s.grant(e.f.actor, Uuid::new_v4(), e.scope.clone(), now + 86_400_001)
+            .await;
+    assert!(matches!(long, Err(Error::Invalid)), "{long:?}");
+    e.s.grant(e.f.actor, Uuid::new_v4(), e.scope.clone(), now + 86_400_000)
+        .await
+        .unwrap();
+
+    // A changed set of abilities replaces the grant; the old one is revoked.
+    let wider = names(&["context.read", "findings.reconcile"]);
+    let (next, _) = state.ensure_grant(SOURCE, &wider).await.unwrap();
+    assert_ne!(next, grant);
+    assert!(expiry(grant).await.1.is_some());
+    assert_eq!(expiry(next).await, (i64::MAX, None));
+    // What was in effect moved to the new grant before the old one went.
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+    let actor = bound["authority"]["actor"].as_str().unwrap();
+    assert!(actor.contains(&next.to_string()), "{actor}");
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+
+    // After a restart the artifact is installed again and still active.
+    driver.stop().await.unwrap();
+    let driver = Arc::new(start().await.unwrap());
+    state.internal_work.test_engine(driver.clone());
+    state.install(&second).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+
+    // Deleting the source revokes its grant: its playbook can do nothing more.
+    state.revoke_grant(SOURCE).await.unwrap();
+    assert!(expiry(next).await.1.is_some());
+    let refused = state.activate(SOURCE, BINDING, &first.digest).await;
+    assert!(
+        matches!(refused, Err(authoring::Error::Conflict(_))),
+        "{refused:?}"
+    );
+    driver.stop().await.unwrap();
 }

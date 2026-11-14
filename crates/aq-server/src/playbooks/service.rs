@@ -67,6 +67,8 @@ pub struct Service {
     pub(crate) profile: CatalogProfile,
     pub(super) reviews: Option<Arc<crate::reviews::Service>>,
     pub(super) host: Option<Arc<super::host_adapters::HostPorts>>,
+    /// R1 (Host9): the routing commands serve any project on the router.
+    pub installation_routing: bool,
 }
 #[derive(Clone, Debug)]
 pub enum MessageResult {
@@ -105,6 +107,7 @@ impl Service {
             checks: None,
             judgments: None,
             integration: None,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
     }
@@ -169,7 +172,7 @@ impl Service {
     }
     /// A catalog 2.x host profile (Host7 or Host8) with its ports.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new_host2(
+    pub async fn new_host2(
         state: &crate::AppState,
         namespace: Namespace,
         keys: Arc<Keyring>,
@@ -189,8 +192,16 @@ impl Service {
             checks,
             judgments,
             integration,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
+    }
+    /// Replaces the routing port of a freshly built host service (tests).
+    pub fn with_routing(mut self, routing: Arc<dyn super::host_adapters::RoutingPort>) -> Self {
+        if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
+            ports.routing = routing;
+        }
+        self
     }
     /// D8 host services with the existing D4 contracts and confirmed domain events.
     pub async fn new_monitoring6(
@@ -207,6 +218,7 @@ impl Service {
             checks: None,
             judgments: None,
             integration: None,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
     }
@@ -261,6 +273,7 @@ impl Service {
             profile,
             reviews,
             host: None,
+            installation_routing: false,
         })
     }
     pub(super) fn now(&self) -> Result<i64> {
@@ -312,26 +325,31 @@ impl Service {
         }
         Ok(row)
     }
-    pub(super) async fn budget(
+    /// Rolling deletion (architecture 0006): one bridge table's finished rows
+    /// beyond the newest `keep_finished`, at most `delete_batch` of them.
+    pub async fn prune(
         &self,
-        tx: &mut Transaction<'_, Postgres>,
-        admissions: i64,
-        effects: i64,
-        cancellations: i64,
-        outbox: i64,
-        bytes: i64,
-    ) -> Result<()> {
-        if [admissions, effects, cancellations, outbox, bytes]
-            .iter()
-            .any(|v| *v < 0)
-        {
-            return Err(Error::Invalid);
-        }
-        let changed=sqlx::query("UPDATE playbook_namespaces SET admission_count=admission_count+$3,effect_count=effect_count+$4,cancellation_count=cancellation_count+$5,outbox_count=outbox_count+$6,retained_bytes=retained_bytes+$7 WHERE namespace_id=$1 AND generation=$2 AND admission_count+$3<=4096 AND effect_count+$4<=8192 AND cancellation_count+$5<=8192 AND outbox_count+$6<=16384 AND retained_bytes+$7<=67108864").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(admissions).bind(effects).bind(cancellations).bind(outbox).bind(bytes).execute(&mut **tx).await?.rows_affected();
-        if changed != 1 {
-            return Err(Error::Overloaded);
-        }
-        Ok(())
+        owner: &RuntimeOwner,
+        retention: &aq_playbook_host::retention::Retention,
+        table: usize,
+    ) -> Result<u64> {
+        let (keep, batch) = retention.bounds().ok_or(Error::Invalid)?;
+        let tables = aq_playbook_host::retention::TABLES;
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        let (namespace, generation) = (self.namespace.namespace_id, self.namespace.generation);
+        let deleted = sqlx::query(tables[table % tables.len()].1)
+            .bind(namespace)
+            .bind(generation)
+            .bind(keep)
+            .bind(batch)
+            .bind(self.now()?)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        tx.commit().await?;
+        Ok(deleted)
     }
     pub async fn initialize(&self, actor: Uuid) -> Result<()> {
         if actor != self.namespace.owner_user_id {
@@ -425,7 +443,7 @@ impl Service {
             actor,
         ))?;
         let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
+        self.namespace_locked(&mut tx).await?;
         Self::owner(&mut tx, actor).await?;
         if let Some(old) = sqlx::query_scalar::<_, String>(
             "SELECT payload_digest FROM playbook_grants WHERE grant_id=$1",
@@ -441,21 +459,29 @@ impl Service {
             return Ok(());
         }
         let now = self.now()?;
-        if expires <= now
-            || expires > now.saturating_add(86_400_000)
-            || ns.get::<i64, _>("grant_count") >= 1024
-        {
+        if expires <= now || expires > now.saturating_add(86_400_000) {
             return Err(Error::Invalid);
         }
-        let bytes = canonical_bytes(&scope).map_err(|_| Error::Invalid)?.len() as i64 + 1024;
-        self.budget(&mut tx, 0, 0, 0, 0, bytes).await?;
         sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7)").bind(id).bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
-        sqlx::query(
-            "UPDATE playbook_namespaces SET grant_count=grant_count+1 WHERE namespace_id=$1",
-        )
-        .bind(self.namespace.namespace_id)
-        .execute(&mut *tx)
-        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    /// The grant the server holds for a playbook source on the owner's
+    /// behalf (spec 0013 ruling R2): written as the namespace owner, and it
+    /// never expires. [`Self::grant`] keeps its 24 h cap.
+    pub async fn source_grant(&self, id: Uuid, scope: GrantScope) -> Result<()> {
+        self.profile.validate_scope(&scope)?;
+        let (ns, actor) = (&self.namespace, self.namespace.owner_user_id);
+        if id.is_nil() || scope.project_id != ns.project_id || scope.workspace_id != ns.workspace_id
+        {
+            return Err(Error::Forbidden);
+        }
+        let expires = aq_playbook_authoring::SOURCE_GRANT_EXPIRES_AT_MS;
+        let payload = digest(&(ns.namespace_id, ns.generation, id, &scope, expires, actor))?;
+        let mut tx = self.tx().await?;
+        self.namespace_locked(&mut tx).await?;
+        Self::owner(&mut tx, actor).await?;
+        sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7) ON CONFLICT(grant_id) DO NOTHING").bind(id).bind(ns.namespace_id).bind(ns.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -697,12 +723,6 @@ impl Service {
         ))
         .map_err(|_| Error::Invalid)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        let retained = canonical_bytes(&response)
-            .map_err(|_| Error::Invalid)?
-            .len() as i64
-            + sealed.ciphertext.len() as i64
-            + 4096;
-        self.budget(&mut tx, 0, 1, 0, 1, retained).await?;
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,'message.send',$5,$6,$7,$8,$9,$10,'queued',$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).bind(&intent.run).bind(&identity).bind(intent.command.fingerprint().map_err(|_|Error::Invalid)?).bind(&intent.input_digest).bind(id).bind(revision).bind(op).bind(&response).bind(at).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(event_id).bind(event_digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
         self.check_expiry(&mut tx, id).await?;
@@ -783,7 +803,6 @@ impl Service {
         } else {
             "confirmed"
         };
-        self.budget(&mut tx, 0, 0, 1, 0, 2048).await?;
         sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(key).bind(&intent.id).bind(identity).bind(disposition).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(if existing.is_some() {
@@ -889,8 +908,6 @@ impl Service {
                 &bytes,
             )
             .map_err(|_| Error::Unknown)?;
-        self.budget(&mut tx, 1, 0, 0, 0, sealed.ciphertext.len() as i64 + 4096)
-            .await?;
         sqlx::query("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(request.request_id).bind(digest).bind(&key).bind(request.grant_id).bind(request.grant_revision).bind(request.expected_activation_revision as i64).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(self.now()?).bind(&binding).execute(&mut *tx).await?;
         self.check_expiry(&mut tx, request.grant_id).await?;
         tx.commit().await?;
@@ -972,7 +989,7 @@ impl Service {
         {
             return Err(Error::Conflict);
         }
-        sqlx::query("UPDATE playbook_admissions SET status='engine_accepted',receipt=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(json!(receipt)).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_admissions SET status='engine_accepted',held_reason=NULL,receipt=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(json!(receipt)).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(AdmissionStatus {
             request_id: id,
@@ -989,7 +1006,7 @@ impl Service {
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        let rows=sqlx::query_scalar("SELECT request_id FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND status='pending' ORDER BY created_at_ms,request_id LIMIT $3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(limit as i64).fetch_all(&mut *tx).await?;
+        let rows=sqlx::query_scalar("SELECT request_id FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND status='pending' ORDER BY held_reason IS NOT NULL,created_at_ms,request_id LIMIT $3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(limit as i64).fetch_all(&mut *tx).await?;
         tx.commit().await?;
         Ok(rows)
     }
@@ -999,6 +1016,22 @@ impl Service {
         after: i64,
         limit: u32,
     ) -> Result<Vec<(i64, Uuid, EventEnvelope)>> {
+        let (page, undecryptable) = self.outbox_page(owner, after, limit).await?;
+        if undecryptable.is_some() {
+            return Err(Error::Unknown);
+        }
+        Ok(page.into_iter().map(|(s, id, e, _)| (s, id, e)).collect())
+    }
+    /// [`Self::outbox`], each row with whether the engine accepted it (its
+    /// receipt is recorded). A queued event that cannot be decrypted is not
+    /// held (fixing the keyring recovers it): the page ends before it, with
+    /// the reason naming the row and its key id.
+    pub(super) async fn outbox_page(
+        &self,
+        owner: &RuntimeOwner,
+        after: i64,
+        limit: u32,
+    ) -> Result<(Vec<(i64, Uuid, EventEnvelope, bool)>, Option<String>)> {
         if after < 0 || !(1..=16).contains(&limit) {
             return Err(Error::Invalid);
         }
@@ -1006,8 +1039,8 @@ impl Service {
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        let rows=sqlx::query("SELECT * FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND sequence>$3 AND (status!='engine_accepted' OR NOT fanout_complete) ORDER BY sequence LIMIT $4").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind(limit as i64).fetch_all(&mut *tx).await?;
-        let mut result = Vec::new();
+        let rows=sqlx::query("SELECT * FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND sequence>$3 AND (status='pending' OR (status='engine_accepted' AND NOT fanout_complete)) ORDER BY sequence LIMIT $4").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind(limit as i64).fetch_all(&mut *tx).await?;
+        let (mut result, mut undecryptable) = (Vec::new(), None);
         for row in rows {
             let id: Uuid = row.get("event_id");
             let digest: String = row.get("event_digest");
@@ -1017,23 +1050,33 @@ impl Service {
                 nonce: row.get("nonce"),
                 ciphertext: row.get("ciphertext"),
             };
-            let bytes = self
-                .keys
-                .open(&self.aad("aq.playbooks.outbox", id, &digest)?, &sealed)
-                .map_err(|_| Error::Unknown)?;
-            let event: EventEnvelope = serde_json::from_slice(&bytes)?;
-            if super::domain::digest(&event)? != digest
-                || event.event_id != id.to_string()
-                || event.producer != row.get::<String, _>("producer")
-            {
-                return Err(Error::Conflict);
-            }
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
-                .map_err(|_| Error::Invalid)?;
-            result.push((row.get("sequence"), id, event));
+            let aad = self.aad("aq.playbooks.outbox", id, &digest)?;
+            let producer: String = row.get("producer");
+            let Ok(bytes) = self.keys.open(&aad, &sealed) else {
+                let key = &sealed.key_id;
+                undecryptable = Some(format!(
+                    "cannot decrypt queued event {id} (key id {key}): fix the keyring, or hold the event"
+                ));
+                break;
+            };
+            let event = (serde_json::from_slice::<EventEnvelope>(&bytes).ok()).filter(|event| {
+                super::domain::digest(event).is_ok_and(|d| d == digest)
+                    && event.event_id == id.to_string()
+                    && event.producer == producer
+                    && aq_playbook_host::model::validate_event(event, &self.profile.registry())
+                        .is_ok()
+            });
+            let Some(event) = event else {
+                // A row whose event does not match its record is held, not
+                // retried forever.
+                sqlx::query("UPDATE playbook_outbox SET status='unknown',held_reason='invalid' WHERE namespace_id=$1 AND generation=$2 AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
+                continue;
+            };
+            let accepted = row.get::<Option<Value>, _>("engine_receipt").is_some();
+            result.push((row.get("sequence"), id, event, accepted));
         }
         tx.commit().await?;
-        Ok(result)
+        Ok((result, undecryptable))
     }
     pub async fn acknowledge_event(
         &self,
@@ -1121,24 +1164,41 @@ impl Service {
 }
 
 impl Service {
-    pub async fn authorize_recovery(
+    /// Hold pending work with its reason (an outbox event, else an
+    /// admission): it is kept, listed with the reason, no longer delivered,
+    /// and can be retried. An admission whose reason is `uncertain` (its
+    /// outcome is unknown) stays pending, delivered after the others.
+    pub(super) async fn hold(
         &self,
         owner: &RuntimeOwner,
+        event: bool,
         id: Uuid,
-        revision: i64,
+        reason: &str,
     ) -> Result<()> {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        self.grant_locked(&mut tx, id, revision, false).await?;
+        let sql = if event {
+            "UPDATE playbook_outbox SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'"
+        } else {
+            "UPDATE playbook_admissions SET status=CASE WHEN $4='uncertain' THEN 'pending' ELSE 'unknown' END,held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'"
+        };
+        sqlx::query(sql)
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(id)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
-    pub async fn hold_admission(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
+    /// The engine has started or forgotten every destination of an accepted event.
+    pub(super) async fn complete_event(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        sqlx::query("UPDATE playbook_admissions SET status='unknown' WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_outbox SET fanout_complete=true WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='engine_accepted'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -1305,7 +1365,6 @@ impl Service {
             .await
             .map_err(review_error)?;
         self.check_expiry(&mut tx, id).await?;
-        self.budget(&mut tx, 0, 1, 0, 0, 8192).await?;
         let receipt = json!({"handle":request.decision_id.to_string(),"subject":request.subject});
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,'decision.request',$5,$6,$7,$8,$9,$10,'accepted',$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).bind(&intent.run).bind(identity).bind(intent.command.fingerprint().map_err(|_|Error::Invalid)?).bind(&intent.input_digest).bind(id).bind(revision).bind(request.operation_id).bind(receipt).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -1522,7 +1581,6 @@ impl Service {
         } else {
             Self::owner(&mut tx, self.namespace.owner_user_id).await?;
         }
-        self.budget(&mut tx, 0, 0, 1, 0, 2048).await?;
         sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(key).bind(&intent.id).bind(identity).bind(disposition).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(if disposition == "confirmed" {
@@ -1623,8 +1681,6 @@ impl Service {
                     .keys
                     .seal(&self.aad("aq.playbooks.outbox", decision, &digest)?, &bytes)
                     .map_err(|_| Error::Unknown)?;
-                self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-                    .await?;
                 sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.human.decisions@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
             }
             sqlx::query("UPDATE review_owner_outbox SET acknowledged=true WHERE decision_id=$1")
@@ -1675,10 +1731,8 @@ impl Service {
             let id: Uuid = row.get("event_id");
             let operation: Uuid = row.get("operation_id");
             let attempt: Uuid = row.get("attempt_id");
-            let task: Uuid = row
-                .get::<Option<String>, _>("task_id")
-                .and_then(|t| t.parse().ok())
-                .ok_or(Error::Conflict)?;
+            let task = row.get::<Option<String>, _>("task_id");
+            let task: Option<Uuid> = task.and_then(|t| t.parse().ok());
             let at = self.now()?;
             let event = EventEnvelope {
                 producer: producer.into(),
@@ -1696,17 +1750,19 @@ impl Service {
                 observed_at_ms: Some(at),
                 payload: json!({"operation_id":operation,"task_id":task,"attempt_id":attempt}),
             };
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
-                .map_err(|_| Error::Invalid)?;
+            // A bad source item (no task id, or not this contract) is queued
+            // held `invalid`, so it is listed and later items are collected.
+            let registry = self.profile.registry();
+            let valid = aq_playbook_host::model::validate_event(&event, &registry).is_ok();
+            let held = (task.is_none() || !valid).then_some("invalid");
+            let status = if held.is_some() { "unknown" } else { "pending" };
             let digest = digest(&event)?;
             let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
             let sealed = self
                 .keys
                 .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
                 .map_err(|_| Error::Unknown)?;
-            self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-                .await?;
-            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,held_reason) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).bind(status).bind(held).execute(&mut *tx).await?;
         }
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
         tx.commit().await?;

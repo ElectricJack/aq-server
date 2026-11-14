@@ -9,7 +9,12 @@ const session=query({prompt:{async *[Symbol.asyncIterator](){await new Promise((
 }});
 try {
   const v=await session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({skipBehaviors:true});
-  // Exclude local session totals, transcript behavior, account ids and credentials.
-  console.log(JSON.stringify({rate_limits_available:v.rate_limits_available,rate_limits:v.rate_limits}));
+  // Copy only the windows we consume; incidental grant data can be cached
+  // without an independent observation timestamp and is not a qualified read.
+  const keys=["five_hour","seven_day","seven_day_opus","seven_day_sonnet","seven_day_oauth_apps"];
+  const limits=v.rate_limits && Object.fromEntries(keys.map(k=>[k,v.rate_limits[k] == null ? null : {
+    utilization:v.rate_limits[k].utilization, resets_at:v.rate_limits[k].resets_at,
+  }]));
+  console.log(JSON.stringify({rate_limits_available:v.rate_limits_available,rate_limits:limits}));
 } finally {session.close();}
 process.exit(0);

@@ -248,6 +248,18 @@ pub struct SelectionInputs {
     /// Sandbox placement facts (C4); absent for host-native workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<crate::Placement>,
+    /// A routed task's class profile, used in place of the automatic router (spec 0011 §4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_override: Option<String>,
+    /// A routed task's harness and provider limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::RouteLimits>,
+}
+impl SelectionInputs {
+    /// The intelligence profile this selection uses.
+    pub fn intelligence_key(&self) -> &str {
+        (self.intelligence_override.as_deref()).unwrap_or(&self.project.intelligence_profile)
+    }
 }
 #[derive(JsonSchema, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

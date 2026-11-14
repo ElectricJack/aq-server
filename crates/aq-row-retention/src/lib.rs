@@ -89,6 +89,89 @@ async fn statement(
     Ok(n)
 }
 
+/// `[workers.heartbeat_log]`: each node keeps its newest `keep` heartbeat log
+/// operations; one sweep deletes at most `delete_batch` older ones. Defaults
+/// 256 and 4096 (more than 250 nodes add between two sweeps); both positive, no upper bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HeartbeatLog {
+    pub keep: u64,
+    pub delete_batch: u64,
+}
+impl Default for HeartbeatLog {
+    fn default() -> Self {
+        Self {
+            keep: 256,
+            delete_batch: 4096,
+        }
+    }
+}
+impl HeartbeatLog {
+    /// `(keep, delete_batch)` as SQL bigints; `None` when either is zero or
+    /// too large to bind.
+    pub fn bounds(&self) -> Option<(i64, i64)> {
+        let keep = i64::try_from(self.keep).ok()?;
+        let batch = i64::try_from(self.delete_batch).ok()?;
+        (keep > 0 && batch > 0).then_some((keep, batch))
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_log_tests {
+    use super::HeartbeatLog;
+    #[test]
+    fn the_heartbeat_log_keeps_256_and_deletes_4096_by_default_and_refuses_zero() {
+        let parsed: HeartbeatLog = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.bounds(), Some((256, 4096)));
+        let set: HeartbeatLog = serde_json::from_str(r#"{"keep":3,"delete_batch":1}"#).unwrap();
+        assert_eq!(set.bounds(), Some((3, 1)));
+        for (keep, delete_batch) in [(0, 1), (1, 0), (u64::MAX, 1)] {
+            assert_eq!(HeartbeatLog { keep, delete_batch }.bounds(), None);
+        }
+        assert!(serde_json::from_str::<HeartbeatLog>(r#"{"batch":1}"#).is_err());
+    }
+}
+
+/// The worker heartbeat log, `profiled_presence_operations` (architecture
+/// 0006): keeps each node's newest `keep` operations and deletes at most
+/// `delete_batch` older ones. Never deleted: an operation a head row names (the
+/// node's accepted inventory, each lease's latest report) and one whose
+/// receipt has not expired at `now`. An inventory of the node's current boot
+/// is also kept while the node has an attempt that is not settled: a live
+/// phase execution and a continuation read the inventory they were selected
+/// against by its revision and digest (`presence::inventory_epoch_locked`).
+///
+/// The log is read for idempotent replay by operation id
+/// (`presence::storage::{inventory, fact}` in aq-server). A repeat of a
+/// deleted id finds no receipt and is judged as a new report: its sequence is
+/// not above the one the node snapshot or the lease's head keeps, so it is
+/// refused and never applied a second time.
+pub async fn presence_operations(
+    pool: &PgPool,
+    now: i64,
+    log: &HeartbeatLog,
+) -> anyhow::Result<u64> {
+    let (keep, batch) = log
+        .bounds()
+        .filter(|_| now > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid heartbeat log bounds"))?;
+    // $1 = now, $2 = keep per node, $3 = batch size.
+    let query = r#"DELETE FROM profiled_presence_operations WHERE (node_id,operation_id) IN (
+      SELECT r.node_id,r.operation_id FROM (
+        SELECT o.node_id,o.operation_id,o.expires_at_ms,o.kind,o.boot_id,row_number() OVER (PARTITION BY o.node_id
+          ORDER BY o.recorded_at_ms DESC,o.sequence DESC,o.operation_id DESC) AS newest
+        FROM profiled_presence_operations o) r
+      WHERE r.newest>$2 AND r.expires_at_ms<$1
+      AND NOT EXISTS(SELECT 1 FROM profiled_inventory_semantic_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
+      AND NOT EXISTS(SELECT 1 FROM profiled_material_presence_heads h WHERE h.node_id=r.node_id AND h.operation_id=r.operation_id)
+      AND NOT (r.kind='inventory_v2'
+        AND EXISTS(SELECT 1 FROM profiled_inventory_semantic_heads h WHERE h.node_id=r.node_id AND h.boot_id=r.boot_id)
+        AND EXISTS(SELECT 1 FROM execution_attempts a LEFT JOIN profiled_authority_hot p USING(attempt_id)
+          WHERE a.node_id=r.node_id AND (a.holds_task OR COALESCE(p.state->>'status',a.state->>'status','unknown') NOT IN ('finished','declined','never_granted'))))
+      ORDER BY r.newest DESC LIMIT $3)"#;
+    statement(pool, query, now, keep, batch).await
+}
+
 /// One bounded pass. Inject `now` and `tasks` for deterministic database tests.
 /// The batch argument may lower the production limit, never raise it.
 pub async fn collect(
@@ -322,31 +405,18 @@ async fn outboxes(pool: &PgPool, now: i64, batch: i64, report: &mut Report) -> a
             "agent_graph_outbox"=>format!("EXISTS(SELECT 1 FROM agent_graph_operations o JOIN execution_attempts e USING(attempt_id) WHERE o.operation_id=b.operation_id AND {ELIGIBLE})"),
             "review_owner_outbox"=>"EXISTS(SELECT 1 FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) JOIN retention_tasks t ON t.task_id=s.task_id AND t.workspace_id=s.workspace_id WHERE d.decision_id=b.decision_id AND d.state<>'pending' AND t.checked_at_ms=$1 AND t.settled_since_ms<$2 AND NOT EXISTS(SELECT 1 FROM execution_attempts e WHERE e.task_id=t.task_id AND (e.holds_task OR COALESCE((SELECT h.state->>'status' FROM profiled_authority_hot h WHERE h.attempt_id=e.attempt_id),e.state->>'status','unknown') NOT IN ('finished','declined','never_granted'))))".to_owned(),
             "terminal_outbox"=>format!("EXISTS(SELECT 1 FROM terminal_sessions s JOIN execution_attempts e USING(attempt_id) WHERE s.terminal_id=b.terminal_id AND {ELIGIBLE})"),
-            // All fanout is complete; immutable admissions/effects and engine
-            // receipts retain operation idempotency independently of this queue.
+            // All fanout is complete, and each producer dedupes on its own
+            // source row. The drive also deletes these on a rolling basis
+            // (aq_playbook_host::retention).
             _=>"TRUE".into(),
         };
         let query = format!(
             "DELETE FROM {table} WHERE ctid IN (SELECT b.ctid FROM {table} b WHERE ({done}) AND retention_completed_at_ms<$2 AND {authority} ORDER BY retention_completed_at_ms LIMIT $3)"
         );
-        if table == "playbook_outbox" {
-            // Return namespace row capacity as well as deleting the queue body.
-            let query = format!(
-                "WITH removed AS ({query} RETURNING namespace_id,generation,octet_length(ciphertext)+4096 AS charge) UPDATE playbook_namespaces n SET outbox_count=outbox_count-r.n,retained_bytes=retained_bytes-r.charge FROM (SELECT namespace_id,generation,count(*) n,sum(charge) charge FROM removed GROUP BY namespace_id,generation) r WHERE n.namespace_id=r.namespace_id AND n.generation=r.generation AND $1::bigint>0 RETURNING r.n"
-            );
-            let rows: Vec<i64> = sqlx::query_scalar(&query)
-                .bind(now)
-                .bind(now - 7 * DAY)
-                .bind(batch)
-                .fetch_all(pool)
-                .await?;
-            report.insert(table, rows.iter().sum::<i64>() as u64);
-        } else {
-            report.insert(
-                table,
-                statement(pool, &query, now, now - 7 * DAY, batch).await?,
-            );
-        }
+        report.insert(
+            table,
+            statement(pool, &query, now, now - 7 * DAY, batch).await?,
+        );
     }
     Ok(())
 }

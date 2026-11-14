@@ -138,12 +138,12 @@ async fn observation_retention_batches_history_and_preserves_authority() {
 }
 
 #[tokio::test]
-async fn outbox_retention_ages_completed_fanout_and_returns_capacity_in_batches() {
+async fn outbox_retention_ages_completed_fanout_in_batches() {
     let e = Env::new().await;
     let owner = Uuid::new_v4();
     let namespace = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,'retention@localhost','owner',now())").bind(owner).execute(&e.pool).await.unwrap();
-    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest,outbox_count,retained_bytes) VALUES($1,1,'retention',$2,$3,$4,$5,$5,7,28784)")
+    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retention',$2,$3,$4,$5,$5)")
         .bind(namespace).bind(e.workspace).bind(Uuid::new_v4()).bind(owner).bind("a".repeat(64)).execute(&e.pool).await.unwrap();
     for i in 0..7 {
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,fanout_complete) VALUES($1,1,'aq.host.bridge@1',0,$2,$3,1,'retention',$4,$5,$6,$7,$8)")
@@ -161,14 +161,6 @@ async fn outbox_retention_ages_completed_fanout_and_returns_capacity_in_batches(
         );
     }
     assert_eq!(e.count("playbook_outbox").await, 2); // pending and unfinished fanout
-    let counters: (i64, i64) = sqlx::query_as(
-        "SELECT outbox_count,retained_bytes FROM playbook_namespaces WHERE namespace_id=$1",
-    )
-    .bind(namespace)
-    .fetch_one(&e.pool)
-    .await
-    .unwrap();
-    assert_eq!(counters, (2, 8224));
 }
 
 #[tokio::test]

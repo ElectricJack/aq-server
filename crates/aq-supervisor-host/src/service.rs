@@ -328,6 +328,16 @@ async fn step(
             if !ctl.enabled {
                 return Ok(());
             }
+            if let Some(reason) = crate::config::swarm_wait(
+                pool,
+                turn.central.profiles.catalog.digest.as_str(),
+                turn.swarm_profile.as_ref(),
+            )
+            .await?
+            {
+                report(pool, config, instance, "waiting", swarm_stage(reason), None).await?;
+                return Ok(());
+            }
             host.start(
                 turn.central.clone(),
                 turn.host.clone(),
@@ -625,6 +635,13 @@ async fn start_turn(
     generation: u64,
     session: Uuid,
 ) -> Result<()> {
+    let digest = ctl.profile["catalog_digest"]
+        .as_str()
+        .context("supervisor catalog unavailable")?;
+    if let Some(reason) = crate::config::swarm_wait(pool, digest, Some(&ctl.profile)).await? {
+        report(pool, config, instance, "waiting", swarm_stage(reason), None).await?;
+        return Ok(());
+    }
     let turn = dispatch::prepare_turn(pool, ctl.actor, reservation, generation, session, now())
         .await
         .map_err(api_error)?;
@@ -649,4 +666,12 @@ async fn start_turn(
         Some(&state),
     )
     .await
+}
+
+fn swarm_stage(reason: &str) -> &'static str {
+    if reason == aq_swarm_settings::admission::CEILING {
+        "Waiting for this provider and intelligence class concurrency limit"
+    } else {
+        "Waiting for an authoritative intelligence class and configured capacity"
+    }
 }

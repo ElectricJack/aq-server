@@ -101,6 +101,16 @@ impl ApiError {
         };
         Self::new(status, code, message)
     }
+    /// A message composed from fixed text and integers (never an internal error), bounded as in
+    /// [`Self::new`].
+    pub fn with_message(mut self, message: &str) -> Self {
+        self.body.message = message
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(256)
+            .collect();
+        self
+    }
     pub fn operation(mut self, id: Uuid) -> Self {
         self.body.operation_id = Some(id);
         self

@@ -466,3 +466,15 @@ mod tests {
 }
 
 pub mod material;
+
+/// Preserve the registry's credential order while applying its existing node placement policy.
+pub fn node_credentials(registry: &LoadedRegistry, node: uuid::Uuid) -> Vec<AuthorizedCredential> {
+    registry
+        .config
+        .credentials
+        .iter()
+        .zip(&registry.credentials)
+        .filter(|(config, _)| config.allows(node))
+        .map(|(_, credential)| credential.clone())
+        .collect()
+}

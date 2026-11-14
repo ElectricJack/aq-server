@@ -28,6 +28,11 @@ pub struct ResolveRequest {
     /// Not part of the request payload or its digest.
     #[serde(skip, default = "yes")]
     pub record_refused: bool,
+    /// A routed task's class profile and limits (spec 0011 §4); absent unrouted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intelligence_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RouteLimits>,
 }
 fn yes() -> bool {
     true
@@ -139,14 +144,12 @@ async fn resolve_with_principal(
             .map_err(db)?;
     let catalog = aq_profiles::ValidatedCatalog::from_artifact(&catalog_bytes)
         .map_err(|_| AppError::Internal)?;
-    let credentials: Vec<_> = loaded
-        .config
-        .credentials
-        .iter()
-        .zip(&loaded.credentials)
-        .filter(|(cfg, _)| cfg.allows(node_id))
-        .map(|(_, c)| c.clone())
-        .collect();
+    let mut credentials = aq_intelligence_config::node_credentials(loaded, node_id);
+    let mut membership = state.store.pool.acquire().await.map_err(db)?;
+    aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
+        .await
+        .map_err(db)?;
+    drop(membership);
     let observations: Vec<Value> = sqlx::query_scalar(
         "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
     )
@@ -302,9 +305,36 @@ async fn resolve_with_principal(
         compositions: request.compositions,
         now_ms: time,
         placement,
+        intelligence_override: request.intelligence_override,
+        route: request.route,
     };
-    let outcome =
+    let mut outcome =
         select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
+    // Route from task requirements first. Capacity can wait on this exact class,
+    // and never influences the router's model or class selection.
+    if let Some(resolved) = &outcome.resolved {
+        let mut capacity = state.store.pool.begin().await.map_err(db)?;
+        let choice = serde_json::to_value(&resolved.choice).map_err(|_| AppError::Internal)?;
+        let artifact = serde_json::to_value(catalog.artifact()).map_err(|_| AppError::Internal)?;
+        let cell = aq_swarm_settings::admission::classify(
+            &artifact,
+            Some(input.intelligence_key()),
+            &choice,
+        );
+        let reason = aq_swarm_settings::admission::observe(
+            &mut capacity,
+            input.project.lineage.task_id,
+            cell.as_ref(),
+            time as i64,
+        )
+        .await
+        .map_err(db)?;
+        capacity.commit().await.map_err(db)?;
+        if let Some(reason) = reason {
+            outcome.resolved = None;
+            outcome.reason_codes = vec![reason.into()];
+        }
+    }
     let decision = Decision {
         decision_id: Uuid::new_v4(),
         project: request.project,
@@ -518,6 +548,27 @@ async fn fence_retained_decision(
         now(state)?,
     )
     .await?;
+    if owned_attempt.is_none() {
+        let choice = serde_json::to_value(&decision.outcome.resolved.as_ref().unwrap().choice)
+            .map_err(|_| AppError::Internal)?;
+        let cell = aq_swarm_settings::admission::resolve(
+            tx,
+            Some(decision.inputs.project.catalog_digest.as_str()),
+            Some(decision.inputs.intelligence_key()),
+            &choice,
+        )
+        .await
+        .map_err(db)?;
+        if let Some(reason) = aq_swarm_settings::admission::check(tx, cell.as_ref())
+            .await
+            .map_err(db)?
+        {
+            return Err(conflict(reason));
+        }
+        aq_swarm_settings::admission::clear_waiting(tx, decision.inputs.project.lineage.task_id)
+            .await
+            .map_err(db)?;
+    }
     principal::fence(state, tx, decision).await?;
     check_time(state, decision)
 }
@@ -556,14 +607,14 @@ async fn fence_snapshot(
     {
         return Err(conflict("installed capability snapshot changed"));
     }
-    let credentials: Vec<_> = loaded(state)?
-        .config
-        .credentials
-        .iter()
-        .zip(&loaded(state)?.credentials)
-        .filter(|(cfg, _)| cfg.allows(node_id))
-        .map(|(_, c)| c.clone())
-        .collect();
+    let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
+    aq_swarm_settings::providers::mask(
+        tx,
+        &mut credentials,
+        owned_attempt.then_some(decision.inputs.credentials.as_slice()),
+    )
+    .await
+    .map_err(db)?;
     if digest(&credentials).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.credentials).map_err(|_| AppError::Internal)?
     {

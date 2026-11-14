@@ -1,0 +1,291 @@
+{
+  "purpose": "Ask for a description when a task has none",
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "max_length": 4096
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ]
+          },
+          "change": {
+            "type": "string",
+            "max_length": 128,
+            "values": [
+              "cancelled",
+              "changed",
+              "completed",
+              "ensured"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "change"
+        ]
+      },
+      "outcomes": {
+        "reminded": {
+          "type": "null"
+        },
+        "described": {
+          "type": "null"
+        },
+        "ended": {
+          "type": "null"
+        },
+        "unreadable": {
+          "type": "null"
+        },
+        "failed": {
+          "type": "null"
+        }
+      },
+      "start": "ready"
+    }
+  },
+  "triggers": [
+    {
+      "id": "task-changed",
+      "event": "aq.work.changed",
+      "entry": "main",
+      "input": {
+        "op": "object",
+        "fields": {
+          "task": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "subject"
+            ]
+          },
+          "change": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "outcome"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "steps": {
+    "ready": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "contains",
+          "collection": {
+            "op": "literal",
+            "value": [
+              "ensured",
+              "changed"
+            ]
+          },
+          "value": {
+            "op": "ref",
+            "root": "input",
+            "path": [
+              "change"
+            ]
+          }
+        }
+      },
+      "edges": {
+        "true": "wait",
+        "false": "ended",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "wait": {
+      "op": {
+        "kind": "wait",
+        "event": null,
+        "correlation": {},
+        "minimum_revision": null,
+        "deadline_ms": 600000,
+        "bind": "waited"
+      },
+      "edges": {
+        "timeout": "read"
+      },
+      "on_error": "failed"
+    },
+    "read": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.read",
+        "bind": "task",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "observed": "check",
+        "refused": "unreadable"
+      },
+      "on_error": "failed"
+    },
+    "check": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "eq",
+          "left": {
+            "op": "ref",
+            "root": "task",
+            "path": [
+              "facts",
+              "description"
+            ]
+          },
+          "right": {
+            "op": "literal",
+            "value": ""
+          }
+        }
+      },
+      "edges": {
+        "true": "remind",
+        "false": "described",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "remind": {
+      "op": {
+        "kind": "invoke",
+        "command": "message.send",
+        "bind": "sent",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "identity": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "reference"
+              ]
+            },
+            "recipient": {
+              "op": "ref",
+              "root": "definitions",
+              "path": [
+                "owner"
+              ]
+            },
+            "visibility": {
+              "op": "literal",
+              "value": "project"
+            },
+            "body": {
+              "op": "literal",
+              "value": "This task has had no description for ten minutes. Please add one, so that it can be worked on."
+            }
+          }
+        }
+      },
+      "edges": {
+        "queued": "reminded",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "reminded": {
+      "op": {
+        "kind": "return",
+        "outcome": "reminded",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "described": {
+      "op": {
+        "kind": "return",
+        "outcome": "described",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "ended": {
+      "op": {
+        "kind": "return",
+        "outcome": "ended",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "unreadable": {
+      "op": {
+        "kind": "return",
+        "outcome": "unreadable",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    }
+  },
+  "source_map": {
+    "ready": 3,
+    "wait": 3,
+    "read": 6,
+    "check": 6,
+    "unreadable": 7,
+    "remind": 10
+  }
+}

@@ -8,7 +8,7 @@ use aq_admission::{
 use aq_server::profiled_execution::{
     context_budget::Qualification, context_renewal::EFFECTIVE_DELAY_MS, definitions::Definition,
 };
-use common::native_offer::{Case, poll, post, setup};
+use common::native_offer::{Case, poll, poll_offered, post, setup};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -114,7 +114,7 @@ async fn renewal_extends_offers_past_config_expiry() {
         pin["expires_at_ms"].as_u64().unwrap() - pin["effective_at_ms"].as_u64().unwrap(),
         86_400_000
     );
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let used = renderer(&body);
     assert_eq!(used.digest.as_str(), digest(&pin));
@@ -130,7 +130,7 @@ async fn renewal_not_effective_before_delay() {
     assert_eq!(status, 200, "{pin}");
     let effective = pin["effective_at_ms"].as_u64().unwrap();
     assert!(effective >= now + EFFECTIVE_DELAY_MS, "{pin}");
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(renderer(&body), config.artifact().unwrap());
 }

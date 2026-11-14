@@ -1,5 +1,9 @@
 # Project execution bindings (AQ-19)
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. Only the registry retention paragraph changed.
+
 AQ owns revisioned project execution policy; aq-git owns repository bindings and
 generations, and aq-graph owns workspace/task state. Project records store public
 references, allowed profile identities, central node/group/environment restrictions,
@@ -108,9 +112,13 @@ configured ref again.
 
 Admin requests are capped at 128 KiB. Four project verification exchanges may run concurrently (each pairs one
 bounded Git read and one graph read); excess returns explicit unavailable observations instead of waiting
-in an unbounded queue. Registry retention caps are 256 current projects and
-100,000 historical revisions/operation receipts. History is preserved rather than
-silently evicted on quota exhaustion. Project edits, binding generations and
+in an unbounded queue. The registry holds at most 256 current projects; projects
+are the product. Historical revisions are a rolling set: the most recent 100 per
+project are kept and older ones are deleted on save. Operation receipts are kept
+for 7 days **(proposed defaults)**. A save is never refused because history is
+full. A read of a deleted revision returns 404. A retry after its receipt is gone
+is a new request, and its expected revision no longer matches, so it conflicts
+instead of applying twice. Project edits, binding generations and
 activation revisions are rechecked rather than attempting a cross-service atomic
 transaction. Any external change after observation is caught by the owner's
 expected-generation checks on subsequent effects and the final admission recheck.

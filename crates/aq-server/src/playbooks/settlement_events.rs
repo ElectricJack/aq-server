@@ -55,8 +55,6 @@ impl Service {
                 .keys
                 .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
                 .map_err(|_| Error::Unknown)?;
-            self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-                .await?;
             sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')")
                 .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&event.producer)
                 .bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce)

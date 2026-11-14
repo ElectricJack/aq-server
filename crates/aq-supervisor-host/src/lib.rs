@@ -6,6 +6,7 @@ mod bridge;
 pub mod config;
 mod conversation;
 pub mod credentials;
+pub mod internal;
 mod journal;
 pub mod service;
 pub mod subscription;

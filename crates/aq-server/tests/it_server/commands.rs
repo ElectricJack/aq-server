@@ -113,6 +113,10 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         root.join("src"),
         root.join("../aq-manual-sessions/src"),
         root.join("../aq-supervisor-control/src"),
+        root.join("../aq-profile-settings/src"),
+        root.join("../aq-swarm-settings/src"),
+        root.join("../aq-internal-work/src"),
+        root.join("../aq-playbook-authoring/src"),
     ];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
@@ -153,6 +157,15 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
                         .clone()
                 };
                 out.entry(route).or_default().insert(name.clone());
+            }
+            // A nest mounts its prefix; the nested routes are scanned where declared.
+            let mut rest = text.as_str();
+            while let Some(i) = rest.find(".nest(") {
+                rest = &rest[i + 6..];
+                if let Some(lit) = rest.trim_start().strip_prefix('"') {
+                    let prefix = lit[..lit.find('"').unwrap()].to_string();
+                    out.entry(prefix).or_default().insert(name.clone());
+                }
             }
         }
     }

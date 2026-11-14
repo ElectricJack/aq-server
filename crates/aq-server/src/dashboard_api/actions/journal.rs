@@ -65,6 +65,13 @@ pub(super) async fn lookup_for_authorization(
             .map_err(|_| ApiError::unavailable())?,
     }))
 }
+/// Whether an operation with this ID was admitted (by any principal, in any state).
+pub(crate) async fn admitted(pool: &PgPool, id: Uuid) -> Result<bool, ApiError> {
+    let found = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM dashboard_operations WHERE operation_id=$1)",
+    );
+    Ok(found.bind(id).fetch_one(pool).await?)
+}
 pub(super) fn retired(id: Uuid) -> ApiError {
     ApiError::new(
         StatusCode::GONE,
@@ -104,6 +111,7 @@ pub(super) async fn admit(
         affected_entities: vec![],
         recovery: Recovery::LookupOriginal,
         current_versions: Default::default(),
+        reason: None,
     };
     let response = serde_json::to_value(&operation).map_err(|_| ApiError::unavailable())?;
     let mut tx = transaction(pool).await?;

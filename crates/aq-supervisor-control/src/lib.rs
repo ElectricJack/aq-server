@@ -1,4 +1,5 @@
 //! Central supervisor scopes and operator controls, separate from worker sessions.
+pub mod admin;
 mod api;
 pub mod authority;
 pub mod read;

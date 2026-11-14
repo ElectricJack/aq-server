@@ -487,9 +487,110 @@ async fn explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drai
         .unwrap()
         .unwrap();
 }
+// No profile moves: a namespace keeps the profile it was created with. A
+// server configured for host_v9 over a human_review_v2 namespace refuses to
+// open it, names the profile found and says what to do; a new namespace
+// (new id and name) opens as host_v9 beside the old rows.
+#[tokio::test]
+async fn a_human_review_v2_namespace_is_kept_and_host_v9_opens_as_a_new_namespace() {
+    let s = setup().await;
+    let mut state = s.f.state.clone();
+    state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let old = state.config.playbooks.clone().unwrap();
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, old)
+        .await
+        .unwrap();
+    runtime.driver.stop().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    let token = s._dir.path().join("graph-token");
+    private(&token, "g".repeat(48));
+    state.agent_access = Some(Arc::new(
+        aq_server::agent_access::Runtime::new(&aq_server::agent_access::AgentAccessConfig {
+            graph_url: "http://127.0.0.1:9/".into(),
+            graph_token_file: token,
+            credential_ttl_ms: 10000,
+            mutation_actor_id: None,
+        })
+        .await
+        .unwrap(),
+    ));
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let host9 = head.replace(
+        "profile=\"human_review_v2\"",
+        "profile=\"host_v9\"\ndeployments=[]\ninstallation_routing=true",
+    );
+    let load = |text: &str| toml::from_str::<Config>(text).unwrap().playbooks.unwrap();
+    let refused = aq_server::playbooks::runtime::Runtime::start(&state, load(&host9)).await;
+    let why = refused.err().unwrap().to_string();
+    for part in [
+        "already exists with profile \"human_review_v2\" (generation 1)",
+        "asks for profile \"host_v9\"",
+        "a new namespace_id and a new name",
+    ] {
+        assert!(why.contains(part), "{why}");
+    }
+    let moved = Uuid::new_v4();
+    let fresh = host9
+        .replace(&s.namespace.to_string(), &moved.to_string())
+        .replace("name=\"activation-", "name=\"host9-");
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, load(&fresh))
+        .await
+        .unwrap();
+    assert!(runtime.driver.service.installation_routing);
+    runtime.driver.stop().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    let pool = s.f.db.pool().await;
+    let profiles: Vec<i16> = sqlx::query_scalar(
+        "SELECT catalog_profile FROM playbook_namespaces WHERE namespace_id=ANY($1) ORDER BY 1",
+    )
+    .bind([s.namespace, moved])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(profiles, [2, 9]);
+}
+// R1: installation routing is the Host9 commands serving every project on
+// the router, so it is refused under any other profile.
+#[tokio::test]
+async fn installation_routing_is_refused_without_host_v9() {
+    let s = setup().await;
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let with = |profile: &str, routing: &str| {
+        head.replace(
+            "profile=\"human_review_v2\"",
+            &format!("profile=\"{profile}\""),
+        )
+        .replace(
+            "drive_interval_ms=250\n",
+            &format!("drive_interval_ms=250\ndeployments=[]\n{routing}"),
+        )
+    };
+    let on = "installation_routing=true\n";
+    for profile in ["human_review_v2", "monitoring_v6", "host_v7", "host_v8"] {
+        assert!(
+            toml::from_str::<Config>(&with(profile, "")).is_ok(),
+            "{profile}"
+        );
+        let refused = toml::from_str::<Config>(&with(profile, on));
+        assert!(
+            refused.is_err_and(|e| e.to_string().contains("requires the host_v9 profile")),
+            "{profile}"
+        );
+    }
+    assert!(toml::from_str::<Config>(&with("host_v9", on)).is_ok());
+    assert!(toml::from_str::<Config>(&with("host_v9", "")).is_ok());
+}
 #[tokio::test]
 async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_socket_directory() {
     let s = setup().await;
+    let timeouts = |table: &str| {
+        let table = format!("drive_interval_ms=250\n[playbooks.engine_timeouts]\n{table}\n");
+        s.text.replace("drive_interval_ms=250\n", &table)
+    };
+    let retention = |table: &str| {
+        let table = format!("drive_interval_ms=250\n[playbooks.retention]\n{table}\n");
+        s.text.replace("drive_interval_ms=250\n", &table)
+    };
     for text in [
         s.text
             .replace("enabled=true\nprofile=", "enabled=false\nprofile="),
@@ -501,9 +602,26 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
             "drive_interval_ms=250",
             "drive_interval_ms=250\nprovider_token=\"not-allowed\"",
         ),
+        timeouts("statement_ms=0"),
+        timeouts("statement_ms=1000\nlock_ms=1001"),
+        timeouts("idle_ms=1"),
+        // The engine open deadline is configuration too, and positive (N4).
+        timeouts("open_ms=0"),
+        // Keeping no finished rows would delete what idempotent replay reads.
+        retention("keep_finished=0"),
+        retention("delete_batch=0"),
+        retention("keep=1"),
     ] {
         assert!(toml::from_str::<Config>(&text).is_err());
     }
+    // The engine session deadlines are configuration (defaults 30 s / 500 ms).
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=2000\nlock_ms=100")).is_ok());
+    // No upper bound: a long drain may need more than 30 s per statement.
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000")).is_ok());
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000\nopen_ms=600000")).is_ok());
+    // Rolling deletion is configuration (defaults keep 10,000, delete 500).
+    assert!(toml::from_str::<Config>(&retention("keep_finished=3\ndelete_batch=1")).is_ok());
+    assert!(toml::from_str::<Config>(&retention("keep_finished=100000000")).is_ok());
     let dsn = s._dir.path().join("dsn");
     private(
         &dsn,
@@ -561,13 +679,17 @@ async fn startup_missing_registered_schema_refuses_before_engine_creation() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(
-        aq_server::playbooks::runtime::Runtime::start(
-            &state,
-            state.config.playbooks.clone().unwrap()
-        )
-        .await
-        .is_err()
+    let refused = aq_server::playbooks::runtime::Runtime::start(
+        &state,
+        state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .err()
+    .expect("refused");
+    // The refusal says which step failed (N3).
+    assert_eq!(
+        refused.to_string(),
+        "playbook owner startup refused: applied migrations differ"
     );
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_namespaces")
         .fetch_one(&pool)
@@ -581,6 +703,65 @@ async fn startup_missing_registered_schema_refuses_before_engine_creation() {
     .await
     .unwrap();
     assert!(!schema);
+}
+/// A failed engine open does not stop the server: it starts, the playbook
+/// routes answer "playbooks unavailable: <reason>", and the open is retried
+/// with a backoff until it succeeds.
+#[tokio::test]
+async fn a_failed_engine_open_starts_the_server_unavailable_and_retries() {
+    let mut s = setup().await;
+    s.f.state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    // Another owner holds the engine namespace, so this server cannot open it.
+    let holder = aq_server::playbooks::runtime::Runtime::start(
+        &s.f.state,
+        s.f.state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .unwrap();
+    let (base, stop, task) = launch(s.f.state.clone()).await;
+    let c = client();
+    let mut unavailable = None;
+    for _ in 0..200 {
+        assert!(
+            !task.is_finished(),
+            "a failed engine open stopped the server"
+        );
+        if let Ok(r) = c
+            .get(format!("{base}/api/playbooks/status"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+        {
+            unavailable = Some((r.status().as_u16(), r.json::<Value>().await.unwrap()));
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let (code, body) = unavailable.expect("server never answered");
+    assert_eq!(code, 503, "{body}");
+    // The message carries the step that failed and the engine's own reason.
+    let message = body["message"].as_str().unwrap();
+    let step = "playbooks unavailable: playbook owner startup refused: opening the engine: ";
+    assert!(message.starts_with(step), "{body}");
+    assert!(message.len() > step.len(), "{body}");
+    holder.driver.stop().await.unwrap();
+    holder.shutdown().await.unwrap();
+    for _ in 0..400 {
+        let r = c
+            .get(format!("{base}/api/playbooks/status"))
+            .header("x-aq-dev-email", "owner@localhost")
+            .send()
+            .await
+            .unwrap();
+        if r.status().is_success() {
+            stop.send(()).unwrap();
+            task.await.unwrap().unwrap();
+            return;
+        }
+        assert!(!task.is_finished());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the engine open was not retried");
 }
 #[tokio::test]
 async fn changed_bootstrap_binding_is_refused_and_successful_stop_replay_is_exact() {
@@ -977,10 +1158,11 @@ mod definitions;
 mod catalog;
 
 /// Production Host7 construction: the configured owner binds the gateway
-/// work graph and leaves the check executor and judgment provider unbound,
-/// so both commands refuse with typed reasons and record no evidence.
+/// work graph, leaves the check executor unbound, so check.request refuses
+/// with a typed reason and records no evidence, and serves judgment.request
+/// through internal work (spec 0012 §6), so it is accepted.
 #[tokio::test]
-async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_ports() {
+async fn host7_profile_starts_on_gateway_graph_with_unbound_check_port_and_internal_judgments() {
     use aq_playbook_host::runner::{Intent, IntentStatus};
     use aq_server::playbooks::review_domain::{CatalogProfile, HOST7_CAPABILITIES};
     let s = setup().await;
@@ -1061,6 +1243,7 @@ async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_p
         reason: None,
         late_results: vec![],
         completion_event: None,
+        dispatch_sequence: None,
     };
     // Subjects are not graph node ids, so no graph call is made.
     let subject = json!({"id": "work-1", "revision": 1});
@@ -1101,15 +1284,8 @@ async fn host7_profile_starts_on_gateway_graph_with_unbound_check_and_judgment_p
         )
         .await
         .unwrap();
-    assert_eq!(
-        (
-            r.outcome.as_str(),
-            &r.output["reason"],
-            &r.output["provenance"]
-        ),
-        ("refused", &json!("no_permitted_profile"), &Value::Null),
-        "{r:?}"
-    );
+    assert_eq!(r.outcome, "accepted", "{r:?}");
+    assert!(r.output["handle"].is_string(), "{r:?}");
     // Refusals fabricate no check evidence.
     let evidence: i64 = sqlx::query_scalar("SELECT count(*) FROM profiled_check_evidence")
         .fetch_one(&pool)
@@ -1283,6 +1459,7 @@ async fn host7_production_startup_prepares_and_publishes_through_delivery_servic
         reason: None,
         late_results: vec![],
         completion_event: None,
+        dispatch_sequence: None,
     };
 
     // candidate.prepare -> D1 create_candidate -> aq-git candidate.create.

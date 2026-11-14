@@ -1,0 +1,18 @@
+{
+  "id": "notify-when-ready",
+  "binding": "aq.notify-when-ready",
+  "scope": "project",
+  "purpose": "Ask for a description when a task has none",
+  "commands": [
+    "message.send",
+    "work.read"
+  ],
+  "events": [
+    "aq.work.changed"
+  ],
+  "capabilities": [
+    "message.send",
+    "work.read"
+  ],
+  "facts_version": "settings-7"
+}

@@ -12,7 +12,10 @@ synthetic owned SQL projection responses, never evidence of a native process.
 Session identities are historical immutable bindings. Overview counts come from
 bounded owner observations; missing owners produce unknown counts and explicit
 partial coverage. `needs_you` counts the returned attention items (decisions,
-failed results, offline workers, uncertain operations); it is unknown while the
+failed results, offline workers, uncertain operations,
+and failed internal work a supervisor could not fix: its subject is the affected
+item, or `{type: "internal_run", id: <run>}` with `impact` naming the affected
+item when the dashboard cannot open that item by id); it is unknown while the
 decision owner is unavailable and estimated while any source is partial. The
 decision count alone is the `reviews` source total. In the all-projects view
 every enrolled offline worker is attention; one without recorded work in a
@@ -133,11 +136,11 @@ missing or expired context measurement for a natively registered node, and
 `worker_stopped` or `worker_draining` from the worker service state. Offline and
 revoked workers show as state, and a full concurrency ceiling shows as no free
 slots, so neither appears as a hold.
-`history_rate_limited` and `history_cap_reached` (spec 0008) say that the offer rate
-(30 an hour per node, 240 per project, 960 in all), the inventory report rate, or a
-live sealed-history cap holds new offers. On a node they apply to that node; in
-`waiting.reasons`, a message starting `Project <id>:` applies to one project and one
-starting `Server:` to all.
+`history_cap_reached` (spec 0008) says that a live sealed-history cap holds new offers.
+On a node it applies to that node; in `waiting.reasons`, a message starting
+`Project <id>:` applies to one project and one starting `Server:` to all.
+`history_rate_limited` is unused: no server sends it since the offer and worker report
+rate limits were removed on 2026-11-13. It stays in the schema for compatibility.
 `tasks_held` (R6, `waiting.reasons` only) says a project has tasks that a server-side hold
 keeps from being offered: an exhausted retry, time or cost budget, a lost attempt whose
 retry was not admitted, a quarantine, or a successor refused on every poll for 10 minutes.
@@ -150,7 +153,9 @@ A node's `slots.total` is absent when the
 worker has not reported one; the read never turns that into zero free slots.
 `cpu_above_threshold`, `memory_above_threshold` and `agent_maximum_reached` are
 reserved for placement and are not produced yet. Each `agents` entry is a running
-session of the node; its `intelligence_class` is derived from the model name
+session of the node; its optional `routing_profile` identifies the authoritative
+pinned intelligence profile (`id` and `display_name`). Historical attempts without
+that identity omit it. Its `intelligence_class` is a legacy palette hint derived from the model name
 (`haiku`, `mini`, `spark` or `flash` fast, `sonnet` standard, `opus` deep) and is
 absent otherwise. `waiting.reasons` says why new work cannot start now:
 `no_machine_online` when no machine is online, holding or stopped,
@@ -176,3 +181,13 @@ question, `asked_at_ms` and `expires_at_ms`. `answer`, `answered_at_ms` and
 `questions.answer@1` is enabled with `dashboard.actions` and names the
 dashboard-actions-1 kind `question.answer`. Fixtures:
 `question-inbox-{open,closed}.json` and `question-detail.json`.
+
+Provider usage may include `reset_credits` per account. Its state is `known`,
+`unknown`, or `unavailable`; a known count of zero is distinct from a null
+count. `grants: null` means details were not supplied and `[]` means an empty
+detail list. Each grant carries display-only restrictions and nullable expiry,
+remaining count and usability. Reset observation timestamps and freshness are
+independent of the quota windows; old clients and snapshots may omit the field.
+The snapshot collector bounds display text and counts and rejects malformed
+metadata without discarding valid windows. Direct legacy HTTP sources omit
+reset metadata.

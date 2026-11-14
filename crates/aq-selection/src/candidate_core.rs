@@ -39,6 +39,7 @@ pub(crate) struct CoreInputs<'a> {
     pub ceilings: &'a ResourceCeilings,
     pub allowed_environments: &'a [String],
     pub placement: Option<&'a Placement>,
+    pub route: Option<&'a RouteLimits>,
     pub now_ms: u64,
     pub global: Option<&'static str>,
     pub environment_denied: &'static str,
@@ -213,7 +214,8 @@ pub(crate) fn evaluate(
     input: &CoreInputs<'_>,
 ) -> Result<CoreOutcome> {
     let global = input.global;
-    let mut rows: Vec<(CandidateTrace, Option<ConcreteChoice>, u64)> = Vec::new();
+    // The last field: the route excludes the row, recorded once where it is evaluated.
+    let mut rows: Vec<(CandidateTrace, Option<ConcreteChoice>, u64, bool)> = Vec::new();
     let mut harnesses: Vec<_> = input.installation.harnesses.iter().collect();
     harnesses.sort_by_key(|h| {
         (
@@ -282,9 +284,16 @@ pub(crate) fn evaluate(
                         "candidate_evaluated",
                     );
                     let mut choice = None;
+                    // A global refusal outranks the route, so such a row is not route-excluded.
+                    let excluded = (input.route)
+                        .filter(|_| global.is_none())
+                        .and_then(|r| crate::route::excludes(r, name, &candidate.provider));
                     let evaluated =
                         (|| -> std::result::Result<(), (CandidateState, &'static str)> {
                             if let Some(reason) = global {
+                                return Err((CandidateState::PolicyDenied, reason));
+                            }
+                            if let Some(reason) = excluded {
                                 return Err((CandidateState::PolicyDenied, reason));
                             }
                             if !input.allowed_environments.iter().any(|e| {
@@ -447,7 +456,8 @@ pub(crate) fn evaluate(
                         row.state = state;
                         row.reason_codes = vec![reason.into()];
                     }
-                    rows.push((row, choice, credential.map_or(0, |c| c.revision)));
+                    let revision = credential.map_or(0, |c| c.revision);
+                    rows.push((row, choice, revision, excluded.is_some()));
                 }
             }
         }
@@ -457,30 +467,55 @@ pub(crate) fn evaluate(
                 "choice:{}",
                 digest(&(&candidate.id, "no-compatible-composition"))?.as_str()
             );
-            rows.push((
-                trace(
-                    id,
-                    candidate,
-                    "unavailable",
-                    "unavailable",
-                    None,
+            // Its harness is unknown: only the route's provider allowlist applies.
+            let excluded =
+                (input.route).and_then(|r| crate::route::excludes_provider(r, &candidate.provider));
+            let (state, reason) = match excluded {
+                Some(reason) => (CandidateState::PolicyDenied, reason),
+                None => (
                     CandidateState::Unsupported,
                     "compatible_installed_composition_unavailable",
                 ),
+            };
+            let row = trace(
+                id,
+                candidate,
+                "unavailable",
+                "unavailable",
                 None,
-                0,
-            ));
+                state,
+                reason,
+            );
+            rows.push((row, None, 0, excluded.is_some()));
         }
+    }
+    // Spec 0011 §4: a pinned route's provider is the first one it allows, in profile order.
+    let pinned = (input.route.is_some_and(|r| r.pinned))
+        .then(|| rows.iter().find(|r| !r.3).map(|r| r.0.provider.clone()))
+        .flatten();
+    if let Some(route) = input.route {
+        crate::route::preferred_first(route, &mut rows, |(t, _, _, _)| &t.harness);
     }
     let mut blocked = false;
     let mut selected = None;
-    for (index, (row, choice, _)) in rows.iter_mut().enumerate() {
+    let mut pin_refused = false;
+    for (index, (row, choice, _, excluded)) in rows.iter_mut().enumerate() {
         if selected.is_some() {
+            continue;
+        }
+        // A candidate the route excludes is not a fallback: it neither blocks nor pins.
+        if *excluded {
             continue;
         }
         if blocked {
             row.state = CandidateState::PolicyDenied;
             row.reason_codes.push("fallback_not_permitted".into());
+            continue;
+        }
+        if pinned.as_ref().is_some_and(|p| *p != row.provider) {
+            row.state = CandidateState::PolicyDenied;
+            row.reason_codes.push("route_provider_pinned".into());
+            pin_refused = true;
             continue;
         }
         if row.state == CandidateState::Eligible && choice.is_some() {
@@ -489,11 +524,13 @@ pub(crate) fn evaluate(
             blocked = true;
         }
     }
-    let traces: Vec<_> = rows.iter().map(|(trace, _, _)| trace.clone()).collect();
+    let traces: Vec<_> = rows.iter().map(|(trace, ..)| trace.clone()).collect();
     let resolved = selected.map(|index| (rows[index].1.clone().unwrap(), rows[index].2, index));
     Ok(CoreOutcome {
         reason_codes: if resolved.is_some() {
             vec![]
+        } else if pin_refused {
+            vec!["route_provider_pinned".into()]
         } else if blocked {
             vec!["no_permitted_fallback".into()]
         } else {

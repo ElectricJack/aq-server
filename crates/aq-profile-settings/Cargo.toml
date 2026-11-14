@@ -13,3 +13,4 @@ sqlx.workspace = true
 sqlx-postgres.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+axum.workspace = true

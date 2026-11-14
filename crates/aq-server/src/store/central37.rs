@@ -18,7 +18,11 @@ pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     // bold-stone-51: agent-sent supervisor mail extends the source proof.
     let agent = include_str!("../../migrations/0084_agent_supervisor_mail.sql");
     let scoped = include_str!("../../migrations/0109_supervisor_service.sql");
-    let source = if version >= 109 && scoped.contains(&format!("FUNCTION {name}(")) {
+    // Spec 0012 §8: internal work tells a supervisor as the system component.
+    let internal = include_str!("../../migrations/0119_internal_work.sql");
+    let source = if version >= 119 && internal.contains(&format!("FUNCTION {name}(")) {
+        internal
+    } else if version >= 109 && scoped.contains(&format!("FUNCTION {name}(")) {
         scoped
     } else if version >= 84 && agent.contains(&format!("FUNCTION {name}(")) {
         agent

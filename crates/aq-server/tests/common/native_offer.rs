@@ -32,8 +32,12 @@ pub struct Case {
     pub controlled_clock: Option<Arc<std::sync::atomic::AtomicI64>>,
     pub observation_entered: Arc<tokio::sync::Semaphore>,
     pub observation_resume: Arc<tokio::sync::Semaphore>,
-    /// A second ready task of lower priority, listed only in mode 7. Mode 8 closes the task.
+    /// A second ready task of lower priority, listed only in mode 7 (and on a second page in mode 11). Mode 8 closes the task; mode 10 completes it.
     pub second_task: Uuid,
+    /// The task's Graph metadata (outside mode 5). A Graph `update_node` replaces it.
+    pub metadata: Arc<std::sync::Mutex<Value>>,
+    /// The synthetic Graph peer's base URL.
+    pub graph_url: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -86,12 +90,28 @@ pub async fn setup() -> Case {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let peer_mode = mode.clone();
+    let metadata = Arc::new(std::sync::Mutex::new(json!({})));
+    let (peer_metadata, written) = (metadata.clone(), metadata.clone());
     let observation_entered = Arc::new(tokio::sync::Semaphore::new(0));
     let observation_resume = Arc::new(tokio::sync::Semaphore::new(0));
     let peer_entered = observation_entered.clone();
     let peer_resume = observation_resume.clone();
+    let updated = node.clone();
+    let mutations = axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        let mut node = updated.clone();
+        let op = &body["operations"][0];
+        assert_eq!(
+            (&op["op"], &op["id"]),
+            (&json!("update_node"), &json!(task))
+        );
+        *written.lock().unwrap() = op["patch"]["metadata"].clone();
+        node["metadata"] = op["patch"]["metadata"].clone();
+        let result = json!({"change_set_id":Uuid::new_v4(),"results":[node]});
+        async move { ([("X-AQ-Graph-API-Version", "1")], axum::Json(result)) }
+    });
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
+        node["metadata"] = peer_metadata.lock().unwrap().clone();
         let second = second.clone();
         let mode = peer_mode.load(Ordering::SeqCst);
         let entered = peer_entered.clone();
@@ -117,13 +137,21 @@ pub async fn setup() -> Case {
                 // The owner closed the task in Graph.
                 node["task_state"] = json!("canceled");
             }
+            if mode == 10 {
+                // AQ completed the task.
+                node["task_state"] = json!("completed");
+            }
             let value = if uri.path().ends_with("/ready") {
+                // Mode 11: two pages, the second task behind a cursor.
+                let behind = uri.query().is_some_and(|q| q.contains("cursor=page-2"));
                 let items = match mode {
                     3 => vec![],
                     7 => vec![node, second],
+                    11 if behind => vec![second],
                     _ => vec![node],
                 };
-                json!({"items":items,"next_cursor":null})
+                let next = (mode == 11 && !behind).then_some("page-2");
+                json!({"items":items,"next_cursor":next})
             } else if uri.path().ends_with("/context")
                 && uri.path().contains(&second_task.to_string())
             {
@@ -144,6 +172,7 @@ pub async fn setup() -> Case {
             ([("X-AQ-Graph-API-Version", "1")], axum::Json(value))
         }
     }));
+    let app = app.route("/v1/workspaces/{workspace}/mutations", mutations);
     tasks.push(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     }));
@@ -397,6 +426,8 @@ pub async fn setup() -> Case {
         observation_entered,
         observation_resume,
         second_task,
+        metadata,
+        graph_url: format!("http://{addr}"),
         tasks,
     }
 }
@@ -517,10 +548,28 @@ pub async fn poll(c: &Case) -> (axum::http::StatusCode, Value) {
     let bytes = r.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
+/// Polls until the first offer arrives, as a worker does. A poll waits only
+/// 750 ms for offer assembly (`producer::workflow::poll`); slower assembly
+/// (a loaded CI runner) continues in the background and a later poll
+/// redelivers its published offer. Returns the last reply: a non-200 status,
+/// the first page with an offer, or the empty page after 30 s.
+pub async fn poll_offered(c: &Case) -> (axum::http::StatusCode, Value) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (status, body) = poll(c).await;
+        let offered = body["body"]["offers"]
+            .as_array()
+            .is_some_and(|o| !o.is_empty());
+        if status != 200 || offered || tokio::time::Instant::now() >= deadline {
+            return (status, body);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
 /// Actual mounted publication, not a helper-inserted execution grant or wrapper.
 pub async fn published() -> (Case, aq_admission::startup::NativeOffer) {
     let c = setup().await;
-    let (status, body) = poll(&c).await;
+    let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
     else {

@@ -199,6 +199,7 @@ impl Host {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn run(&self, intent: &Intent) -> Result<HostResult> {

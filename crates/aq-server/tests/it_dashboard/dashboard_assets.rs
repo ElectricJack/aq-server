@@ -79,6 +79,7 @@ enabled=false
         .await
         .unwrap();
     let state = AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         config: Arc::new(config),

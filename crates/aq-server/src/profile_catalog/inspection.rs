@@ -9,18 +9,9 @@ pub(super) fn routes() -> Router<crate::AppState> {
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
 }
 async fn inspect(request: Request, require: bool) -> Result<Json<Inspection>, AppError> {
-    if request.artifact_json.len() > 2_097_152 {
+    if aq_profile_settings::inspection::oversized(&request) {
         return Err(AppError::PayloadTooLarge(
-            "catalog artifact exceeds 2 MiB".into(),
-        ));
-    }
-    if request
-        .composition
-        .as_ref()
-        .is_some_and(|c| serde_json::to_vec(c).map_or(true, |b| b.len() > 2_097_152))
-    {
-        return Err(AppError::PayloadTooLarge(
-            "composition snapshot exceeds 2 MiB".into(),
+            "inspection input exceeds 2 MiB".into(),
         ));
     }
     tokio::task::spawn_blocking(move || aq_profile_settings::inspection::inspect(request, require))

@@ -3248,6 +3248,33 @@
     {
       "cli": [
         "task",
+        "delete"
+      ],
+      "grant": "task.delete",
+      "kind": "mutation",
+      "name": "task.delete",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:b21e28bd480efb51d5734ae10a83cf15cd136fdc2095803245770883cbb5d7ca",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.delete"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "dependency",
         "add"
       ],
@@ -3793,6 +3820,84 @@
           "params_digest": "sha256:55723a165d16dea35f9d25531eee4f0a92a7378923f60428a7ee2d15ca7cadfa",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.retry"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "route",
+        "clear"
+      ],
+      "grant": "task.edit",
+      "kind": "mutation",
+      "name": "task.route.clear",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:e4a84d83137a18f04f8957a9cc8271755ec520c515e622a819a96e3035141f74",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.route.clear"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:e4a84d83137a18f04f8957a9cc8271755ec520c515e622a819a96e3035141f74",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.route.clear"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        }
+      },
+      "summary": "Dashboard action (protocol/dashboard-actions/v1)",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "route",
+        "set"
+      ],
+      "grant": "task.edit",
+      "kind": "mutation",
+      "name": "task.route.set",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:07952d47f547e56ca115f93bf482e1c7a8ecf59105724db0a55d417fecf76a23",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.route.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:07952d47f547e56ca115f93bf482e1c7a8ecf59105724db0a55d417fecf76a23",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.route.set"
           },
           "route": {
             "method": "POST",

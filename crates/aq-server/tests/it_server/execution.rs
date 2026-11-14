@@ -553,6 +553,7 @@ owner_email="owner@localhost"
     )
     .unwrap();
     let state = aq_server::AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: aq_server::identity::verifier_from_config(&config.auth, reqwest::Client::new()),
@@ -839,6 +840,7 @@ owner_email="owner@localhost"
         std::sync::Arc::new(|| chrono::DateTime::from_timestamp_millis(NOW as i64).unwrap());
     let app = |config| {
         aq_server::build_admin_router(aq_server::AppState {
+            internal_work: Default::default(),
             agent_access: None,
             source_retention: None,
             config: std::sync::Arc::new(config),
@@ -995,6 +997,7 @@ owner_email="owner@localhost"
     )
     .unwrap();
     aq_server::AppState {
+        internal_work: Default::default(),
         agent_access: None,
         source_retention: None,
         identity: aq_server::identity::verifier_from_config(&config.auth, reqwest::Client::new()),

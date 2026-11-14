@@ -11,14 +11,14 @@ pub fn human_selection(
         "explanation must match recomputed decision",
     )?;
     let source = catalog
-        .source("intelligence", &input.project.intelligence_profile)
+        .source("intelligence", input.intelligence_key())
         .map_err(|e| SelectionError::Invalid(e.to_string()))?;
     let definition = catalog
         .artifact()
         .catalog
         .intelligence
         .iter()
-        .find(|i| aq_profiles::key(&i.id, i.version) == input.project.intelligence_profile)
+        .find(|i| aq_profiles::key(&i.id, i.version) == input.intelligence_key())
         .ok_or_else(|| SelectionError::Invalid("intelligence source".into()))?;
     let candidates = outcome
         .traces

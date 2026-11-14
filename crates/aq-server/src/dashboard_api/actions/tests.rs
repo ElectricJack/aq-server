@@ -92,6 +92,7 @@ enabled=false
     .unwrap();
     let identity = verifier_from_config(&config.auth, reqwest::Client::new());
     let state = AppState {
+        internal_work: Default::default(),
         config: Arc::new(config),
         store,
         identity,
@@ -707,6 +708,8 @@ fn dashboard_action_schema_lists_task_and_knowledge_kinds() {
         "task.cancel",
         "task.retry",
         "task.reprioritize",
+        "task.route.set",
+        "task.route.clear",
         "task.dependency.add",
         "task.dependency.remove",
         "knowledge.author",

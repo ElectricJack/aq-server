@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 schemars = "1"
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
+aq-routing = { path = "../aq-routing" }
 aq-session-api = { path = "../aq-session-api", version = "=0.1.0" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 serde = { version = "1", features = ["derive"] }

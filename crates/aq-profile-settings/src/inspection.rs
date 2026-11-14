@@ -60,3 +60,12 @@ pub fn inspect(request: Request, require_composition: bool) -> Result<Inspection
         compilation,
     })
 }
+
+/// Bound encoded inputs before starting CPU-heavy catalog inspection.
+pub fn oversized(request: &Request) -> bool {
+    request.artifact_json.len() > 2_097_152
+        || request
+            .composition
+            .as_ref()
+            .is_some_and(|c| serde_json::to_vec(c).map_or(true, |b| b.len() > 2_097_152))
+}

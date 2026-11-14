@@ -1,7 +1,9 @@
 //! Owner profile editing: versioned artifacts and project references move atomically.
+pub mod http;
 pub mod inspection;
 mod routing;
 mod store;
+pub mod structure;
 use aq_profiles::{ActivationState, Intelligence, ModelCandidate, ValidatedCatalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -48,6 +50,41 @@ pub struct ModelChoice {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
+}
+/// Whether a logged-in `harness` (`codex` or `claude`) accepts the reasoning
+/// `effort` of a model choice. Other harnesses accept none.
+pub fn harness_supports(harness: &str, effort: &str) -> bool {
+    let supported: &[&str] = match harness {
+        "codex" => &[
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ],
+        "claude" => &["default", "off", "low", "medium", "high", "xhigh", "max"],
+        _ => return false,
+    };
+    supported.contains(&effort)
+}
+/// The model choice a profile candidate names by `(provider, model,
+/// reasoning_configuration_reference)` on `harness`.
+pub fn find_choice<'a>(
+    choices: &'a [ModelChoice],
+    (provider, model, reference): (&str, &str, &str),
+    harness: &str,
+) -> Option<&'a ModelChoice> {
+    choices.iter().find(|m| {
+        m.provider == provider
+            && m.model == model
+            && m.reasoning_configuration_reference == reference
+            && m.harness == harness
+    })
+}
+/// [`find_choice`], when `harness` accepts the choice's `reasoning` label as
+/// an effort (manual sessions offer only those).
+pub fn choice_for<'a>(
+    choices: &'a [ModelChoice],
+    names: (&str, &str, &str),
+    harness: &str,
+) -> Option<&'a ModelChoice> {
+    find_choice(choices, names, harness).filter(|m| harness_supports(harness, &m.reasoning))
 }
 /// A host refresh tool writes this metadata cache atomically. Failure leaves
 /// configured/imported preferences usable; no credentials or launch facts enter here.

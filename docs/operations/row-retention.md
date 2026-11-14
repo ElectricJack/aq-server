@@ -1,5 +1,10 @@
 # PostgreSQL row retention (DEP6)
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. Marked **(pending)** below where the text describes the
+target rather than what the job does today.
+
 The server starts `row_retention::run` with its other maintenance jobs, runs a
 pass at startup and every ten minutes, and stops it with the server. Each delete
 statement has a limit of 512 rows. Related child/parent deletes share a bounded
@@ -8,10 +13,12 @@ transaction; a large backlog drains over successive ticks. The job logs
 Errors retain remaining rows for a later tick. Tests lower the limit to two.
 
 Graph is the task-state owner. `retention_tasks` records the first observation
-of a completed task with **all** its attempts released (`holds_task = false`)
-and in `finished`, `declined` or `never_granted` state. A fresh Graph node read
-must confirm completion again on the collecting pass. Open, missing, unavailable,
-deleted or retired Graph state resets that clock. Unknown or unsettled attempts
+of a settled task with **all** its attempts released (`holds_task = false`)
+and in `finished`, `declined` or `never_granted` state. A task is settled when
+Graph reports it completed, cancelled or retired **(pending: the job counts only
+completed tasks today; `closed()` exists and is unused)**. A fresh Graph node
+read must confirm the settled state again on the collecting pass. Open, missing,
+unavailable or deleted Graph state resets that clock. Unknown or unsettled attempts
 also reset it. This is a conservative age: installation, an outage or a reopen
 can lengthen retention. Discovery and checks rotate through retained task scopes
 in batches. An unchecked scope never authorizes deletion on a later run.
@@ -28,7 +35,8 @@ The predicates live beside the queries in
 | `observation_attempt_projections` | Last record and settled-task age exceed 14 days; attempt fenced; no event or canonical call head still needs the aggregate. |
 | `observation_projections` | Last record exceeds 14 days; a retained source identifies an eligible fenced owner; no lineage event or canonical call head remains. |
 | `agent_graph_outbox` | Both `delivered` and `notification_observed` have been observed complete for seven days; original task is eligible for seven days. An independent notification consumer can therefore delay collection. |
-| `playbook_outbox` | `engine_accepted` **and** `fanout_complete` observed for seven days. All consumers are done; immutable admissions/effects and the engine own replay receipts independently. Returns the namespace's outbox count and ciphertext plus queue-overhead byte charge. |
+| `playbook_outbox` | `engine_accepted` **and** `fanout_complete` observed for seven days. All consumers are done, and each producer dedupes on its own source row. The playbook drive also deletes these rows on a rolling basis (`[playbooks.retention]`, B1b); there is no namespace counter to return any more. |
+| `profiled_presence_operations` (the worker heartbeat log) | Rolling, not by age: each node keeps its newest `[workers.heartbeat_log] keep` operations (default 256) and one sweep deletes at most `delete_batch` older ones (default 4096, above what 250 nodes add between sweeps), on the same 10-minute tick (`aq_row_retention::presence_operations`, migration 0127). Never deleted: an operation a head row names (the node's accepted inventory, each lease's latest report) and a receipt that has not expired. A repeat of a deleted operation id finds no receipt, is judged as a new report and is refused by the sequence the node snapshot or the lease head keeps. UPDATE and an ordinary DELETE are still refused by the trigger. |
 | `review_owner_outbox` | `acknowledged` observed for seven days; decision no longer pending; subject task freshly confirmed settled for seven days with no unsettled attempt. Finality and operation receipts remain. |
 | `terminal_outbox` | `acknowledged` observed for seven days; original task settled for seven days. Pending or unacknowledged commands remain. |
 | `terminal_subscriptions`, `terminal_control_acl` | Expiry and original task settlement both more than seven days ago. |
@@ -43,9 +51,10 @@ The predicates live beside the queries in
 
 Observation ingestion checks `retention_closed_attempts` under its existing node
 lock before accepting any old or new packet. Closed attempts cannot recreate
-pruned accounting history. Node sequence watermarks, immutable source bindings,
-source revocations and transport receipts remain; deletion never resets a
-sequence or reuses an observation identity namespace. A newly admitted attempt
+pruned accounting history. Node sequence watermarks remain, one per node, so
+deletion never resets a sequence or reuses an observation identity namespace.
+Source bindings, source revocations and transport receipts leave 14 days after
+their task settles **(pending; proposed default)**. A newly admitted attempt
 gets its own window. Ordinary observation updates/deletes still fail: only the
 retention transaction's local setting enables history deletion.
 
@@ -53,10 +62,17 @@ Packet metadata is backfilled from the retained receipt sequence ranges when
 migration 0061 is applied. Historical packets did not store their exact quota
 charge, so that conservative legacy charge remains reserved; new packets return
 their full exact charge. This does not keep their historical row bodies on disk.
+**(Pending:** the ledger counts live rows instead of charging a lifetime quota,
+so no charge needs returning and the legacy reservation goes away.)
 
-Mailbox cursors and immutable operation receipts are retained, so retrying an
-expired send does not recreate its body. The job does not prune execution,
-settlement, source retention, global-supervisor or other immutable owner records.
+Mailbox cursors stay while their mailbox exists. Mail operation receipts are
+kept for 7 days after their message is deleted **(pending; proposed default)**,
+so a retry inside that window does not recreate its body; a later repeat is
+handled as architecture 0006 §1 point 4 says. The job does not yet delete
+execution and settlement records (spec 0008 phase B), source retention handles
+(SBX24), global-supervisor conversations or the other stores listed in
+architecture 0006 §4. Each is added to this job, or deleted on insert, when its
+deletion is built; 0006 lists its rule.
 Autovacuum remains enabled. Normal periodic `VACUUM (ANALYZE)` can refresh planner
 statistics and reuse freed space; this job does not run `VACUUM FULL` or block
 normal work to shrink database files.

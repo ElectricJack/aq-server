@@ -1,5 +1,9 @@
 # Central supervisors
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending.
+
 Global and project supervisors use the retained mailbox and dispatch protocol.
 Each project has a distinct immutable conversation, actor, controller, container,
 native home and workspace. These are central services, not enrolled workers.
@@ -11,7 +15,10 @@ Start. The controller reports Ready between turns and Working during a physical
 generation. Confirmed task creations appear as task links beneath its reply.
 Proposals use draft tasks; active work requires an execution request. Stop
 revokes tools immediately and waits for physical stopped-writer evidence.
-History and task operations remain retained. Profile changes affect subsequent
+A conversation keeps its most recent 4,096 messages, and older ones are deleted
+as new ones arrive; task operations keep their receipts for their replay window
+(architecture 0006; pending, today a full conversation refuses new messages).
+Profile changes affect subsequent
 turns. Failed or uncertain requests are never automatically replayed: inspect
 the retained dispatch and actual task state first.
 

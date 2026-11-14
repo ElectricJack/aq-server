@@ -98,7 +98,8 @@ pub(super) async fn swarm(
         history,
         task_holds,
     })?;
-    let data = aq_swarm::management::apply(&state.store.pool, data).await?;
+    let mut data = aq_swarm::management::apply(&state.store.pool, data).await?;
+    aq_swarm::routing::apply(&mut *state.store.pool.acquire().await?, &mut data).await?;
     fence(state, runtime, user, &a).await?;
     envelope(state, scope, data, reason.as_deref())
 }

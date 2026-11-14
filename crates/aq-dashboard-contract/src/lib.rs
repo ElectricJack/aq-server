@@ -349,6 +349,10 @@ pub enum AttentionKind {
     Failed,
     UncertainOperation,
     WorkerOffline,
+    // Failed internal work a supervisor could not fix (spec 0012 §8); the
+    // subject is the affected item, not the internal run. A plain comment
+    // keeps the schema a flat enum.
+    InternalWork,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -415,6 +419,30 @@ pub enum ProviderScope {
     ProviderAccount,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetCreditState {
+    Known,
+    Unknown,
+    Unavailable,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResetGrant {
+    pub label: String,
+    pub remaining_count: Option<u32>,
+    pub expires_at: Option<Timestamp>,
+    pub usable_now: Option<bool>,
+    pub clears: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResetCredits {
+    pub state: ResetCreditState,
+    pub available_count: Option<u32>,
+    pub grants: Option<Vec<ResetGrant>>,
+    pub observation: Observation,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderUsage {
     pub provider_id: String,
@@ -424,6 +452,8 @@ pub struct ProviderUsage {
     pub windows: Vec<QuotaWindow>,
     pub preferred_window_id: Option<String>,
     pub availability_ref: Option<EntityRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
 }
 /// X1/X2 installation capacity: slot load, per-node placement eligibility and
 /// per-account provider availability. Owner-only and installation-wide.
@@ -829,3 +859,5 @@ impl Default for OperationRetention {
         }
     }
 }
+
+pub mod release_manifest;

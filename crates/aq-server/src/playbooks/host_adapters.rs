@@ -18,13 +18,17 @@ use sqlx::{PgConnection, PgExecutor, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod assess;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
+mod routing;
+pub use assess::{AssessReply, AssessRequest};
 pub use delivery_port::*;
 pub use integration::*;
 pub use requests::*;
+pub use routing::{RoutingPort, ServerRouting};
 
 /// External ports. Authority never comes from here: it comes from the grant.
 pub struct HostPorts {
@@ -36,6 +40,8 @@ pub struct HostPorts {
     pub judgments: Option<Arc<dyn JudgmentProvider>>,
     /// D7 integration port (D1 delivery); `None` refuses `unavailable`.
     pub integration: Option<Arc<dyn Integration>>,
+    /// Host9 routing commands: routes, bindings and attempt history.
+    pub routing: Arc<dyn RoutingPort>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -141,13 +147,7 @@ fn node_version(node: &Value) -> Result<i64> {
 
 impl Service {
     fn ports(&self) -> Result<&HostPorts> {
-        if !matches!(
-            self.profile,
-            CatalogProfile::Host5
-                | CatalogProfile::Monitoring6
-                | CatalogProfile::Host7
-                | CatalogProfile::Host8
-        ) {
+        if !self.profile.is_host() {
             return Err(Error::Forbidden);
         }
         self.host.as_deref().ok_or(Error::Forbidden)
@@ -164,11 +164,15 @@ impl Service {
     ) -> Result<HostResult> {
         match intent.command.name.as_str() {
             "findings.reconcile" => self.findings_reconcile(owner, id, revision, intent).await,
+            "work.read" | "work.route" | "work.unroutable" => {
+                self.work_routing(owner, id, revision, intent).await
+            }
             "context.read" => self.context_read(owner, id, revision, intent).await,
             "work.ensure" => self.work_ensure(owner, id, revision, intent).await,
             "work.change" => self.work_change(owner, id, revision, intent).await,
             "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
+            "judgment.assess" => self.judgment_assess(owner, id, revision, intent).await,
             "check.request" => self.check_request(owner, id, revision, intent).await,
             "operation.get" => self.host_operation_get(owner, id, revision, intent).await,
             "candidate.prepare" => self.candidate_prepare(owner, id, revision, intent).await,
@@ -209,7 +213,9 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile.is_host2() {
+        let commands: &[&str] = if self.profile == CatalogProfile::Host9 {
+            self.profile.commands()
+        } else if self.profile.is_host2() {
             &HOST7_COMMANDS
         } else {
             &HOST5_COMMANDS
@@ -314,8 +320,6 @@ impl Service {
         if status != PENDING {
             self.validated(intent, status, receipt)?;
         }
-        let bytes = canonical_bytes(receipt).map_err(|_| Error::Invalid)?.len() as i64 + 4096;
-        self.budget(tx, 0, 1, 0, 0, bytes).await?;
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
@@ -414,8 +418,6 @@ impl Service {
         let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
         let aad = self.aad("aq.playbooks.outbox", event_id, &event_digest)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        self.budget(tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 1024)
-            .await?;
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
@@ -1117,12 +1119,7 @@ impl Service {
                     None => ("incomplete", subject_id.clone(), 0, String::new(), false),
                 }
             }
-            "health_observations"
-                if matches!(
-                    self.profile,
-                    CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
-                ) =>
-            {
+            "health_observations" if self.profile.has_findings() => {
                 if input["page"].as_u64() != Some(0) {
                     ("incomplete", subject_id.clone(), 0, String::new(), false)
                 } else {

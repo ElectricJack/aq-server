@@ -595,7 +595,7 @@ async fn initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wal
     case.env.env.body["allowed_intelligence_profiles"] = json!(["engineering@3"]);
     let (status,body)=super::common::selection::call(&app,&super::common::selection::path(),Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":case.env.env.body})),"owner@localhost").await;
     assert_eq!(status, 200, "{body}");
-    let (status, body) = native_offer::poll(&case).await;
+    let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let aq_admission::control::ControlReply::Poll(mut page) =
         aq_admission::control::decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
@@ -635,7 +635,7 @@ async fn switched_on() -> Prepared {
         .await
         .unwrap();
     switch(&case, true, 1).await;
-    let (status, body) = native_offer::poll(&case).await;
+    let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let reply = aq_admission::control::decode_reply(&serde_json::to_vec(&body).unwrap());
     let Ok(aq_admission::control::ControlReply::Poll(mut page)) = reply else {

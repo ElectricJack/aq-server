@@ -50,6 +50,15 @@ pub(crate) trait GraphPayload:
         vec![]
     }
     fn operations(&self, current: &Current<'_>) -> ApiResult<Vec<Value>>;
+    /// A routing kind writes through `routing` instead of a Graph patch.
+    fn route_change(&self) -> Option<RouteChange> {
+        None
+    }
+}
+
+pub(crate) enum RouteChange {
+    Set(Box<aq_routing::Route>),
+    Clear,
 }
 
 pub(super) fn version(text: &str) -> Option<u64> {
@@ -241,6 +250,76 @@ impl GraphPayload for TaskReprioritize {
         let mut patch = serde_json::Map::new();
         patch.insert("metadata".into(), Value::Object(metadata));
         Ok(update(c, patch))
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskRouteSet {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// `<parent>-<effort>`, for example `standard-high`.
+    #[schemars(regex(pattern = "^(simple|standard|complex|deep)-(low|medium|high|max)$"))]
+    pub class: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 16))]
+    pub harnesses: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 16))]
+    pub providers: Option<Vec<String>>,
+}
+impl GraphPayload for TaskRouteSet {
+    common!("task.route.set", "task", aq_agent_grants::op::TASK_EDIT);
+    fn valid(&self) -> bool {
+        self.class.parse::<aq_routing::Class>().is_ok()
+            && labels(&self.harnesses)
+            && labels(&self.providers)
+    }
+    fn operations(&self, _: &Current<'_>) -> ApiResult<Vec<Value>> {
+        Ok(vec![])
+    }
+    fn route_change(&self) -> Option<RouteChange> {
+        Some(RouteChange::Set(Box::new(aq_routing::Route {
+            class: self.class.parse().ok()?,
+            harnesses: self.harnesses.clone().unwrap_or_default(),
+            providers: self.providers.clone().unwrap_or_default(),
+            prefer: vec![],
+            lane: None,
+            provider_intent: aq_routing::ProviderIntent::Any,
+            reasons: vec![aq_routing::RouteReason {
+                code: "owner_set".into(),
+                detail: "Set by the owner".into(),
+            }],
+            classification: None,
+            policy_digest: None,
+            structure_revision: None,
+            source: aq_routing::Source::Owner,
+            ended_attempts: 0,
+            judgment: None,
+        })))
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskRouteClear {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+}
+impl GraphPayload for TaskRouteClear {
+    common!("task.route.clear", "task", aq_agent_grants::op::TASK_EDIT);
+    fn valid(&self) -> bool {
+        true
+    }
+    fn operations(&self, _: &Current<'_>) -> ApiResult<Vec<Value>> {
+        Ok(vec![])
+    }
+    fn route_change(&self) -> Option<RouteChange> {
+        Some(RouteChange::Clear)
     }
 }
 
@@ -566,6 +645,10 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task edit adapter");
     r.register(GraphAction::<TaskReprioritize>::new(state))
         .expect("task reprioritize adapter");
+    r.register(GraphAction::<TaskRouteSet>::new(state))
+        .expect("task route set adapter");
+    r.register(GraphAction::<TaskRouteClear>::new(state))
+        .expect("task route clear adapter");
     r.register(GraphAction::<DependencyAdd>::new(state))
         .expect("dependency add adapter");
     r.register(GraphAction::<DependencyRemove>::new(state))
@@ -592,6 +675,10 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task edit schema");
     r.register_schema::<GraphAction<TaskReprioritize>>()
         .expect("task reprioritize schema");
+    r.register_schema::<GraphAction<TaskRouteSet>>()
+        .expect("task route set schema");
+    r.register_schema::<GraphAction<TaskRouteClear>>()
+        .expect("task route clear schema");
     r.register_schema::<GraphAction<DependencyAdd>>()
         .expect("dependency add schema");
     r.register_schema::<GraphAction<DependencyRemove>>()
@@ -674,7 +761,7 @@ pub(super) async fn lookup(
     Ok(())
 }
 /// Fresh current node version, validated for workspace, kind and liveness.
-pub(super) async fn current(rt: &Runtime, workspace: Uuid, id: Uuid, kind: &str) -> Result<Value> {
+pub(crate) async fn current(rt: &Runtime, workspace: Uuid, id: Uuid, kind: &str) -> Result<Value> {
     let raw = rt
         .human_get(
             &format!("/v1/workspaces/{workspace}/nodes/{id}"),
@@ -764,6 +851,13 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
             || version(payload.expected()).is_none()
             || existing::subject(request, P::ENTITY, P::ENTITY, payload.expected())?
                 != payload.project_id()
+        {
+            return Err(ApiError::invalid());
+        }
+        if let Some(RouteChange::Set(route)) = payload.route_change()
+            && !crate::routing::class_assigned(state, route.class)
+                .await
+                .map_err(ApiError::from)?
         {
             return Err(ApiError::invalid());
         }
@@ -870,6 +964,45 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
         }
     }
 }
+/// Sets or clears the task's route; the stale check is the same as a patch's.
+async fn route(
+    state: &AppState,
+    workspace: Uuid,
+    task: Uuid,
+    expected: u64,
+    change: RouteChange,
+) -> Result<Outcome> {
+    let written = match change {
+        RouteChange::Set(route) => {
+            crate::routing::write(state, workspace, task, expected, &route).await?
+        }
+        RouteChange::Clear => {
+            crate::routing::clear(state, workspace, task, expected, aq_routing::Source::Owner)
+                .await?
+        }
+    };
+    let rt = runtime(state)?;
+    Ok(match written {
+        crate::routing::Written::Routed { sequence } => Outcome::confirmed(
+            vec![existing::entity(
+                "task_route",
+                task,
+                Some(sequence.to_string()),
+            )],
+            vec![existing::entity(
+                "task",
+                task,
+                Some((expected + 1).to_string()),
+            )],
+        ),
+        crate::routing::Written::Stale => match current(rt, workspace, task, "task").await {
+            Ok(n) => n["version"]
+                .as_u64()
+                .map_or_else(|| Outcome::conflict(BTreeMap::new()), |v| stale("task", v)),
+            Err(_) => Outcome::conflict(BTreeMap::new()),
+        },
+    })
+}
 impl<P: GraphPayload> GraphAction<P> {
     async fn run(
         &self,
@@ -893,6 +1026,9 @@ impl<P: GraphPayload> GraphAction<P> {
         };
         if live != expected {
             return Ok(stale(P::ENTITY, live));
+        }
+        if let Some(change) = payload.route_change() {
+            return route(state, workspace, subject, expected, change).await;
         }
         let operations = payload
             .operations(&Current {
