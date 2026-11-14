@@ -2,6 +2,9 @@
 
 **Status:** written 2026-11-13 from the owner's direction of that day. Design
 calls made without the owner are marked **(call)**.
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. Authoring runs are a rolling set (§4.5).
 **Repositories:** aq-playbooks (language, catalog, simulation library),
 aq-server (authoring service, host commands), aq-dashboard.
 **Replaces:** the generation, planner and playbook parts of spec 0011 (§5
@@ -169,6 +172,11 @@ A run that ends without a save changes nothing. The owner sees why in plain
 language: the agent's question, or what it could not make work and the
 sentence involved. The previous playbook keeps running. The run itself is
 visible like any internal work run, including what the agent did.
+
+Authoring runs and their compile records are a rolling set: the server keeps
+the most recent 20 per source **(proposed default)** and deletes the oldest
+when a new run is written. The active and previous playbooks are installed
+artifacts and are kept while installed.
 
 The view also shows a diff against the previous artifact in the engine's
 terms: no change, wording only, behaviour changed, or abilities changed.

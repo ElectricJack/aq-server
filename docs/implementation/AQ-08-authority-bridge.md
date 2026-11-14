@@ -1,5 +1,7 @@
 # AQ-08 authority bridge review draft
 
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Only the retention bounds paragraph changed.
+
 Root approved this bridge after stage 1 (`3520832`). Migration 0010 and the
 kind-dispatched view are now implemented as a qualification checkpoint. No real
 profiled grant/lifecycle routes are enabled. AQ21 consumes the same locked view
@@ -188,13 +190,17 @@ owner route on a fixture attempt. No foreign keys need to be moved off the commo
 attempt table. Scoped graph/API01 profile/context digests stay independent from
 execution spec, composed context and native credential fingerprints.
 
-Initial service retention ceilings: 1,024 pending/live material leases and 16 MiB
-metadata, 4,096 profiled operation receipts/16 MiB per node, 1,024 source
-observations/16 MiB, 1,024 central artifact bodies/64 MiB and 128 descriptors per
-launch. Include incoming uncompressed JSONB/bytea lengths in quota checks before
-insert. Live/referenced rows are pinned; expiry never deletes replay/stop proof.
-History growth refuses new work until an explicitly qualified maintenance policy
-exists. Artifact fetch resolves only typed owner_kind/owner_key through fixed
+Initial service bounds count live rows only: 1,024 pending/live material leases
+and 16 MiB metadata, 4,096 profiled operation receipts/16 MiB per node, 1,024
+source observations/16 MiB, 1,024 central artifact bodies/64 MiB and 128
+descriptors per launch. Rows of settled runs do not count. Include incoming
+uncompressed JSONB/bytea lengths in these checks before insert. Live/referenced
+rows are pinned: nothing deletes replay or stop proof while its run is live or
+its task is open. Settled history is deleted under
+[spec 0008](../specs/0008-sealed-history-retention.md) phase B, following
+[architecture 0006](../architecture/0006-records-are-rolling.md); history growth
+never refuses new work (2026-11-13: aligned with the rolling-records principle;
+implementation pending). Artifact fetch resolves only typed owner_kind/owner_key through fixed
 adapters; it accepts no caller filesystem path or URL.
 
 ## AuthorityView exact read contract

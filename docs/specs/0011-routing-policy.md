@@ -4,6 +4,7 @@
 
 
 **Status:** Approved by the owner on 2026-11-12. Nothing here is implemented except the Settings field in §2.
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Route history is a rolling set (§3).
 **Repositories:** aq-server, aq-playbooks (host catalog), aq-dashboard.
 **Depends on:** spec [0012](0012-internal-work.md) for every model call, and aq-server #131 and aq-dashboard #105 (the Intelligence structure setting, migration 117). **(owner)** The work is stacked on those two pull requests, on branch `feat/internal-work` in each repository, without waiting for them to merge.
 
@@ -65,7 +66,7 @@ A route is a typed record on the task, written only through the routing command 
 
 A route is replaced, never edited. An owner route is never overwritten by the router.
 
-Where it lives: the current route is one compact value in the task's graph metadata, written with the task's expected version, so a stale router loses to a newer change. Graph metadata is limited to 16 KiB per task, so the route there is capped at 2 KiB and carries no classification text. The full record of every route a task has had, with its classification and reasons, is kept by the server.
+Where it lives: the current route is one compact value in the task's graph metadata, written with the task's expected version, so a stale router loses to a newer change. Graph metadata is limited to 16 KiB per task, so the route there is capped at 2 KiB and carries no classification text. The server keeps the full record of a task's routes, with classification and reasons, as a rolling set: the most recent 16 routes per task, until 30 days after the task settles **(proposed defaults)**. Writing a route deletes the task's oldest beyond 16; the server's retention tick deletes the routes of settled tasks. The current route in the graph is not affected.
 
 ## 4. Placement honors the route
 

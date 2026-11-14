@@ -1,5 +1,9 @@
 # Operating the internal work host
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending.
+
 The internal work host is `aq-supervisor-host internal <CONFIG>`. It claims
 queued internal tasks that use a subscription login (Codex or Claude) from the
 database and runs the model CLI for each, up to two at a time, so that one long
@@ -238,7 +242,8 @@ workspace instead of as one prompt. Its task row has `workspace_kind = 'agent'`.
 - **Transcript.** Each candidate's tool calls, tool results and text are kept
   in `internal_task_transcripts` (items at most 2 KiB, at most 256 KiB per
   candidate) and shown in the run read. `internal work: a transcript was not
-  recorded` means that write failed.
+  recorded` means that write failed. Runs and transcripts are to be a rolling
+  set (spec 0012 §4, pending); today nothing deletes them.
 - **Redaction.** Whichever harness ran, every stored transcript, outcome and
   failure detail has the secrets of both logins replaced: the Claude token and
   the Codex login's tokens, as staged, as left by the run and as the login file

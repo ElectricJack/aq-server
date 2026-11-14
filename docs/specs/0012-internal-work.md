@@ -1,6 +1,7 @@
 # 0012: Internal work (one way for AQ components to use a model)
 
 **Status:** Draft for the owner's approval (2026-11-12), from a brainstorming session with the owner; a builder review's questions are answered in the text. Nothing here is implemented.
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Finished internal tasks are a rolling set (§4, §7).
 **Repositories:** aq-server (service, storage, supervisor host), aq-dashboard (Settings, History, inline run view).
 **Needed by:** spec [0011](0011-routing-policy.md), for its classifier and its policy compiler.
 
@@ -68,7 +69,7 @@ A caller may ask and wait, or ask and be told later; the routing playbook's judg
 - **Among themselves** **(author's call)**, internal tasks that something is blocked on run before those nothing is waiting for, and otherwise oldest first.
 - **Workspace.** **(owner)** Internal tasks can have different workspace needs. The first version has one kind: no workspace at all. A later kind may be given a repository to read; the task record carries what kind it is from the start so that adding the second does not change the first.
 - **Where the record lives.** **(author's call)** An internal task is a record kept by the server, not a task in the graph. The graph requires every task to have a project, and putting internal tasks there would mean filtering them out of every scheduler, count, view and retention path. The dashboard still presents it as a task. Supervisors reach internal tasks through their own read and retry surface (§8), since their graph access does not cover them.
-- **Lifetime.** An internal task is short. It ends with an answer or a failure and is kept as history (§7).
+- **Lifetime.** An internal task is short. It ends with an answer or a failure. Finished internal tasks and their transcripts are a rolling set: the most recent 10,000, none older than 30 days **(proposed default)**. The server deletes older ones on its ten-minute retention tick. Nothing refuses a new request because many are kept (§7).
 
 **(owner)** The swarm availability switch and reduced-usage mode do not stop internal work. The owner may later want a stop and start for the whole of AQ; that is not part of this spec, but if it is built, internal work stops with it.
 
@@ -108,7 +109,7 @@ The existing playbook `judgment.request` command is served by this service, with
 
 - **Hidden by default.** **(owner)** Internal tasks do not appear in Work, Overview counts, or project views.
 - **Shown where it mattered.** **(owner agreed)** The item an internal run was about shows the run inline: what was asked, which model answered, how long it took, the answer or the error, and a retry. A task shows its routing classification; the routing policy shows its last compile; a decision shows its revision.
-- **Browsable.** **(owner agreed)** Agents > History lists internal runs behind an "internal" filter that is off by default. History is the manual-agents archive today, so this adds a second source to it.
+- **Browsable.** **(owner agreed)** Agents > History lists internal runs behind an "internal" filter that is off by default. History is the manual-agents archive today, so this adds a second source to it. It lists the runs that are kept (§4). An item whose run has been deleted shows its result, such as a task's route, and says the run is no longer kept.
 - "Needs your attention" items are computed when the page is read; internal-work failures are a new kind there.
 
 ## 8. When it fails

@@ -1,5 +1,9 @@
 # Profile catalog administration
 
+2026-11-13: aligned with the rolling-records principle
+([architecture 0006](../architecture/0006-records-are-rolling.md));
+implementation pending. The storage paragraph changed.
+
 The editable profile catalog is a `catalog.toml` file and its referenced Markdown
 files in the configuration vault. The independently tested `aq-profiles` crate
 validates those files and composes their versioned identities. The daemon stores
@@ -47,11 +51,16 @@ its identity history. Rollback is another expected-revision activation of the
 retained old artifact. Invalid edits and failed transactions preserve the last
 good active catalog.
 
-Artifacts are at most 2 MiB each. The initial adapter retains at most 128 artifacts
-and 64 MiB of artifact bytes, 4 MiB of activation identity state and 100,000
-activation receipts. Exhaustion refuses new activation; exact retries remain
-available. This initial adapter has no deletion endpoint and preserves all old
-artifacts, including those needed by attempts. The core repository interface
+Artifacts are at most 2 MiB each (a limit on one input). Old catalogs are a
+rolling set: the adapter keeps the active catalog, every catalog a live attempt
+pins, and the most recent 128 others within 64 MiB of artifact bytes; activation
+receipts are the most recent 4,096 **(proposed defaults)**. An activation deletes
+the oldest unpinned catalogs and receipts beyond these, in the same transaction,
+and is never refused because storage is full. An exact retry inside the receipt
+set returns its receipt; an older one is a new request and conflicts on its
+expected revision. Rollback works to any catalog still kept. Identity history
+(definition identities and versions) stays; whether its 4 MiB bound may still
+refuse an activation is an open question (architecture 0006 §6). The core repository interface
 also provides exact-reference retention/release; attempt integration must retain
 the frozen catalog and must not resolve an old attempt through the active pointer.
 

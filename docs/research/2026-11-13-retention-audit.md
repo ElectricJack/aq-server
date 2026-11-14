@@ -68,7 +68,14 @@ are live, and dashboard task creation.
 - `dashboard_api/actions/journal.rs:155 retire()` is called only by tests.
 - The server vendors the old playbook engine; its fix arrives with the re-vendor.
 
-## D. Where a spec requires keeping, or refusing (owner decides which wins)
+## D. Where a spec required keeping, or refusing (owner decided: the rule wins)
+
+**Owner decision, 2026-11-13:** the rule wins. "Just remove all 'limits' and
+just enforce deleting old records. This should be how ALL SYSTEMS that log in
+agent queue are designed." The principle is
+[architecture 0006](../architecture/0006-records-are-rolling.md). Each spec text
+below has been rewritten to it (implementation pending); the table keeps what the
+specs said before.
 
 | Store | Spec text | Source |
 | --- | --- | --- |
