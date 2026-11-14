@@ -487,6 +487,99 @@ async fn explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drai
         .unwrap()
         .unwrap();
 }
+// No profile moves: a namespace keeps the profile it was created with. A
+// server configured for host_v9 over a human_review_v2 namespace refuses to
+// open it, names the profile found and says what to do; a new namespace
+// (new id and name) opens as host_v9 beside the old rows.
+#[tokio::test]
+async fn a_human_review_v2_namespace_is_kept_and_host_v9_opens_as_a_new_namespace() {
+    let s = setup().await;
+    let mut state = s.f.state.clone();
+    state.config = Arc::new(toml::from_str::<Config>(&s.text).unwrap());
+    let old = state.config.playbooks.clone().unwrap();
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, old)
+        .await
+        .unwrap();
+    runtime.driver.stop().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    let token = s._dir.path().join("graph-token");
+    private(&token, "g".repeat(48));
+    state.agent_access = Some(Arc::new(
+        aq_server::agent_access::Runtime::new(&aq_server::agent_access::AgentAccessConfig {
+            graph_url: "http://127.0.0.1:9/".into(),
+            graph_token_file: token,
+            credential_ttl_ms: 10000,
+            mutation_actor_id: None,
+        })
+        .await
+        .unwrap(),
+    ));
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let host9 = head.replace(
+        "profile=\"human_review_v2\"",
+        "profile=\"host_v9\"\ndeployments=[]\ninstallation_routing=true",
+    );
+    let load = |text: &str| toml::from_str::<Config>(text).unwrap().playbooks.unwrap();
+    let refused = aq_server::playbooks::runtime::Runtime::start(&state, load(&host9)).await;
+    let why = refused.err().unwrap().to_string();
+    for part in [
+        "already exists with profile \"human_review_v2\" (generation 1)",
+        "asks for profile \"host_v9\"",
+        "a new namespace_id and a new name",
+    ] {
+        assert!(why.contains(part), "{why}");
+    }
+    let moved = Uuid::new_v4();
+    let fresh = host9
+        .replace(&s.namespace.to_string(), &moved.to_string())
+        .replace("name=\"activation-", "name=\"host9-");
+    let runtime = aq_server::playbooks::runtime::Runtime::start(&state, load(&fresh))
+        .await
+        .unwrap();
+    assert!(runtime.driver.service.installation_routing);
+    runtime.driver.stop().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    let pool = s.f.db.pool().await;
+    let profiles: Vec<i16> = sqlx::query_scalar(
+        "SELECT catalog_profile FROM playbook_namespaces WHERE namespace_id=ANY($1) ORDER BY 1",
+    )
+    .bind([s.namespace, moved])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(profiles, [2, 9]);
+}
+// R1: installation routing is the Host9 commands serving every project on
+// the router, so it is refused under any other profile.
+#[tokio::test]
+async fn installation_routing_is_refused_without_host_v9() {
+    let s = setup().await;
+    let (head, _) = s.text.split_once("[[playbooks.deployments]]").unwrap();
+    let with = |profile: &str, routing: &str| {
+        head.replace(
+            "profile=\"human_review_v2\"",
+            &format!("profile=\"{profile}\""),
+        )
+        .replace(
+            "drive_interval_ms=250\n",
+            &format!("drive_interval_ms=250\ndeployments=[]\n{routing}"),
+        )
+    };
+    let on = "installation_routing=true\n";
+    for profile in ["human_review_v2", "monitoring_v6", "host_v7", "host_v8"] {
+        assert!(
+            toml::from_str::<Config>(&with(profile, "")).is_ok(),
+            "{profile}"
+        );
+        let refused = toml::from_str::<Config>(&with(profile, on));
+        assert!(
+            refused.is_err_and(|e| e.to_string().contains("requires the host_v9 profile")),
+            "{profile}"
+        );
+    }
+    assert!(toml::from_str::<Config>(&with("host_v9", on)).is_ok());
+    assert!(toml::from_str::<Config>(&with("host_v9", "")).is_ok());
+}
 #[tokio::test]
 async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_socket_directory() {
     let s = setup().await;

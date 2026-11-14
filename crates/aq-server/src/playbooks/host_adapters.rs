@@ -141,13 +141,7 @@ fn node_version(node: &Value) -> Result<i64> {
 
 impl Service {
     fn ports(&self) -> Result<&HostPorts> {
-        if !matches!(
-            self.profile,
-            CatalogProfile::Host5
-                | CatalogProfile::Monitoring6
-                | CatalogProfile::Host7
-                | CatalogProfile::Host8
-        ) {
+        if !self.profile.is_host() {
             return Err(Error::Forbidden);
         }
         self.host.as_deref().ok_or(Error::Forbidden)
@@ -209,7 +203,9 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile.is_host2() {
+        let commands: &[&str] = if self.profile == CatalogProfile::Host9 {
+            self.profile.commands()
+        } else if self.profile.is_host2() {
             &HOST7_COMMANDS
         } else {
             &HOST5_COMMANDS
@@ -1113,12 +1109,7 @@ impl Service {
                     None => ("incomplete", subject_id.clone(), 0, String::new(), false),
                 }
             }
-            "health_observations"
-                if matches!(
-                    self.profile,
-                    CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
-                ) =>
-            {
+            "health_observations" if self.profile.has_findings() => {
                 if input["page"].as_u64() != Some(0) {
                     ("incomplete", subject_id.clone(), 0, String::new(), false)
                 } else {

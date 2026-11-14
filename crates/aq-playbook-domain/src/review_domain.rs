@@ -29,6 +29,70 @@ pub enum CatalogProfile {
     /// Host7; candidate.prepare (2.1.0) outputs the prepared `source` OID that
     /// policies bind check.request `source` to.
     Host8,
+    /// AQ host catalog 2.2.0 (supersedes 2.1.0; adds contracts only), vendored
+    /// and fingerprint-pinned beside the untouched Host8 pin: Host8 plus
+    /// `work.read`, `work.route`, `work.unroutable` and `judgment.assess`.
+    Host9,
+}
+pub const HOST9_VERSION: &str = "2.2.0";
+pub const HOST9_FINGERPRINT: &str =
+    "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a";
+/// `HOST7_CAPABILITIES` plus the four catalog 2.2.0 commands.
+pub const HOST9_CAPABILITIES: [&str; 16] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+    "operation.get",
+    "judgment.request.v2",
+    "check.request.v2",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
+    "work.read",
+    "work.route",
+    "work.unroutable",
+    "judgment.assess",
+];
+/// The commands a Host9 namespace serves: the catalog's sixteen.
+pub const HOST9_COMMANDS: [&str; 16] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+    "judgment.request",
+    "check.request",
+    "operation.get",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
+    "work.read",
+    "work.route",
+    "work.unroutable",
+    "judgment.assess",
+];
+fn host9_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.2.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.2.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST9_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST9_FINGERPRINT),
+                "vendored AQ host catalog 2.2.0 fingerprint"
+            );
+            registry
+        })
+        .clone()
 }
 pub const HOST8_VERSION: &str = "2.1.0";
 pub const HOST8_FINGERPRINT: &str =
@@ -127,18 +191,89 @@ impl CatalogProfile {
             Self::Monitoring6 => 6,
             Self::Host7 => 7,
             Self::Host8 => 8,
+            Self::Host9 => 9,
         }
     }
-    /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0): the
-    /// asynchronous judgment/check, integration and operation.get adapters.
+    /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0, Host9 =
+    /// 2.2.0): the asynchronous judgment/check, integration and
+    /// operation.get adapters.
     pub fn is_host2(self) -> bool {
-        matches!(self, Self::Host7 | Self::Host8)
+        matches!(self, Self::Host7 | Self::Host8 | Self::Host9)
+    }
+    /// Any vendored host catalog profile (1.0.0 and later) or Monitoring6:
+    /// the profiles the host adapters serve.
+    pub fn is_host(self) -> bool {
+        self.is_host2() || matches!(self, Self::Host5 | Self::Monitoring6)
+    }
+    /// Catalog 2.1.0 and later: `candidate.prepare` outputs the prepared
+    /// source that `check.request` must name.
+    pub fn has_prepared_source(self) -> bool {
+        matches!(self, Self::Host8 | Self::Host9)
+    }
+    /// D8 findings: Monitoring6 and every catalog 2.x profile.
+    pub fn has_findings(self) -> bool {
+        self.is_host2() || self == Self::Monitoring6
+    }
+    pub fn from_number(number: i16) -> Option<Self> {
+        [
+            Self::Mail1,
+            Self::HumanReview2,
+            Self::GraphEvents3,
+            Self::SettlementEvents4,
+            Self::Host5,
+            Self::Monitoring6,
+            Self::Host7,
+            Self::Host8,
+            Self::Host9,
+        ]
+        .into_iter()
+        .find(|p| p.number() == number)
+    }
+    /// The `[playbooks] profile` value that configures this profile.
+    pub fn config_name(self) -> &'static str {
+        match self {
+            Self::Mail1 => "mail_v1 (not configurable)",
+            Self::HumanReview2 => "human_review_v2",
+            Self::GraphEvents3 => "graph_events_v3",
+            Self::SettlementEvents4 => "settlement_events_v4",
+            Self::Host5 => "host_v5 (not configurable)",
+            Self::Monitoring6 => "monitoring_v6",
+            Self::Host7 => "host_v7",
+            Self::Host8 => "host_v8",
+            Self::Host9 => "host_v9",
+        }
+    }
+    /// Why a configured namespace cannot open over the stored row
+    /// `(profile number, generation)`, and what the operator does. A
+    /// namespace's profile and generation never change (trigger
+    /// `playbook_catalog_immutable`), from any profile: a different profile
+    /// is a new namespace.
+    pub fn namespace_refusal(self, generation: i64, stored: Option<(i16, i64)>) -> Option<String> {
+        let (number, stored_generation) = stored?;
+        if number == self.number() && stored_generation == generation {
+            return None;
+        }
+        let found = Self::from_number(number).map_or("an unknown profile", Self::config_name);
+        Some(format!(
+            "this namespace already exists with profile \"{found}\" (generation {stored_generation}); \
+             the configuration asks for profile \"{want}\" (generation {generation}). A namespace never \
+             changes its profile or generation. To use \"{want}\": stop the server, give \
+             [playbooks.namespace] a new namespace_id and a new name with generation=1, keep \
+             profile=\"{want}\", and start again; artifacts are installed and activated again in the \
+             new namespace. The old namespace's rows are kept and its unfinished runs are no longer \
+             driven. To go back, restore the old [playbooks.namespace] and profile=\"{found}\".",
+            want = self.config_name(),
+        ))
+    }
+    /// The commands the host adapters serve under this profile.
+    pub fn commands(self) -> &'static [&'static str] {
+        match self {
+            Self::Host9 => &HOST9_COMMANDS,
+            _ => &[],
+        }
     }
     pub fn has_reviews(self) -> bool {
-        !matches!(
-            self,
-            Self::Mail1 | Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
-        )
+        !(self == Self::Mail1 || self.is_host())
     }
     pub fn registry(self) -> Registry {
         if self == Self::Monitoring6 {
@@ -156,6 +291,9 @@ impl CatalogProfile {
         }
         if self == Self::Host8 {
             return host8_registry();
+        }
+        if self == Self::Host9 {
+            return host9_registry();
         }
         let mut registry = crate::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
@@ -180,11 +318,10 @@ impl CatalogProfile {
         if self == Self::Mail1 {
             return scope.validate();
         }
-        if matches!(
-            self,
-            Self::Host5 | Self::Monitoring6 | Self::Host7 | Self::Host8
-        ) {
-            let mut allowed: BTreeSet<String> = if self.is_host2() {
+        if self.is_host() {
+            let mut allowed: BTreeSet<String> = if self == Self::Host9 {
+                HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect()
+            } else if self.is_host2() {
                 HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
             } else {
                 HOST5_CAPABILITIES.iter().map(|c| c.to_string()).collect()

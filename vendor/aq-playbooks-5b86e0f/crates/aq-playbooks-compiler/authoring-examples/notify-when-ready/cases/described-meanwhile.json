@@ -1,0 +1,57 @@
+{
+  "name": "described-meanwhile",
+  "situation": "Somebody adds a description within the ten minutes",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "ensured",
+      "reference": "task-40@2",
+      "subject": {
+        "id": "task-40",
+        "revision": 2
+      }
+    },
+    "correlation": {
+      "operation": "work-op-3"
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-40@3",
+          "subject": {
+            "id": "task-40",
+            "revision": 3
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a dark theme",
+            "description": "Follow the system setting, and keep the contrast of the light theme.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none"
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "described",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-40",
+            "revision": 2
+          }
+        }
+      }
+    ]
+  }
+}

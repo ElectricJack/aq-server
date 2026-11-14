@@ -1,0 +1,78 @@
+{
+  "name": "finished-during-the-wait",
+  "situation": "A task is finished within the ten minutes but still has no description: the task's facts do not say it is finished, so the message is sent",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "ensured",
+      "reference": "task-40@2",
+      "subject": {
+        "id": "task-40",
+        "revision": 2
+      }
+    },
+    "correlation": {
+      "operation": "work-op-9"
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-40@3",
+          "subject": {
+            "id": "task-40",
+            "revision": 3
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a dark theme",
+            "description": "",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none"
+          }
+        }
+      }
+    ],
+    "message.send": [
+      {
+        "outcome": "queued",
+        "output": {
+          "reference": "message-1",
+          "subject": {
+            "id": "task-40",
+            "revision": 3
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "reminded",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-40",
+            "revision": 2
+          }
+        }
+      },
+      {
+        "command": "message.send",
+        "input": {
+          "identity": "task-40@3",
+          "recipient": "user:owner-1",
+          "visibility": "project",
+          "body": "This task has had no description for ten minutes. Please add one, so that it can be worked on."
+        }
+      }
+    ]
+  }
+}

@@ -26,6 +26,7 @@ mod playbook_bridge;
 mod playbook_coding;
 mod playbook_contract;
 mod playbook_findings_triggers;
+mod playbook_host9;
 mod playbook_host_adapters;
 mod playbook_host_integration;
 mod playbook_host_requests;

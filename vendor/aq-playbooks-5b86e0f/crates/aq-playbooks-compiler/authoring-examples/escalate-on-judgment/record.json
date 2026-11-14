@@ -1,0 +1,23 @@
+{
+  "id": "escalate-on-judgment",
+  "binding": "aq.escalate-on-judgment",
+  "scope": "project",
+  "purpose": "Decide how strong a model a task needs and who may take it",
+  "commands": [
+    "judgment.assess",
+    "work.read",
+    "work.route",
+    "work.unroutable"
+  ],
+  "events": [
+    "aq.work.route_needed"
+  ],
+  "capabilities": [
+    "judgment.assess",
+    "operation.get",
+    "work.read",
+    "work.route",
+    "work.unroutable"
+  ],
+  "facts_version": "settings-7"
+}

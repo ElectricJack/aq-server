@@ -806,12 +806,7 @@ impl Driver {
         let tick = ticked.await.map_err(host_error);
         partial.defer("ticking runs", tick.clone());
         let tick = tick?;
-        if matches!(
-            self.service.profile,
-            super::review_domain::CatalogProfile::Monitoring6
-                | super::review_domain::CatalogProfile::Host7
-                | super::review_domain::CatalogProfile::Host8
-        ) {
+        if self.service.profile.has_findings() {
             partial.defer(
                 "sending finding notifications",
                 self.service

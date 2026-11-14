@@ -221,24 +221,31 @@ impl Runtime {
             .await
         }
         .step("opening the bridge service")?;
-        service
-            .initialize(config.namespace.owner_user_id)
-            .await
-            .step("initializing the namespace")?;
+        let mut service = service;
+        service.installation_routing = config.installation_routing;
+        let initialized = service.initialize(config.namespace.owner_user_id).await;
+        if initialized.is_err() {
+            // A stored namespace of another profile or generation: say which,
+            // and what the operator does (there is no move between profiles).
+            let stored = sqlx::query_as("SELECT catalog_profile,generation FROM playbook_namespaces WHERE namespace_id=$1 OR name=$2 LIMIT 1")
+                .bind(config.namespace.namespace_id)
+                .bind(&config.namespace.name)
+                .fetch_optional(&state.store.pool)
+                .await
+                .step("reading the stored namespace")?;
+            let generation = config.namespace.generation;
+            if let Some(why) = config.profile.namespace_refusal(generation, stored) {
+                return Err(refused(&why));
+            }
+        }
+        initialized.step("initializing the namespace")?;
         let factory_config = config.clone();
         let limits = Limits {
             work_queue: 8,
             control_queue: 4,
             timeouts: config.timeouts,
             retention: config.retention,
-            // Accepted and ignored by the engine: it has no namespace limits.
-            engine: aq_playbook_host::runner::EngineConfig {
-                max_runs: 128,
-                max_events: 2048,
-                max_queued_destinations: 256,
-                max_receipts: 4096,
-                max_state_bytes: 8_388_608,
-            },
+            engine_retention: config.engine_retention,
             ..Limits::default()
         };
         let started = Driver::open(service.clone(), limits, move || {

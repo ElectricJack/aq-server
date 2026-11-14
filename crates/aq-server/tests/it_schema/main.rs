@@ -12,6 +12,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod host9_routing_migration;
 mod migration_catalog;
 mod playbook_authoring_migration;
 mod playbook_rolling_records_migration;

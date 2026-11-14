@@ -11,10 +11,7 @@ impl Service {
     /// D8 findings run on Monitoring6 and, since D11, on Host7/Host8 (catalog
     /// 2.0.0/2.1.0 findings.reconcile is byte-identical to 1.0.0).
     fn findings_profile(&self) -> Result<()> {
-        if !matches!(
-            self.profile,
-            CatalogProfile::Monitoring6 | CatalogProfile::Host7 | CatalogProfile::Host8
-        ) {
+        if !self.profile.has_findings() {
             return Err(Error::Forbidden);
         }
         Ok(())

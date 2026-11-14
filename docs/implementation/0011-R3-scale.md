@@ -2,7 +2,7 @@
 
 Task 9 of the routing-policy plan. A measurement that decides scope; no product code changed.
 
-**Re-measured on the live-state engine `aq-playbooks-e7df379` (2026-11-13):
+**Re-measured on the live-state engine (interim `aq-playbooks-e7df379`, 2026-11-13; again on 0.2.0 `5b86e0f`, see the note):
 all 500 runs completed, slowest tick 232 ms at run 500. See
 [`playbook-authoring-B1-interim-vendor.md`](playbook-authoring-B1-interim-vendor.md).**
 

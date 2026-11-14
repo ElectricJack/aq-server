@@ -1,0 +1,21 @@
+{
+  "document": "stuck/deep-level.md",
+  "why": "This version of the document gives high risk work a level Settings does not offer (facts.json lists only simple-high, standard-high and complex-high). Never round a level to a neighbour: ask the owner, name the sentence by its lines, and end. The sentence spans lines 17 and 18, so the question names both.",
+  "run": [
+    "ask",
+    "--lines",
+    "17-18",
+    "The document gives high risk work Deep, high effort, but Settings offers no Deep level: it offers Simple, Standard and Complex, all at high effort. Which level should high risk work get?"
+  ],
+  "writes": {
+    "kind": "question",
+    "question": "The document gives high risk work Deep, high effort, but Settings offers no Deep level: it offers Simple, Standard and Complex, all at high effort. Which level should high risk work get?",
+    "sentences": [
+      {
+        "line": 17,
+        "end_line": 18,
+        "text": "- High risk work is Deep, high effort, because mistakes there are costly,\n  and only Claude or Codex may take it."
+      }
+    ]
+  }
+}

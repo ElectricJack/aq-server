@@ -1,11 +1,12 @@
 # Playbook authoring B1 (interim): the server on the live-state engine
 
-> **Not deployable. Do not deploy this to a live playbook namespace.** The
-> interim engine e7df379 has no drain of namespaces written by 0173673 (the
-> engine the live stack runs): a live namespace would keep its whole old
-> record on every commit. The final re-vendor is the first deployable
-> version; its preconditions are listed in "Final re-vendor: preconditions
-> for deploying" below.
+> **Superseded by the final re-vendor (engine 0.2.0, commit 5b86e0f); see
+> "Final re-vendor (done)" at the end.** The interim tree
+> `vendor/aq-playbooks-e7df379` is removed. Everything below up to that
+> section describes the interim step and still holds unless that section
+> says otherwise. One precondition for deploying to a live namespace is
+> still open: a measured first open and drain of a copy of the live
+> namespace under the configured engine statement timeout.
 
 Plan: `docs/superpowers/plans/2026-11-13-playbook-authoring.md`, Task B1.
 This is an interim version of that task. It moves aq-server from
@@ -399,3 +400,50 @@ shared test database refused connections, "too many clients").
   after its cleared episode was deleted starts again at revision 1.
 - **Heartbeat log.** See `docs/operations/row-retention.md`
   (`profiled_presence_operations`, `[workers.heartbeat_log]`, migration 0127).
+
+## Final re-vendor (done): engine 0.2.0, commit 5b86e0f
+
+| | |
+| --- | --- |
+| Source | aq-playbooks, branch `feat/playbook-authoring`, commit `5b86e0f7d37606f3cab80717d98db0453da56a50` |
+| Tree | `vendor/aq-playbooks-5b86e0f/` (182 files) |
+| Archive | `vendor/aq-playbooks-source-0.2.0.tar`: `git archive --format=tar 5b86e0f Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md` |
+| Pin | `vendor/aq-playbooks-source-0.2.0.json`, checked by `scripts/check-playbook-source.py` |
+| Crate versions | model, compiler, runner, postgres, simulation, CLI: all 0.2.0 |
+
+`crates/`, `contracts/` (whole) and `skills/` stay siblings: the compiler
+embeds `skills/aq-playbook-author/SKILL.md` and
+`contracts/aq-host-2.2.0/{registry,notes}.json` by relative path. The
+simulation crate and the compiler's `authoring-examples/` are in the tree.
+The interim tree, pin and archive are removed.
+
+What changed for the server (the engine's list of 38 differences is
+`vendor/aq-playbooks-5b86e0f/docs/implementation/0004-playbook-authoring.md`):
+
+- **No server code used a changed item.** The server builds no
+  `RetentionPolicy` literal, calls neither `history::trim_budget`,
+  `retention::verify_removals` nor `collect_garbage`, keeps no receipt index
+  cursor, and used none of the removed CLI commands or the CLI library
+  (`fake_host`, `pilots`). Only the dependency paths and versions changed.
+- **`COMPILER_VERSION`** is `aq-playbooks-compiler/0.2.0`: a draft sealed now
+  has a different digest than under 0.1.0. Stored artifacts keep their stamp
+  and still load.
+- **Legacy drain.** A namespace written by 0173673 now moves its finished
+  runs to history, a bounded amount per commit.
+- **`PostgresStorage::connect` runs `ANALYZE`** on engine tables without
+  planner statistics, at open, outside any commit.
+- **Engine retention is configuration.** `[playbooks.engine_retention]`:
+  `event_replay_ms` (86,400,000), `admission_replay_ms` (604,800,000),
+  `replay_keep` (256), `history_keep` (10,000), `audit_ms` (604,800,000);
+  the defaults are the engine's. Windows and `replay_keep` must be positive;
+  no upper bound. The owner thread writes them into the namespace's policy
+  right after `Engine::new`, in one commit, only when they differ from the
+  stored policy (`aq_playbook_host::engine_retention`). The table is separate
+  from `[playbooks.retention]` (the server's own bridge rows). The per-commit
+  bounds of the engine policy (drain, window drops, evictions, history trim,
+  GC page, settle) are not configuration; they keep their stored values.
+- **Ignored engine limits dropped.** `playbooks/runtime.rs` no longer passes
+  `max_runs` and the other `EngineConfig` values, which the engine ignores;
+  the host's defaults apply.
+- Unchanged rulings: the server sends no request times, and an accepted row
+  is never sent as a new event again.

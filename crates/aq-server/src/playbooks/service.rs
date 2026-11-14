@@ -67,6 +67,8 @@ pub struct Service {
     pub(crate) profile: CatalogProfile,
     pub(super) reviews: Option<Arc<crate::reviews::Service>>,
     pub(super) host: Option<Arc<super::host_adapters::HostPorts>>,
+    /// R1 (Host9): the routing commands serve any project on the router.
+    pub installation_routing: bool,
 }
 #[derive(Clone, Debug)]
 pub enum MessageResult {
@@ -261,6 +263,7 @@ impl Service {
             profile,
             reviews,
             host: None,
+            installation_routing: false,
         })
     }
     pub(super) fn now(&self) -> Result<i64> {

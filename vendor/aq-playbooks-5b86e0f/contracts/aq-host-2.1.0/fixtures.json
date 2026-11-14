@@ -1,0 +1,200 @@
+{
+  "cases": [
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "valid prepared candidate with sha1 source",
+      "outcome": "prepared",
+      "valid": true,
+      "value": {
+        "reference": "candidate:op-1",
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "valid prepared candidate with sha256 source",
+      "outcome": "prepared",
+      "valid": true,
+      "value": {
+        "reference": "candidate:op-1",
+        "source": {
+          "format": "sha256",
+          "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "invalid 2.0.0 prepared candidate without source",
+      "outcome": "prepared",
+      "valid": false,
+      "value": {
+        "reference": "candidate:op-1",
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "invalid prepared candidate with mutable ref source",
+      "outcome": "prepared",
+      "valid": false,
+      "value": {
+        "reference": "candidate:op-1",
+        "source": {
+          "format": "ref",
+          "hex": "main"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "invalid prepared candidate with oversized source",
+      "outcome": "prepared",
+      "valid": false,
+      "value": {
+        "reference": "candidate:op-1",
+        "source": {
+          "format": "sha256",
+          "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "invalid prepared candidate with partial source",
+      "outcome": "prepared",
+      "valid": false,
+      "value": {
+        "reference": "candidate:op-1",
+        "source": {
+          "format": "sha1"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "valid conflict without source",
+      "outcome": "conflict",
+      "valid": true,
+      "value": {
+        "reference": "stale-candidate-input",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "candidate.prepare",
+      "kind": "output",
+      "name": "valid refusal without source",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reference": "refused",
+        "subject": {
+          "id": "work-1",
+          "revision": 1
+        }
+      }
+    },
+    {
+      "contract": "check.request",
+      "kind": "input",
+      "name": "valid check bound to the prepared candidate source",
+      "valid": true,
+      "value": {
+        "check": {
+          "id": "unit",
+          "validator": {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "id": "validator-1",
+            "version": "1"
+          }
+        },
+        "source": {
+          "format": "sha1",
+          "hex": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "subject": {
+          "id": "candidate:op-1",
+          "revision": 1
+        }
+      }
+    }
+  ],
+  "compatibility": {
+    "added_events": [],
+    "base": {
+      "fingerprint": "sha256:e2ce7dc8ff4b37538f8d27f175a4e365ff95cf14508ae7074beea04026b143db",
+      "registry_sha256": "sha256:b2dba78d591977d1803d352def7c6cae549ad37dd6fe48b6c8ea45b5bc146bb3",
+      "version": "2.0.0"
+    },
+    "changed_commands": {
+      "candidate.prepare": {
+        "capabilities": [
+          "candidate.prepare"
+        ],
+        "from": "1.0.0",
+        "to": "2.1.0"
+      }
+    },
+    "unchanged_commands": {
+      "candidate.publish": "sha256:7a510d82b43b2b59b7f0906b4eff3823427ed7d088f793396bfce6d9348b5be5",
+      "check.request": "sha256:52e13a43e363bfd19e2e6a4c73535048685fc8dc4b25890ccdd0ffc0421bf183",
+      "context.read": "sha256:33681ea332d3d0b475fcfafe32bc3762d6037f035c9114dccf9b4f788302f6cd",
+      "decision.request": "sha256:a9b64f5947567934a8217be9e0bacb53e7f225239e91e10c3c3b0b691efe3f05",
+      "findings.reconcile": "sha256:239802aecd6961c9a7ba93b0387cb2f872e42ddc4246e7901bae7219f19288d8",
+      "judgment.request": "sha256:fc7a12fca1b8af2c7ee1349a1569a711abe07120881a3ea4531da007fe6e39d9",
+      "message.send": "sha256:c75d3f9fceebbef2dc1f0c20ff2eda3a61aaf90cdc817d624fe349eb752eca6e",
+      "operation.cancel": "sha256:268e68958d3dadf6caae3a642ec3b8bfaf3869cbbc9f20873cb833af5c650810",
+      "operation.get": "sha256:06f9c8e969f6b461d2a39e5a4c2e322bba32f79fdb33b0f770a71e60c4f9bf8b",
+      "work.change": "sha256:fb3d3ed7e0d6b2a108220e684bd871663d9ce184bd8d4d952d1d065cc1a7fadd",
+      "work.ensure": "sha256:0fcf486b0ad4b1e570ff5c7f5b688d15d675be5da8d0c961f83e59a68045ea16"
+    },
+    "unchanged_events": {
+      "aq.artifact.recorded": "sha256:10e31a719c1d30c2825ac39913777cf07533eaa4cfd46a355d6b6a761b7427a1",
+      "aq.check.completed": "sha256:057b68bf02f62ecf38f342ea07dfd1586ccd4e566ad0ab8ec93345c61fbfd23c",
+      "aq.check.receipted": "sha256:371660367e3f2c573132704de4ecb6291d284d08f3081da5c734d998532884ef",
+      "aq.decision.completed": "sha256:90d042036d23155858b8e1d0cd41a8dd832cdcb530cab8cce8d22b26cdc96934",
+      "aq.integration.changed": "sha256:c0f20b58ee35f85af9868dd07e4c61b432de9fdd2fbfc2692e5b5b6d94a09e29",
+      "aq.judgment.completed": "sha256:afb31ce80a7024fc875ced6451708798567c3cf54a98c1b3a05c8a64784f1979",
+      "aq.operation.updated": "sha256:36071ae1086d80e5fc5166df3f1300c3e6e1df08caf7d039572d8f4418965ee3",
+      "aq.signal.reported": "sha256:9d93528eb9ccf35cc71fed2072668145a25d7f7d9d8dbd567232eb67066811cd",
+      "aq.work.changed": "sha256:78aaaf08411f1d17e93e12feb21feab4bcfb6636e56738afd1305aa3c1074401"
+    }
+  }
+}
