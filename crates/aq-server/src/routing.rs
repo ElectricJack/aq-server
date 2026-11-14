@@ -222,10 +222,9 @@ pub async fn ensure_source(pool: &PgPool) -> Result<(), AppError> {
     Ok(aq_playbook_authoring::ensure_builtin(pool, &record).await?)
 }
 
-/// Authors the routing document as it is now, after a save of the structure or of Settings
-/// that may have changed what it offers. Nothing starts for an empty document or when
-/// nothing the agent would see changed. A server without an open playbook engine, or without
-/// the source, only logs: the save that led here has succeeded.
+/// Authors the routing document after a save of the structure or of Settings. Nothing starts
+/// for an empty document or when nothing the agent would see changed. A server without an
+/// open playbook engine, or without the source, only logs: the save has succeeded.
 pub async fn author(state: &AppState) {
     let document = aq_profile_settings::structure::document(&state.store.pool).await;
     if document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty()) {
@@ -244,10 +243,11 @@ pub(crate) async fn reconcile(state: AppState) {
         let pool = &state.store.pool;
         let document = aq_profile_settings::structure::document(pool).await;
         let empty = document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty());
-        if !empty && ensure_source(pool).await.is_ok() {
-            if let Err(error) = aq_playbook_authoring::author_missed(&state, ROUTING_SOURCE).await {
-                tracing::info!(%error, "the routing document is not authored yet");
-            }
+        if !empty
+            && ensure_source(pool).await.is_ok()
+            && let Err(error) = aq_playbook_authoring::author_missed(&state, ROUTING_SOURCE).await
+        {
+            tracing::info!(%error, "the routing document is not authored yet");
         }
         tokio::time::sleep(every).await;
     }
