@@ -278,6 +278,104 @@ async fn owner_commands_reach_the_same_handlers() {
     .await;
     assert_eq!(status, StatusCode::OK, "{via}");
     assert_eq!(via, direct);
+    // An undeclared query param is refused before the route is asked.
+    let (status, refused) = send(
+        &e.admin,
+        "/api/v1/commands/wait.list",
+        None,
+        Some(json!({"params":{"projet_id":e.binding["project_id"]}})),
+    )
+    .await;
+    assert_eq!(
+        (status, refused["code"].clone(), refused["message"].clone()),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("invalid_request"),
+            json!("unknown param")
+        ),
+        "{refused}"
+    );
+    // The owner reads registered from REST answer as their routes do,
+    // whatever the route answers in this fixture.
+    let project = e.binding["project_id"].as_str().unwrap();
+    for (name, path, params, same_body) in [
+        ("worker.list", "/api/workers".to_string(), json!({}), true),
+        ("server.status", "/api/status".to_string(), json!({}), true),
+        (
+            "project.show",
+            format!("/api/projects/{project}"),
+            json!({"project_id":project}),
+            true,
+        ),
+        (
+            "project.revision.show",
+            format!("/api/projects/{project}/revisions/1"),
+            json!({"project_id":project,"revision":1}),
+            true,
+        ),
+        (
+            "conversation.project",
+            format!("/api/human/conversations/projects/{project}"),
+            json!({"project":project}),
+            false,
+        ),
+        (
+            "attempt.show",
+            format!("/api/execution/attempts/{}", Uuid::nil()),
+            json!({"attempt_id":Uuid::nil()}),
+            false,
+        ),
+        (
+            "supervisor.list",
+            "/api/supervisors".to_string(),
+            json!({}),
+            false,
+        ),
+        (
+            "session.manual.list",
+            format!("/api/manual-agents?project_id={project}"),
+            json!({"project_id":project}),
+            false,
+        ),
+        (
+            "intelligence.list",
+            "/api/settings/intelligence".to_string(),
+            json!({}),
+            false,
+        ),
+        (
+            "intelligence.registry.show",
+            "/api/intelligence/registry".to_string(),
+            json!({}),
+            false,
+        ),
+        (
+            "profile.catalog.active",
+            "/api/profiles/catalogs".to_string(),
+            json!({}),
+            false,
+        ),
+        (
+            "profile.catalog.show",
+            format!("/api/profiles/catalogs/{}", "0".repeat(64)),
+            json!({"digest":"0".repeat(64)}),
+            false,
+        ),
+    ] {
+        let (direct_status, direct) = send(&e.admin, &path, None, None).await;
+        let (status, via) = send(
+            &e.admin,
+            &format!("/api/v1/commands/{name}"),
+            None,
+            Some(json!({"params":params})),
+        )
+        .await;
+        assert_eq!(status, direct_status, "{name}: {via} / {direct}");
+        // Bodies with clocks or request IDs are compared by status only.
+        if same_body && status == StatusCode::OK {
+            assert_eq!(via, direct, "{name}");
+        }
+    }
     let (status, listed) = send(&e.admin, "/api/v1/commands", None, None).await;
     assert_eq!(status, StatusCode::OK);
     let names: Vec<&str> = listed["commands"]
