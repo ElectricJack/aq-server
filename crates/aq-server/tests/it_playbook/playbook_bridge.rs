@@ -2140,12 +2140,13 @@ async fn seed_finished(e: &Env, grant: Uuid, n: i64) {
         "INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) SELECT gen_random_uuid(),$1,$2,'done-'||i,'judgment.request','work-'||i,1,'{}','assessed','{}',i,i FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL AND $4<>''".into(),
         "INSERT INTO playbook_health_observations(namespace_id,generation,observation,partition,baseline,expires_at_ms,evaluation,complete,request_digest,result) SELECT $1,$2,'done-'||i,'p','{}',i,'e',true,$4,'{}' FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL".into(),
         "INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request,submitted) SELECT $1,$2,gen_random_uuid(),'{}',true FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL AND $4<>''".into(),
+        "INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) SELECT $1,$2,'p','done-'||i,2,false,'e',i FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL AND $4<>''".into(),
     ] {
         exec(&pool, &sql, e, grant, n).await;
     }
 }
 
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "playbook_outbox",
     "playbook_admissions",
     "playbook_effects",
@@ -2153,6 +2154,7 @@ const TABLES: [&str; 7] = [
     "playbook_host_operations",
     "playbook_health_observations",
     "playbook_finding_notifications",
+    "playbook_finding_episodes",
 ];
 
 async fn rows(e: &Env, table: &str) -> i64 {
@@ -2273,9 +2275,9 @@ async fn finished_playbook_rows_are_deleted_down_to_keep_finished() {
         .await
         .unwrap();
     // Bounded batches: at most two rows per table per pass.
-    assert_eq!(prune(&e, 2, 2).await, vec![2; 7]);
-    assert_eq!(prune(&e, 2, 2).await, vec![1; 7]);
-    assert_eq!(prune(&e, 2, 2).await, vec![0; 7]);
+    assert_eq!(prune(&e, 2, 2).await, vec![2; 8]);
+    assert_eq!(prune(&e, 2, 2).await, vec![1; 8]);
+    assert_eq!(prune(&e, 2, 2).await, vec![0; 8]);
     for table in TABLES {
         assert_eq!(rows(&e, table).await, 2, "{table}");
     }
@@ -2287,6 +2289,7 @@ async fn finished_playbook_rows_are_deleted_down_to_keep_finished() {
         ("playbook_cancellations", "cancellation_key"),
         ("playbook_host_operations", "intent_id"),
         ("playbook_health_observations", "observation"),
+        ("playbook_finding_episodes", "finding_key"),
     ] {
         let kept: Vec<String> =
             sqlx::query_scalar(&format!("SELECT {column} FROM {table} ORDER BY 1"))
@@ -2358,6 +2361,9 @@ async fn rows_in_progress_or_held_survive_deletion() {
         .bind(ns).bind(g).bind(NOW as i64 + 60_000).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request) VALUES($1,$2,gen_random_uuid(),'{}')")
         .bind(ns).bind(g).execute(&pool).await.unwrap();
+    // A finding that is still open.
+    sqlx::query("INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) VALUES($1,$2,'p','open',1,true,'e',0)")
+        .bind(ns).bind(g).execute(&pool).await.unwrap();
     let before: Vec<i64> = {
         let mut v = vec![];
         for table in TABLES {
@@ -2365,7 +2371,7 @@ async fn rows_in_progress_or_held_survive_deletion() {
         }
         v
     };
-    assert_eq!(before, [3, 3, 3, 2, 1, 1, 1]);
+    assert_eq!(before, [3, 3, 3, 2, 1, 1, 1, 1]);
     // Many finished rows newer than all of them, and the smallest keep.
     seed_finished(&e, old, 4).await;
     for _ in 0..4 {

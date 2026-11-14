@@ -489,6 +489,56 @@ async fn findings_reconcile_preserves_episode_and_notification_identity() {
         3
     );
 }
+/// Architecture 0006: cleared episodes are not a cap. A partition with more
+/// than the old 100 cleared episodes still reconciles a new finding, and the
+/// rolling deletion keeps only the newest cleared ones; an open episode stays.
+#[tokio::test]
+async fn reconcile_works_past_100_cleared_episodes_and_old_cleared_ones_are_deleted() {
+    let e = setup().await;
+    let pool = e.f.db.pool().await;
+    let (ns, g) = (e.s.namespace.namespace_id, e.s.namespace.generation);
+    sqlx::query("INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) SELECT $1,$2,'workers','gone-'||i,2,false,'node/a',i FROM generate_series(1,150) i")
+        .bind(ns).bind(g).execute(&pool).await.unwrap();
+    e.scan("more", true).await;
+    let finding = json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]);
+    let result = e.findings("more", "more", finding).await.unwrap();
+    assert_eq!(result.outcome, "reconciled");
+    let episodes = aq_playbook_host::retention::TABLES.len() - 1;
+    assert_eq!(
+        aq_playbook_host::retention::TABLES[episodes].0,
+        "playbook_finding_episodes"
+    );
+    let retention = aq_playbook_host::retention::Retention {
+        keep_finished: 10,
+        delete_batch: 100,
+    };
+    let mut deleted = vec![];
+    for _ in 0..3 {
+        deleted.push(e.s.prune(&e.owner, &retention, episodes).await.unwrap());
+    }
+    assert_eq!(deleted, [100, 40, 0]);
+    let kept: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT finding_key,present FROM playbook_finding_episodes WHERE namespace_id=$1 ORDER BY last_notified_ms,finding_key",
+    )
+    .bind(ns)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept.len(), 11);
+    assert_eq!(kept[0], ("gone-141".into(), false));
+    assert_eq!(kept[9], ("gone-150".into(), false));
+    assert_eq!(kept[10], ("offline".into(), true));
+    // A cleared finding whose episode was deleted comes back as a new one.
+    e.scan("back", true).await;
+    let back = json!([
+        {"key":"offline","expected_revision":1,"evidence":"node/a"},
+        {"key":"gone-1","expected_revision":0,"evidence":"node/b"}
+    ]);
+    assert_eq!(
+        e.findings("back", "back", back).await.unwrap().outcome,
+        "reconciled"
+    );
+}
 #[tokio::test]
 async fn findings_clear_requires_original_complete_scan() {
     let e = setup().await;

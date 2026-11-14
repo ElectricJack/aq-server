@@ -5,7 +5,7 @@
 //! finished rows of a namespace generation; one pass deletes at most
 //! `delete_batch` older ones. Rows of work in progress never match: pending,
 //! held or unknown rows, running operations, unanswered decisions, unexpired
-//! scans, unsent notifications. The aq-server drive quantum runs one
+//! scans, unsent notifications, open finding episodes. The aq-server drive quantum runs one
 //! statement per quantum, in turn.
 //!
 //! Each statement binds `$1` namespace id, `$2` generation, `$3`
@@ -43,7 +43,7 @@ impl Retention {
 }
 
 /// `(table, statement)` in the order the drive takes them.
-pub const TABLES: [(&str, &str); 7] = [
+pub const TABLES: [(&str, &str); 8] = [
     // Settled events: accepted and fanned out. Producers dedupe on their own
     // source (graph and settlement rows are acknowledged with the engine
     // acceptance, decisions when copied, host-bridge events with their effect).
@@ -88,6 +88,13 @@ pub const TABLES: [(&str, &str); 7] = [
     (
         "playbook_finding_notifications",
         "DELETE FROM playbook_finding_notifications WHERE (namespace_id,generation,notification_id) IN (SELECT namespace_id,generation,notification_id FROM playbook_finding_notifications WHERE namespace_id=$1 AND generation=$2 AND submitted ORDER BY sequence DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
+    ),
+    // Cleared finding episodes (the finding is gone). An open episode is
+    // work in progress and never matches. A finding that comes back after
+    // its cleared episode was deleted starts a new episode at revision 1.
+    (
+        "playbook_finding_episodes",
+        "DELETE FROM playbook_finding_episodes WHERE (namespace_id,generation,partition,finding_key) IN (SELECT namespace_id,generation,partition,finding_key FROM playbook_finding_episodes WHERE namespace_id=$1 AND generation=$2 AND NOT present ORDER BY last_notified_ms DESC,partition DESC,finding_key DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
     ),
 ];
 

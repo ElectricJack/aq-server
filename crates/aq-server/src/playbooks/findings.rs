@@ -186,10 +186,6 @@ impl Service {
                         .any(|(key, r)| baseline.get(key) != Some(&r.get::<i64, _>("revision"))));
                 outcome = if conflicts { "conflict" } else { "reconciled" };
                 if !conflicts {
-                    let new_count = seen.iter().filter(|k| !current.contains_key(**k)).count();
-                    if current.len() + new_count > 100 {
-                        return Err(Error::Overloaded);
-                    }
                     for f in findings {
                         let key = text(f, "key")?;
                         let evidence = text(f, "evidence")?;
@@ -254,8 +250,10 @@ impl Service {
                 "aq.finding.notification",
                 self.namespace.namespace_id,
                 self.namespace.generation,
-                &digest(&(partition, key, revision))?,
+                &digest(&(partition, key, revision, now))?,
             )?;
+            // The time is part of the identity: a cleared episode is deleted in
+            // time, and the finding's next episode starts at revision 1 again.
             // Evidence stays in AQ; the deliberate summary identifies the
             // episode. Delivery routing belongs to the notifications owner.
             let request = SendRequest {
