@@ -39,18 +39,6 @@ impl Service {
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(partition).fetch_all(&mut **tx).await?;
         let baseline: BTreeMap<_, _> = rows.into_iter().collect();
         let value = serde_json::to_value(&baseline)?;
-        self.budget(
-            tx,
-            0,
-            0,
-            0,
-            0,
-            serde_json::to_vec(&value)?.len() as i64
-                + observation.len() as i64
-                + partition.len() as i64
-                + 4096,
-        )
-        .await?;
         sqlx::query("INSERT INTO playbook_health_observations(namespace_id,generation,observation,partition,baseline,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6)")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(partition).bind(value).bind(self.now()?.checked_add(ttl_ms).ok_or(Error::Invalid)?).execute(&mut **tx).await?;
         Ok(baseline)
@@ -101,8 +89,6 @@ impl Service {
             if row.get::<i64, _>("expires_at_ms") <= self.now()? {
                 return Err(Error::Forbidden);
             }
-            self.budget(&mut tx, 0, 0, 0, 0, evaluation.len() as i64)
-                .await?;
             sqlx::query("UPDATE playbook_health_observations SET evaluation=$4,complete=$5 WHERE namespace_id=$1 AND generation=$2 AND observation=$3")
                 .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(evaluation).bind(complete).execute(&mut *tx).await?;
         }
@@ -242,7 +228,6 @@ impl Service {
                     }
                 }
                 let receipt = result(outcome);
-                self.budget(&mut tx, 0, 0, 0, 0, 4096).await?;
                 sqlx::query("UPDATE playbook_health_observations SET request_digest=$4,result=$5 WHERE namespace_id=$1 AND generation=$2 AND observation=$3")
                     .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(hash).bind(json!({"outcome":receipt.outcome,"output":receipt.output})).execute(&mut *tx).await?;
             }
@@ -262,15 +247,6 @@ impl Service {
         notify: bool,
     ) -> Result<()> {
         let now = self.now()?;
-        self.budget(
-            tx,
-            0,
-            0,
-            0,
-            0,
-            (partition.len() + key.len() + evidence.len()) as i64 + 4096,
-        )
-        .await?;
         sqlx::query("INSERT INTO playbook_finding_episodes(namespace_id,generation,partition,finding_key,revision,present,evidence,last_notified_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(namespace_id,generation,partition,finding_key) DO UPDATE SET revision=EXCLUDED.revision,present=EXCLUDED.present,evidence=EXCLUDED.evidence,last_notified_ms=CASE WHEN $9 THEN EXCLUDED.last_notified_ms ELSE playbook_finding_episodes.last_notified_ms END")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(partition).bind(key).bind(revision).bind(present).bind(evidence).bind(now).bind(notify).execute(&mut **tx).await?;
         if notify {
@@ -306,7 +282,6 @@ impl Service {
                 ),
                 ttl_ms: 86_400_000,
             };
-            self.budget(tx, 0, 0, 0, 0, 4096).await?;
             sqlx::query("INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request) VALUES($1,$2,$3,$4)")
                 .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(notification).bind(serde_json::to_value(request)?).execute(&mut **tx).await?;
         }

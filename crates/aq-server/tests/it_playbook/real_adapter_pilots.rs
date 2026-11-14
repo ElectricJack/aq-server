@@ -465,6 +465,8 @@ struct Pilot {
     author: AtomicBool,
     /// Moves the remote's main before the next review completes.
     move_base_on_review: AtomicBool,
+    /// `[playbooks.retention]` of the driver `start` builds.
+    retention: aq_playbook_host::retention::Retention,
 }
 
 fn keyring() -> Arc<Keyring> {
@@ -575,6 +577,7 @@ impl Pilot {
             installed: vec![],
             author: AtomicBool::new(true),
             move_base_on_review: AtomicBool::new(false),
+            retention: Default::default(),
         };
         pilot.start().await;
         pilot
@@ -599,6 +602,7 @@ impl Pilot {
             self.service.clone(),
             aq_playbook_host::Limits {
                 transitions: 2,
+                retention: self.retention,
                 ..Default::default()
             },
             protected_factory(&self.f),

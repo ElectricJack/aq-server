@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 pub mod drive;
 pub mod protected;
+pub mod retention;
 pub use aq_playbooks_model as model;
 pub use aq_playbooks_postgres as postgres_storage;
 pub use aq_playbooks_runner as runner;
@@ -80,6 +81,8 @@ pub struct Limits {
     pub engine: EngineConfig,
     /// Engine session deadlines; the owner-call deadlines derive from them.
     pub timeouts: protected::Timeouts,
+    /// Rolling deletion of the server's finished bridge rows.
+    pub retention: retention::Retention,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -91,6 +94,7 @@ impl Default for Limits {
             transitions: 8,
             engine: EngineConfig::default(),
             timeouts: protected::Timeouts::default(),
+            retention: retention::Retention::default(),
         }
     }
 }
@@ -102,6 +106,7 @@ impl Limits {
             || !(1024..=1_048_576).contains(&self.response_bytes)
             || !(1..=64).contains(&self.transitions)
             || !self.timeouts.valid()
+            || !self.retention.valid()
             || self.engine.max_runs == 0
             || self.engine.max_events == 0
             || self.engine.max_runs > 10_000

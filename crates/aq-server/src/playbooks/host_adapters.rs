@@ -314,8 +314,6 @@ impl Service {
         if status != PENDING {
             self.validated(intent, status, receipt)?;
         }
-        let bytes = canonical_bytes(receipt).map_err(|_| Error::Invalid)?.len() as i64 + 4096;
-        self.budget(tx, 0, 1, 0, 0, bytes).await?;
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
@@ -414,8 +412,6 @@ impl Service {
         let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
         let aad = self.aad("aq.playbooks.outbox", event_id, &event_digest)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        self.budget(tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 1024)
-            .await?;
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)

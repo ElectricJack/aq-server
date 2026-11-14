@@ -322,31 +322,18 @@ async fn outboxes(pool: &PgPool, now: i64, batch: i64, report: &mut Report) -> a
             "agent_graph_outbox"=>format!("EXISTS(SELECT 1 FROM agent_graph_operations o JOIN execution_attempts e USING(attempt_id) WHERE o.operation_id=b.operation_id AND {ELIGIBLE})"),
             "review_owner_outbox"=>"EXISTS(SELECT 1 FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) JOIN retention_tasks t ON t.task_id=s.task_id AND t.workspace_id=s.workspace_id WHERE d.decision_id=b.decision_id AND d.state<>'pending' AND t.checked_at_ms=$1 AND t.settled_since_ms<$2 AND NOT EXISTS(SELECT 1 FROM execution_attempts e WHERE e.task_id=t.task_id AND (e.holds_task OR COALESCE((SELECT h.state->>'status' FROM profiled_authority_hot h WHERE h.attempt_id=e.attempt_id),e.state->>'status','unknown') NOT IN ('finished','declined','never_granted'))))".to_owned(),
             "terminal_outbox"=>format!("EXISTS(SELECT 1 FROM terminal_sessions s JOIN execution_attempts e USING(attempt_id) WHERE s.terminal_id=b.terminal_id AND {ELIGIBLE})"),
-            // All fanout is complete; immutable admissions/effects and engine
-            // receipts retain operation idempotency independently of this queue.
+            // All fanout is complete, and each producer dedupes on its own
+            // source row. The drive also deletes these on a rolling basis
+            // (aq_playbook_host::retention).
             _=>"TRUE".into(),
         };
         let query = format!(
             "DELETE FROM {table} WHERE ctid IN (SELECT b.ctid FROM {table} b WHERE ({done}) AND retention_completed_at_ms<$2 AND {authority} ORDER BY retention_completed_at_ms LIMIT $3)"
         );
-        if table == "playbook_outbox" {
-            // Return namespace row capacity as well as deleting the queue body.
-            let query = format!(
-                "WITH removed AS ({query} RETURNING namespace_id,generation,octet_length(ciphertext)+4096 AS charge) UPDATE playbook_namespaces n SET outbox_count=outbox_count-r.n,retained_bytes=retained_bytes-r.charge FROM (SELECT namespace_id,generation,count(*) n,sum(charge) charge FROM removed GROUP BY namespace_id,generation) r WHERE n.namespace_id=r.namespace_id AND n.generation=r.generation AND $1::bigint>0 RETURNING r.n"
-            );
-            let rows: Vec<i64> = sqlx::query_scalar(&query)
-                .bind(now)
-                .bind(now - 7 * DAY)
-                .bind(batch)
-                .fetch_all(pool)
-                .await?;
-            report.insert(table, rows.iter().sum::<i64>() as u64);
-        } else {
-            report.insert(
-                table,
-                statement(pool, &query, now, now - 7 * DAY, batch).await?,
-            );
-        }
+        report.insert(
+            table,
+            statement(pool, &query, now, now - 7 * DAY, batch).await?,
+        );
     }
     Ok(())
 }

@@ -35,7 +35,7 @@ The predicates live beside the queries in
 | `observation_attempt_projections` | Last record and settled-task age exceed 14 days; attempt fenced; no event or canonical call head still needs the aggregate. |
 | `observation_projections` | Last record exceeds 14 days; a retained source identifies an eligible fenced owner; no lineage event or canonical call head remains. |
 | `agent_graph_outbox` | Both `delivered` and `notification_observed` have been observed complete for seven days; original task is eligible for seven days. An independent notification consumer can therefore delay collection. |
-| `playbook_outbox` | `engine_accepted` **and** `fanout_complete` observed for seven days. All consumers are done; immutable admissions/effects and the engine own replay receipts independently. Returns the namespace's outbox count and ciphertext plus queue-overhead byte charge. |
+| `playbook_outbox` | `engine_accepted` **and** `fanout_complete` observed for seven days. All consumers are done, and each producer dedupes on its own source row. The playbook drive also deletes these rows on a rolling basis (`[playbooks.retention]`, B1b); there is no namespace counter to return any more. |
 | `review_owner_outbox` | `acknowledged` observed for seven days; decision no longer pending; subject task freshly confirmed settled for seven days with no unsettled attempt. Finality and operation receipts remain. |
 | `terminal_outbox` | `acknowledged` observed for seven days; original task settled for seven days. Pending or unacknowledged commands remain. |
 | `terminal_subscriptions`, `terminal_control_acl` | Expiry and original task settlement both more than seven days ago. |

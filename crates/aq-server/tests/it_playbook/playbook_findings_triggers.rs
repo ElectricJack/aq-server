@@ -328,31 +328,14 @@ async fn schedule_survives_restart_without_double_fire() {
     assert_eq!(e.s.put_schedule(&next, changed, 1).await.unwrap(), 2);
     assert_eq!(e.s.collect_schedule_events(&next, 2).await.unwrap(), 1);
     assert_eq!(e.s.outbox(&next, 0, 4).await.unwrap().len(), 2);
-    let pool = e.f.db.pool().await;
-    sqlx::query("UPDATE playbook_namespaces SET outbox_count=16384 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
     let tomorrow = DailySchedule {
         schedule_id: Uuid::new_v4(),
         ..schedule
     };
     e.s.put_schedule(&next, tomorrow, 0).await.unwrap();
-    assert_eq!(
-        e.s.collect_schedule_events(&next, 2).await,
-        Err(Error::Overloaded)
-    );
-    sqlx::query("UPDATE playbook_namespaces SET outbox_count=2 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        e.s.collect_schedule_events(&next, 2).await.unwrap(),
-        1,
-        "refusal must not advance the cursor"
-    );
+    // No outbox lifetime cap (architecture 0006): the new schedule's
+    // occurrence is collected however many events came before.
+    assert_eq!(e.s.collect_schedule_events(&next, 2).await.unwrap(), 1);
 }
 impl Env {
     fn intent(&self, id: &str, name: &str, input: Value) -> Intent {
@@ -411,39 +394,6 @@ async fn findings_reconcile_preserves_episode_and_notification_identity() {
         .await
         .unwrap();
     e.scan("one", false).await;
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=8192 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        e.findings(
-            "first",
-            "one",
-            json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}])
-        )
-        .await,
-        Err(Error::Overloaded)
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM playbook_finding_episodes")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM playbook_finding_notifications")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=0 WHERE namespace_id=$1")
-        .bind(e.s.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
 
     let first = e
         .findings(
@@ -804,7 +754,7 @@ fn protected_factory(
 #[tokio::test]
 async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
     use aq_server::playbooks::driver::Driver;
-    for refusal in ["schedule", "notification_capacity", "notification_scope"] {
+    for refusal in ["notification_capacity", "notification_scope"] {
         let e = setup().await;
         let pool = e.f.db.pool().await;
         let date = chrono::DateTime::from_timestamp_millis(common::profiled::NOW as i64)
@@ -822,39 +772,21 @@ async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
             .await
             .unwrap();
         e.s.collect_schedule_events(&e.owner, 2).await.unwrap();
-        if refusal == "schedule" {
-            e.s.put_schedule(
-                &e.owner,
-                DailySchedule {
-                    schedule_id: Uuid::new_v4(),
-                    ..schedule
-                },
-                0,
-            )
-            .await
-            .unwrap();
-            sqlx::query("UPDATE playbook_namespaces SET outbox_count=16384 WHERE namespace_id=$1")
-                .bind(e.s.namespace.namespace_id)
+        e.scan("blocked-notification", false).await;
+        e.findings(
+            "blocked-notification",
+            "blocked-notification",
+            json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]),
+        )
+        .await
+        .unwrap();
+        if refusal == "notification_capacity" {
+            sqlx::query("UPDATE notification_budget SET message_count=4096")
                 .execute(&pool)
                 .await
                 .unwrap();
         } else {
-            e.scan("blocked-notification", false).await;
-            e.findings(
-                "blocked-notification",
-                "blocked-notification",
-                json!([{"key":"offline","expected_revision":0,"evidence":"node/a"}]),
-            )
-            .await
-            .unwrap();
-            if refusal == "notification_capacity" {
-                sqlx::query("UPDATE notification_budget SET message_count=4096")
-                    .execute(&pool)
-                    .await
-                    .unwrap();
-            } else {
-                sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','false'::jsonb)").execute(&pool).await.unwrap();
-            }
+            sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','false'::jsonb)").execute(&pool).await.unwrap();
         }
         e.s.retire_runtime(&e.owner).await.unwrap();
         let driver = Driver::start(
@@ -897,36 +829,19 @@ async fn monitoring_backpressure_does_not_block_retained_events_or_runs() {
             runs.items[0].status, "completed",
             "{refusal}: accepted run must tick"
         );
-        sqlx::query("UPDATE playbook_namespaces SET outbox_count=1 WHERE namespace_id=$1")
-            .bind(e.s.namespace.namespace_id)
-            .execute(&pool)
-            .await
-            .unwrap();
         sqlx::query("UPDATE notification_budget SET message_count=0")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{enabled}','true'::jsonb)").execute(&pool).await.unwrap();
         driver.quantum().await.unwrap();
-        if refusal == "schedule" {
-            assert_eq!(
-                driver
-                    .inspect_runs(e.f.actor, Default::default())
-                    .await
-                    .unwrap()
-                    .items
-                    .len(),
-                2
-            );
-        } else {
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notification_messages")
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap(),
-                1
-            );
-        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notification_messages")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
         driver.stop().await.unwrap();
     }
 }

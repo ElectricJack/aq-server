@@ -223,6 +223,7 @@ impl Runtime {
             work_queue: 8,
             control_queue: 4,
             timeouts: config.timeouts,
+            retention: config.retention,
             // Accepted and ignored by the engine: it has no namespace limits.
             engine: aq_playbook_host::runner::EngineConfig {
                 max_runs: 128,

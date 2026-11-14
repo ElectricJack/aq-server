@@ -312,26 +312,31 @@ impl Service {
         }
         Ok(row)
     }
-    pub(super) async fn budget(
+    /// Rolling deletion (architecture 0006): one bridge table's finished rows
+    /// beyond the newest `keep_finished`, at most `delete_batch` of them.
+    pub async fn prune(
         &self,
-        tx: &mut Transaction<'_, Postgres>,
-        admissions: i64,
-        effects: i64,
-        cancellations: i64,
-        outbox: i64,
-        bytes: i64,
-    ) -> Result<()> {
-        if [admissions, effects, cancellations, outbox, bytes]
-            .iter()
-            .any(|v| *v < 0)
-        {
-            return Err(Error::Invalid);
-        }
-        let changed=sqlx::query("UPDATE playbook_namespaces SET admission_count=admission_count+$3,effect_count=effect_count+$4,cancellation_count=cancellation_count+$5,outbox_count=outbox_count+$6,retained_bytes=retained_bytes+$7 WHERE namespace_id=$1 AND generation=$2 AND admission_count+$3<=4096 AND effect_count+$4<=8192 AND cancellation_count+$5<=8192 AND outbox_count+$6<=16384 AND retained_bytes+$7<=67108864").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(admissions).bind(effects).bind(cancellations).bind(outbox).bind(bytes).execute(&mut **tx).await?.rows_affected();
-        if changed != 1 {
-            return Err(Error::Overloaded);
-        }
-        Ok(())
+        owner: &RuntimeOwner,
+        retention: &aq_playbook_host::retention::Retention,
+        table: usize,
+    ) -> Result<u64> {
+        let (keep, batch) = retention.bounds().ok_or(Error::Invalid)?;
+        let tables = aq_playbook_host::retention::TABLES;
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        let (namespace, generation) = (self.namespace.namespace_id, self.namespace.generation);
+        let deleted = sqlx::query(tables[table % tables.len()].1)
+            .bind(namespace)
+            .bind(generation)
+            .bind(keep)
+            .bind(batch)
+            .bind(self.now()?)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        tx.commit().await?;
+        Ok(deleted)
     }
     pub async fn initialize(&self, actor: Uuid) -> Result<()> {
         if actor != self.namespace.owner_user_id {
@@ -425,7 +430,7 @@ impl Service {
             actor,
         ))?;
         let mut tx = self.tx().await?;
-        let ns = self.namespace_locked(&mut tx).await?;
+        self.namespace_locked(&mut tx).await?;
         Self::owner(&mut tx, actor).await?;
         if let Some(old) = sqlx::query_scalar::<_, String>(
             "SELECT payload_digest FROM playbook_grants WHERE grant_id=$1",
@@ -441,21 +446,10 @@ impl Service {
             return Ok(());
         }
         let now = self.now()?;
-        if expires <= now
-            || expires > now.saturating_add(86_400_000)
-            || ns.get::<i64, _>("grant_count") >= 1024
-        {
+        if expires <= now || expires > now.saturating_add(86_400_000) {
             return Err(Error::Invalid);
         }
-        let bytes = canonical_bytes(&scope).map_err(|_| Error::Invalid)?.len() as i64 + 1024;
-        self.budget(&mut tx, 0, 0, 0, 0, bytes).await?;
         sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7)").bind(id).bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
-        sqlx::query(
-            "UPDATE playbook_namespaces SET grant_count=grant_count+1 WHERE namespace_id=$1",
-        )
-        .bind(self.namespace.namespace_id)
-        .execute(&mut *tx)
-        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -697,12 +691,6 @@ impl Service {
         ))
         .map_err(|_| Error::Invalid)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        let retained = canonical_bytes(&response)
-            .map_err(|_| Error::Invalid)?
-            .len() as i64
-            + sealed.ciphertext.len() as i64
-            + 4096;
-        self.budget(&mut tx, 0, 1, 0, 1, retained).await?;
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,'message.send',$5,$6,$7,$8,$9,$10,'queued',$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).bind(&intent.run).bind(&identity).bind(intent.command.fingerprint().map_err(|_|Error::Invalid)?).bind(&intent.input_digest).bind(id).bind(revision).bind(op).bind(&response).bind(at).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(event_id).bind(event_digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
         self.check_expiry(&mut tx, id).await?;
@@ -783,7 +771,6 @@ impl Service {
         } else {
             "confirmed"
         };
-        self.budget(&mut tx, 0, 0, 1, 0, 2048).await?;
         sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(key).bind(&intent.id).bind(identity).bind(disposition).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(if existing.is_some() {
@@ -889,8 +876,6 @@ impl Service {
                 &bytes,
             )
             .map_err(|_| Error::Unknown)?;
-        self.budget(&mut tx, 1, 0, 0, 0, sealed.ciphertext.len() as i64 + 4096)
-            .await?;
         sqlx::query("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(request.request_id).bind(digest).bind(&key).bind(request.grant_id).bind(request.grant_revision).bind(request.expected_activation_revision as i64).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(self.now()?).bind(&binding).execute(&mut *tx).await?;
         self.check_expiry(&mut tx, request.grant_id).await?;
         tx.commit().await?;
@@ -1346,7 +1331,6 @@ impl Service {
             .await
             .map_err(review_error)?;
         self.check_expiry(&mut tx, id).await?;
-        self.budget(&mut tx, 0, 1, 0, 0, 8192).await?;
         let receipt = json!({"handle":request.decision_id.to_string(),"subject":request.subject});
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,'decision.request',$5,$6,$7,$8,$9,$10,'accepted',$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&intent.id).bind(&intent.run).bind(identity).bind(intent.command.fingerprint().map_err(|_|Error::Invalid)?).bind(&intent.input_digest).bind(id).bind(revision).bind(request.operation_id).bind(receipt).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -1563,7 +1547,6 @@ impl Service {
         } else {
             Self::owner(&mut tx, self.namespace.owner_user_id).await?;
         }
-        self.budget(&mut tx, 0, 0, 1, 0, 2048).await?;
         sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(key).bind(&intent.id).bind(identity).bind(disposition).bind(self.now()?).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(if disposition == "confirmed" {
@@ -1664,8 +1647,6 @@ impl Service {
                     .keys
                     .seal(&self.aad("aq.playbooks.outbox", decision, &digest)?, &bytes)
                     .map_err(|_| Error::Unknown)?;
-                self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-                    .await?;
                 sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.human.decisions@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
             }
             sqlx::query("UPDATE review_owner_outbox SET acknowledged=true WHERE decision_id=$1")
@@ -1745,8 +1726,6 @@ impl Service {
                 .keys
                 .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
                 .map_err(|_| Error::Unknown)?;
-            self.budget(&mut tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-                .await?;
             sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
         }
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;

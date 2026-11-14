@@ -484,7 +484,7 @@ async fn check_request_runs_in_sandbox_and_reports_typed_outcome() {
         Value::Null,
     );
     assert_eq!(checks.starts(), 4);
-    // At most 8 executions per subject and check.
+    // Eight executions of one subject and check.
     for i in 0..7 {
         h.accepted(
             &format!("unit-{i}"),
@@ -494,17 +494,15 @@ async fn check_request_runs_in_sandbox_and_reports_typed_outcome() {
         .await;
     }
     assert_eq!(checks.starts(), 11);
-    refused(
-        h.run(
-            "unit-8",
-            "check.request",
-            check_input("unit", &validator(1), 1),
-        )
-        .await,
-        "execution_limit",
-        Value::Null,
-    );
-    assert_eq!(checks.starts(), 11);
+    // No lifetime limit per subject and check (architecture 0006): a ninth
+    // execution starts too.
+    h.accepted(
+        "unit-8",
+        "check.request",
+        check_input("unit", &validator(1), 1),
+    )
+    .await;
+    assert_eq!(checks.starts(), 12);
     // Unknown handles are refused, never invented.
     assert_eq!(h.get(&Uuid::new_v4().to_string()).await.outcome, "refused");
     // Undeclared fields (a shell command, a pre-set result) never reach an adapter.
@@ -1156,4 +1154,42 @@ async fn judgment_request_with_no_internal_profile_fails_provider_unavailable() 
     let rows = internal_tasks(&pool).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].3.as_deref(), Some("no_candidate"));
+}
+
+/// The former retention bounds on host operations (10,000 per namespace, 256
+/// per subject, 8 per subject revision and check) no longer refuse work.
+#[tokio::test]
+async fn a_namespace_keeps_admitting_past_the_old_lifetime_caps() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let pool = f.db.pool().await;
+    let checks = Arc::new(FakeChecks::default());
+    checks.pinned.lock().unwrap().insert(
+        "work-1".into(),
+        PinnedOutcome {
+            revision: 1,
+            required_checks: vec![PinnedCheck {
+                id: "unit".into(),
+                validator: validator(1),
+            }],
+        },
+    );
+    *checks.script.lock().unwrap() = BTreeMap::from([("unit".into(), CheckObservation::Running)]);
+    let h = host(&f, Some(checks.clone()), None).await;
+    // 10,000 finished operations, 256 of them for work-1 and 8 of those its
+    // revision 1 "unit" check.
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,output,created_at_ms,completed_at_ms) SELECT gen_random_uuid(),$1,$2,'old-'||i,'check.request',CASE WHEN i<=256 THEN 'work-1' ELSE 'work-'||i END,CASE WHEN i<=8 THEN 1 ELSE 2 END,'unit','{}','passed','{}',$3,$3 FROM generate_series(1,10000) i")
+        .bind(h.service.namespace.namespace_id)
+        .bind(h.service.namespace.generation)
+        .bind(h.now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    h.accepted(
+        "past-caps",
+        "check.request",
+        check_input("unit", &validator(1), 1),
+    )
+    .await;
+    assert_eq!(checks.starts(), 1);
 }

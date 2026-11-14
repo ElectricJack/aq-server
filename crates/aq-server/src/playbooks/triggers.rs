@@ -72,7 +72,6 @@ impl Service {
         }
         let revision = expected_revision.checked_add(1).ok_or(Error::Overloaded)?;
         let definition = serde_json::to_value(&schedule)?;
-        self.budget(&mut tx, 0, 0, 0, 0, 8192).await?;
         if old.is_none() {
             let count: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM playbook_schedules WHERE namespace_id=$1 AND generation=$2",
@@ -211,8 +210,6 @@ impl Service {
             .keys
             .seal(&self.aad("aq.playbooks.outbox", id, &hash)?, &bytes)
             .map_err(|_| Error::Unknown)?;
-        self.budget(tx, 0, 0, 0, 1, sealed.ciphertext.len() as i64 + 4096)
-            .await?;
         sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&event.producer).bind(id).bind(hash).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(self.now()?).execute(&mut **tx).await?;
         Ok(())

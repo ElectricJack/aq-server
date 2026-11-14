@@ -494,6 +494,10 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
         let table = format!("drive_interval_ms=250\n[playbooks.engine_timeouts]\n{table}\n");
         s.text.replace("drive_interval_ms=250\n", &table)
     };
+    let retention = |table: &str| {
+        let table = format!("drive_interval_ms=250\n[playbooks.retention]\n{table}\n");
+        s.text.replace("drive_interval_ms=250\n", &table)
+    };
     for text in [
         s.text
             .replace("enabled=true\nprofile=", "enabled=false\nprofile="),
@@ -508,6 +512,10 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
         timeouts("statement_ms=0"),
         timeouts("statement_ms=1000\nlock_ms=1001"),
         timeouts("idle_ms=1"),
+        // Keeping no finished rows would delete what idempotent replay reads.
+        retention("keep_finished=0"),
+        retention("delete_batch=0"),
+        retention("keep=1"),
     ] {
         assert!(toml::from_str::<Config>(&text).is_err());
     }
@@ -515,6 +523,9 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
     assert!(toml::from_str::<Config>(&timeouts("statement_ms=2000\nlock_ms=100")).is_ok());
     // No upper bound: a long drain may need more than 30 s per statement.
     assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000")).is_ok());
+    // Rolling deletion is configuration (defaults keep 10,000, delete 500).
+    assert!(toml::from_str::<Config>(&retention("keep_finished=3\ndelete_batch=1")).is_ok());
+    assert!(toml::from_str::<Config>(&retention("keep_finished=100000000")).is_ok());
     let dsn = s._dir.path().join("dsn");
     private(
         &dsn,

@@ -126,7 +126,7 @@ no dependency.
      engine never accepted is delivered as new; a row with an engine receipt
      goes back to `engine_accepted` and resumes its fan-out, never a new event
      (round 2 R1). The outbox page judges "accepted" by the stored receipt.
-   - Rolling deletion of these tables is a later task (B1b).
+   - Rolling deletion of these tables: see "B1b: rolling records" below.
 10. **A failed engine open does not stop the server** (ruling 4, second
     half). `serve` starts the owner once; when that fails, the server starts
     anyway (`playbooks::runtime::open_later`): every `/api/playbooks/...`
@@ -178,11 +178,7 @@ are now ignored and can be dropped when the host stops validating them.
   in the engine's `docs/implementation/0003-live-state-only.md` (actor from
   the authenticated identity, the server clock as `now_ms`, `to_ms` checked
   against PostgreSQL `now()`, dry run first, explicit confirmation).
-- **The server's own namespace counters.** `playbook_namespaces`
-  `admission_count`, `effect_count`, `cancellation_count`, `outbox_count` and
-  `retained_bytes` are lifetime counters with fixed caps (migration 0023,
-  lines 15-19), raised by `Service::budget` (`playbooks/service.rs`) and never
-  lowered. They are unchanged here.
+- **The server's own namespace counters** were removed in B1b (below).
 
 ## Final re-vendor: preconditions for deploying
 
@@ -196,8 +192,8 @@ live playbook namespace before they are met.
   namespaces, thinner `collect_garbage`), at crates 0.2.0.
 - A measured first open and drain of a copy of the live namespace under the
   configured engine statement timeout (`[playbooks.engine_timeouts]`).
-- The server's lifetime counters removed and rolling deletion of the playbook
-  tables (B1b).
+- ~~The server's lifetime counters removed and rolling deletion of the
+  playbook tables (B1b).~~ Done; see "B1b: rolling records".
 
 Mechanics:
 
@@ -235,6 +231,43 @@ Mechanics:
   first delivery however old it is.
 - Retire the old owner before starting the new one, as for every engine
   change (one owner per namespace).
+
+## B1b: rolling records (no lifetime counters)
+
+Architecture 0006: nothing in the server's playbook bridge refuses work
+because of how much has happened.
+
+- **Counters gone.** Migration 0126 drops `playbook_namespaces`
+  `grant_count` (1,024), `admission_count` (4,096), `effect_count` and
+  `cancellation_count` (8,192), `outbox_count` (16,384) and `retained_bytes`
+  (64 MiB) with their CHECKs. `Service::budget`, which raised them and
+  refused at a cap (grants, admissions, effects, cancellations, every outbox
+  producer, health scans and findings), is removed, and so are the
+  host-operation bounds (`MAX_RETAINED_OPERATIONS` 10,000,
+  `MAX_LINEAGE_OPERATIONS` 256, `MAX_CHECK_EXECUTIONS` 8, refusals
+  `execution_limit` and `budget_exceeded`). Single-input size checks stay.
+  DEP6 no longer returns outbox "capacity".
+- **Rolling deletion.** `[playbooks.retention] keep_finished` (default
+  10,000) and `delete_batch` (default 500), both positive, no upper bound
+  (`aq_playbook_host::retention::Retention`, validated at config load). Each
+  drive quantum runs one table's statement (`aq_playbook_host::retention::TABLES`),
+  in turn: it keeps the newest `keep_finished` finished rows of the
+  namespace generation and deletes at most `delete_batch` older ones. Work in
+  progress never matches.
+
+| Table | Finished (deletable beyond the newest N) | A repeat of a deleted id |
+| --- | --- | --- |
+| `playbook_outbox` | `engine_accepted` and fanned out | Producers dedupe on their own source (graph and settlement rows acknowledged at engine acceptance, decisions when copied, host-bridge events in their effect's transaction); a re-sent key is the engine's repeat protection |
+| `playbook_admissions` | `engine_accepted`, **and** its grant expired, revoked or re-revisioned | Refused as expired: `prepare` needs a live grant (at most 24 h) for a request it has no row for, so it answers `Forbidden` and queues nothing |
+| `playbook_effects` | Any recorded status but `pending`, and no running host operation for the intent; an `accepted` review decision only once final and copied | The engine's: it re-dispatches or reconciles only intents of live runs, and a live run's in-progress effect is never deleted |
+| `playbook_cancellations` | `confirmed`, `too_late`, `refused` | The engine's: it cancels only live intents |
+| `playbook_host_operations` | not `running` | A late completion finds no running row and is answered `Unknown` (no second completion event); `operation.get` comes only from live intents |
+| `playbook_health_observations` | reconciled, or expired | The engine's: observation ids belong to live runs; a reconcile is answered from its effect first |
+| `playbook_finding_notifications` | submitted | Notification ids are per episode revision, which only goes up; the notification owner dedupes its operation id |
+
+Not covered: `playbook_finding_episodes` (current state per finding key, and
+the 100-per-partition check counts absent keys too), `playbook_grants`,
+`playbook_work_keys`, `playbook_integration_receipts`.
 
 ## The 500-run routing scale test
 

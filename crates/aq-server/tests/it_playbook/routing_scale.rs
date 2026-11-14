@@ -11,6 +11,38 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const CHECKPOINTS: [usize; 5] = [1, 50, 100, 250, 500];
+/// The server's own bridge tables (rolling deletion, B1b).
+const SERVER_TABLES: [&str; 7] = [
+    "playbook_outbox",
+    "playbook_admissions",
+    "playbook_effects",
+    "playbook_cancellations",
+    "playbook_host_operations",
+    "playbook_health_observations",
+    "playbook_finding_notifications",
+];
+/// `[playbooks.retention] keep_finished` for the measured namespace.
+const KEEP: u64 = 20;
+/// Runs per grant: a grant is replaced (and the clock moved past the old
+/// one's expiry) so accepted admissions become deletable, as daily grants
+/// in production do.
+const GRANT_RUNS: usize = 50;
+
+async fn server_rows(p: &Pilot) -> Vec<i64> {
+    let pool = p.f.db.pool().await;
+    let mut rows = vec![];
+    for table in SERVER_TABLES {
+        let n: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} WHERE namespace_id=$1"
+        ))
+        .bind(p.service.namespace.namespace_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        rows.push(n);
+    }
+    rows
+}
 
 async fn storage_report(p: &Pilot) -> String {
     let pool = p.f.db.pool().await;
@@ -58,6 +90,13 @@ async fn storage_report(p: &Pilot) -> String {
     .await
     .unwrap();
     out.push(format!("snapshot(enc_bytes,plain_bytes,revision)={size:?}"));
+    let rows = server_rows(p).await;
+    let server: Vec<String> = SERVER_TABLES
+        .iter()
+        .zip(rows)
+        .map(|(t, n)| format!("{t}={n}"))
+        .collect();
+    out.push(format!("server[{}]", server.join(",")));
     out.join(" ")
 }
 
@@ -91,15 +130,30 @@ async fn measure() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(500);
     let mut p = Pilot::new().await;
-    let grant = p.grant;
+    p.retention = aq_playbook_host::retention::Retention {
+        keep_finished: KEEP,
+        delete_batch: 500,
+    };
+    p.restart().await;
+    let mut grant = p.grant;
     let routing = pilots::routing().unwrap();
-    let rev = p.install(&[&routing], "routing", grant).await;
+    let mut rev = p.install(&[&routing], "routing", grant).await;
+    let mut flat: Vec<(usize, Vec<i64>)> = vec![];
     println!(
         "SCALE start runs={runs} storage: {}",
         storage_report(&p).await
     );
     let mut recent: Vec<Duration> = vec![];
     for n in 1..=runs {
+        if n > 1 && (n - 1) % GRANT_RUNS == 0 {
+            p.advance(86_400_001);
+            grant = Uuid::new_v4();
+            p.service
+                .grant(p.f.actor, grant, super::scope(&p.f), Pilot::far(&p.f))
+                .await
+                .unwrap();
+            rev = p.install(&[&routing], "routing", grant).await;
+        }
         // A distinct work subject and a fresh attempt (no recorded facts, so
         // the run takes the judgment path, the longer of the two).
         let work_id = Uuid::new_v4();
@@ -172,6 +226,13 @@ async fn measure() {
             super::outcome(&view)
         );
         if CHECKPOINTS.contains(&n) || n == runs {
+            // One full turn of the rolling deletion after the last writes.
+            for _ in SERVER_TABLES {
+                p.driver().quantum().await.ok();
+            }
+            if n >= 250 {
+                flat.push((n, server_rows(&p).await));
+            }
             println!(
                 "SCALE checkpoint run={n} storage: {}",
                 storage_report(&p).await
@@ -179,6 +240,19 @@ async fn measure() {
         }
     }
     p.driver.take().unwrap().stop().await.unwrap();
+    // Flat between run 250 and the last run: every table holds its newest
+    // KEEP finished rows (admissions: those the current grant still covers).
+    if let [(a, first), .., (b, last)] = flat.as_slice() {
+        assert_eq!(first, last, "server rows at run {a} and run {b}");
+        for (table, n) in SERVER_TABLES.iter().zip(last) {
+            let bound = if *table == "playbook_admissions" {
+                GRANT_RUNS as i64
+            } else {
+                KEEP as i64
+            };
+            assert!(*n <= bound, "{table}={n}");
+        }
+    }
 }
 
 /// 500 sequential routing runs in one protected namespace. The future is

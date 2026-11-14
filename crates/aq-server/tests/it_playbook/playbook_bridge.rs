@@ -227,52 +227,6 @@ async fn mailbox_and_outbox_commit_once_and_reconcile_after_revocation() {
     assert_eq!(page[0].2.payload["message_id"], first["message_id"]);
 }
 #[tokio::test]
-async fn quota_refusal_rolls_back_mailbox_and_event_but_retained_exact_replay_works() {
-    let e = setup().await;
-    let pool = e.f.db.pool().await;
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=8192 WHERE namespace_id=$1")
-        .bind(e.service.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        e.service
-            .send_message(&e.runtime, e.grant, 1, &intent(&e, "refused"))
-            .await
-            .unwrap_err(),
-        Error::Overloaded
-    );
-    for table in ["mailbox_messages", "playbook_effects", "playbook_outbox"] {
-        assert_eq!(count(&e, table).await, 0);
-    }
-    sqlx::query("UPDATE playbook_namespaces SET effect_count=0 WHERE namespace_id=$1")
-        .bind(e.service.namespace.namespace_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let r = intent(&e, "accepted");
-    e.service
-        .send_message(&e.runtime, e.grant, 1, &r)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE playbook_namespaces SET retained_bytes=67108864,effect_count=8192,outbox_count=16384 WHERE namespace_id=$1").bind(e.service.namespace.namespace_id).execute(&pool).await.unwrap();
-    assert!(matches!(
-        e.service
-            .send_message(&e.runtime, e.grant, 1, &r)
-            .await
-            .unwrap(),
-        MessageResult::Queued(_)
-    ));
-    assert_eq!(
-        e.service
-            .send_message(&e.runtime, e.grant, 1, &intent(&e, "full"))
-            .await
-            .unwrap_err(),
-        Error::Overloaded
-    );
-    assert_eq!(count(&e, "mailbox_messages").await, 1);
-}
-#[tokio::test]
 async fn cancel_before_owner_admission_prevents_effect_and_after_queue_is_too_late() {
     let e = setup().await;
     let before = intent(&e, "before");
@@ -2086,4 +2040,330 @@ async fn notification_outbox_replays_frozen_projection_independently_of_engine_a
     .unwrap();
     assert!(row.get::<bool, _>("delivered"));
     assert!(row.get::<bool, _>("notification_observed"));
+}
+
+// ------------------------------------------------- rolling records (B1b)
+
+const ZERO12: &str = "decode(repeat('00',12),'hex')";
+const ZERO16: &str = "decode(repeat('00',16),'hex')";
+
+async fn exec(pool: &sqlx::PgPool, sql: &str, e: &Env, grant: Uuid, n: i64) {
+    sqlx::query(sql)
+        .bind(e.service.namespace.namespace_id)
+        .bind(e.service.namespace.generation)
+        .bind(grant)
+        .bind("a".repeat(64))
+        .bind(n)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// `n` finished rows in every bridge table, named `done-1` (oldest) to
+/// `done-n` where a table has a text key. `grant` backs the admissions.
+async fn seed_finished(e: &Env, grant: Uuid, n: i64) {
+    let pool = e.f.db.pool().await;
+    for sql in [
+        format!("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) SELECT $1,$2,gen_random_uuid(),$4,'done-'||i,$3,1,1,1,'test',{ZERO12},{ZERO16},i,'engine_accepted' FROM generate_series(1,$5) i"),
+        "INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) SELECT $1,$2,'done-'||i,'run','message.send',$4,$4,$4,$3,1,gen_random_uuid(),'queued','{}',i FROM generate_series(1,$5) i".into(),
+        "INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) SELECT $1,$2,'done-'||i,'cancel-done-'||i,$4,'confirmed',i FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL".into(),
+        format!("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,fanout_complete) SELECT $1,$2,'aq.host.bridge@1',0,gen_random_uuid(),$4,1,'test',{ZERO12},{ZERO16},i,'engine_accepted',true FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL"),
+        "INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) SELECT gen_random_uuid(),$1,$2,'done-'||i,'judgment.request','work-'||i,1,'{}','assessed','{}',i,i FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL AND $4<>''".into(),
+        "INSERT INTO playbook_health_observations(namespace_id,generation,observation,partition,baseline,expires_at_ms,evaluation,complete,request_digest,result) SELECT $1,$2,'done-'||i,'p','{}',i,'e',true,$4,'{}' FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL".into(),
+        "INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request,submitted) SELECT $1,$2,gen_random_uuid(),'{}',true FROM generate_series(1,$5) i WHERE $3::uuid IS NOT NULL AND $4<>''".into(),
+    ] {
+        exec(&pool, &sql, e, grant, n).await;
+    }
+}
+
+const TABLES: [&str; 7] = [
+    "playbook_outbox",
+    "playbook_admissions",
+    "playbook_effects",
+    "playbook_cancellations",
+    "playbook_host_operations",
+    "playbook_health_observations",
+    "playbook_finding_notifications",
+];
+
+async fn rows(e: &Env, table: &str) -> i64 {
+    assert!(TABLES.contains(&table));
+    sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM {table} WHERE namespace_id=$1"
+    ))
+    .bind(e.service.namespace.namespace_id)
+    .fetch_one(&e.f.db.pool().await)
+    .await
+    .unwrap()
+}
+
+/// An expired grant row, so its accepted admissions can be deleted.
+async fn expired_grant(e: &Env) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,'{}',1,$5)")
+        .bind(id)
+        .bind(e.service.namespace.namespace_id)
+        .bind(e.service.namespace.generation)
+        .bind(e.f.actor)
+        .bind("a".repeat(64))
+        .execute(&e.f.db.pool().await)
+        .await
+        .unwrap();
+    id
+}
+
+/// One pass of every table; the number of rows each deleted.
+async fn prune(e: &Env, keep: u64, batch: u64) -> Vec<u64> {
+    let retention = aq_playbook_host::retention::Retention {
+        keep_finished: keep,
+        delete_batch: batch,
+    };
+    let mut deleted = vec![];
+    for (i, (table, _)) in aq_playbook_host::retention::TABLES.iter().enumerate() {
+        assert_eq!(*table, TABLES[i]);
+        deleted.push(e.service.prune(&e.runtime, &retention, i).await.unwrap());
+    }
+    deleted
+}
+
+fn admission(e: &Env, grant: Uuid) -> PrepareRequest {
+    PrepareRequest {
+        request_id: Uuid::new_v4(),
+        grant_id: grant,
+        grant_revision: 1,
+        binding: "mail".into(),
+        expected_activation_revision: 1,
+        entry: "main".into(),
+        input: json!({"n": e.attempt}),
+    }
+}
+
+#[tokio::test]
+async fn a_namespace_keeps_admitting_past_the_old_lifetime_caps() {
+    let e = setup().await;
+    let pool = e.f.db.pool().await;
+    // Where the lifetime counters still exist, start them at their caps
+    // (grants 1,024; admissions 4,096; effects and cancellations 8,192;
+    // outbox 16,384; 64 MiB).
+    sqlx::raw_sql("DO $$ BEGIN IF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='playbook_namespaces' AND column_name='admission_count') THEN EXECUTE 'UPDATE playbook_namespaces SET grant_count=1024,admission_count=4096,effect_count=8192,cancellation_count=8192,outbox_count=16384,retained_bytes=67108864'; END IF; END $$")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // And hold as many rows as the old caps allowed.
+    let old = expired_grant(&e).await;
+    let n = 16_384;
+    seed_finished(&e, old, n).await;
+    for table in TABLES {
+        assert_eq!(rows(&e, table).await, n, "{table}");
+    }
+    let scope = GrantScope {
+        workspace_id: e.f.selection.lineage.workspace_id,
+        project_id: e.f.selection.lineage.project_id,
+        recipients: vec![e.recipient.clone()],
+        capabilities: BTreeSet::from(["message.send".into()]),
+    };
+    e.service
+        .grant(e.f.actor, Uuid::new_v4(), scope, NOW as i64 + 10_000)
+        .await
+        .unwrap();
+    let status = e
+        .service
+        .prepare(e.f.actor, admission(&e, e.grant))
+        .await
+        .unwrap();
+    assert_eq!(status.status, "pending");
+    assert!(matches!(
+        e.service
+            .send_message(&e.runtime, e.grant, 1, &intent(&e, "past-cap"))
+            .await
+            .unwrap(),
+        MessageResult::Queued(_)
+    ));
+    assert!(matches!(
+        e.service
+            .cancel(&e.runtime, e.grant, 1, &intent(&e, "cancel-past-cap"))
+            .await
+            .unwrap(),
+        CancellationResult::Confirmed
+    ));
+    assert_eq!(rows(&e, "playbook_admissions").await, n + 1);
+    assert_eq!(rows(&e, "playbook_effects").await, n + 1);
+    assert_eq!(rows(&e, "playbook_outbox").await, n + 1);
+    assert_eq!(rows(&e, "playbook_cancellations").await, n + 1);
+}
+
+#[tokio::test]
+async fn finished_playbook_rows_are_deleted_down_to_keep_finished() {
+    let e = setup().await;
+    let old = expired_grant(&e).await;
+    seed_finished(&e, old, 5).await;
+    // An accepted judgment whose operation completed is finished too.
+    sqlx::query("UPDATE playbook_effects SET command_name='judgment.request',status='accepted',receipt='{\"handle\":\"h\"}' WHERE namespace_id=$1 AND intent_id='done-1'")
+        .bind(e.service.namespace.namespace_id)
+        .execute(&e.f.db.pool().await)
+        .await
+        .unwrap();
+    // Bounded batches: at most two rows per table per pass.
+    assert_eq!(prune(&e, 2, 2).await, vec![2; 7]);
+    assert_eq!(prune(&e, 2, 2).await, vec![1; 7]);
+    assert_eq!(prune(&e, 2, 2).await, vec![0; 7]);
+    for table in TABLES {
+        assert_eq!(rows(&e, table).await, 2, "{table}");
+    }
+    // The newest two are kept.
+    let pool = e.f.db.pool().await;
+    for (table, column) in [
+        ("playbook_admissions", "engine_key"),
+        ("playbook_effects", "intent_id"),
+        ("playbook_cancellations", "cancellation_key"),
+        ("playbook_host_operations", "intent_id"),
+        ("playbook_health_observations", "observation"),
+    ] {
+        let kept: Vec<String> =
+            sqlx::query_scalar(&format!("SELECT {column} FROM {table} ORDER BY 1"))
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kept, ["done-4", "done-5"], "{table}");
+    }
+    let kept: Vec<i64> = sqlx::query_scalar("SELECT created_at_ms FROM playbook_outbox ORDER BY 1")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, [4, 5]);
+}
+
+#[tokio::test]
+async fn rows_in_progress_or_held_survive_deletion() {
+    let e = setup().await;
+    let pool = e.f.db.pool().await;
+    let (ns, g) = (
+        e.service.namespace.namespace_id,
+        e.service.namespace.generation,
+    );
+    let old = expired_grant(&e).await;
+    let d = "a".repeat(64);
+    // Admissions: pending, held (unknown), and accepted under a live grant.
+    for (status, held, grant) in [
+        ("pending", None, old),
+        ("unknown", Some("uncertain"), old),
+        ("engine_accepted", None, e.grant),
+    ] {
+        sqlx::query(&format!("INSERT INTO playbook_admissions(namespace_id,generation,request_id,request_digest,engine_key,grant_id,grant_revision,expected_activation_revision,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,held_reason) VALUES($1,$2,gen_random_uuid(),$3,$4,$5,1,1,1,'test',{ZERO12},{ZERO16},0,$4,$6)"))
+            .bind(ns).bind(g).bind(&d).bind(status).bind(grant).bind(held).execute(&pool).await.unwrap();
+    }
+    // Outbox: pending, held, accepted but not fanned out.
+    for (status, fanned) in [
+        ("pending", false),
+        ("unknown", false),
+        ("engine_accepted", false),
+    ] {
+        sqlx::query(&format!("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,fanout_complete) VALUES($1,$2,'aq.host.bridge@1',0,gen_random_uuid(),$3,1,'test',{ZERO12},{ZERO16},0,$4,$5)"))
+            .bind(ns).bind(g).bind(&d).bind(status).bind(fanned).execute(&pool).await.unwrap();
+    }
+    // Effects: pending; an accepted judgment whose operation runs; an
+    // accepted review decision nobody has answered.
+    let decision = Uuid::new_v4();
+    for (intent, command, status, receipt) in [
+        ("p", "work.change", "pending", json!({})),
+        ("j", "judgment.request", "accepted", json!({"handle": "h"})),
+        (
+            "d",
+            "decision.request",
+            "accepted",
+            json!({"handle": decision, "subject": {}}),
+        ),
+    ] {
+        sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,'run',$4,$5,$5,$5,$6,1,gen_random_uuid(),$7,$8,0)")
+            .bind(ns).bind(g).bind(intent).bind(command).bind(&d).bind(e.grant).bind(status).bind(receipt).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,created_at_ms) VALUES(gen_random_uuid(),$1,$2,'j','judgment.request','work-j',1,'{}','running',0)")
+        .bind(ns).bind(g).execute(&pool).await.unwrap();
+    // Cancellations requested but not yet answered.
+    for (key, disposition) in [("a", "accepted"), ("u", "unknown")] {
+        sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$3,$4,$5,0)")
+            .bind(ns).bind(g).bind(key).bind(&d).bind(disposition).execute(&pool).await.unwrap();
+    }
+    // A scan that can still be reconciled, a notification not yet sent.
+    sqlx::query("INSERT INTO playbook_health_observations(namespace_id,generation,observation,partition,baseline,expires_at_ms) VALUES($1,$2,'open','p','{}',$3)")
+        .bind(ns).bind(g).bind(NOW as i64 + 60_000).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO playbook_finding_notifications(namespace_id,generation,notification_id,request) VALUES($1,$2,gen_random_uuid(),'{}')")
+        .bind(ns).bind(g).execute(&pool).await.unwrap();
+    let before: Vec<i64> = {
+        let mut v = vec![];
+        for table in TABLES {
+            v.push(rows(&e, table).await);
+        }
+        v
+    };
+    assert_eq!(before, [3, 3, 3, 2, 1, 1, 1]);
+    // Many finished rows newer than all of them, and the smallest keep.
+    seed_finished(&e, old, 4).await;
+    for _ in 0..4 {
+        prune(&e, 1, 500).await;
+    }
+    for (i, table) in TABLES.into_iter().enumerate() {
+        // Each table keeps its one newest finished row and all the others.
+        assert_eq!(rows(&e, table).await, before[i] + 1, "{table}");
+    }
+    // The running judgment, unanswered decision and pending effect remain.
+    let effects: Vec<String> = sqlx::query_scalar(
+        "SELECT intent_id FROM playbook_effects WHERE intent_id NOT LIKE 'done-%' ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(effects, ["d", "j", "p"]);
+}
+
+#[tokio::test]
+async fn a_repeat_of_a_deleted_operation_is_not_executed_twice() {
+    let e = setup().await;
+    let pool = e.f.db.pool().await;
+    let accept = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE playbook_admissions SET status='engine_accepted' WHERE request_id=$1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    let first = admission(&e, e.grant);
+    e.service.prepare(e.f.actor, first.clone()).await.unwrap();
+    accept(first.request_id).await;
+    for step in 1..=2 {
+        e.f.time
+            .store(NOW as i64 + step, std::sync::atomic::Ordering::SeqCst);
+        let newer = admission(&e, e.grant);
+        e.service.prepare(e.f.actor, newer.clone()).await.unwrap();
+        accept(newer.request_id).await;
+    }
+    // While its grant can still admit, an accepted admission beyond keep is
+    // kept: its repeat returns the original record and admits nothing.
+    prune(&e, 1, 500).await;
+    assert_eq!(rows(&e, "playbook_admissions").await, 3);
+    let repeat = e.service.prepare(e.f.actor, first.clone()).await.unwrap();
+    assert_eq!(repeat.status, "engine_accepted");
+    // Once the grant has expired, the older two leave.
+    e.f.time
+        .store(NOW as i64 + 20_000, std::sync::atomic::Ordering::SeqCst);
+    prune(&e, 1, 500).await;
+    assert_eq!(rows(&e, "playbook_admissions").await, 1);
+    // A repeat of the deleted request is refused as expired; no new
+    // admission is queued, so the engine is never asked to run it again.
+    assert_eq!(
+        e.service.prepare(e.f.actor, first).await.unwrap_err(),
+        Error::Forbidden
+    );
+    assert_eq!(rows(&e, "playbook_admissions").await, 1);
+    let pending: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM playbook_admissions WHERE status='pending'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pending, 0);
 }

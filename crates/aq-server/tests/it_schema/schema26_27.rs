@@ -28,8 +28,10 @@ async fn seed(pool: &PgPool) -> Uuid {
     sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'schema-fixture-namespace',$1,$1,$1,$2,$3)").bind(id).bind("c".repeat(64)).bind("d".repeat(64)).execute(pool).await.unwrap();
     id
 }
+/// The namespace row without the columns later migrations add or drop
+/// (0126 drops the lifetime counters, all zero here).
 async fn snapshot(pool: &PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar("SELECT jsonb_build_object('user',(SELECT to_jsonb(u) FROM users u WHERE id=$1),'node',(SELECT to_jsonb(n) - 'machine_key' - 'slot' FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1),'namespace',(SELECT to_jsonb(p)-'catalog_profile' FROM playbook_namespaces p WHERE namespace_id=$1))").bind(id).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar("SELECT jsonb_build_object('user',(SELECT to_jsonb(u) FROM users u WHERE id=$1),'node',(SELECT to_jsonb(n) - 'machine_key' - 'slot' FROM nodes n WHERE id=$1),'receipt',(SELECT to_jsonb(r) FROM execution_receipts r WHERE node_id=$1),'namespace',(SELECT to_jsonb(p)-ARRAY['catalog_profile','grant_count','admission_count','effect_count','cancellation_count','outbox_count','retained_bytes'] FROM playbook_namespaces p WHERE namespace_id=$1))").bind(id).fetch_one(pool).await.unwrap()
 }
 async fn migrations(pool: &PgPool) -> Vec<(i32, DateTime<Utc>)> {
     sqlx::query_as("SELECT version,applied_at FROM schema_migrations ORDER BY version")

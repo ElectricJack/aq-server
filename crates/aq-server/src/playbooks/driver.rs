@@ -324,6 +324,9 @@ pub struct Driver {
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
     deadline: Duration,
     tick_deadline: Duration,
+    /// Rolling deletion: one bridge table per quantum, in turn.
+    retention: aq_playbook_host::retention::Retention,
+    pruned: std::sync::atomic::AtomicUsize,
     /// Why the last quantum failed or skipped a source; `None` when clean.
     reason: Mutex<Option<String>>,
     automatic: std::sync::atomic::AtomicU8,
@@ -361,6 +364,7 @@ impl Driver {
         let expected = service.runtime_revision().await?;
         let deadline = limits.timeouts.call_deadline(1);
         let tick_deadline = (limits.timeouts).call_deadline(limits.transitions as u32);
+        let retention = limits.retention;
         let handle = tokio::runtime::Handle::current();
         let host_service = service.clone();
         let namespace = service.namespace.engine_namespace();
@@ -420,6 +424,8 @@ impl Driver {
             gate: tokio::sync::Mutex::new(0),
             deadline,
             tick_deadline,
+            retention,
+            pruned: Default::default(),
             reason: Mutex::default(),
             automatic: std::sync::atomic::AtomicU8::new(0),
             stopped_ack: std::sync::atomic::AtomicBool::new(false),
@@ -809,6 +815,11 @@ impl Driver {
                     .await,
             );
         }
+        let table = self
+            .pruned
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pruned = self.service.prune(&self.runtime, &self.retention, table);
+        partial.defer("deleting finished rows", pruned.await);
         if partial.overloaded {
             return Err(Error::Overloaded);
         }

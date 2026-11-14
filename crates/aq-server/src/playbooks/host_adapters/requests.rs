@@ -19,12 +19,6 @@ use serde::{Deserialize, Serialize};
 
 /// Check execution profile every D6 check attempt runs under.
 pub const CHECK_EXECUTION_PROFILE: &str = "aq.check.sandbox/v1";
-/// Executions retained per subject (id + revision) and check id.
-pub const MAX_CHECK_EXECUTIONS: i64 = 8;
-/// Judgment and check operations retained per subject lineage (subject id).
-pub const MAX_LINEAGE_OPERATIONS: i64 = 256;
-/// Judgment and check operations retained per namespace generation.
-pub const MAX_RETAINED_OPERATIONS: i64 = 10_000;
 
 /// Immutable artifact reference (id, version, digest).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,27 +280,6 @@ impl Service {
             "decision.request" => (json!("decision"), "aq.decision.completed"),
             _ => return Err(Error::Invalid),
         })
-    }
-
-    /// Counts against the retention bounds; returns false when a bound is hit.
-    async fn operation_room(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        subject: &Value,
-        check: Option<&str>,
-    ) -> Result<bool> {
-        let id = text(subject, "id")?;
-        let row = sqlx::query("SELECT count(*) AS total, count(*) FILTER (WHERE subject_id=$3) AS lineage, count(*) FILTER (WHERE subject_id=$3 AND subject_revision=$4 AND check_id=$5) AS executions FROM playbook_host_operations WHERE namespace_id=$1 AND generation=$2")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(id)
-            .bind(revision_of(subject)?)
-            .bind(check)
-            .fetch_one(&mut **tx)
-            .await?;
-        Ok(row.get::<i64, _>("total") < MAX_RETAINED_OPERATIONS
-            && row.get::<i64, _>("lineage") < MAX_LINEAGE_OPERATIONS
-            && (check.is_none() || row.get::<i64, _>("executions") < MAX_CHECK_EXECUTIONS))
     }
 
     /// Records the durable intent (accepted effect row and running operation
@@ -637,13 +610,6 @@ impl Service {
                 {
                     Some(refusal(Value::Null, "not_required"))
                 }
-                Some(_)
-                    if !self
-                        .operation_room(&mut tx, subject, Some(check_id))
-                        .await? =>
-                {
-                    Some(refusal(Value::Null, "execution_limit"))
-                }
                 Some(_) => None,
             }
         } else {
@@ -840,7 +806,6 @@ impl Service {
             .fetch_optional(&mut *tx)
             .await?;
         let Some(effect) = effect else {
-            self.budget(&mut tx, 0, 0, 1, 0, 2048).await?;
             sqlx::query("INSERT INTO playbook_cancellations(namespace_id,generation,cancellation_key,intent_id,request_digest,disposition,created_at_ms) VALUES($1,$2,$3,$4,$5,'confirmed',$6)")
                 .bind(self.namespace.namespace_id)
                 .bind(self.namespace.generation)
@@ -878,7 +843,7 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
         let operation = self.operation(intent)?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
@@ -917,8 +882,6 @@ impl Service {
             Some(refusal(Value::Null, "no_permitted_profile"))
         } else if stale {
             Some(refusal(Value::Null, "stale_subject"))
-        } else if !self.operation_room(&mut tx, subject, None).await? {
-            Some(refusal(Value::Null, "budget_exceeded"))
         } else {
             None
         };
