@@ -3,7 +3,8 @@
 //! [`invoke`], so output, exit codes, operation IDs and recovery hints come
 //! from one place in both modes.
 use crate::{
-    Ctx, Result, catalog, cli::RunFlags, client, error, input, program, with_operation_in,
+    Ctx, Mode, Result, catalog, cli::RunFlags, client, error, flags, input, program,
+    with_operation_in,
 };
 use clap::Parser;
 use serde_json::{Map, Value, json};
@@ -284,6 +285,9 @@ struct ExternalFlags {
 /// `aq <cli tokens…> [run flags]`: resolve the tokens against the built-in
 /// catalog, then the server's discovery (so a newer command's tokens work too).
 pub async fn external(ctx: &Ctx, tokens: &[String]) -> Result<Value> {
+    if let Some(help) = help(ctx.mode, tokens) {
+        return Ok(help);
+    }
     let words: Vec<String> = tokens
         .iter()
         .take_while(|t| !t.starts_with('-'))
@@ -311,18 +315,55 @@ pub async fn external(ctx: &Ctx, tokens: &[String]) -> Result<Value> {
             ),
         ));
     };
-    let rest = &tokens[used..];
+    // The command's own params as flags (flags.rs), then `run`'s flags. A
+    // missing required param is the server's to refuse: the catalog is a hint.
+    let generated = flags::flags(&name, ctx.mode.principal());
+    let (params, rest) = flags::split(&generated, &tokens[used..])?;
+    let usage = format!(
+        "`{} {} --help` lists its flags",
+        program(),
+        words[..used].join(" ")
+    );
     let parsed = ExternalFlags::try_parse_from(
         std::iter::once(program()).chain(rest.iter().map(String::as_str)),
     )
     .map_err(|_| {
         error(
             "invalid_arguments",
-            &format!(
-                "Invalid arguments for {name}; flags are those of `{} run`",
-                program()
-            ),
+            &format!("Invalid arguments for {name}; {usage}"),
         )
     })?;
-    run(ctx, &name, &parsed.flags).await
+    if parsed.flags.describe {
+        return describe(&name);
+    }
+    let mut inv = build(ctx.mode, &name, &parsed.flags)?;
+    if let Some(Value::Object(all)) = inv.request.get_mut("params") {
+        for (key, value) in params {
+            if all.insert(key.clone(), value).is_some() {
+                return Err(error(
+                    "invalid_arguments",
+                    &format!("{key} is given both as a flag and as a --param"),
+                ));
+            }
+        }
+    }
+    invoke(ctx, &inv).await
+}
+/// Help that needs no connection: `<command tokens> --help` (or `-h`) for a
+/// command in the built-in catalog, and the commands under tokens that name
+/// a group but no command. `{"help": text}`, or `None` to run the command.
+pub fn help(mode: Mode, tokens: &[String]) -> Option<Value> {
+    let args: Vec<&String> = tokens.iter().take_while(|t| *t != "--").collect();
+    let words: Vec<String> = args
+        .iter()
+        .take_while(|t| !t.starts_with('-'))
+        .map(|t| (*t).clone())
+        .collect();
+    let asked = args.iter().any(|t| *t == "--help" || *t == "-h");
+    let text = match catalog::resolve(catalog::commands(), &words) {
+        Some((name, _)) if asked => flags::help(&name, mode.principal()),
+        Some(_) => None,
+        None => flags::group_help(&words),
+    };
+    text.map(|text| json!({"help":text}))
 }

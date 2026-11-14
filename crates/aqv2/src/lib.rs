@@ -14,6 +14,7 @@ pub mod catalog;
 mod chat;
 pub mod cli;
 mod client;
+pub mod flags;
 mod input;
 mod json;
 pub mod render;
@@ -300,6 +301,72 @@ fn connect(cli: &cli::Cli, channel: Option<OsString>) -> Result<Ctx> {
         mode: Mode::Owner,
     })
 }
+/// The CLI tokens of a command that is not typed in this binary.
+fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
+    use cli::Command as C;
+    use typed::{Comment, Knowledge, Message, Operation, Question, Task, Wait};
+    let (group, rest) = match command {
+        C::External(tokens) => return Some(tokens.clone()),
+        C::Task(Task::Other(rest)) => ("task", rest),
+        C::Knowledge(Knowledge::Other(rest)) => ("knowledge", rest),
+        C::Comment(Comment::Other(rest)) => ("comment", rest),
+        C::Question(Question::Other(rest)) => ("question", rest),
+        C::Wait(Wait::Other(rest)) => ("wait", rest),
+        C::Message(Message::Other(rest)) => ("message", rest),
+        C::Operation(Operation::Other(rest)) => ("operation", rest),
+        C::Result(cli::ResultCommand::Command(rest)) => ("result", rest),
+        _ => return None,
+    };
+    Some(
+        std::iter::once(group.to_owned())
+            .chain(rest.iter().cloned())
+            .collect(),
+    )
+}
+/// Add what the registry knows to clap's help: the command groups at the top
+/// level, and under each typed group the registry commands that share it.
+pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
+    let program = program();
+    let mut groups = String::new();
+    let mut line = String::from(" ");
+    for g in flags::groups() {
+        if line.len() + g.len() > 76 {
+            groups.push_str(&line);
+            groups.push('\n');
+            line = String::from(" ");
+        }
+        line.push(' ');
+        line.push_str(&g);
+    }
+    groups.push_str(&line);
+    command = command.after_help(format!(
+        "{}\n\nRegistry command groups (`{program} GROUP` lists a group, `{program} COMMAND --help` a command's flags):\n{groups}",
+        cli::AFTER_HELP
+    ));
+    for group in [
+        "task",
+        "knowledge",
+        "comment",
+        "question",
+        "wait",
+        "message",
+        "operation",
+        "result",
+    ] {
+        let lines = flags::group(&[group.to_owned()]);
+        if lines.is_empty() {
+            continue;
+        }
+        let width = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
+        let mut text =
+            format!("Registry commands (`{program} COMMAND --help` shows a command's flags):\n");
+        for (tokens, summary) in lines {
+            text.push_str(&format!("  {tokens:<width$}  {summary}\n"));
+        }
+        command = command.mut_subcommand(group, |c| c.after_help(text.trim_end().to_owned()));
+    }
+    command
+}
 pub async fn run(cli: cli::Cli) -> Result<Value> {
     if let Some(operation) = cli.commands.command.unsupported() {
         return Err(unsupported(operation));
@@ -311,6 +378,17 @@ pub async fn run(cli: cli::Cli) -> Result<Value> {
         return surface::describe(&args.name);
     }
     let channel = std::env::var_os("AQ_CHANNEL").filter(|v| !v.is_empty());
+    // Generated help needs no connection either.
+    let mode = if channel.is_some() {
+        Mode::Channel
+    } else {
+        Mode::Owner
+    };
+    if let Some(tokens) = external_tokens(&cli.commands.command)
+        && let Some(help) = surface::help(mode, &tokens)
+    {
+        return Ok(help);
+    }
     let ctx = connect(&cli, channel)?;
     dispatch(&ctx, &cli.commands.command).await
 }
