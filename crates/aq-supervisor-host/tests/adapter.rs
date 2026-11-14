@@ -280,6 +280,8 @@ mod internal {
             let rec = root.join("rec");
             let script = format!(
                 "#!/bin/sh\numask 077\nrec='{rec}'\nout=\nwhere=\nprev=\n\
+                 if [ \"$1\" = sandbox ]; then\n  [ -e \"$rec/no-sandbox\" ] && exit 1\n\
+                 \x20 while [ \"$1\" != -- ]; do shift; done\n  shift\n  exec \"$@\"\nfi\n\
                  for a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$rec/argv\"\n\
                  \x20 [ \"$prev\" = --output-last-message ] && out=$a\n\
                  \x20 [ \"$prev\" = --cd ] && where=$a\n  prev=$a\ndone\n\
@@ -1879,6 +1881,40 @@ sleep 0.5
             ("queued", 0)
         );
         assert_eq!(agents, "x\n", "a second agent run started");
+    }
+
+    /// A host whose Codex sandbox cannot start (the probe fails) passes a
+    /// Codex agent candidate on at once, and the next candidate answers.
+    #[tokio::test]
+    async fn a_codex_agent_candidate_moves_on_at_once_when_the_sandbox_cannot_start() {
+        let claude = format!(
+            "{}\n{}",
+            saving("claude"),
+            claude_printing(&claude_result(false, "done"), 0)
+        );
+        let f = Fixture::with_claude(&saving("codex"), &claude).await;
+        std::fs::write(f.rec("no-sandbox"), "").unwrap();
+        let id = f
+            .submit_request(&agent_request(), &[codex_candidate(), claude_candidate()])
+            .await;
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.attempts.len(), 1, "{:?}", row.attempts);
+        assert_eq!(
+            row.attempts[0].reason,
+            Some(aq_internal_work::Reason::ProviderUnavailable)
+        );
+        assert_eq!(
+            row.attempts[0].detail,
+            "codex sandbox cannot start on this host"
+        );
+        assert!(row.attempts[0].elapsed_ms < 5_000);
+        assert!(!f.rec("codex.tree").exists(), "the Codex agent ran");
+        // The probe is not repeated for the same native.
+        std::fs::remove_file(f.rec("no-sandbox")).unwrap();
+        assert!(f.tick().await);
+        let row = f.row(id).await;
+        assert_eq!(row.status, "answered", "{:?}", row.attempts);
     }
 
     /// The owner's requirement on the Codex lock: a blocking 60 s judgment

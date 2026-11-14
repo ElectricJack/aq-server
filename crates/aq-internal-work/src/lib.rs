@@ -34,7 +34,7 @@ pub const AGENT_MAX_TURNS: std::ops::RangeInclusive<u32> = 1..=400;
 /// Most files [`AgentWork::files`] may hold.
 pub const AGENT_MAX_FILES: usize = 256;
 /// Most bytes of [`AgentWork::files`], paths and contents together.
-pub const AGENT_FILES_BYTES: usize = 1024 * 1024;
+pub const AGENT_FILES_BYTES: usize = 4 * 1024 * 1024;
 /// The file in the workspace an agent's answer is read from; it is the raw
 /// answer `validate::answer` checks, at most `Request::max_output_bytes`.
 pub const AGENT_OUTCOME: &str = "out/outcome.json";
@@ -50,6 +50,8 @@ pub const TRANSCRIPT_BYTES: usize = 262_144;
 pub const TRANSCRIPT_ITEM_BYTES: usize = 2048;
 /// Allowed `Request::max_output_bytes`.
 pub const MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=1_048_576;
+/// Largest outcome file agent work may leave (the engine's outcome bound).
+pub const AGENT_MAX_OUTPUT_BYTES: std::ops::RangeInclusive<u64> = 1..=4_194_304;
 /// The smallest candidate budget, unless less time is left to the deadline.
 pub const MIN_CANDIDATE_BUDGET_MS: i64 = 30_000;
 /// The most a runner stops a candidate before the end of its budget, so the
@@ -242,7 +244,7 @@ impl AgentWork {
         }
         let bytes: usize = self.files.iter().map(|(p, c)| p.len() + c.len()).sum();
         if bytes > AGENT_FILES_BYTES {
-            return Err(invalid("agent files exceed 1 MiB"));
+            return Err(invalid("agent files exceed 4 MiB"));
         }
         for path in self.files.keys() {
             let in_tmp = path.split('/').next() == Some(AGENT_TMP);
@@ -290,8 +292,15 @@ impl Request {
                 "deadline_ms must be between {low} and {high}"
             )));
         }
-        if !MAX_OUTPUT_BYTES.contains(&self.max_output_bytes) {
-            return Err(invalid("max_output_bytes must be between 1 and 1048576"));
+        let outputs = match &self.agent {
+            Some(_) => AGENT_MAX_OUTPUT_BYTES,
+            None => MAX_OUTPUT_BYTES,
+        };
+        if !outputs.contains(&self.max_output_bytes) {
+            return Err(Error::Invalid(format!(
+                "max_output_bytes must be between 1 and {}",
+                outputs.end()
+            )));
         }
         match &self.agent {
             Some(agent) => agent.validate(),

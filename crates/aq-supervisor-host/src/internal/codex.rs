@@ -18,6 +18,9 @@ use serde_json::Value;
 use std::{path::Path, process::ExitStatus};
 use zeroize::Zeroizing;
 
+/// The failure of a Codex agent candidate on a host whose sandbox fails its probe.
+pub(crate) const SANDBOX_CANNOT_START: &str = "codex sandbox cannot start on this host";
+
 /// Runs `run`'s task once on the Codex login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
@@ -67,6 +70,10 @@ async fn attempt(
         ..
     } = run;
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
+    if claimed.request.agent.is_some() && !h.sandbox_starts(executable, place, identity).await {
+        // The next candidate takes over at once.
+        return Err(failure(Reason::ProviderUnavailable, SANDBOX_CANNOT_START));
+    }
     let auth = stage_login(&h.secret_file, home, identity)
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
     let auth_path = home.join("auth.json");
