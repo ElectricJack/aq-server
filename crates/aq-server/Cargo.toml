@@ -101,7 +101,7 @@ futures-util = "0.3"
 tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-0173673/crates/aq-playbooks-compiler", version = "=0.1.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-e7df379/crates/aq-playbooks-compiler", version = "=0.1.0" }
 aq-playbook-authoring = { path = "../aq-playbook-authoring" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true

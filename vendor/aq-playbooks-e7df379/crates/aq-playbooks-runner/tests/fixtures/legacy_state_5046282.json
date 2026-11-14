@@ -1,0 +1,718 @@
+{
+  "format2_snapshot": {
+    "artifacts": {
+      "sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c": {
+        "content": {
+          "compiler": "test",
+          "definitions": {},
+          "dependencies": {},
+          "format_version": 1,
+          "playbook": {
+            "entries": {
+              "main": {
+                "input": {
+                  "type": "null"
+                },
+                "outcomes": {
+                  "error": {
+                    "type": "null"
+                  },
+                  "ok": {
+                    "type": "null"
+                  }
+                },
+                "start": "wait"
+              }
+            },
+            "id": "waiter",
+            "limits": {
+              "max_children": 100,
+              "max_concurrent_children": 16,
+              "max_concurrent_effects": 16,
+              "max_depth": 8,
+              "max_duration_ms": 86400000,
+              "max_history_bytes": 16777216,
+              "max_iteration_depth": 4,
+              "max_iterations": 1000,
+              "max_payload_bytes": 1048576,
+              "max_step_visits": 10000
+            },
+            "purpose": "semantics test",
+            "required_capabilities": [
+              "execute"
+            ],
+            "scope": "project",
+            "steps": {
+              "error": {
+                "edges": {},
+                "on_error": null,
+                "op": {
+                  "kind": "return",
+                  "outcome": "error",
+                  "output": {
+                    "op": "literal",
+                    "value": null
+                  }
+                }
+              },
+              "ok": {
+                "edges": {},
+                "on_error": null,
+                "op": {
+                  "kind": "return",
+                  "outcome": "ok",
+                  "output": {
+                    "op": "literal",
+                    "value": null
+                  }
+                }
+              },
+              "wait": {
+                "edges": {
+                  "received": "ok",
+                  "timeout": "error"
+                },
+                "on_error": "error",
+                "op": {
+                  "bind": "completion",
+                  "correlation": {
+                    "invocation": {
+                      "op": "literal",
+                      "value": "exact-invocation"
+                    }
+                  },
+                  "deadline_ms": 100,
+                  "event": {
+                    "fingerprint": "sha256:cb0524991cc9914038cf050dab17230c93c92dd90b8163e0aab4d2438d01d66f",
+                    "name": "test.completed"
+                  },
+                  "kind": "wait",
+                  "minimum_revision": {
+                    "op": "literal",
+                    "value": 2
+                  }
+                }
+              }
+            },
+            "triggers": []
+          },
+          "registry": {
+            "commands": {},
+            "events": {
+              "test.completed": {
+                "correlation_fields": [
+                  "invocation"
+                ],
+                "max_payload_bytes": 1024,
+                "name": "test.completed",
+                "payload": {
+                  "type": "null"
+                },
+                "retention_ms": 1000,
+                "revision_field": "revision",
+                "scopes": [
+                  "project"
+                ],
+                "sensitive_payload_fields": [],
+                "subject_field": "subject",
+                "trusted_producers": [
+                  "host"
+                ],
+                "version": "1"
+              }
+            }
+          },
+          "source": {
+            "digest": "sha256:41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "header": {
+              "definitions": [],
+              "format_version": 1,
+              "id": "waiter",
+              "interfaces": [
+                "main"
+              ],
+              "scope": "project"
+            }
+          },
+          "source_map": {}
+        },
+        "digest": "sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c",
+        "executable_fingerprint": "sha256:db6995f3d92e6db8991b66b986d7ccf0bb6d64cbc00fa665f456946331f8b308"
+      },
+      "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78": {
+        "content": {
+          "compiler": "test",
+          "definitions": {},
+          "dependencies": {},
+          "format_version": 1,
+          "playbook": {
+            "entries": {
+              "main": {
+                "input": {
+                  "type": "null"
+                },
+                "outcomes": {
+                  "error": {
+                    "type": "null"
+                  },
+                  "ok": {
+                    "type": "null"
+                  }
+                },
+                "start": "done"
+              }
+            },
+            "id": "a",
+            "limits": {
+              "max_children": 100,
+              "max_concurrent_children": 16,
+              "max_concurrent_effects": 16,
+              "max_depth": 8,
+              "max_duration_ms": 86400000,
+              "max_history_bytes": 16777216,
+              "max_iteration_depth": 4,
+              "max_iterations": 1000,
+              "max_payload_bytes": 1048576,
+              "max_step_visits": 10000
+            },
+            "purpose": "semantics test",
+            "required_capabilities": [
+              "execute"
+            ],
+            "scope": "project",
+            "steps": {
+              "done": {
+                "edges": {},
+                "on_error": null,
+                "op": {
+                  "kind": "return",
+                  "outcome": "ok",
+                  "output": {
+                    "op": "literal",
+                    "value": null
+                  }
+                }
+              }
+            },
+            "triggers": []
+          },
+          "registry": {
+            "commands": {},
+            "events": {}
+          },
+          "source": {
+            "digest": "sha256:41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "header": {
+              "definitions": [],
+              "format_version": 1,
+              "id": "a",
+              "interfaces": [
+                "main"
+              ],
+              "scope": "project"
+            }
+          },
+          "source_map": {}
+        },
+        "digest": "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78",
+        "executable_fingerprint": "sha256:e0e403f08a023ba118e310f3f7683164120502b7528034bee343521ee23d547f"
+      }
+    },
+    "authority_revocations": {},
+    "bindings": {
+      "a": {
+        "artifact": "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78",
+        "authority": {
+          "actor": "alice",
+          "capabilities": [
+            "execute"
+          ],
+          "scope": "project"
+        },
+        "controls": {
+          "calls_enabled": true,
+          "event_starts_enabled": true,
+          "execution_enabled": true
+        },
+        "revision": 1
+      },
+      "waiter": {
+        "artifact": "sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c",
+        "authority": {
+          "actor": "alice",
+          "capabilities": [
+            "execute"
+          ],
+          "scope": "project"
+        },
+        "controls": {
+          "calls_enabled": true,
+          "event_starts_enabled": true,
+          "execution_enabled": true
+        },
+        "revision": 2
+      }
+    },
+    "budgets": {
+      "run-000000000000000a": {
+        "children": 0,
+        "iterations": 0,
+        "visits": 0
+      }
+    },
+    "catalog_history": {
+      "2": {
+        "a": {
+          "artifact": "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78",
+          "authority": {
+            "actor": "alice",
+            "capabilities": [
+              "execute"
+            ],
+            "scope": "project"
+          },
+          "controls": {
+            "calls_enabled": true,
+            "event_starts_enabled": true,
+            "execution_enabled": true
+          },
+          "revision": 1
+        },
+        "waiter": {
+          "artifact": "sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c",
+          "authority": {
+            "actor": "alice",
+            "capabilities": [
+              "execute"
+            ],
+            "scope": "project"
+          },
+          "controls": {
+            "calls_enabled": true,
+            "event_starts_enabled": true,
+            "execution_enabled": true
+          },
+          "revision": 2
+        }
+      }
+    },
+    "catalog_history_at_ms": {
+      "2": 0
+    },
+    "catalog_revision": 2,
+    "events": {
+      "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb": {
+        "accepted_at_ms": 1000000020,
+        "catalog_revision": 2,
+        "destinations": [],
+        "digest": "sha256:bae876485d94153901e27b71daa91c8eb3e82b8371c22b4c4ac1c5d6c86b3068",
+        "envelope": {
+          "causation": null,
+          "contract": {
+            "fingerprint": "sha256:cb0524991cc9914038cf050dab17230c93c92dd90b8163e0aab4d2438d01d66f",
+            "name": "test.completed"
+          },
+          "correlation": {
+            "invocation": "exact-invocation"
+          },
+          "event_id": "live-event",
+          "observed_at_ms": null,
+          "occurred_at_ms": 0,
+          "payload": null,
+          "producer": "host",
+          "revision": 3,
+          "scope": "project",
+          "subject": "object"
+        },
+        "key": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb",
+        "sequence": 13
+      }
+    },
+    "execution_denied": [],
+    "indexes": {
+      "activation_triggers": {
+        "a": [],
+        "waiter": []
+      },
+      "all_receipts": {
+        "11": 0
+      },
+      "completion_ready": [],
+      "dependents": {},
+      "dirty_intents": [],
+      "dirty_runs": [],
+      "dispatch_turn": false,
+      "due": {
+        "1086400010": [
+          "run:run-000000000000000a"
+        ]
+      },
+      "effect_cursor": {},
+      "effect_item_cursor": {},
+      "effect_memberships": {},
+      "effects": {},
+      "event_memberships": {
+        "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb": [
+          "sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a",
+          "sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b"
+        ]
+      },
+      "events": {
+        "sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b": {
+          "13": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+        },
+        "sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a": {
+          "13": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+        }
+      },
+      "initialized": true,
+      "intent_roots": {},
+      "ready": {
+        "project": {
+          "12": "run-000000000000000a"
+        }
+      },
+      "ready_tokens": {
+        "run-000000000000000a": [
+          "project",
+          12
+        ]
+      },
+      "receipts": {
+        "run-000000000000000a": {
+          "11": 0
+        }
+      },
+      "root_active": {
+        "run-000000000000000a": [
+          "run-000000000000000a"
+        ]
+      },
+      "root_effects": {},
+      "root_intents": {},
+      "root_last_activity": {
+        "run-000000000000000a": 1000000010
+      },
+      "root_members": {
+        "run-000000000000000a": [
+          "run-000000000000000a"
+        ]
+      },
+      "run_dependencies": {},
+      "run_roots": {
+        "run-000000000000000a": "run-000000000000000a"
+      },
+      "run_subscriptions": {},
+      "run_timer": {},
+      "runs": [
+        "run-000000000000000a"
+      ],
+      "scope_cursor": null,
+      "timers": {
+        "run:run-000000000000000a": {
+          "at_ms": 1086400010,
+          "intent": null,
+          "key": "run:run-000000000000000a",
+          "run": "run-000000000000000a"
+        }
+      },
+      "triggers": {},
+      "uncertain_completion_contracts": {},
+      "uncertain_contract_membership": {},
+      "waiters": {}
+    },
+    "intents": {},
+    "keyed_admissions": {
+      "legacy-key": {
+        "accepted_at_ms": 10,
+        "activation_revision": 1,
+        "catalog_revision": 2,
+        "key": "legacy-key",
+        "request_digest": "sha256:0be5ce1f3fbcd0f04dfabd5368cdbacf35e3a398bacf646bca2d3e869763ac0e",
+        "run_id": "run-0000000000000001"
+      }
+    },
+    "receipts": [
+      {
+        "at_ms": 1000000010,
+        "detail": {
+          "artifact": "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78"
+        },
+        "kind": "admitted",
+        "run": "run-000000000000000a",
+        "sequence": 11,
+        "step": "done"
+      }
+    ],
+    "recovery_requests": {},
+    "retention": {
+      "artifact_disposals": {},
+      "disposals": [
+        {
+          "at_ms": 1000000000,
+          "key": "run-0000000000000001",
+          "kind": "run"
+        },
+        {
+          "at_ms": 1000000000,
+          "key": "run-0000000000000004",
+          "kind": "run"
+        },
+        {
+          "at_ms": 1000000000,
+          "key": "sha256:f22d376ffcbd9c3c5ef72cc203eec9bbc64c881f6eca19258dede8f4e98b3b8e",
+          "kind": "event"
+        }
+      ],
+      "event_epochs": {
+        "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb": 0
+      },
+      "event_expires_at_ms": {
+        "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb": 1086400020
+      },
+      "event_tombstones": {
+        "sha256:f22d376ffcbd9c3c5ef72cc203eec9bbc64c881f6eca19258dede8f4e98b3b8e": {
+          "digest": "sha256:4b51afe810cbd8473304ea9e81d43450ca3ad39b4f04cecf71a071830ebeac75",
+          "disposed_at_ms": 1000000000,
+          "epoch": 0,
+          "producer": "host"
+        }
+      },
+      "expired_correlations": {
+        "sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b": [
+          "host",
+          0
+        ],
+        "sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a": [
+          "host",
+          0
+        ]
+      },
+      "gc_cursor": null,
+      "last_gc_at_ms": 1000000000,
+      "policy": {
+        "audit_ms": 604800000,
+        "event_replay_ms": 86400000,
+        "max_tombstones": 100000,
+        "terminal_run_ms": 604800000
+      },
+      "producer_epochs": {}
+    },
+    "runs": {
+      "run-000000000000000a": {
+        "admitted_at_ms": 1000000010,
+        "artifact": "sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78",
+        "attempts": {},
+        "authority": {
+          "actor": "alice",
+          "capabilities": [
+            "execute"
+          ],
+          "scope": "project"
+        },
+        "catalog_revision": 2,
+        "children": [],
+        "dependencies": {},
+        "depth": 0,
+        "entry": "main",
+        "id": "run-000000000000000a",
+        "input": null,
+        "loops": [],
+        "origin": null,
+        "outcome": null,
+        "output": null,
+        "parent": null,
+        "pending": null,
+        "pending_failure": false,
+        "pending_return": null,
+        "reason": null,
+        "root": "run-000000000000000a",
+        "status": "admitted",
+        "step": "done",
+        "terminal_sequence": null,
+        "variables": {},
+        "visits": 0
+      }
+    },
+    "sequence": 13,
+    "waits": {}
+  },
+  "format3_header": "{\"artifacts\":{\"sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c\":{\"content\":{\"compiler\":\"test\",\"definitions\":{},\"dependencies\":{},\"format_version\":1,\"playbook\":{\"entries\":{\"main\":{\"input\":{\"type\":\"null\"},\"outcomes\":{\"error\":{\"type\":\"null\"},\"ok\":{\"type\":\"null\"}},\"start\":\"wait\"}},\"id\":\"waiter\",\"limits\":{\"max_children\":100,\"max_concurrent_children\":16,\"max_concurrent_effects\":16,\"max_depth\":8,\"max_duration_ms\":86400000,\"max_history_bytes\":16777216,\"max_iteration_depth\":4,\"max_iterations\":1000,\"max_payload_bytes\":1048576,\"max_step_visits\":10000},\"purpose\":\"semantics test\",\"required_capabilities\":[\"execute\"],\"scope\":\"project\",\"steps\":{\"error\":{\"edges\":{},\"on_error\":null,\"op\":{\"kind\":\"return\",\"outcome\":\"error\",\"output\":{\"op\":\"literal\",\"value\":null}}},\"ok\":{\"edges\":{},\"on_error\":null,\"op\":{\"kind\":\"return\",\"outcome\":\"ok\",\"output\":{\"op\":\"literal\",\"value\":null}}},\"wait\":{\"edges\":{\"received\":\"ok\",\"timeout\":\"error\"},\"on_error\":\"error\",\"op\":{\"bind\":\"completion\",\"correlation\":{\"invocation\":{\"op\":\"literal\",\"value\":\"exact-invocation\"}},\"deadline_ms\":100,\"event\":{\"fingerprint\":\"sha256:cb0524991cc9914038cf050dab17230c93c92dd90b8163e0aab4d2438d01d66f\",\"name\":\"test.completed\"},\"kind\":\"wait\",\"minimum_revision\":{\"op\":\"literal\",\"value\":2}}}},\"triggers\":[]},\"registry\":{\"commands\":{},\"events\":{\"test.completed\":{\"correlation_fields\":[\"invocation\"],\"max_payload_bytes\":1024,\"name\":\"test.completed\",\"payload\":{\"type\":\"null\"},\"retention_ms\":1000,\"revision_field\":\"revision\",\"scopes\":[\"project\"],\"sensitive_payload_fields\":[],\"subject_field\":\"subject\",\"trusted_producers\":[\"host\"],\"version\":\"1\"}}},\"source\":{\"digest\":\"sha256:41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d\",\"header\":{\"definitions\":[],\"format_version\":1,\"id\":\"waiter\",\"interfaces\":[\"main\"],\"scope\":\"project\"}},\"source_map\":{}},\"digest\":\"sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c\",\"executable_fingerprint\":\"sha256:db6995f3d92e6db8991b66b986d7ccf0bb6d64cbc00fa665f456946331f8b308\"},\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\":{\"content\":{\"compiler\":\"test\",\"definitions\":{},\"dependencies\":{},\"format_version\":1,\"playbook\":{\"entries\":{\"main\":{\"input\":{\"type\":\"null\"},\"outcomes\":{\"error\":{\"type\":\"null\"},\"ok\":{\"type\":\"null\"}},\"start\":\"done\"}},\"id\":\"a\",\"limits\":{\"max_children\":100,\"max_concurrent_children\":16,\"max_concurrent_effects\":16,\"max_depth\":8,\"max_duration_ms\":86400000,\"max_history_bytes\":16777216,\"max_iteration_depth\":4,\"max_iterations\":1000,\"max_payload_bytes\":1048576,\"max_step_visits\":10000},\"purpose\":\"semantics test\",\"required_capabilities\":[\"execute\"],\"scope\":\"project\",\"steps\":{\"done\":{\"edges\":{},\"on_error\":null,\"op\":{\"kind\":\"return\",\"outcome\":\"ok\",\"output\":{\"op\":\"literal\",\"value\":null}}}},\"triggers\":[]},\"registry\":{\"commands\":{},\"events\":{}},\"source\":{\"digest\":\"sha256:41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d\",\"header\":{\"definitions\":[],\"format_version\":1,\"id\":\"a\",\"interfaces\":[\"main\"],\"scope\":\"project\"}},\"source_map\":{}},\"digest\":\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\",\"executable_fingerprint\":\"sha256:e0e403f08a023ba118e310f3f7683164120502b7528034bee343521ee23d547f\"}},\"authority_revocations\":{},\"bindings\":{\"a\":{\"artifact\":\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\",\"authority\":{\"actor\":\"alice\",\"capabilities\":[\"execute\"],\"scope\":\"project\"},\"controls\":{\"calls_enabled\":true,\"event_starts_enabled\":true,\"execution_enabled\":true},\"revision\":1},\"waiter\":{\"artifact\":\"sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c\",\"authority\":{\"actor\":\"alice\",\"capabilities\":[\"execute\"],\"scope\":\"project\"},\"controls\":{\"calls_enabled\":true,\"event_starts_enabled\":true,\"execution_enabled\":true},\"revision\":2}},\"budgets\":{},\"catalog_history\":{\"2\":{\"a\":{\"artifact\":\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\",\"authority\":{\"actor\":\"alice\",\"capabilities\":[\"execute\"],\"scope\":\"project\"},\"controls\":{\"calls_enabled\":true,\"event_starts_enabled\":true,\"execution_enabled\":true},\"revision\":1},\"waiter\":{\"artifact\":\"sha256:1a149e142bd42b964758b07c9be110f15a2894e365d4559e0b28b583d5681c3c\",\"authority\":{\"actor\":\"alice\",\"capabilities\":[\"execute\"],\"scope\":\"project\"},\"controls\":{\"calls_enabled\":true,\"event_starts_enabled\":true,\"execution_enabled\":true},\"revision\":2}}},\"catalog_history_at_ms\":{\"2\":0},\"catalog_revision\":2,\"events\":{},\"execution_denied\":[],\"indexes\":{\"activation_triggers\":{\"a\":[],\"waiter\":[]},\"all_receipts\":{},\"completion_ready\":[],\"dependents\":{},\"dirty_intents\":[],\"dirty_runs\":[],\"dispatch_turn\":false,\"due\":{},\"effect_cursor\":{},\"effect_item_cursor\":{},\"effect_memberships\":{},\"effects\":{},\"event_memberships\":{},\"events\":{},\"initialized\":true,\"intent_roots\":{},\"ready\":{\"project\":{\"12\":\"run-000000000000000a\"}},\"ready_tokens\":{\"run-000000000000000a\":[\"project\",12]},\"receipts\":{},\"root_active\":{},\"root_effects\":{},\"root_intents\":{},\"root_last_activity\":{},\"root_members\":{},\"run_dependencies\":{},\"run_roots\":{},\"run_subscriptions\":{},\"run_timer\":{},\"runs\":[],\"scope_cursor\":null,\"timers\":{},\"triggers\":{},\"uncertain_completion_contracts\":{},\"uncertain_contract_membership\":{},\"waiters\":{}},\"intents\":{},\"keyed_admissions\":{},\"receipts\":[],\"recovery_requests\":{},\"retention\":{\"artifact_disposals\":{},\"disposals\":[],\"event_epochs\":{},\"event_expires_at_ms\":{},\"event_tombstones\":{},\"expired_correlations\":{},\"gc_cursor\":null,\"last_gc_at_ms\":1000000000,\"policy\":{\"audit_ms\":604800000,\"event_replay_ms\":86400000,\"max_tombstones\":100000,\"terminal_run_ms\":604800000},\"producer_epochs\":{}},\"runs\":{},\"sequence\":13,\"waits\":{}}",
+  "format3_records": [
+    [
+      "keyed_admissions",
+      {
+        "Str": "legacy-key"
+      },
+      "{\"accepted_at_ms\":10,\"activation_revision\":1,\"catalog_revision\":2,\"key\":\"legacy-key\",\"request_digest\":\"sha256:0be5ce1f3fbcd0f04dfabd5368cdbacf35e3a398bacf646bca2d3e869763ac0e\",\"run_id\":\"run-0000000000000001\"}"
+    ],
+    [
+      "runs",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "{\"admitted_at_ms\":1000000010,\"artifact\":\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\",\"attempts\":{},\"authority\":{\"actor\":\"alice\",\"capabilities\":[\"execute\"],\"scope\":\"project\"},\"catalog_revision\":2,\"children\":[],\"dependencies\":{},\"depth\":0,\"entry\":\"main\",\"id\":\"run-000000000000000a\",\"input\":null,\"loops\":[],\"origin\":null,\"outcome\":null,\"output\":null,\"parent\":null,\"pending\":null,\"pending_failure\":false,\"pending_return\":null,\"reason\":null,\"root\":\"run-000000000000000a\",\"status\":\"admitted\",\"step\":\"done\",\"terminal_sequence\":null,\"variables\":{},\"visits\":0}"
+    ],
+    [
+      "receipts",
+      {
+        "U64": 0
+      },
+      "{\"at_ms\":1000000010,\"detail\":{\"artifact\":\"sha256:edaac54ef6841c743f101877d65d7b752a00ae456ae7640823a5106e7e7d2c78\"},\"kind\":\"admitted\",\"run\":\"run-000000000000000a\",\"sequence\":11,\"step\":\"done\"}"
+    ],
+    [
+      "events",
+      {
+        "Str": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+      },
+      "{\"accepted_at_ms\":1000000020,\"catalog_revision\":2,\"destinations\":[],\"digest\":\"sha256:bae876485d94153901e27b71daa91c8eb3e82b8371c22b4c4ac1c5d6c86b3068\",\"envelope\":{\"causation\":null,\"contract\":{\"fingerprint\":\"sha256:cb0524991cc9914038cf050dab17230c93c92dd90b8163e0aab4d2438d01d66f\",\"name\":\"test.completed\"},\"correlation\":{\"invocation\":\"exact-invocation\"},\"event_id\":\"live-event\",\"observed_at_ms\":null,\"occurred_at_ms\":0,\"payload\":null,\"producer\":\"host\",\"revision\":3,\"scope\":\"project\",\"subject\":\"object\"},\"key\":\"sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb\",\"sequence\":13}"
+    ],
+    [
+      "budgets",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "{\"children\":0,\"iterations\":0,\"visits\":0}"
+    ],
+    [
+      "indexes.root_members",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "[\"run-000000000000000a\"]"
+    ],
+    [
+      "indexes.root_active",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "[\"run-000000000000000a\"]"
+    ],
+    [
+      "indexes.root_last_activity",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "1000000010"
+    ],
+    [
+      "indexes.run_roots",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "\"run-000000000000000a\""
+    ],
+    [
+      "indexes.timers",
+      {
+        "Str": "run:run-000000000000000a"
+      },
+      "{\"at_ms\":1086400010,\"intent\":null,\"key\":\"run:run-000000000000000a\",\"run\":\"run-000000000000000a\"}"
+    ],
+    [
+      "indexes.due",
+      {
+        "I64": 1086400010
+      },
+      "[\"run:run-000000000000000a\"]"
+    ],
+    [
+      "indexes.events",
+      {
+        "Str": "sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b"
+      },
+      "{\"13\":\"sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb\"}"
+    ],
+    [
+      "indexes.events",
+      {
+        "Str": "sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a"
+      },
+      "{\"13\":\"sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb\"}"
+    ],
+    [
+      "indexes.event_memberships",
+      {
+        "Str": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+      },
+      "[\"sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a\",\"sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b\"]"
+    ],
+    [
+      "indexes.runs",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "\"run-000000000000000a\""
+    ],
+    [
+      "indexes.receipts",
+      {
+        "Str": "run-000000000000000a"
+      },
+      "{\"11\":0}"
+    ],
+    [
+      "indexes.all_receipts",
+      {
+        "U64": 11
+      },
+      "0"
+    ],
+    [
+      "retention.event_epochs",
+      {
+        "Str": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+      },
+      "0"
+    ],
+    [
+      "retention.event_expires_at_ms",
+      {
+        "Str": "sha256:588b4b47f12ee907fb59876e30aecfd68a0f94f2c56337ce05622074c99195fb"
+      },
+      "1086400020"
+    ],
+    [
+      "retention.expired_correlations",
+      {
+        "Str": "sha256:7fcfb63ff70c342a47f3249c2a1dc7613f471132396075a1ff0fd5e8bb394d6b"
+      },
+      "[\"host\",0]"
+    ],
+    [
+      "retention.expired_correlations",
+      {
+        "Str": "sha256:9c03d9aba9abc1d21ae836ee62ab54dfe7b4dd9fa856a520310959414a4f222a"
+      },
+      "[\"host\",0]"
+    ],
+    [
+      "retention.event_tombstones",
+      {
+        "Str": "sha256:f22d376ffcbd9c3c5ef72cc203eec9bbc64c881f6eca19258dede8f4e98b3b8e"
+      },
+      "{\"digest\":\"sha256:4b51afe810cbd8473304ea9e81d43450ca3ad39b4f04cecf71a071830ebeac75\",\"disposed_at_ms\":1000000000,\"epoch\":0,\"producer\":\"host\"}"
+    ],
+    [
+      "retention.disposals",
+      {
+        "U64": 0
+      },
+      "{\"at_ms\":1000000000,\"key\":\"run-0000000000000001\",\"kind\":\"run\"}"
+    ],
+    [
+      "retention.disposals",
+      {
+        "U64": 1
+      },
+      "{\"at_ms\":1000000000,\"key\":\"run-0000000000000004\",\"kind\":\"run\"}"
+    ],
+    [
+      "retention.disposals",
+      {
+        "U64": 2
+      },
+      "{\"at_ms\":1000000000,\"key\":\"sha256:f22d376ffcbd9c3c5ef72cc203eec9bbc64c881f6eca19258dede8f4e98b3b8e\",\"kind\":\"event\"}"
+    ]
+  ]
+}
