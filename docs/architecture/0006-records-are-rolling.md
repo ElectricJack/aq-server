@@ -55,9 +55,12 @@ Owner, 2026-11-13: "Remove any hard-coded limits. Any limits we have need to
 be configurable in settings."
 
 This answers the question of what to do with limits on work happening now
-(for example 30 offers per machine per hour, and the counts of attempts that
-may be live at once). They are not removed by the rolling rule, but none may
-be a constant in code or a number in a migration:
+(for example the counts of attempts that may be live at once). They are not
+removed by the rolling rule, but none may be a constant in code or a number in
+a migration. The offer rate limits (30 offers per machine, 240 per project and
+960 per server an hour) were not made settings: the owner removed them on
+2026-11-13 ("I'm not sure that limit is needed anymore, lets just remove them
+instead"; spec 0008 §7.2, migration 0124).
 
 1. Every limit that can hold, slow or refuse work is a value in Settings, with
    a default, shown in the dashboard next to what it limits, and changeable by
@@ -86,9 +89,10 @@ These stay, and a spec that keeps one says why:
   values), installed artifacts, and the knowledge graph's own node history.
 - **Limits on the size of one input:** payload bytes, field lengths, items
   per request, a per-response cap.
-- **Controls on work happening at this moment:** concurrency, rates (for
-  example offers per node per hour), the owner's swarm matrix, worker slots,
-  live-row backstops that count only work in progress.
+- **Controls on work happening at this moment:** concurrency, the owner's
+  swarm matrix, worker slots, live-row backstops that count only work in
+  progress. (Offers per node per hour was one until the owner removed the
+  offer rate limits on 2026-11-13.)
 - **Budgets the owner set on purpose:** per-task retry, time and cost
   budgets, sandbox-minute budgets, provider quota. Deleting old attempts must
   keep the counts these budgets read. The store that deletes an attempt first
@@ -209,3 +213,6 @@ Decided, so no longer open:
   pending ([0005](0005-sandboxed-execution-and-deployment-topology.md) §4
   step 7, SBX22).
 - **Limits on work happening now.** Answered by §1a: they are settings.
+- **Offer rate limits (owner, 2026-11-13).** Removed, not made settings
+  (spec 0008 §7.2). Per-task retry budgets remain the guard against a task
+  that fails in a loop.

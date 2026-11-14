@@ -1,8 +1,8 @@
-# 0008: Sealed-history retention (live-only caps, rate limits, deletion after the task closes)
+# 0008: Sealed-history retention (live-only caps, deletion after the task closes)
 
 **Status:** Draft for the owner's review (2026-11-08). The retention rule in §1 is the owner's decision of 2026-11-07. Everything else is a proposal.
 **Implementation (2026-11-12):** phase A (live caps) is merged ([`../implementation/0008-PA-server.md`](../implementation/0008-PA-server.md)). Phase B waits on the owner's answer on results retention. The A1 soak has not run.
-**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Phase B keeps a rolling set of attempt summaries and one budget summary per task; nothing refuses for history.
+**2026-11-13:** aligned with the rolling-records principle ([architecture 0006](../architecture/0006-records-are-rolling.md)); implementation pending. Phase B keeps a rolling set of attempt summaries and one budget summary per task; nothing refuses for history. The offer rate limits of phase A are removed (owner, 2026-11-13; migration 0124, §7.2).
 **Repositories:** aq-server; aq-dashboard for the contract re-pin and the Settings field.
 **Unblocks:** spec 0007 phase 1 live acceptance, which stopped on a history cap (§1.1).
 
@@ -16,7 +16,7 @@ The owner's rule (2026-11-07) **(owner)**:
 
 - full sealed records are kept while the run is live or its task is open;
 - full records are deleted 7 days after the run has settled **and** its task is closed. The 7 days can be changed in Settings;
-- caps apply only to live rows, plus a rate limit.
+- caps apply only to live rows. (The rate limit on offers that went with this point was removed on 2026-11-13, §7.2.)
 
 In the owner's words: "I'm just not sure we need to retain them forever. I don't really understand why we need the records or when we would use them."
 
@@ -36,8 +36,8 @@ The earlier analysis (S16, `.superpowers/sdd/2026-11-07-swarm-p1-workers-as-serv
 
 ## 2. Goals
 
-1. A swarm that runs for months stops on no history cap. Caps count only live rows, and a rate limit bounds the rate of new work. Both are controls on work happening now, not caps on history.
-2. When a cap or the rate limit holds work back, the Swarm page and `GET /api/v1/swarm` say which one and why. A worker never loops on a silent 409.
+1. A swarm that runs for months stops on no history cap. Caps count only live rows: they are controls on work happening now, not caps on history.
+2. When a cap or the inventory report rate holds work back, the Swarm page and `GET /api/v1/swarm` say which one and why. A worker never loops on a silent 409.
 3. Full records of a run are deleted once the run has settled and its task has been closed for longer than the retention period: 7 days by default, set in Settings.
 4. A summary of about 1 KB is kept for each of the most recent `summary_keep` settled attempts per project, and one budget summary per task, so task history, session lists, results, cost and replacement budgets still work after deletion. Older summaries are deleted as new ones are written.
 5. Deletion runs in the background, in bounded batches, and never removes a row that something live still references.
@@ -159,7 +159,7 @@ The poll writes some rows before the attempt exists: selection decisions, admiss
 
 For deletion (phase B) a run's records are eligible once the run is not live **and** its task is closed: §8.1.
 
-## 7. Phase A: live-only caps, a rate limit, visible holds (unblocks 0007 phase 1)
+## 7. Phase A: live-only caps, visible holds (unblocks 0007 phase 1)
 
 Phase A deletes nothing.
 
@@ -181,10 +181,10 @@ One SQL function, `sealed_history_usage(kind, scope, now_ms, exclude)` (migratio
 | `phase_terminal` | node | A1 |
 | `presence_operations` | node | A4 live rows |
 | `presence_rate` | node | A4 reports in the last hour (§7.2) |
-| `offers` | node | the offer rate per node and per server (§7.2) |
-| `project_offers` | project | the offer rate per project (§7.2) |
 
-Each returns `(total_rows, total_bytes, scope_rows, scope_bytes)`. "Now" is always passed in, never read from the database clock, so it is in the server clock that the injected test clocks drive: triggers pass the incoming row's own timestamp (`NEW.created_at_ms`, `NEW.recorded_at_ms`, the decision's `inputs.now_ms`, the offer's source observation `observed_at_ms`), and Rust passes `now(state)`.
+The kinds `offers` and `project_offers` (the offer rates) were removed on 2026-11-13 (§7.2). Migration 0124 keeps them as kinds that count nothing.
+
+Each returns `(total_rows, total_bytes, scope_rows, scope_bytes)`. "Now" is always passed in, never read from the database clock, so it is in the server clock that the injected test clocks drive: triggers pass the incoming row's own timestamp (`NEW.created_at_ms`, `NEW.recorded_at_ms`, the decision's `inputs.now_ms`), and Rust passes `now(state)`.
 
 How each enforcement site changes:
 
@@ -202,36 +202,27 @@ How each enforcement site changes:
 
 Rust mirrors must keep working at older state formats: the frozen-profile test fixtures (for example `with_state32_store`) issue grants before the database reaches 0103. The new crate `aq-history-caps` therefore checks `to_regprocedure('sealed_history_usage(text,uuid,bigint,uuid)')` and falls back to the old all-rows query when the function is absent. The old SQL strings move from the aq-server lib into the crate with that fallback, which also pays for the lines the gate adds.
 
-### 7.2 The rate limit
+### 7.2 Rate limits
 
-A lifetime bound is replaced by a bound on the rate. The rate limit is a control on work happening now and stays under architecture 0006. Once phase B deletes records, storage is then bounded by "rate × (retention + time until the task closes)" for full records, and by `summary_keep` for summaries. The unit is the **offered attempt**, because every capped table in §5.1 except A4 grows per offered attempt, and an attempt is what the owner sees **(author's call)**.
+**The offer rate limits were removed on 2026-11-13 (owner).** Phase A had limited offers to 30 per node, 240 per project and 960 per server in any rolling hour, at the poll gate and with a database fence (migration 0105). The owner: "I'm not sure that limit is needed anymore, lets just remove them instead." Growth of sealed history is bounded by deleting old records (phase B, architecture 0006), not by slowing new work, and a task that fails in a loop is bounded by its own retry, lineage, time and cost budgets. Migration 0124 drops the fence and the limit rows. Nothing holds a node, a project or the server for the number of offers it took.
+
+The inventory report rate (A4) stays for now. It is a question for the owner (§13):
 
 | Limit | Value | Reasoning |
 |---|---|---|
-| Offers per node per rolling hour | **30** | A slot runs one agent at a time. The fastest window measured on ms1 was 6 offers in 20 minutes on one node (node f85cc3e1, 16:30–16:50 on 2026-11-08), during an acceptance script built from short tasks and handoffs: 18 an hour. 30 leaves headroom over that and is one offer every 2 minutes, sustained. A loop where offers fail immediately (one per poll) is held within the hour. Lineage budgets still bound attempts per task. |
-| Offers per project per rolling hour | **240** | Eight slots, each at its node limit. |
-| Offers per server per rolling hour | **960** | Four projects at their limit. |
 | Inventory reports (A4) per node per rolling hour | **720** | One every 5 s. Measured: one every 41 s typically, one every 11 s at the peak (333 an hour). |
 | Inventory reports per server per rolling hour | **11,520** | Sixteen nodes at their limit. |
 
-Derived row rates at the node limit, from the measured rates per attempt: 444 admission artifacts, 95 decisions, 30 leases, 30 registrations and 27 exports an hour per node. On disk, ms1's sealed tables take 9.8 MB for 33 attempts, about 300 KB per attempt including indexes. A sustained server-wide runaway at 960 offers an hour would therefore add about 290 MB an hour; the hold stops it after the first hour.
+Both count every `profiled_presence_operations` row (inventory and per-attempt presence reports) recorded in the last hour. They are constants in `sealed_history_limits()` (migration 0103) and in `profiled_presence_operation_guard` (A4, migration 0104), which refuses the report. The poll gate (§7.3) then holds the node.
 
-The limits are constants in the SQL function `sealed_history_limits()` (migration 0103), not settings **(author's call: the owner asked only for the retention period in Settings; a rate that needs raising is a migration with a reason)**.
-
-Where the rate is enforced:
-
-- **The poll gate** (§7.3) refuses before any history row is written.
-- **A database fence** (migration 0105): a `BEFORE INSERT` trigger on `profiled_launches`, `profiled_launch_offer_rate`, counts offers in the hour before the new offer's source observation, per node, per project and in total, under an advisory lock, and raises `sealed history offer rate`. Only a race between two polls that both passed the gate can reach it, and the next poll's gate then holds visibly.
-- The inventory-report rate is enforced in `profiled_presence_operation_guard` (A4).
-
-Orphan rows (§6.2) are also rate-bounded: pending rows count toward their table's live cap, so at most a cap's worth of orphans can be written per 10 minutes.
+Orphan rows (§6.2) are bounded too: pending rows count toward their table's live cap, so at most a cap's worth of orphans can be written per 10 minutes.
 
 ### 7.3 The poll gate
 
 A new crate, `crates/aq-history-caps`, owns the gate. `offers()` in `profiled_execution/producer/workflow.rs` calls it after the existing `offer_hold` and the `busy` check, and before any selection, export or artifact write:
 
-1. **Node and server holds** (`aq_history_caps::node_holds(conn, node, now_ms, staging)`): the offer rate for the node and the server; live usage plus headroom against each node-scoped and global cap (A1, A2 global, A3, A5, A6, A7, A8, A9 global, A10); inventory reports for the node. Any hold → the poll returns its page with no offers (200), logs `"{code} {subject}: {used} of {limit}; no new offers"` at info, and writes nothing.
-2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): a project with a hold (its offer rate, A2, A9) is dropped from the fair-share candidates before the per-poll project limit, so it is never charged a turn, like a project with no ready task. The poll reads node, server and project holds in one call, `aq_history_caps::poll_gate`, so other projects still get offers.
+1. **Node and server holds** (`aq_history_caps::node_holds(conn, node, now_ms, staging)`): live usage plus headroom against each node-scoped and global cap (A1, A2 global, A3, A5, A6, A7, A8, A9 global, A10); inventory reports for the node and the server. Any hold → the poll returns its page with no offers (200), logs `"{code} {subject}: {used} of {limit}; no new offers"` at info, and writes nothing.
+2. **Project holds** (`aq_history_caps::project_holds(conn, project, now_ms)`): a project with a hold (A2, A9) is dropped from the fair-share candidates before the per-poll project limit, so it is never charged a turn, like a project with no ready task. The poll reads node, server and project holds in one call, `aq_history_caps::poll_gate`, so other projects still get offers.
 
 Headroom is the most a single offer can add: 64 admission artifacts and 4 MiB, 2 decisions and 16 MiB, 1 export and 4 MiB, 1 lease and 256 KiB of preparation bytes, 1 registration, 1 phase reservation and 1 MiB, and `max_bundle_bytes` of staging **(author's call)**. With headroom, a refusal happens at the gate and not halfway through a poll.
 
@@ -246,7 +237,7 @@ Two new `HoldCode` values (contract `dashboard-read-1`):
 
 | Code | `message` | `remedy` |
 |---|---|---|
-| `history_rate_limited` | `Offer rate limit reached: {used} offers in the last hour (limit {limit})`, or `Inventory report rate limit reached: {used} reports in the last hour (limit {limit})` | `Wait for the hour to pass; if this repeats, look for a task that fails in a loop` |
+| `history_rate_limited` | `Inventory report rate limit reached: {used} reports in the last hour (limit {limit})`. It no longer stands for an offer rate (removed 2026-11-13, §7.2); the code stays for the pinned contract | `Wait for the hour to pass; if this repeats, look for a worker that reports in a loop` |
 | `history_cap_reached` | `Live {subject} cap reached: {used} of {limit}` (with ` bytes` appended for a byte limit). The subject is one of `admission artifacts`, `selection decisions`, `source exports`, `staging bytes`, `preparation bytes`, `material leases`, `preparation proposals`, `launch registrations`, `phase terminal reservations` or `inventory reports` | `Wait for running agents to settle` |
 
 A project hold's message starts with `Project {project_id}: ` and a server-wide hold's with `Server: `, followed by the text above with a lower-case first letter, for example `Project 0000…0001: live admission artifacts cap reached: 449 of 512`.
@@ -261,9 +252,11 @@ The current maximum on main is 0102. Phase A adds three, contiguous:
 |---|---|
 | `0103_sealed_history_live.sql` | `sealed_attempt_live(uuid)`, `sealed_history_limits()`, `sealed_history_usage(text,uuid,bigint,uuid)`, `sealed_staging_live_bytes()`, `sealed_history_holds(uuid[],uuid[],bigint)`, `sealed_history_scoped(text,bigint,uuid,uuid[])`, the view `sealed_live_attempt_ids`; the column `profiled_source_exports.created_at_ms` (nullable; written by the reservation INSERT); indexes `profiled_launch_artifacts(artifact_id)`, `profiled_launches(decision_id)`, `profiled_launches(source_observation_id)`, `admission_source_observations(observed_at_ms)`, `admission_material_leases(prospective_attempt_id)` and `(lease_id) WHERE state='pending'`, `profiled_presence_operations` on `(node_id, recorded_at_ms)`, `(recorded_at_ms)`, `(expires_at_ms)` and `(attempt_id)`, `source_bases(profiled_export_operation_id)`, `admission_artifacts(created_at_ms)`, `intelligence_decisions(((decision#>>'{inputs,now_ms}')::bigint))`, `profiled_source_exports(operation_id) WHERE state='pending'` and `(created_at_ms)`, `source_transfers(transfer_id) WHERE NOT staging_released`, and the partial attempt indexes `execution_attempts(attempt_id) WHERE holds_task`, `execution_attempts(attempt_id)` for released, unsettled `legacy_fixture` attempts, and `profiled_authority_hot(attempt_id)` for an unsettled status. The four indexes on tables the settlement39 catalog attests are listed in that catalog from format 103 on (`aq_history_caps::ATTESTED_INDEXES`); any other index there still fails the attestation. |
 | `0104_sealed_history_live_caps.sql` | `CREATE OR REPLACE` of `admission_artifact_insert_guard`, `profiled_source_export_guard`, `profiled_launch_registration_guard`, `profiled_phase_terminal_capacity_guard` and `profiled_presence_operation_guard`. Names, triggers and every non-quota check are unchanged (the store checks the phase-terminal function by name, `store.rs:314-345`). |
-| `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. |
+| `0105_sealed_offer_rate.sql` | `profiled_launch_offer_rate()` and its `BEFORE INSERT` trigger on `profiled_launches`. Dropped by 0124. |
 
 The exact bodies are in the phase A plan, `docs/superpowers/plans/2026-11-08-sealed-history-p-a-live-caps.md`.
+
+`0124_remove_offer_rate.sql` (2026-11-13) removes the offer rate limits (§7.2): the `offers` and `project_offers` rows of `sealed_history_limits()` go, those two kinds of `sealed_history_scoped` count nothing, and the 0105 trigger and function are dropped. A migrating role that does not own `profiled_launches` or the function leaves them in place with a warning; the fence then counts no offers.
 
 ## 8. Phase B: deletion after the task closes, and rolling summaries
 
@@ -375,8 +368,8 @@ What each reader reads after deletion. The readers come from the read inventory 
    - the stack runs origin/main with phase A merged, and its database is the one that stopped on 2026-11-07 (512 admission artifacts). The first poll after the upgrade gets an offer;
    - a soak project of trivial tasks ("write a file and finish") is driven through the workers until **at least 650 offered attempts** are recorded in `profiled_launches` since the upgrade, with at least one node taking more than 300 of them;
    - **pass condition:** no poll fails with a cap or quota error. Check this two ways: no server log line "native control request refused" whose reason names a quota or capacity, and no attempt stuck between offer and grant;
-   - every rate-limit hold during the soak appears as `history_rate_limited` on that node in `GET /api/v1/swarm` and on the Swarm page, and clears when the hour's count drops;
-   - **deliberate hold:** with the soak stopped, set the node's slot count so that one machine offers above 30 in an hour (or seed rows as the plan's test does on a copy of the database). The Swarm page then shows the node `holding` with "Offer rate limit reached", and the worker log shows empty polls, not 409s;
+   - no node, project or server is held for the number of offers it took (the offer rate limits were removed on 2026-11-13, §7.2). Any hold during the soak appears on the Swarm page and in `GET /api/v1/swarm` with its code, and the worker log shows empty polls, not 409s;
+   - **deliberate check:** with the soak stopped, give one node more than 30 offers in the last hour, its project more than 240 and the server more than 960 (or seed rows as `native_offers::history_caps` does, on a copy of the database). The next poll still gets an offer, and the Swarm page shows no hold for it;
    - the evidence (counts per table before and after, the swarm read JSON with the hold, the log excerpts) is written to `docs/implementation/0008-PA-acceptance.md`.
 
 ### Phase B
@@ -409,6 +402,7 @@ Phase A is what 0007 phase 1 needs. Phase B can follow when the owner has answer
 3. **Phase A live caps.** They count only live rows and are kept as controls on work happening now (§7.1). Keep them, or remove them as well under "remove all limits"?
 4. **B4 per-lineage review count (256).** Is it a budget you set (keep), or a cap (remove)?
 5. **Playbook host reads of old attempts.** Once a summary has rolled away, `playbooks/host_adapters.rs` cannot find that attempt's project or selection digest. Which playbook reads need it, and is "unknown" acceptable?
+6. **Inventory report rate (§7.2).** 720 reports per node and 11,520 per server an hour. Its purpose was to bound the heartbeat log, which architecture 0006 §4 now bounds by deleting reports older than 24 hours. Remove it as the offer rate was, or keep it as a Setting?
 
 ## Appendix A. Delete-firing triggers (live catalog at format 102)
 

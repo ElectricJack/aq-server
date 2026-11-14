@@ -219,9 +219,9 @@ pub fn hold(code: HoldCode) -> HoldReason {
             Some("Wait for a running agent to finish, or add a machine"),
         ),
         HistoryRateLimited => (
-            "Offer rate limit reached",
+            "Inventory report rate limit reached",
             Some(
-                "Wait for the hour to pass; if this repeats, look for a task that fails in a loop",
+                "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop",
             ),
         ),
         HistoryCapReached => (

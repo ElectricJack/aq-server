@@ -63,7 +63,7 @@ still have lifetime caps (`research/2026-11-13-retention-audit.md`).
 | aq-server: local execution (specs 0002, 0003, 0004) | **Live** on one machine. MS0 passed with 1 of 3 required runs (owner waiver). MS1 demoed 2026-11-06; its Windows-suspend drill was a dry run only. | [`implementation/MS0.md`](implementation/MS0.md), [`implementation/MS1.md`](implementation/MS1.md) |
 | aq-server: agent channel (spec 0006) | Phases 1 to 6 **Live**. Phase 7 stopped before removing the old path; the boat channel is a design note. | aq-worker `docs/implementation/0006-P6.md`, `0006-P7.md` |
 | aq-server: swarm (spec 0007) | Phase 1 **Live** (accepted on rerun 4, 2026-11-09). Phase 2 merged. Phase 3 controls are a draft (aq-server #131, aq-dashboard #105) already deployed on `aq-ms1`. Phases 4 (boat) and 5 (macOS) **Missing**. | aq-worker `docs/implementation/0007-P1.md` |
-| aq-server: sealed-history retention (spec 0008) | Phase A merged. Phase B, restated 2026-11-13 under [architecture 0006](architecture/0006-records-are-rolling.md) (rolling summaries, task budget summaries, no history caps), is **Missing** and waits on owner answers. The A1 600-attempt soak has not run. | [`implementation/0008-PA-server.md`](implementation/0008-PA-server.md) |
+| aq-server: sealed-history retention (spec 0008) | Phase A merged; its offer rate limits removed 2026-11-13 (0124, on `feat/internal-work`). Phase B, restated 2026-11-13 under [architecture 0006](architecture/0006-records-are-rolling.md) (rolling summaries, task budget summaries, no history caps), is **Missing** and waits on owner answers. The A1 600-attempt soak has not run. | [`implementation/0008-PA-server.md`](implementation/0008-PA-server.md) |
 | aq-server: terminals (specs 0009, 0010) | **Live** on the desktop and a laptop (2026-11-11). | [`handoff/2026-11-11-agents-terminal-workspace.md`](handoff/2026-11-11-agents-terminal-workspace.md) |
 | aq-server: supervisors, manual agents, provider quota | **Live** (2026-11-10). | supervision log |
 | aq-server: hosted deployment (spec 0001, MS2 to MS4) | **Missing**. `compose.yaml` describes it; nothing is provisioned. | [`operations.md`](operations.md) |
@@ -143,8 +143,9 @@ This needs no playbook work. In order:
 3. The task must be Active, and its project enabled. New tasks start as Draft
    by design: the owner reviews a task and its dependencies before making it
    Active, and only Active tasks are ready.
-4. Owner availability on, machine not stopped or draining, history and rate
-   caps clear, provider quota available.
+4. Owner availability on, machine not stopped or draining, live history caps
+   and the inventory report rate clear, provider quota available. (The offer
+   rate limits were removed on 2026-11-13, migration 0124.)
 
 A task does not have to change a file. Since 2026-11-13 (on
 `feat/internal-work`, not yet on `main`) an attempt that finishes successfully

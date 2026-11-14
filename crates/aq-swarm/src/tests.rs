@@ -644,11 +644,11 @@ fn history_holds_join_the_node_and_the_waiting_reasons() {
     i.history = vec![
         Hold {
             code: Code::RateLimited,
-            kind: "offers".into(),
+            kind: "presence_rate".into(),
             scope: Scope::Node(uid(1)),
             bytes: false,
-            used: 30,
-            limit: 30,
+            used: 720,
+            limit: 720,
         },
         Hold {
             code: Code::CapReached,
@@ -664,7 +664,11 @@ fn history_holds_join_the_node_and_the_waiting_reasons() {
     assert_eq!(codes(&n.holding), vec![HoldCode::HistoryRateLimited]);
     assert_eq!(
         n.holding[0].message,
-        "Offer rate limit reached: 30 offers in the last hour (limit 30)"
+        "Inventory report rate limit reached: 720 reports in the last hour (limit 720)"
+    );
+    assert_eq!(
+        hold(HoldCode::HistoryRateLimited).message,
+        "Inventory report rate limit reached"
     );
     assert!(matches!(s.machines[0].state, MachineState::Holding));
     assert!(

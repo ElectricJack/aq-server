@@ -136,9 +136,10 @@ missing or expired context measurement for a natively registered node, and
 `worker_stopped` or `worker_draining` from the worker service state. Offline and
 revoked workers show as state, and a full concurrency ceiling shows as no free
 slots, so neither appears as a hold.
-`history_rate_limited` and `history_cap_reached` (spec 0008) say that the offer rate
-(30 an hour per node, 240 per project, 960 in all), the inventory report rate, or a
-live sealed-history cap holds new offers. On a node they apply to that node; in
+`history_rate_limited` and `history_cap_reached` (spec 0008) say that the inventory
+report rate or a live sealed-history cap holds new offers. (`history_rate_limited` also
+stood for an offer rate until the offer rate limits were removed on 2026-11-13; the
+code is unchanged.) On a node they apply to that node; in
 `waiting.reasons`, a message starting `Project <id>:` applies to one project and one
 starting `Server:` to all.
 `tasks_held` (R6, `waiting.reasons` only) says a project has tasks that a server-side hold

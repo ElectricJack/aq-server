@@ -1,5 +1,6 @@
-//! Spec 0008 phase A: the offer rate holds a node with an empty poll, never a 409,
-//! and writes no history; offers older than an hour do not count.
+//! Spec 0008 phase A history holds on the poll. The offer rate limits (30 per node,
+//! 240 per project, 960 per server in an hour) were removed on 2026-11-13 (owner):
+//! more offers than that in an hour hold nothing. A live cap still holds a project.
 use crate::common::{
     native_offer::{self, Case},
     sealed,
@@ -23,49 +24,53 @@ fn offered(body: &serde_json::Value) -> usize {
     };
     page.offers.len()
 }
-async fn rows(pool: &sqlx::PgPool) -> (i64, i64, i64, i64) {
-    sqlx::query_as("SELECT (SELECT count(*) FROM intelligence_decisions),(SELECT count(*) FROM admission_artifacts),(SELECT count(*) FROM profiled_source_exports),(SELECT count(*) FROM profiled_project_schedule)")
-        .fetch_one(pool)
-        .await
-        .unwrap()
-}
-
-#[tokio::test]
-async fn offer_rate_limit_holds_the_node_without_a_409() {
-    let c = native_offer::setup().await;
-    let pool = &c.env.env.pool;
-    let now = (c.env.env.state.clock)().timestamp_millis();
-    let id = node(&c).await;
-    sealed::offers(pool, id, c.env.lineage.project_id, now - 1_000, 30).await;
-    let before = rows(pool).await;
-    let (status, body) = native_offer::poll(&c).await;
-    assert_eq!(status, 200, "never a 409: {body}");
-    assert_eq!(offered(&body), 0, "{body}");
-    assert_eq!(
-        rows(pool).await,
-        before,
-        "a held poll writes no decision, artifact, export or schedule row"
-    );
-    let mut conn = pool.acquire().await.unwrap();
-    let holds = aq_history_caps::node_holds(&mut conn, id, now as u64, None)
+/// What the poll gate decides for this node and project, plus every hold it sees.
+async fn gate(c: &Case, node: Uuid, now: i64) -> (bool, bool, Vec<String>) {
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    let project = c.env.lineage.project_id;
+    let gate = aq_history_caps::poll_gate(&mut conn, node, &[project], now as u64, None)
         .await
         .unwrap();
-    assert_eq!(
-        holds.iter().map(|h| h.message()).collect::<Vec<_>>(),
-        vec!["Offer rate limit reached: 30 offers in the last hour (limit 30)".to_string()]
-    );
+    let holds = aq_history_caps::holds(&mut conn, &[node], &[project], now as u64, None)
+        .await
+        .unwrap();
+    (
+        gate.stop.is_some(),
+        gate.is_held(project),
+        holds.iter().map(|h| h.message()).collect(),
+    )
 }
 
+/// More offers in an hour than the removed limits allowed, for the node (31), its
+/// project (241) and the server (961): the gate holds nothing and the poll offers work.
 #[tokio::test]
-async fn offers_older_than_an_hour_do_not_count() {
+async fn a_node_a_project_and_the_server_past_the_old_offer_rates_are_not_held() {
     let c = native_offer::setup().await;
     let pool = &c.env.env.pool;
     let now = (c.env.env.state.clock)().timestamp_millis();
     let id = node(&c).await;
-    sealed::offers(pool, id, c.env.lineage.project_id, now - 3_700_000, 30).await;
+    let project = c.env.lineage.project_id;
+    sealed::offers(pool, id, project, now - 1_000, 31).await;
+    assert_eq!(gate(&c, id, now).await, (false, false, vec![]), "node: 31");
+    sealed::spread_offers(pool, Some(project), 210, now - 1_000).await;
+    assert_eq!(
+        gate(&c, id, now).await,
+        (false, false, vec![]),
+        "project: 241"
+    );
+    sealed::spread_offers(pool, None, 720, now - 1_000).await;
+    assert_eq!(
+        gate(&c, id, now).await,
+        (false, false, vec![]),
+        "server: 961"
+    );
     let (status, body) = native_offer::poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered(&body), 1, "{body}");
+    assert!(
+        !body.to_string().contains("Offer rate limit"),
+        "no offer-rate hold: {body}"
+    );
 }
 
 /// A project at its artifact cap is dropped before the per-poll project limit (4)
@@ -111,24 +116,4 @@ async fn four_held_projects_do_not_starve_the_fifth() {
         served, 1,
         "only the project that was tried is charged a turn"
     );
-}
-
-/// The offer-rate fence lost a race with another poll that passed the gate: the
-/// poll offers nothing (200), never a 500, and leaves no attempt behind.
-#[tokio::test]
-async fn the_offer_rate_fence_racing_past_the_gate_is_an_empty_page() {
-    let c = native_offer::setup().await;
-    let pool = &c.env.env.pool;
-    sqlx::raw_sql("CREATE FUNCTION fence_race() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'sealed history offer rate' USING ERRCODE='54000'; END $$; CREATE TRIGGER fence_race BEFORE INSERT ON profiled_launches FOR EACH ROW EXECUTE FUNCTION fence_race();")
-        .execute(pool)
-        .await
-        .unwrap();
-    let (status, body) = native_offer::poll(&c).await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(offered(&body), 0, "{body}");
-    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    assert_eq!(attempts, 0);
 }

@@ -253,6 +253,8 @@ pub fn catalog_matches(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code {
+    /// The inventory report rate (`presence_rate`). The offer rate limits were removed by
+    /// migration 0124 (owner, 2026-11-13).
     RateLimited,
     CapReached,
 }
@@ -311,14 +313,11 @@ impl Hold {
     }
     pub fn message(&self) -> String {
         let (used, limit) = (self.used, self.limit);
-        let body = match (self.code, self.kind.as_str()) {
-            (Code::RateLimited, "presence_rate") => format!(
+        let body = match self.code {
+            Code::RateLimited => format!(
                 "inventory report rate limit reached: {used} reports in the last hour (limit {limit})"
             ),
-            (Code::RateLimited, _) => {
-                format!("offer rate limit reached: {used} offers in the last hour (limit {limit})")
-            }
-            (Code::CapReached, _) => format!(
+            Code::CapReached => format!(
                 "live {} cap reached: {used} of {limit}{}",
                 self.subject(),
                 if self.bytes { " bytes" } else { "" }
@@ -333,7 +332,7 @@ impl Hold {
     pub fn remedy(&self) -> &'static str {
         match self.code {
             Code::RateLimited => {
-                "Wait for the hour to pass; if this repeats, look for a task that fails in a loop"
+                "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop"
             }
             Code::CapReached => "Wait for running agents to settle",
         }
@@ -505,28 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn node_offer_rate_message_and_remedy() {
-        let h = hold(
-            Code::RateLimited,
-            "offers",
-            Scope::Node(Uuid::nil()),
-            false,
-            30,
-            30,
-        );
-        assert_eq!(
-            h.message(),
-            "Offer rate limit reached: 30 offers in the last hour (limit 30)"
-        );
-        assert_eq!(
-            h.remedy(),
-            "Wait for the hour to pass; if this repeats, look for a task that fails in a loop"
-        );
-        assert_eq!(h.code_name(), "history_rate_limited");
-    }
-
-    #[test]
-    fn inventory_rate_message() {
+    fn inventory_rate_message_and_remedy() {
         let h = hold(
             Code::RateLimited,
             "presence_rate",
@@ -539,6 +517,31 @@ mod tests {
             h.message(),
             "Inventory report rate limit reached: 720 reports in the last hour (limit 720)"
         );
+        assert_eq!(
+            h.remedy(),
+            "Wait for the hour to pass; if this repeats, look for a worker that reports in a loop"
+        );
+        assert_eq!(h.code_name(), "history_rate_limited");
+        let server = Hold {
+            scope: Scope::Global,
+            ..h
+        };
+        assert_eq!(
+            server.message(),
+            "Server: inventory report rate limit reached: 720 reports in the last hour (limit 720)"
+        );
+    }
+
+    /// The offer rate limits were removed (owner, 2026-11-13): no hold speaks of offers.
+    #[test]
+    fn no_hold_message_names_an_offer_rate() {
+        for code in [Code::RateLimited, Code::CapReached] {
+            for kind in ["offers", "project_offers", "presence_rate"] {
+                let h = hold(code, kind, Scope::Node(Uuid::nil()), false, 31, 30);
+                assert!(!h.message().contains("ffer rate"), "{}", h.message());
+                assert!(!h.remedy().contains("task that fails"), "{}", h.remedy());
+            }
+        }
     }
 
     #[test]
