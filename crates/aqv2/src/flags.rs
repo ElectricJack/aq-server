@@ -161,6 +161,20 @@ pub fn flags(name: &str, principal: &str) -> Vec<Flag> {
             required: required.contains(&param.as_str()),
         })
         .collect();
+    // The param that names an action's subject when the payload does not
+    // (the server takes it out of the payload and builds the subject).
+    let subject =
+        &catalog::entry(name).map_or(&Value::Null, |e| &e["principals"][principal])["subject"];
+    if let Some(param) = subject["id_param"].as_str()
+        && subject["id_param_schema"].is_object()
+        && !flags.iter().any(|f| f.param == param)
+    {
+        flags.push(Flag {
+            param: param.to_owned(),
+            schema: &subject["id_param_schema"],
+            required: true,
+        });
+    }
     flags.sort_by_key(|f| !f.required);
     flags
 }
@@ -280,11 +294,13 @@ pub fn help(name: &str, principal: &str) -> Option<String> {
     }
     let flags = flags(name, principal);
     let action = entry["principals"][principal]["body"] == "action_request";
+    // With a subject rule the subject follows from the params.
+    let derived = entry["principals"][principal]["subject"].is_object();
     let mut usage = format!("{program} {}", tokens(entry));
     for f in flags.iter().filter(|f| f.required) {
         let _ = write!(usage, " --{} <{}>", f.name(), hint(f.schema));
     }
-    if action {
+    if action && !derived {
         usage.push_str(" --subject TYPE:ID[:REVISION]");
     }
     if flags.iter().any(|f| !f.required) {
@@ -338,7 +354,12 @@ pub fn help(name: &str, principal: &str) -> Option<String> {
         if action {
             let _ = writeln!(
                 out,
-                "  --subject TYPE:ID[:REVISION]  what the action changes; --expect TYPE=REVISION for other versions"
+                "  --subject TYPE:ID[:REVISION]  what the action changes{}; --expect TYPE=REVISION for other versions",
+                if derived {
+                    " (taken from the params when omitted)"
+                } else {
+                    ""
+                }
             );
         }
         let _ = writeln!(

@@ -65,6 +65,38 @@ fn every_command_has_its_own_summary() {
     }
 }
 
+/// Every action kind has a subject rule (aq-command-registry subjects.rs),
+/// and the rule's params are what the kind's payload schema says: an id or
+/// revision "from the payload" is a payload field, and an id param of its
+/// own is not (payloads refuse unknown fields, so it is taken out).
+#[test]
+fn subject_rules_match_the_action_schemas() {
+    use aq_command_registry::SubjectId;
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/dashboard-actions/v1/schema.json"
+    ))
+    .unwrap();
+    for kind in schema["$defs"]["ActionRequest"]["oneOf"]
+        .as_array()
+        .unwrap()
+    {
+        let name = kind["properties"]["kind"]["const"].as_str().unwrap();
+        let fields = kind["properties"]["payload"]["properties"]
+            .as_object()
+            .unwrap();
+        let rule = aq_command_registry::subject_rule(name)
+            .unwrap_or_else(|| panic!("{name} has no subject rule"));
+        match rule.id {
+            SubjectId::Payload(p) => assert!(fields.contains_key(p), "{name}: {p}"),
+            SubjectId::Param(p) => assert!(!fields.contains_key(p), "{name}: {p}"),
+            SubjectId::Fixed(_) => {}
+        }
+        if let Some((param, _)) = rule.revision {
+            assert!(fields.contains_key(param), "{name}: {param}");
+        }
+    }
+}
+
 /// `.route(path, ...)` in the lib sources, outside `#[cfg(test)] mod` tails.
 fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     // Paths given by a constant rather than a literal.
