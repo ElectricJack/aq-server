@@ -1445,6 +1445,118 @@ async fn task_history_attributes_dashboard_writes_to_the_acting_owner() {
 }
 
 #[tokio::test]
+async fn owner_activates_a_draft_task_and_only_a_draft() {
+    let x = setup().await;
+    let request = |id: Uuid| {
+        let op = Uuid::new_v4();
+        action(
+            "task.activate",
+            "task",
+            id,
+            "3",
+            json!({"operation_id":op,"project_id":x.project(),"expected_version":"3"}),
+        )
+    };
+    // A draft becomes active with one Graph write at the expected version.
+    let id = Uuid::new_v4();
+    let mut before = node(id, x.workspace(), "task", 3);
+    before["task_state"] = json!("draft");
+    x.put(before.clone());
+    let mut after = before;
+    after["version"] = json!(4);
+    after["task_state"] = json!("active");
+    x.reply(200, change_set(vec![after]));
+    let activate = request(id);
+    let (status, body) = x.act(&activate).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let native = x.posts().last().unwrap()["operations"][0].clone();
+    assert_eq!(
+        (
+            native["op"].clone(),
+            native["expected_version"].clone(),
+            native["patch"].clone()
+        ),
+        (
+            json!("update_node"),
+            json!(3),
+            json!({"task_state":"active"})
+        )
+    );
+    // Replaying the operation returns its result and writes nothing more.
+    let posts = x.posts().len();
+    let (status, replay) = x.act(&activate).await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay["data"]["disposition"], "confirmed", "{replay}");
+    assert_eq!(x.posts().len(), posts);
+    // Any other state is rejected before Graph is asked to change anything:
+    // reopening a finished task is not activation.
+    for state in ["active", "completed", "canceled"] {
+        let id = Uuid::new_v4();
+        let mut task = node(id, x.workspace(), "task", 3);
+        task["task_state"] = json!(state);
+        x.put(task);
+        let posts = x.posts().len();
+        let (status, body) = x.act(&request(id)).await;
+        assert_eq!(
+            body["data"]["disposition"], "rejected",
+            "{state}: {status} {body}"
+        );
+        assert_eq!(x.posts().len(), posts, "{state}");
+    }
+}
+
+#[tokio::test]
+async fn owner_reopens_a_finished_task_only_if_it_never_ran() {
+    let x = setup().await;
+    let request = |id: Uuid| {
+        let op = Uuid::new_v4();
+        action(
+            "task.reopen",
+            "task",
+            id,
+            "3",
+            json!({"operation_id":op,"project_id":x.project(),"expected_version":"3"}),
+        )
+    };
+    for state in ["completed", "canceled"] {
+        let id = Uuid::new_v4();
+        let mut before = node(id, x.workspace(), "task", 3);
+        before["task_state"] = json!(state);
+        x.put(before.clone());
+        let mut after = before;
+        after["version"] = json!(4);
+        after["task_state"] = json!("active");
+        x.reply(200, change_set(vec![after]));
+        let (status, body) = x.act(&request(id)).await;
+        assert_eq!(status, StatusCode::OK, "{state}: {body}");
+        assert_eq!(body["data"]["disposition"], "confirmed", "{state}: {body}");
+        let native = x.posts().last().unwrap()["operations"][0].clone();
+        assert_eq!(native["patch"], json!({"task_state":"active"}), "{state}");
+    }
+    // A task that is not finished is not reopened.
+    for state in ["draft", "active"] {
+        let id = Uuid::new_v4();
+        let mut task = node(id, x.workspace(), "task", 3);
+        task["task_state"] = json!(state);
+        x.put(task);
+        let posts = x.posts().len();
+        let (_, body) = x.act(&request(id)).await;
+        assert_eq!(body["data"]["disposition"], "rejected", "{state}: {body}");
+        assert_eq!(x.posts().len(), posts, "{state}");
+    }
+    // The fixture's task has an attempt: finished or not, it is not reopened.
+    let ran = x.f.selection.lineage.task_id;
+    let mut task = node(ran, x.workspace(), "task", 3);
+    task["task_state"] = json!("completed");
+    x.put(task);
+    let posts = x.posts().len();
+    let (_, body) = x.act(&request(ran)).await;
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(x.posts().len(), posts);
+}
+
+#[tokio::test]
 async fn owner_cancels_tasks_without_reason_or_attempt_and_deletes_without_gate() {
     let x = setup().await;
     for (state, kind) in [

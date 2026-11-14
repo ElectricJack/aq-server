@@ -704,6 +704,8 @@ fn dashboard_action_schema_lists_task_and_knowledge_kinds() {
     for kind in [
         "task.graph.create",
         "task.edit",
+        "task.activate",
+        "task.reopen",
         "task.cancel",
         "task.retry",
         "task.reprioritize",

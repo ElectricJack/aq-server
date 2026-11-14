@@ -179,6 +179,19 @@ subject revision and the single `expected_versions` entry (`task` or
   -1,000,000..1,000,000, higher first) and preserves other metadata keys.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
   `task.dependency.remove` removes `edge_id` at `edge_version`.
+- `task.activate` makes a `draft` task `active`, so the scheduler may start
+  it. A task in any other state is `rejected` and nothing is written:
+  reopening a completed or canceled task is not activation. A draft has never
+  had an attempt, so there is nothing to reconcile. Activating a draft parent
+  also makes its children eligible.
+- `task.reopen` makes a `completed` or `canceled` task `active` again, only
+  when the task has never had an execution attempt. A task in another state,
+  or one with any attempt, is `rejected` and nothing is written: the scheduler
+  does not start over a task that has execution history (an accepted result,
+  or an attempt abandoned by a cancel), so reopening it would leave it active
+  and permanently held. Follow-up work on such a task is a new task. Reopening
+  a completed task blocks its dependents again; waits already satisfied by it
+  are not undone.
 - `task.cancel` records Graph task lifecycle `canceled`, including draft tasks
   without attempts. `reason` is optional. A central cleanup cursor requests B3
   cancellation for any holding attempt, retries after restart, and records the

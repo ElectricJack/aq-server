@@ -311,6 +311,16 @@ pub(super) async fn bootstrap(
             "Task deletion requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.activate",
+            graph_mutation,
+            "Task activation requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.reopen",
+            graph_mutation,
+            "Reopening a task requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.cancel",
             graph_mutation,
             "Task cancellation requires an owner account and configured Graph mutation identity",

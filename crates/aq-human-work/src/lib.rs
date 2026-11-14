@@ -731,7 +731,7 @@ mod tests {
 }
 
 mod execution;
-pub use execution::{Execution, TaskDelete};
+pub use execution::{Execution, TaskActivate, TaskDelete, TaskReopen};
 
 mod downstream;
 pub use downstream::blocked_by;
