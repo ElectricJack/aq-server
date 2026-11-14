@@ -2,6 +2,45 @@
   "commands": [
     {
       "cli": [
+        "attempt",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "attempt.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:432ef672133f082728574353773c15bdde95b05ca57012b9853827a1bf59eb58",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "attempt_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/execution/attempts/{id}"
+          }
+        }
+      },
+      "summary": "One execution attempt's state",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "comment",
         "list"
       ],
@@ -283,6 +322,45 @@
         }
       },
       "summary": "A conversation send operation",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "conversation",
+        "project"
+      ],
+      "grant": "message.read",
+      "kind": "read",
+      "name": "conversation.project",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:60784403aa8cbeaac274d7d2407a5e6e47e698e8e7a7eb302605f9995f7dddb7",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/human/conversations/projects/{project}"
+          }
+        }
+      },
+      "summary": "A project's supervisor conversation",
       "target": {
         "rule": "own"
       }
@@ -712,6 +790,69 @@
       "target": {
         "param": "project_id",
         "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "intelligence",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "intelligence.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/intelligence"
+          }
+        }
+      },
+      "summary": "Intelligence settings: profiles, the projects using each, and model choices",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "intelligence",
+        "registry",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "intelligence.registry.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/intelligence/registry"
+          }
+        }
+      },
+      "summary": "The intelligence registry: credentials and recent observations",
+      "target": {
+        "rule": "own"
       }
     },
     {
@@ -1917,6 +2058,78 @@
     },
     {
       "cli": [
+        "profile",
+        "catalog",
+        "active"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "profile.catalog.active",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/profiles/catalogs"
+          }
+        }
+      },
+      "summary": "The active profile catalog's digest and revision",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "profile",
+        "catalog",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "profile.catalog.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:ff50ee07ca713bb2b66283845af4d7a64279805b5b706f3c9a7b8d20b7da841d",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "digest": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "digest"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/profiles/catalogs/{digest}"
+          }
+        }
+      },
+      "summary": "One profile catalog by digest",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "project",
         "list"
       ],
@@ -1976,6 +2189,93 @@
       "summary": "Projects",
       "target": {
         "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "project",
+        "revision",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "project.revision.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:f14a51231d0eba00463a2b3a7f670ff3cfa90b82c4e7f1569b83a1473b0d6604",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/projects/{id}/revisions/{revision}"
+          }
+        }
+      },
+      "summary": "A project's binding as it was at an earlier revision",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "project",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "project.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:892f5f15d5b42a267eba3c7de07cb434e17eaf96e40028afc81b57d095fa7a70",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/projects/{id}"
+          }
+        }
+      },
+      "summary": "One project: its current binding, repository and execution settings",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
       }
     },
     {
@@ -2718,6 +3018,37 @@
     },
     {
       "cli": [
+        "server",
+        "status"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "server.status",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/status"
+          }
+        }
+      },
+      "summary": "The server's version, health and update state",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "session",
         "events"
       ],
@@ -2815,6 +3146,43 @@
         }
       },
       "summary": "Sessions",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "session",
+        "manual",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "session.manual.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:f4b840a2074962527819348885e9b9d2bdb479eb2777ed1da9bd25e30bc27e6e",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/manual-agents"
+          }
+        }
+      },
+      "summary": "Sessions the owner started by hand, with the workers, slots and projects to start one on",
       "target": {
         "rule": "own"
       }
@@ -2997,6 +3365,37 @@
         }
       },
       "summary": "A session's observed usage",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "supervisor.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/supervisors"
+          }
+        }
+      },
+      "summary": "Supervisors, with the profiles a supervisor can run on",
       "target": {
         "rule": "own"
       }
@@ -4806,6 +5205,37 @@
       "summary": "Stop a machine taking new work and let running attempts finish",
       "target": {
         "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "worker",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "worker.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/workers"
+          }
+        }
+      },
+      "summary": "Worker nodes: version, last seen, status and storage",
+      "target": {
+        "rule": "own"
       }
     },
     {
