@@ -325,7 +325,6 @@ async fn saved<S: Server>(
         previous,
     };
     let markdown = inputs.markdown.clone();
-    let binding = inputs.record.binding.clone();
     let check_config = config.clone();
     let check = tokio::task::spawn_blocking(move || {
         save::check_saved(&draft, &cases, &inputs, &check_config)
@@ -385,11 +384,8 @@ async fn saved<S: Server>(
     }
     // The run is active but not yet deployed: when this fails, every pass of
     // `tick` tries again until the engine has the artifact on the binding.
-    match s.activate(source, &binding, &digest).await {
-        Ok(()) => runs::deployed(pool, run.id).await?,
-        Err(e) => {
-            tracing::error!(source, error = %e, "authored artifact recorded active but not activated yet")
-        }
+    if let Err(e) = deploy(s, run.id).await {
+        tracing::error!(source, error = %e, "authored artifact recorded active but not activated yet");
     }
     prune(s, source).await
 }
@@ -557,21 +553,84 @@ pub async fn tick<S: Server>(s: &S) -> Result<usize> {
 /// whose activation failed is tried again on every pass.
 async fn deploy_pending<S: Server>(s: &S) -> Result<()> {
     let pool: &PgPool = s.as_ref();
-    type Row = (i64, String, String, sqlx::types::Json<Value>);
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT r.id,r.source_id,s.binding,r.artifact FROM playbook_authoring_runs r
-         JOIN playbook_sources s ON s.id=r.source_id
-         WHERE r.status='saved' AND r.active AND NOT r.deployed AND s.deleted_at_ms IS NULL",
+    let runs: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id,source_id FROM playbook_authoring_runs
+         WHERE status='saved' AND active AND NOT deployed ORDER BY id",
     )
     .fetch_all(pool)
     .await?;
-    for (run, source, binding, artifact) in &rows {
-        match reinstall(s, source, binding, &artifact.0).await {
-            Ok(()) => runs::deployed(pool, *run).await?,
-            Err(e) => tracing::warn!(%source, error = %e, "active playbook not activated yet"),
+    for (run, source) in &runs {
+        if let Err(e) = deploy(s, *run).await {
+            tracing::warn!(%source, error = %e, "active playbook not activated yet");
         }
     }
     Ok(())
+}
+
+/// Activates run `id`'s artifact in the engine and marks it deployed, if it
+/// is still its source's active run. All of it happens under the source's
+/// lock, as a rollback does, so the engine is never left on an artifact the
+/// tables no longer call active. Returns whether it deployed anything.
+pub async fn deploy<S: Server>(s: &S, id: i64) -> Result<bool> {
+    let pool: &PgPool = s.as_ref();
+    let mut tx = pool.begin().await?;
+    let source: Option<String> = sqlx::query_scalar(
+        "SELECT s.id FROM playbook_sources s JOIN playbook_authoring_runs r ON r.source_id=s.id
+         WHERE r.id=$1 FOR UPDATE OF s",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(source) = source else {
+        return Ok(false);
+    };
+    // Read again under the lock: a rollback may have made another run active.
+    type Row = (String, sqlx::types::Json<Value>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT s.binding,r.artifact FROM playbook_authoring_runs r
+         JOIN playbook_sources s ON s.id=r.source_id
+         WHERE r.id=$1 AND r.status='saved' AND r.active AND NOT r.deployed
+           AND s.deleted_at_ms IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((binding, artifact)) = row else {
+        return Ok(false);
+    };
+    reinstall(s, &source, &binding, &artifact.0).await?;
+    sqlx::query("UPDATE playbook_authoring_runs SET deployed=TRUE WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// [`author`], unless the newest run of the source was already for the
+/// document, facts and record as they are now, however it ended. For the
+/// server's own reconciliation (the engine opened, a slow periodic pass): a
+/// save whose authoring was missed is authored, and a question or a refusal
+/// is not asked again until something changes.
+pub async fn author_missed<S: Server>(s: &S, source: &str) -> Result<Option<i64>> {
+    let pool: &PgPool = s.as_ref();
+    let now = Now::read(s, source).await?;
+    let newest: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT source_digest,facts_digest,record_digest FROM playbook_authoring_runs
+         WHERE source_id=$1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(source)
+    .fetch_optional(pool)
+    .await?;
+    let same = newest.is_some_and(|(document, facts, record)| {
+        document == source_digest(&now.markdown)
+            && facts == facts_digest(&now.facts)
+            && record == record_digest(&now.record)
+    });
+    match same {
+        true => Ok(None),
+        false => author(s, source).await,
+    }
 }
 
 pub fn internal_error(e: aq_internal_work::Error) -> Error {

@@ -1793,3 +1793,115 @@ async fn registering_an_existing_source_is_refused_and_keeps_its_document_and_bi
     let kept = authoring::get(&host.pool, NOTIFY).await.unwrap().unwrap();
     assert_eq!(kept.binding, BINDING);
 }
+
+// ---- Fix round 2 (Codex review of the routing switch-on) ----
+
+/// The routing source's id and binding with the worked example's commands,
+/// so the example's draft is its playbook.
+async fn routing_like_source(host: &Host) -> (i64, Uuid) {
+    let record = SourceRecord {
+        id: "routing".into(),
+        kind: SourceKind::Builtin,
+        binding: "aq.routing".into(),
+        ..notify()
+    };
+    ensure_builtin(&host.pool, &record).await.unwrap();
+    host.set("routing", example("source.md"), 1, notify_facts());
+    let run = authoring::author(host, "routing").await.unwrap().unwrap();
+    let task = in_flight(&host.pool).await.unwrap()[0].internal_task_id;
+    (run, task.unwrap())
+}
+
+/// Finding 3: routing turns on only once the engine has the routing
+/// playbook, not when it is merely saved.
+#[tokio::test]
+async fn the_switch_needs_a_routing_playbook_the_engine_has_acknowledged() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    let on = || aq_server::routing::set_enabled(&pool, true);
+    assert!(on().await.is_err(), "no routing source yet");
+    let (run, task) = routing_like_source(&host).await;
+    assert!(on().await.is_err(), "a run is not a playbook");
+    // The save succeeds; the engine refuses the activation.
+    host.engine.lock().unwrap().refuses_activation = true;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "saved");
+    assert!(!active(&pool, "routing").await.unwrap().unwrap().deployed);
+    assert!(on().await.is_err(), "saved but not in the engine");
+    assert!(!aq_server::routing::enabled(&pool).await.unwrap());
+    // The retry deploys it; now the switch turns on.
+    host.engine.lock().unwrap().refuses_activation = false;
+    authoring::tick(&host).await.unwrap();
+    assert!(active(&pool, "routing").await.unwrap().unwrap().deployed);
+    on().await.unwrap();
+    assert!(aq_server::routing::enabled(&pool).await.unwrap());
+}
+
+/// Finding 1: a retry of an activation that a rollback has overtaken does
+/// nothing: the engine stays on what the tables call active.
+#[tokio::test]
+async fn a_late_activation_retry_never_undoes_a_rollback() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (first, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    // The second save is recorded, but the engine does not take it.
+    notify_source(&host, &reworded(2), 2).await;
+    let (second, task) = authored(&host).await;
+    host.engine.lock().unwrap().refuses_activation = true;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(active(&pool, NOTIFY).await.unwrap().unwrap().id, second);
+    host.engine.lock().unwrap().refuses_activation = false;
+    // The owner rolls back before any retry.
+    authoring::rollback(&host, NOTIFY).await.unwrap();
+    let now = active(&pool, NOTIFY).await.unwrap().unwrap();
+    assert_eq!((now.id, now.deployed), (first, true));
+    let rolled_back = host.engine.lock().unwrap().activations.clone();
+    assert_eq!(rolled_back.last().unwrap().1, now.artifact_digest);
+    // The retry that had picked the second run finds it no longer active.
+    assert!(!authoring::deploy(&host, second).await.unwrap());
+    authoring::tick(&host).await.unwrap();
+    assert_eq!(host.engine.lock().unwrap().activations, rolled_back);
+    // A run that is active and waiting is deployed once, under the same rule.
+    assert!(!authoring::deploy(&host, first).await.unwrap());
+}
+
+/// Finding 2: a save whose authoring was missed is authored when the server
+/// reconciles, and a run that ended is not repeated while nothing changed.
+#[tokio::test]
+async fn a_missed_save_is_authored_on_reconciliation_and_an_ended_run_is_not_repeated() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    // The owner saved while the engine was not open: nothing was authored.
+    host.engine.lock().unwrap().down = true;
+    assert!(authoring::author(&host, NOTIFY).await.is_err());
+    assert!(authoring::author_missed(&host, NOTIFY).await.is_err());
+    assert_eq!(runs(&pool).await, 0);
+    // The engine opens: the reconciliation authors the document.
+    host.engine.lock().unwrap().down = false;
+    let run = authoring::author_missed(&host, NOTIFY).await.unwrap();
+    let run = run.expect("the missed save is authored");
+    // While it runs, and after it ends with a question, nothing is repeated.
+    assert_eq!(authoring::author_missed(&host, NOTIFY).await.unwrap(), None);
+    let task = in_flight(&pool).await.unwrap()[0].internal_task_id.unwrap();
+    let question = json!({"kind": "question", "question": "How long?",
+        "sentences": [{"line": 1, "text": "x"}]});
+    authoring::completed(&host, task, &answered(question))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "question");
+    assert_eq!(authoring::author_missed(&host, NOTIFY).await.unwrap(), None);
+    assert_eq!(runs(&pool).await, 1);
+    // The owner changes the document (or Settings change the facts).
+    notify_source(&host, &reworded(2), 2).await;
+    let next = authoring::author_missed(&host, NOTIFY).await.unwrap();
+    assert!(next.is_some_and(|next| next > run));
+}

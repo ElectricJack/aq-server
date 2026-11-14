@@ -20,7 +20,8 @@ pub mod store;
 pub mod view;
 
 pub use complete::{
-    FACTS_CHANGED, author, completed, reinstall_active, rollback, serve, submit_run, tick,
+    FACTS_CHANGED, author, author_missed, completed, deploy, reinstall_active, rollback, serve,
+    submit_run, tick,
 };
 pub use config::Config;
 pub use deploy::{Deployer, Server};

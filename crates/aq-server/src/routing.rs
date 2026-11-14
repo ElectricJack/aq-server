@@ -199,11 +199,9 @@ pub async fn enabled(pool: &PgPool) -> Result<bool, AppError> {
 /// Routing turns on only while a routing playbook is active (spec 0013 §7); turning it off
 /// always works.
 pub async fn set_enabled(pool: &PgPool, on: bool) -> Result<(), AppError> {
-    if on
-        && aq_playbook_authoring::active(pool, ROUTING_SOURCE)
-            .await?
-            .is_none()
-    {
+    // In effect means the engine has it: a playbook only saved routes nothing.
+    let in_effect = aq_playbook_authoring::active(pool, ROUTING_SOURCE).await?;
+    if on && !in_effect.is_some_and(|run| run.deployed) {
         return Err(AppError::Conflict(
             "Routing can be turned on once a routing playbook is active".into(),
         ));
@@ -238,18 +236,20 @@ pub async fn author(state: &AppState) {
     }
 }
 
-/// [`author`] when the routing source has never been authored: a document saved before this
-/// server could author it gets its playbook once the engine is open.
-pub(crate) async fn author_first(state: AppState) {
-    let pool = &state.store.pool;
-    let none = sqlx::query_scalar::<_, bool>(
-        "SELECT NOT EXISTS(SELECT 1 FROM playbook_authoring_runs WHERE source_id=$1)",
-    )
-    .bind(ROUTING_SOURCE)
-    .fetch_one(pool)
-    .await;
-    if ensure_source(pool).await.is_ok() && none.unwrap_or(false) {
-        author(&state).await;
+/// When the engine opens and then on a slow pass: authors the routing document unless its
+/// newest run was already for the document and offers as they are (a missed save is caught up).
+pub(crate) async fn reconcile(state: AppState) {
+    let every = Duration::from_millis(state.config.playbook_authoring.poll_ms.saturating_mul(30));
+    loop {
+        let pool = &state.store.pool;
+        let document = aq_profile_settings::structure::document(pool).await;
+        let empty = document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty());
+        if !empty && ensure_source(pool).await.is_ok() {
+            if let Err(error) = aq_playbook_authoring::author_missed(&state, ROUTING_SOURCE).await {
+                tracing::info!(%error, "the routing document is not authored yet");
+            }
+        }
+        tokio::time::sleep(every).await;
     }
 }
 

@@ -55,6 +55,8 @@ pub struct ActiveRun {
     pub finished_at_ms: Option<i64>,
     /// When the artifact took effect (again, after a rollback).
     pub activated_at_ms: Option<i64>,
+    /// Whether the engine has acknowledged the artifact on the binding.
+    pub deployed: bool,
 }
 
 /// How a run ended, as [`finish`] records it.
@@ -346,10 +348,11 @@ pub async fn active(pool: &PgPool, source: &str) -> Result<Option<ActiveRun>> {
         Option<String>,
         Option<i64>,
         Option<i64>,
+        bool,
     );
     let row: Option<Row> = sqlx::query_as(
         "SELECT id,source_revision,source_digest,facts_digest,record_digest,artifact_digest,
-            artifact,previous_digest,finished_at_ms,activated_at_ms FROM playbook_authoring_runs
+            artifact,previous_digest,finished_at_ms,activated_at_ms,deployed FROM playbook_authoring_runs
          WHERE source_id=$1 AND status='saved' AND active",
     )
     .bind(source)
@@ -366,6 +369,7 @@ pub async fn active(pool: &PgPool, source: &str) -> Result<Option<ActiveRun>> {
         previous,
         finished,
         activated,
+        deployed,
     )) = row
     else {
         return Ok(None);
@@ -381,6 +385,7 @@ pub async fn active(pool: &PgPool, source: &str) -> Result<Option<ActiveRun>> {
         previous_digest: previous,
         finished_at_ms: finished,
         activated_at_ms: activated,
+        deployed,
     }))
 }
 
@@ -495,13 +500,4 @@ pub async fn prune(pool: &PgPool, source: &str, keep: u64) -> Result<u64> {
     .await?;
     tx.commit().await?;
     Ok(done.rows_affected())
-}
-
-/// Records that the engine runs the active run `id`'s artifact on its binding.
-pub async fn deployed(pool: &PgPool, id: i64) -> Result<()> {
-    sqlx::query("UPDATE playbook_authoring_runs SET deployed=TRUE WHERE id=$1 AND active")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
 }
