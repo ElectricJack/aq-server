@@ -187,6 +187,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "comment_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "comment",
+            "version_key": "comment"
           }
         }
       },
@@ -602,6 +612,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "decision_id",
+            "revision_param": "expected_decision_revision",
+            "type": "decision",
+            "version_key": "decision"
           }
         }
       },
@@ -629,6 +645,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "result_id",
+            "revision_param": "expected_version",
+            "type": "result",
+            "version_key": "thread"
           }
         }
       },
@@ -696,6 +718,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "result_id",
+            "revision_param": "expected_version",
+            "type": "result",
+            "version_key": "thread"
           }
         }
       },
@@ -874,6 +902,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "revision_param": "expected_project_revision",
+            "type": "project",
+            "version_key": "project"
           }
         }
       },
@@ -902,6 +936,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "node_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
           }
         }
       },
@@ -1026,6 +1070,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "node_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
           }
         }
       },
@@ -1053,6 +1107,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "node_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
           }
         }
       },
@@ -1312,6 +1376,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "node_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
           }
         }
       },
@@ -1646,6 +1720,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "binding",
+            "revision_param": "expected_version",
+            "type": "playbook_binding",
+            "version_key": "playbook_binding"
           }
         }
       },
@@ -1674,6 +1754,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "binding",
+            "revision_param": "expected_version",
+            "type": "playbook_binding",
+            "version_key": "playbook_binding"
           }
         }
       },
@@ -2020,6 +2106,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "run_id",
+            "type": "playbook_run"
           }
         }
       },
@@ -2048,6 +2138,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "binding",
+            "revision_param": "expected_version",
+            "type": "playbook_binding",
+            "version_key": "playbook_binding"
           }
         }
       },
@@ -2328,6 +2424,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "decision_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_revision",
+            "type": "decision",
+            "version_key": "decision"
           }
         }
       },
@@ -2512,6 +2618,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "result_id",
+            "revision_param": "expected_version",
+            "type": "result",
+            "version_key": "result"
           }
         }
       },
@@ -2640,6 +2752,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "result_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "result",
+            "version_key": "assessment"
           }
         }
       },
@@ -2752,6 +2874,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "result_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "result",
+            "version_key": "result"
           }
         }
       },
@@ -3207,6 +3339,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "session_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_generation",
+            "type": "session",
+            "version_key": "session"
           }
         }
       },
@@ -3234,6 +3376,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "session_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_generation",
+            "type": "session",
+            "version_key": "session"
           }
         }
       },
@@ -3420,6 +3572,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "conversation_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_conversation_revision",
+            "type": "conversation",
+            "version_key": "conversation"
           }
         }
       },
@@ -3448,6 +3610,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id": "owner-availability",
+            "type": "swarm"
           }
         }
       },
@@ -3475,6 +3641,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -3590,6 +3766,14 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "task"
           }
         }
       },
@@ -3649,6 +3833,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "comment_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_revision",
+            "type": "task_comment",
+            "version_key": "task_comment"
           }
         }
       },
@@ -3715,6 +3909,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "comment_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_revision",
+            "type": "task_comment",
+            "version_key": "task_comment"
           }
         }
       },
@@ -3829,6 +4033,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_project_revision",
+            "type": "project",
+            "version_key": "project"
           }
         },
         "supervisor": {
@@ -3840,6 +4054,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_project_revision",
+            "type": "project",
+            "version_key": "project"
           }
         }
       },
@@ -3869,6 +4093,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -3897,6 +4131,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         },
         "supervisor": {
@@ -3908,6 +4152,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -3936,6 +4190,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         },
         "supervisor": {
@@ -3947,6 +4211,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -3974,6 +4248,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         },
         "supervisor": {
@@ -3985,6 +4269,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -4013,6 +4307,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "revision_param": "expected_version",
+            "type": "project",
+            "version_key": "project"
           }
         },
         "supervisor": {
@@ -4024,6 +4324,12 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "revision_param": "expected_version",
+            "type": "project",
+            "version_key": "project"
           }
         }
       },
@@ -4427,6 +4733,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         },
         "supervisor": {
@@ -4438,6 +4754,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -4465,6 +4791,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
           }
         }
       },
@@ -4932,6 +5268,16 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "thread_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "thread",
+            "version_key": "thread"
           }
         }
       },
@@ -5199,6 +5545,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "machine",
+            "type": "machine"
           }
         }
       },
@@ -5257,6 +5607,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "machine",
+            "type": "machine"
           }
         }
       },
@@ -5284,6 +5638,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "machine",
+            "type": "machine"
           }
         }
       },
@@ -5311,6 +5669,10 @@
           "route": {
             "method": "POST",
             "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "machine",
+            "type": "machine"
           }
         }
       },

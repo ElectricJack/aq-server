@@ -66,6 +66,10 @@ aq <group>                           # the commands under those tokens, e.g. aq 
   flag alone is `true`. `--param` still works and may be mixed with flags; a
   param given both ways is refused. A param named like one of `run`'s own
   flags (`reason`, `subject`, `expect`, `param`) is given with `--param`.
+- A mutation that goes through the action union names what it changes by a
+  param: `aq task cancel --task-id ID --project-id P --expected-version 7`.
+  The server builds the action's subject and expected versions from those
+  params, so `--subject` and `--expect` are needed only to override them.
 - Flags and help come from the catalog built into the binary, for the mode's
   principal (owner, or the agent in a sandbox). They are a convenience: a
   required param that is missing is refused by the server, not the CLI, and a

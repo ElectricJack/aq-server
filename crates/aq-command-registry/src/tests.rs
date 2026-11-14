@@ -121,7 +121,8 @@ fn forward_builds_each_body_kind() {
         (body["kind"].clone(), body["operation_id"].clone()),
         (json!("task.create"), json!(op))
     );
-    assert_eq!(body["payload"], json!({"title":"x"}));
+    // The payload always carries the operation ID.
+    assert_eq!(body["payload"], json!({"title":"x","operation_id":op}));
     request.subject = None;
     assert!(forward(create, create.owner.as_ref().unwrap(), &request, None, rid).is_err());
 }
@@ -413,4 +414,103 @@ fn forward_refuses_an_undeclared_query_param() {
     )
     .unwrap();
     assert_eq!(f.uri, format!("/api/human/projects/{p}/tasks?limit=5"));
+}
+
+#[test]
+fn an_action_subject_follows_from_its_params() {
+    let kinds = [
+        ("task.cancel", "task.cancel"),
+        ("worker.revoke", "worker.control"),
+        ("swarm.availability.set", "swarm.availability"),
+        ("feedback.link", "result.comment"),
+    ];
+    let mut all = actions();
+    for (kind, grant) in kinds {
+        all.push(ActionSpec {
+            kind,
+            grant,
+            target: TargetRule::Subject,
+        });
+    }
+    let r = Registry::new(&all).unwrap();
+    let op = Uuid::from_u128(7);
+    let build = |name: &str, params: Value, subject: Option<Value>| {
+        let c = r.get(name).unwrap();
+        let request = CommandRequest {
+            operation_id: Some(op),
+            subject,
+            params: params.as_object().unwrap().clone(),
+            ..Default::default()
+        };
+        forward(c, c.owner.as_ref().unwrap(), &request, None, Uuid::nil()).map(|f| f.body.unwrap())
+    };
+    // An id the payload does not have is taken out of it.
+    let b = build(
+        "task.cancel",
+        json!({"task_id":"t","project_id":"p","expected_version":"7"}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(b["subject"], json!({"type":"task","id":"t","revision":"7"}));
+    assert_eq!(b["expected_versions"], json!({"task":"7"}));
+    assert_eq!(
+        b["payload"],
+        json!({"project_id":"p","expected_version":"7","operation_id":op})
+    );
+    // An id the payload has stays; no revision means no expected version.
+    let b = build("worker.revoke", json!({"machine":"desktop"}), None).unwrap();
+    assert_eq!(b["subject"], json!({"type":"machine","id":"desktop"}));
+    assert_eq!(b["expected_versions"], json!({}));
+    assert_eq!(b["payload"], json!({"machine":"desktop","operation_id":op}));
+    let b = build("swarm.availability.set", json!({"available":true}), None).unwrap();
+    assert_eq!(
+        b["subject"],
+        json!({"type":"swarm","id":"owner-availability"})
+    );
+    // A numeric revision is sent as its decimal string, under the kind's key.
+    let b = build(
+        "decision.resolve",
+        json!({"decision_id":"d","expected_decision_revision":4}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        b["subject"],
+        json!({"type":"decision","id":"d","revision":"4"})
+    );
+    let b = build(
+        "feedback.link",
+        json!({"result_id":"r","expected_version":"2"}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(b["expected_versions"], json!({"thread":"2"}));
+    // An explicit subject is sent as given and the params are left alone.
+    let given = json!({"type":"task","id":"other","revision":"9"});
+    let b = build(
+        "task.cancel",
+        json!({"project_id":"p","expected_version":"9"}),
+        Some(given.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        (b["subject"].clone(), b["expected_versions"].clone()),
+        (given, json!({}))
+    );
+    // Without the id or the version nothing is built.
+    assert!(build("task.cancel", json!({"expected_version":"7"}), None).is_err());
+    assert!(build("task.cancel", json!({"task_id":"t"}), None).is_err());
+    // The published entry says how.
+    let doc = document(&r, &BTreeMap::new());
+    let entry = doc["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "task.cancel")
+        .unwrap();
+    assert_eq!(
+        entry["principals"]["owner"]["subject"],
+        json!({"type":"task","id_param":"task_id","id_param_schema":{"type":"string","format":"uuid"},
+            "revision_param":"expected_version","version_key":"task"})
+    );
 }
