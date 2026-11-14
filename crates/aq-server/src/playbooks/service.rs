@@ -819,6 +819,8 @@ pub struct RetainedAdmission {
     pub(super) request: aq_playbook_host::runner::KeyedAdmissionRequest,
     pub(super) grant_id: Uuid,
     pub(super) grant_revision: i64,
+    /// The engine request time: when this admission was retained.
+    pub(super) created_at_ms: i64,
 }
 impl Service {
     pub(super) fn aad(&self, domain: &str, id: Uuid, digest: &str) -> Result<Vec<u8>> {
@@ -947,6 +949,7 @@ impl Service {
             request,
             grant_id,
             grant_revision: revision,
+            created_at_ms: row.get("created_at_ms"),
         })
     }
     pub async fn acknowledge_admission(
@@ -999,6 +1002,16 @@ impl Service {
         after: i64,
         limit: u32,
     ) -> Result<Vec<(i64, Uuid, EventEnvelope)>> {
+        let page = self.outbox_requests(owner, after, limit).await?;
+        Ok(page.into_iter().map(|(s, id, e, _)| (s, id, e)).collect())
+    }
+    /// [`Self::outbox`] with each row's `created_at_ms`, the engine request time.
+    pub(super) async fn outbox_requests(
+        &self,
+        owner: &RuntimeOwner,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<(i64, Uuid, EventEnvelope, i64)>> {
         if after < 0 || !(1..=16).contains(&limit) {
             return Err(Error::Invalid);
         }
@@ -1006,7 +1019,7 @@ impl Service {
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        let rows=sqlx::query("SELECT * FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND sequence>$3 AND (status!='engine_accepted' OR NOT fanout_complete) ORDER BY sequence LIMIT $4").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind(limit as i64).fetch_all(&mut *tx).await?;
+        let rows=sqlx::query("SELECT * FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND sequence>$3 AND (status='pending' OR (status='engine_accepted' AND NOT fanout_complete)) ORDER BY sequence LIMIT $4").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind(limit as i64).fetch_all(&mut *tx).await?;
         let mut result = Vec::new();
         for row in rows {
             let id: Uuid = row.get("event_id");
@@ -1030,7 +1043,7 @@ impl Service {
             }
             aq_playbook_host::model::validate_event(&event, &self.profile.registry())
                 .map_err(|_| Error::Invalid)?;
-            result.push((row.get("sequence"), id, event));
+            result.push((row.get("sequence"), id, event, row.get("created_at_ms")));
         }
         tx.commit().await?;
         Ok(result)
@@ -1131,6 +1144,16 @@ impl Service {
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         self.grant_locked(&mut tx, id, revision, false).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    /// Hold a pending outbox event the engine refused as stale: it is kept,
+    /// visibly, and no longer delivered.
+    pub(super) async fn hold_event(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        sqlx::query("UPDATE playbook_outbox SET status='unknown' WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }

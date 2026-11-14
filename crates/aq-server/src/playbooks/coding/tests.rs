@@ -259,15 +259,38 @@ pub(crate) async fn settle(
             .unwrap();
         let state = store.clone().load(namespace).unwrap().state;
         if state.runs.values().all(|r| r.status.terminal()) {
-            return state
-                .runs
-                .values()
-                .filter(|r| r.parent.is_none())
-                .map(|r| (r.artifact.clone(), r.outcome.clone()))
-                .collect();
+            return root_outcomes(owner).await;
         }
     }
     panic!("coding runs did not settle");
+}
+/// Root runs' artifacts and outcomes through inspection, which serves live
+/// runs and the history finished runs leave the State for.
+pub(crate) async fn root_outcomes(owner: &Owner) -> Vec<(String, Option<String>)> {
+    let mut roots = Vec::new();
+    let mut after = None;
+    loop {
+        let query = aq_playbook_host::runner::InspectionQuery {
+            kind: aq_playbook_host::runner::InspectionKind::Runs,
+            run: None,
+            after,
+            limit: 32,
+        };
+        let page = owner
+            .call(Request::Inspect { query }, DEADLINE)
+            .await
+            .unwrap();
+        for run in page["items"].as_array().unwrap() {
+            if run["parent"].is_null() {
+                let outcome = run["outcome"].as_str().map(String::from);
+                roots.push((run["artifact"].as_str().unwrap().into(), outcome));
+            }
+        }
+        match page["next"].as_str() {
+            Some(next) => after = Some(next.into()),
+            None => return roots,
+        }
+    }
 }
 
 #[tokio::test]
@@ -388,6 +411,7 @@ async fn deliver_completion(owner: &Owner, handle: &str, payload: Value, now: i6
                 authenticated_producer: "aq.host.bridge@1".into(),
                 epoch: 0,
                 event: Box::new(event),
+                requested_at_ms: Some(now),
                 now_ms: now,
             },
             DEADLINE,
@@ -463,14 +487,7 @@ async fn coding_policy_consumes_async_work_completion() {
         }
         let state = store.clone().load("coding-async").unwrap().state;
         if state.runs.values().all(|r| r.status.terminal()) {
-            roots = Some(
-                state
-                    .runs
-                    .values()
-                    .filter(|r| r.parent.is_none())
-                    .map(|r| (r.artifact.clone(), r.outcome.clone()))
-                    .collect::<Vec<_>>(),
-            );
+            roots = Some(root_outcomes(&owner).await);
             break;
         }
     }

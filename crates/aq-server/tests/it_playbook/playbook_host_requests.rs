@@ -218,6 +218,7 @@ impl Host {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn run(&self, id: &str, name: &str, input: Value) -> HostResult {

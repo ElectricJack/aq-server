@@ -1062,6 +1062,7 @@ async fn host7_profile_starts_on_gateway_graph_with_unbound_check_port_and_inter
         reason: None,
         late_results: vec![],
         completion_event: None,
+        dispatch_sequence: None,
     };
     // Subjects are not graph node ids, so no graph call is made.
     let subject = json!({"id": "work-1", "revision": 1});
@@ -1277,6 +1278,7 @@ async fn host7_production_startup_prepares_and_publishes_through_delivery_servic
         reason: None,
         late_results: vec![],
         completion_event: None,
+        dispatch_sequence: None,
     };
 
     // candidate.prepare -> D1 create_candidate -> aq-git candidate.create.

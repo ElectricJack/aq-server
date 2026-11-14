@@ -56,6 +56,11 @@ pub enum Error {
     Unknown,
     #[error("engine refused: {0}")]
     Engine(String),
+    /// The engine no longer remembers this event or admission key and its
+    /// request time is older than the replay window. Nothing was written;
+    /// the outcome belongs to this one request.
+    #[error("{0}")]
+    Stale(String),
     #[error("synchronous owner thread could not start")]
     Thread,
 }
@@ -124,6 +129,9 @@ pub enum Request {
     },
     AdmitOnce {
         request: Box<KeyedAdmissionRequest>,
+        /// When the host first created this admission (its own clock).
+        #[serde(default)]
+        requested_at_ms: Option<i64>,
         now_ms: i64,
     },
     Admission {
@@ -133,6 +141,10 @@ pub enum Request {
         authenticated_producer: String,
         epoch: u64,
         event: Box<EventEnvelope>,
+        /// When the host first created this event (its own clock), not the
+        /// event's business time.
+        #[serde(default)]
+        requested_at_ms: Option<i64>,
         now_ms: i64,
     },
     Fanout {
@@ -569,13 +581,7 @@ impl Owner {
 fn runner_error(e: aq_playbooks_runner::Error) -> Error {
     match e {
         aq_playbooks_runner::Error::Exhausted(_) => Error::Overloaded,
-        // The pinned runner reports atomic namespace limits as this refusal.
-        // Preserve its type here without changing the vendored engine API.
-        aq_playbooks_runner::Error::Refused(reason)
-            if reason == "namespace retention/admission quota exhausted" =>
-        {
-            Error::Overloaded
-        }
+        stale @ aq_playbooks_runner::Error::Stale { .. } => Error::Stale(stale.to_string()),
         other => Error::Engine(other.to_string()),
     }
 }
@@ -631,10 +637,16 @@ fn execute<S: Storage>(
             let event = snapshot.events.get(&event_key).ok_or(Error::Invalid)?;
             serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.iter().filter(|d|d.run.is_none()).count()})
         }
-        Request::AdmitOnce { request, now_ms } => {
-            serde_json::to_value(engine.admit_once(*request, now_ms).map_err(runner_error)?)
-                .map_err(engine_error)?
-        }
+        Request::AdmitOnce {
+            request,
+            requested_at_ms,
+            now_ms,
+        } => serde_json::to_value(
+            engine
+                .admit_once_at(*request, requested_at_ms, now_ms)
+                .map_err(runner_error)?,
+        )
+        .map_err(engine_error)?,
         Request::Admission { key } => {
             serde_json::to_value(engine.admission_receipt(&key).map_err(engine_error)?)
                 .map_err(engine_error)?
@@ -652,10 +664,17 @@ fn execute<S: Storage>(
             authenticated_producer,
             epoch,
             event,
+            requested_at_ms,
             now_ms,
         } => serde_json::to_value(
             engine
-                .admit_event_in_epoch(&authenticated_producer, *event, epoch, now_ms)
+                .admit_event_at(
+                    &authenticated_producer,
+                    *event,
+                    epoch,
+                    requested_at_ms,
+                    now_ms,
+                )
                 .map_err(runner_error)?,
         )
         .map_err(engine_error)?,

@@ -543,6 +543,7 @@ impl Driver {
                 .call(
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
+                        requested_at_ms: Some(retained.created_at_ms),
                         now_ms: (self.service_clock()),
                     },
                     CALL,
@@ -551,6 +552,9 @@ impl Driver {
             {
                 Ok(value) => value,
                 Err(aq_playbook_host::Error::Overloaded) => return Err(Error::Overloaded),
+                // A stale refusal (the engine forgot the key and the request is
+                // older than its window) is held like any uncertain outcome,
+                // never re-admitted.
                 Err(_) => {
                     let _ = self.service.hold_admission(&self.runtime, id).await;
                     return Err(Error::Unknown);
@@ -673,11 +677,14 @@ impl Driver {
                 &mut overloaded,
             )?;
         }
-        let page = self.service.outbox(&self.runtime, *cursor, 2).await?;
+        let page = self
+            .service
+            .outbox_requests(&self.runtime, *cursor, 2)
+            .await?;
         if page.is_empty() {
             *cursor = 0;
         }
-        for (sequence, id, event) in &page {
+        for (sequence, id, event, created_at_ms) in &page {
             if self.service.profile.is_host2()
                 && !self
                     .declared_events
@@ -703,19 +710,26 @@ impl Driver {
                 continue;
             }
             let delivery: Result<()> = async {
-                let result = self
+                let result = match self
                     .owner
                     .call(
                         Request::Event {
                             authenticated_producer: event.producer.clone(),
                             epoch: 0,
                             event: Box::new(event.clone()),
+                            requested_at_ms: Some(*created_at_ms),
                             now_ms: self.service_clock(),
                         },
                         CALL,
                     )
                     .await
-                    .map_err(host_error)?;
+                {
+                    // The outcome of this one event: hold its row and go on.
+                    Err(aq_playbook_host::Error::Stale(_)) => {
+                        return self.service.hold_event(&self.runtime, *id).await;
+                    }
+                    result => result.map_err(host_error)?,
+                };
                 let receipt: EventDisposition = serde_json::from_value(result)?;
                 self.owner
                     .call(
@@ -823,17 +837,23 @@ impl Driver {
         if run.is_empty() || run.len() > 512 {
             return Err(Error::Invalid);
         }
-        self.owner
-            .call(
-                Request::Cancel {
-                    run,
-                    now_ms: self.service_clock(),
-                },
-                CALL,
-            )
-            .await
-            .map_err(host_error)?;
-        Ok(())
+        let cancel = Request::Cancel {
+            run: run.clone(),
+            now_ms: self.service_clock(),
+        };
+        match self.owner.call(cancel, CALL).await {
+            Ok(_) => Ok(()),
+            // A finished run has left the engine State (it is history), so the
+            // engine no longer finds it. Cancelling it stays the no-op it is
+            // for a terminal run.
+            Err(aq_playbook_host::Error::Engine(_)) if self.finished(run).await? => Ok(()),
+            Err(error) => Err(host_error(error)),
+        }
+    }
+    async fn finished(&self, run: String) -> Result<bool> {
+        let page = self.inspect_run(run).await?;
+        let status = page["items"][0]["status"].as_str();
+        Ok(matches!(status, Some("completed" | "failed" | "cancelled")))
     }
     /// Startup replay never changes an existing activation or renews authority.
     pub(crate) async fn ensure_binding(
@@ -950,8 +970,8 @@ impl Driver {
     /// Exact retained-event cut fixture: engine commits, AQ ACK is omitted.
     /// Not mounted as an HTTP route or present in ordinary release builds.
     pub async fn test_commit_event_without_aq_ack(&self) -> Result<EventDisposition> {
-        let page = self.service.outbox(&self.runtime, 0, 1).await?;
-        let (_, _, event) = page.into_iter().next().ok_or(Error::Invalid)?;
+        let page = self.service.outbox_requests(&self.runtime, 0, 1).await?;
+        let (_, _, event, created_at_ms) = page.into_iter().next().ok_or(Error::Invalid)?;
         let value = self
             .owner
             .call(
@@ -959,6 +979,7 @@ impl Driver {
                     authenticated_producer: event.producer.clone(),
                     epoch: 0,
                     event: Box::new(event),
+                    requested_at_ms: Some(created_at_ms),
                     now_ms: self.service_clock(),
                 },
                 CALL,

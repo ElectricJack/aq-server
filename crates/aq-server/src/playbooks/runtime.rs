@@ -156,6 +156,7 @@ impl Runtime {
         let limits = Limits {
             work_queue: 8,
             control_queue: 4,
+            // Accepted and ignored by the engine: it has no namespace limits.
             engine: aq_playbook_host::runner::EngineConfig {
                 max_runs: 128,
                 max_events: 2048,

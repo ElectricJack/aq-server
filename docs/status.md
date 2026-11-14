@@ -102,8 +102,12 @@ What the routing policy layer still needs, in dependency order:
    reads it yet. The Settings field itself is on aq-server #131, not on `main`.
    The rest of this list is specified in
    [`specs/0011-routing-policy.md`](specs/0011-routing-policy.md) (draft).
-2. aq-server re-vendored onto the current aq-playbooks runner. It vendors
-   `aq-playbooks-0173673`, a branch commit that predates the D10 storage change.
+2. aq-server re-vendored onto the current aq-playbooks runner. **Interim on
+   `feat/internal-work`** (2026-11-13): it vendors `aq-playbooks-e7df379`, the
+   live-state engine (finished runs leave the State as history, rolling repeat
+   protection with request times, no namespace limits), crates still at 0.1.3.
+   The 0.2.0 re-vendor follows when the engine is final
+   ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
 3. `judgment.request` bound to a provider. The server registers all twelve
    host commands but leaves `judgment.request` and `check.request` unbound, so
    they refuse (`playbooks/runtime.rs`). aq-server #64 is the open judgment

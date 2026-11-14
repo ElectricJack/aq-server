@@ -376,6 +376,7 @@ impl Env {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn scan(&self, name: &str, complete: bool) {

@@ -30,6 +30,19 @@ impl Storage for Counted {
     fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
         self.inner.release(n, o)
     }
+    fn persists_history(&self) -> bool {
+        self.inner.persists_history()
+    }
+    fn history_page(
+        &self,
+        n: &str,
+        q: &aq_playbook_host::runner::InspectionQuery,
+    ) -> Result<Vec<aq_playbook_host::runner::HistoryItem>, StorageError> {
+        self.inner.history_page(n, q)
+    }
+    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
+        self.inner.delete_history(n, o, before_ms)
+    }
     fn compare_and_swap(&self, n: &str, o: &str, r: u64, s: &State) -> Result<u64, StorageError> {
         self.inner.compare_and_swap(n, o, r, s)
     }
@@ -136,6 +149,19 @@ impl Storage for Opaque {
     }
     fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
         self.0.release(n, o)
+    }
+    fn persists_history(&self) -> bool {
+        self.0.persists_history()
+    }
+    fn history_page(
+        &self,
+        n: &str,
+        q: &aq_playbook_host::runner::InspectionQuery,
+    ) -> Result<Vec<aq_playbook_host::runner::HistoryItem>, StorageError> {
+        self.0.history_page(n, q)
+    }
+    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
+        self.0.delete_history(n, o, before_ms)
     }
     fn compare_and_swap(&self, n: &str, o: &str, r: u64, s: &State) -> Result<u64, StorageError> {
         self.0.compare_and_swap(n, o, r, s)

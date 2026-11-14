@@ -177,6 +177,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .call(
             Request::AdmitOnce {
                 request: Box::new(request.clone()),
+                requested_at_ms: None,
                 now_ms: 1,
             },
             DEADLINE,
@@ -187,6 +188,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .call(
             Request::AdmitOnce {
                 request: Box::new(request),
+                requested_at_ms: None,
                 now_ms: 2,
             },
             DEADLINE,

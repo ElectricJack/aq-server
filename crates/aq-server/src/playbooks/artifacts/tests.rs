@@ -7,7 +7,7 @@ use crate::playbooks::coding::{
 use crate::playbooks::review_domain::CatalogProfile;
 use aq_playbook_host::{
     MemoryStorage, Owner, Request,
-    runner::{Activation, Storage},
+    runner::{Activation, InspectionKind, InspectionQuery},
 };
 use std::{sync::Arc, time::Duration};
 
@@ -55,7 +55,7 @@ async fn install_all(c: &OwnerCatalog<'_>, l: &MemoryLedger, tag: &str, a: &Codi
     }
 }
 
-async fn admit(o: &Owner, policy: &CodingPolicy, key: &str) {
+async fn admit(o: &Owner, policy: &CodingPolicy, key: &str) -> String {
     let request = Request::Admit {
         binding: ROOT.into(),
         entry: "main".into(),
@@ -63,7 +63,8 @@ async fn admit(o: &Owner, policy: &CodingPolicy, key: &str) {
         authority: authority(),
         now_ms: 1,
     };
-    o.call(request, DEADLINE).await.unwrap();
+    let run = o.call(request, DEADLINE).await.unwrap();
+    run.as_str().unwrap().into()
 }
 
 #[tokio::test]
@@ -87,19 +88,19 @@ async fn activation_switches_future_runs_only() {
         .await
         .unwrap();
     assert_eq!(first["previous"], Value::Null);
-    admit(&o, &policy_a, "run-1").await;
+    let mut runs = vec![admit(&o, &policy_a, "run-1").await];
 
     let switched = activate(&c, &l, "act-b", ROOT, &b.root.digest)
         .await
         .unwrap();
     assert_eq!(switched["previous"], a.root.digest.as_str());
     assert_eq!(switched["duplicate"], false);
-    admit(&o, &policy_b, "run-2").await;
+    runs.push(admit(&o, &policy_b, "run-2").await);
 
     let back = rollback(&c, &l, "rollback-1", ROOT).await.unwrap();
     assert_eq!(back["artifact"], a.root.digest.as_str());
     assert_eq!(back["previous"], b.root.digest.as_str());
-    admit(&o, &policy_a, "run-3").await;
+    runs.push(admit(&o, &policy_a, "run-3").await);
 
     // Idempotent: replaying an op id returns the record and changes nothing;
     // reusing it for a different request is a conflict.
@@ -118,14 +119,24 @@ async fn activation_switches_future_runs_only() {
         Err(Error::Conflict)
     );
 
-    // Every run kept the artifact pinned at its admission.
+    // Every run kept the artifact pinned at its admission. Finished runs
+    // leave the State, so read them through inspection (history).
     settle(&o, &store, "activation").await;
-    let state = store.clone().load("activation").unwrap().state;
-    let mut roots: Vec<_> = state.runs.values().filter(|r| r.parent.is_none()).collect();
-    roots.sort_by_key(|r| r.catalog_revision);
+    let mut roots = Vec::new();
+    for run in runs {
+        let query = InspectionQuery {
+            kind: InspectionKind::Runs,
+            run: Some(run),
+            after: None,
+            limit: 1,
+        };
+        let page = o.call(Request::Inspect { query }, DEADLINE).await.unwrap();
+        let item = &page["items"][0];
+        roots.push((item["artifact"].clone(), item["outcome"].clone()));
+    }
     let pinned: Vec<_> = roots
         .iter()
-        .map(|r| (r.artifact.as_str(), r.outcome.as_deref()))
+        .map(|(artifact, outcome)| (artifact.as_str().unwrap(), outcome.as_str()))
         .collect();
     assert_eq!(
         pinned,

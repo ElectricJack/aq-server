@@ -286,6 +286,7 @@ impl Host {
             reason: None,
             late_results: vec![],
             completion_event: None,
+            dispatch_sequence: None,
         }
     }
     async fn try_run(&self, id: &str, name: &str, input: Value) -> Result<HostResult> {

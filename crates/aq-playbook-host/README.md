@@ -1,7 +1,7 @@
 # AQ playbook owner foundation
 
 An internal embedding of the exact aq-playbooks source pinned in
-`vendor/aq-playbooks-source-0.1.3.json`. By default, no domain commands or events
+`vendor/aq-playbooks-source-0.1.3-e7df379.json`. By default, no domain commands or events
 are registered. Explicit AQ adapters remain the embedding owner's responsibility.
 The CLI and synthetic host are not dependencies. There is no automatic driver,
 production registration, worker launch, supervisor, notification dispatcher or
@@ -114,3 +114,19 @@ Retire a prior owner before deployment; do not apply this candidate to an active
 legacy database as a metadata preview. The consumer source qualification and
 no-canonical-change boundary are tracked in
 [API-05 current catalog](../../docs/implementation/API-05-current-catalog.md).
+
+## Live-state engine (interim, e7df379)
+
+The host consumes exact component source e7df379 (runner/Postgres/CLI 0.1.3,
+model/compiler 0.1.0 by number; the engine moves to 0.2.0 later), pinned in
+`vendor/aq-playbooks-source-0.1.3-e7df379.json`. A finished run leaves the
+State as history; `Request::Inspect` serves live State plus history, while
+`Request::Runs` lists live runs only. `Request::AdmitOnce` and `Request::Event`
+take an optional `requested_at_ms` (the host's creation time of the request)
+and call the engine's `admit_once_at` / `admit_event_at`; a repeat of a
+forgotten key with an old request time returns the new `Error::Stale`, the
+outcome of that one request. The engine has no namespace limits: the
+`EngineConfig` limits in `Limits` are accepted and ignored. A storage wrapper
+must forward `persists_history`, `history_page` and `delete_history`, or
+`Engine::new` refuses it. See
+[the interim vendor note](../../docs/implementation/playbook-authoring-B1-interim-vendor.md).

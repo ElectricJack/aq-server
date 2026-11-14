@@ -1430,7 +1430,7 @@ async fn pilots_end_to_end() {
     .into_iter()
     .collect();
     let source: Value = serde_json::from_str(include_str!(
-        "../../../../vendor/aq-playbooks-source-0.1.3.json"
+        "../../../../vendor/aq-playbooks-source-0.1.3-e7df379.json"
     ))
     .unwrap();
     let evidence = json!({

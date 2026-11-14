@@ -21,14 +21,19 @@ async fn actual_engine_install_admit_tick_inspect_and_explicit_stop() {
         .await
         .unwrap();
     let run = install(&owner).await;
+    let live = Request::Runs {
+        after: None,
+        limit: 1,
+    };
+    let page = owner.call(live, DEADLINE).await.unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
     owner
         .call(Request::Tick { now_ms: 2 }, DEADLINE)
         .await
         .unwrap();
-    assert_eq!(
-        inspect.load("pure").unwrap().state.runs[&run].status,
-        aq_playbooks_runner::RunStatus::Completed
-    );
+    // A finished run leaves the State in the commit that finishes it;
+    // inspection serves it from history.
+    assert!(inspect.load("pure").unwrap().state.runs.get(&run).is_none());
     let page = owner
         .call(
             Request::Runs {
@@ -39,7 +44,23 @@ async fn actual_engine_install_admit_tick_inspect_and_explicit_stop() {
         )
         .await
         .unwrap();
-    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert!(page["items"].as_array().unwrap().is_empty());
+    let page = owner
+        .call(
+            Request::Inspect {
+                query: aq_playbooks_runner::InspectionQuery {
+                    kind: aq_playbooks_runner::InspectionKind::Runs,
+                    run: Some(run.clone()),
+                    after: None,
+                    limit: 1,
+                },
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["items"][0]["id"], run.as_str());
+    assert_eq!(page["items"][0]["status"], "completed");
     owner.call(Request::Stop, DEADLINE).await.unwrap();
     assert!(matches!(
         owner.call(Request::Tick { now_ms: 3 }, DEADLINE).await,
@@ -132,6 +153,19 @@ impl Storage for Blocked {
     }
     fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
         self.store.release(n, o)
+    }
+    fn persists_history(&self) -> bool {
+        self.store.persists_history()
+    }
+    fn history_page(
+        &self,
+        n: &str,
+        q: &aq_playbooks_runner::InspectionQuery,
+    ) -> Result<Vec<aq_playbooks_runner::HistoryItem>, StorageError> {
+        self.store.history_page(n, q)
+    }
+    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
+        self.store.delete_history(n, o, before_ms)
     }
     fn query(
         &self,
@@ -313,9 +347,11 @@ async fn changed_artifact_bytes_and_large_request_never_enter_namespace() {
     );
 }
 
+// There are no namespace limits: the deprecated `max_runs` is accepted and
+// ignored, so a second keyed admission is admitted while the first is live,
+// and a replay of the first still returns its receipt.
 #[tokio::test]
-async fn engine_admission_capacity_is_typed_and_keeps_existing_work() {
-    use aq_playbooks_runner::KeyedAdmissionRequest;
+async fn ignored_engine_limits_admit_new_work_and_keep_existing_work() {
     let store = MemoryStorage::default();
     let inspect = store.clone();
     let mut limits = HostLimits::default();
@@ -323,6 +359,69 @@ async fn engine_admission_capacity_is_typed_and_keeps_existing_work() {
     let owner = Owner::start("bounded-admissions".into(), limits, move || Ok(store))
         .await
         .unwrap();
+    activate(&owner).await;
+    let first = owner
+        .call(admit_once("one", None, 1), DEADLINE)
+        .await
+        .unwrap();
+    owner
+        .call(admit_once("two", None, 2), DEADLINE)
+        .await
+        .unwrap();
+    let replay = owner
+        .call(admit_once("one", None, 3), DEADLINE)
+        .await
+        .unwrap();
+    assert_eq!(first["receipt"], replay["receipt"]);
+    assert_eq!(replay["duplicate"], true);
+    assert_eq!(
+        inspect.load("bounded-admissions").unwrap().state.runs.len(),
+        2
+    );
+    owner.call(Request::Stop, DEADLINE).await.unwrap();
+}
+
+// A request for a key the engine does not remember, whose request time is
+// older than the admission window, is refused as `Error::Stale` and writes
+// nothing. The owner stays usable for the requests behind it.
+#[tokio::test]
+async fn a_stale_keyed_admission_is_typed_and_writes_nothing() {
+    let store = MemoryStorage::default();
+    let inspect = store.clone();
+    let owner = Owner::start(
+        "stale-admissions".into(),
+        HostLimits::default(),
+        move || Ok(store),
+    )
+    .await
+    .unwrap();
+    activate(&owner).await;
+    let window = inspect
+        .load("stale-admissions")
+        .unwrap()
+        .state
+        .retention
+        .policy
+        .admission_replay_ms as i64;
+    let now = 2 * window;
+    let stale = owner
+        .call(admit_once("old", Some(now - window), now), DEADLINE)
+        .await;
+    assert!(
+        matches!(&stale, Err(Error::Stale(text)) if text.starts_with("stale request")),
+        "{stale:?}"
+    );
+    let state = inspect.load("stale-admissions").unwrap().state;
+    assert!(state.runs.is_empty() && state.keyed_admissions.get("old").is_none());
+    let fresh = owner
+        .call(admit_once("new", Some(now - window + 1), now), DEADLINE)
+        .await
+        .unwrap();
+    assert_eq!(fresh["duplicate"], false);
+    owner.call(Request::Stop, DEADLINE).await.unwrap();
+}
+
+async fn activate(owner: &Owner) {
     let a = artifact();
     owner
         .call(
@@ -344,50 +443,19 @@ async fn engine_admission_capacity_is_typed_and_keeps_existing_work() {
         )
         .await
         .unwrap();
-    let request = |key: &str| KeyedAdmissionRequest {
-        key: key.into(),
-        binding: "bounded".into(),
-        expected_activation_revision: 1,
-        entry: "main".into(),
-        input: serde_json::Value::Null,
-        authority: common::authority(),
-    };
-    let first = owner
-        .call(
-            Request::AdmitOnce {
-                request: Box::new(request("one")),
-                now_ms: 1,
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        owner
-            .call(
-                Request::AdmitOnce {
-                    request: Box::new(request("two")),
-                    now_ms: 2
-                },
-                DEADLINE
-            )
-            .await,
-        Err(Error::Overloaded)
-    ));
-    let replay = owner
-        .call(
-            Request::AdmitOnce {
-                request: Box::new(request("one")),
-                now_ms: 3,
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    assert_eq!(first["receipt"], replay["receipt"]);
-    assert_eq!(
-        inspect.load("bounded-admissions").unwrap().state.runs.len(),
-        1
-    );
-    owner.call(Request::Stop, DEADLINE).await.unwrap();
+}
+
+fn admit_once(key: &str, requested_at_ms: Option<i64>, now_ms: i64) -> Request {
+    Request::AdmitOnce {
+        request: Box::new(aq_playbooks_runner::KeyedAdmissionRequest {
+            key: key.into(),
+            binding: "bounded".into(),
+            expected_activation_revision: 1,
+            entry: "main".into(),
+            input: serde_json::Value::Null,
+            authority: common::authority(),
+        }),
+        requested_at_ms,
+        now_ms,
+    }
 }
