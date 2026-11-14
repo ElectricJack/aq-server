@@ -95,7 +95,7 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:f4e5dc3aeff563b69af203cbb486bbc4636b6b47f2a6cf3a195e3bf96937dcb8"
+          "digest": "sha256:92b19f1ecee542b9424687e5b4db364e70b406620867dd695c5e6f39144405da"
         },
         {
           "name": "dashboard-actions",
