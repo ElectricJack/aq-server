@@ -56,20 +56,26 @@ When a task touches several areas, go by the riskiest. When you can't tell,
 call it medium.
 
 Medium and high risk work is at least Standard, high effort. Very high risk
-work is at least Complex, medium effort, unless it is narrow and covered by a test, in which
-case Standard, high effort is enough.
+work is at least Complex, high effort, unless it is narrow and covered by a
+test, in which case Standard, high effort is enough.
 
 Never raise the level because providers are busy, and never use a task's
 priority to choose anything. Priority only orders the queue.
 
 ## Who may take it
 
+A local model means the OpenCode agent. It may or may not be available when a
+task is routed. When a rule sends work to a local model and it isn't
+available, use your judgement and send the work to the next agent these rules
+allow.
+
 - High and very high risk work goes only to Claude or Codex.
 - Medium risk work goes to Claude or Codex. It may go to a local model only
   when the task is narrow, covered by a test, and Standard.
 - Low risk work that is narrow and covered by a test should go to a local
   model first, to save Claude and Codex usage.
-- Anything not mentioned here, takes only low risk work.
+- Any agent other than Claude, Codex and the local model takes only low risk
+  work.
 - Design and planning go to Claude first, and to Codex only when Claude can't
   take them.
 - Art and visual design go to Codex, and wait for it rather than going
