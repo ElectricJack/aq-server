@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import subprocess
 import time
+import unicodedata
 
 spec = importlib.util.spec_from_file_location("catalog", Path(__file__).with_name("refresh-model-catalog.py"))
 catalog = importlib.util.module_from_spec(spec)
@@ -29,6 +30,53 @@ def window(identity, label, percent, reset):
     return dict(id=identity, label=label, used_percent=percent, reset_at=reset)
 
 
+def reset_unknown():
+    return dict(state="unknown", available_count=None, grants=None)
+
+
+def valid_label(label):
+    if not isinstance(label, str) or not label.strip():
+        return False
+    try:
+        return len(label.encode("utf-8")) <= 120 and not any(unicodedata.category(c) == "Cc" for c in label)
+    except UnicodeEncodeError:
+        return False
+
+
+def codex_resets(value):
+    """Normalize documented app-server reset credits without copying opaque IDs."""
+    block = value.get("rateLimitResetCredits")
+    if not isinstance(block, dict):
+        return reset_unknown()
+    count = block.get("availableCount")
+    if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 1_000_000:
+        return reset_unknown()
+    details = block.get("credits")
+    grants = None
+    if isinstance(details, list) and len(details) <= 100:
+        grants = []
+        for row in details:
+            if not isinstance(row, dict) or row.get("status") != "available":
+                continue
+            label = row.get("title")
+            if label is None:
+                label = "Rate-limit reset"
+            if not valid_label(label):
+                continue
+            expiry = row.get("expiresAt")
+            if expiry is not None:
+                if isinstance(expiry, bool) or not isinstance(expiry, int) or not 0 < expiry <= 253402300799:
+                    continue
+                try:
+                    expiry = datetime.datetime.fromtimestamp(expiry, datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                except (ValueError, OSError, OverflowError):
+                    continue
+            # Availability of a credit does not establish that an eligible window
+            # can be reset now; the read interface supplies no such assertion.
+            grants.append(dict(label=label, remaining_count=None, expires_at=expiry, usable_now=None, clears=[]))
+    return dict(state="known", available_count=count, grants=grants)
+
+
 def codex(cwd):
     client = catalog.Rpc(["codex", "app-server", "--stdio"], cwd)
     try:
@@ -43,7 +91,7 @@ def codex(cwd):
                 minutes = row.get("windowDurationMins")
                 label = {300: "5 hours", 10080: "Weekly", 1440: "Daily"}.get(minutes, f"{minutes} minutes" if isinstance(minutes, int) and 0 < minutes < 100000 else key.title())
                 windows.append(window(key, label, row["usedPercent"], row.get("resetsAt")))
-        return windows
+        return windows, codex_resets(value)
     finally:
         client.close()
 
@@ -56,7 +104,8 @@ def claude(cwd, sdk, executable):
     value = json.loads(result.stdout)
     if value.get("rate_limits_available") is not True or not isinstance(value.get("rate_limits"), dict):
         raise ValueError("subscription usage unavailable")
-    return claude_windows(value["rate_limits"])
+    # The documented experimental SDK control exposes windows, not grants.
+    return claude_windows(value["rate_limits"]), reset_unknown()
 
 
 def claude_windows(limits):
@@ -99,10 +148,12 @@ def refresh(output, cwd, sdk, executable, claude_account, codex_account, claude_
         jobs = [(p, a, pool.submit(fetch)) for p, a, fetch in sources]
         for provider, account, job in jobs:
             try:
-                windows = job.result()
+                windows, resets = job.result()
                 if not windows or len(windows) > 16:
                     raise ValueError("no windows")
-                accounts.append(dict(provider=provider, account_ref=account, observed_at_ms=int(time.time()*1000), windows=windows))
+                observed = int(time.time()*1000)
+                resets["observed_at_ms"] = observed
+                accounts.append(dict(provider=provider, account_ref=account, observed_at_ms=observed, windows=windows, reset_credits=resets))
                 statuses[provider] = "refreshed"
             except Exception:
                 previous = retained.get((provider, account))
@@ -110,7 +161,10 @@ def refresh(output, cwd, sdk, executable, claude_account, codex_account, claude_
                     try:
                         cached = cached_claude(claude_cache, claude_account_id)
                         if cached and (previous is None or cached[0] > previous["observed_at_ms"]):
+                            reset = previous.get("reset_credits") if previous else None
                             previous = dict(provider=provider, account_ref=account, observed_at_ms=cached[0], windows=cached[1], source="claude_cli_usage_cache")
+                            if reset is not None:
+                                previous["reset_credits"] = reset
                     except (OSError, ValueError, KeyError, TypeError):
                         pass
                 if previous:
