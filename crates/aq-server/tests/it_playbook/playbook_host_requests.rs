@@ -973,7 +973,7 @@ async fn judgment_request_respects_budget_and_records_provenance() {
 /// `engineering` lists `fixture-a`/`model-a` first, which resolves by API key
 /// to `endpoint` at the effort its model choice names. `profile` is the
 /// internal work default (`None`: unset).
-async fn internal_work(
+pub(crate) async fn internal_work(
     f: &common::profiled::Fixture,
     endpoint: String,
     profile: Option<&str>,

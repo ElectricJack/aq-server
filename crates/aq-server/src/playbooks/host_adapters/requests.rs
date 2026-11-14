@@ -178,6 +178,11 @@ pub trait JudgmentProvider: Send + Sync {
         &self,
         request: &JudgmentRequest,
     ) -> std::result::Result<JudgmentReply, ProviderFailure>;
+    /// One structured answer (`judgment.assess`); the error is the catalog's
+    /// `failed` reason. A provider that cannot answer one is unavailable.
+    async fn assess(&self, _: &AssessRequest) -> std::result::Result<AssessReply, &'static str> {
+        Err("provider_unavailable")
+    }
 }
 
 fn source_valid(source: &Value) -> bool {
@@ -275,6 +280,7 @@ impl Service {
     fn completion_contract(&self, command: &str) -> Result<(Value, &'static str)> {
         Ok(match command {
             "judgment.request" => (json!("judgment"), "aq.judgment.completed"),
+            "judgment.assess" => (json!("judgment"), "aq.judgment.assessed"),
             "check.request" => (json!("check"), "aq.check.receipted"),
             "work.ensure" => (json!("work"), "aq.operation.updated"),
             "decision.request" => (json!("decision"), "aq.decision.completed"),
@@ -285,7 +291,7 @@ impl Service {
     /// Records the durable intent (accepted effect row and running operation
     /// row) and commits it before any external effect.
     #[allow(clippy::too_many_arguments)]
-    async fn record_operation(
+    pub(super) async fn record_operation(
         &self,
         mut tx: Transaction<'_, Postgres>,
         id: Uuid,
@@ -347,7 +353,7 @@ impl Service {
     /// Completes a running operation exactly once: the retained completion and
     /// its sealed completion event commit together. A completion that lost the
     /// race returns the retained one.
-    async fn complete_operation(
+    pub(super) async fn complete_operation(
         &self,
         operation: Uuid,
         command: &str,
@@ -1210,6 +1216,9 @@ impl Service {
             self.observe_work(operation).await?
         } else if op.command == "decision.request" {
             self.observe_decision(operation, &op).await?
+        } else if op.command == "judgment.assess" {
+            // Answered through its join; it fails at its deadline by itself.
+            None
         } else if self.now()?
             >= op.request["deadline_at_ms"]
                 .as_i64()

@@ -6,6 +6,7 @@ publish = false
 description = "Playbook fixed host contracts, typed grant scope and the HTTP error mapping"
 
 [dependencies]
+aq-routing = { path = "../aq-routing" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.3" }
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 axum.workspace = true

@@ -107,6 +107,7 @@ impl Service {
             checks: None,
             judgments: None,
             integration: None,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
     }
@@ -171,7 +172,7 @@ impl Service {
     }
     /// A catalog 2.x host profile (Host7 or Host8) with its ports.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new_host2(
+    pub async fn new_host2(
         state: &crate::AppState,
         namespace: Namespace,
         keys: Arc<Keyring>,
@@ -191,8 +192,16 @@ impl Service {
             checks,
             judgments,
             integration,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
+    }
+    /// Replaces the routing port of a freshly built host service (tests).
+    pub fn with_routing(mut self, routing: Arc<dyn super::host_adapters::RoutingPort>) -> Self {
+        if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
+            ports.routing = routing;
+        }
+        self
     }
     /// D8 host services with the existing D4 contracts and confirmed domain events.
     pub async fn new_monitoring6(
@@ -209,6 +218,7 @@ impl Service {
             checks: None,
             judgments: None,
             integration: None,
+            routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
         }));
         Ok(service)
     }

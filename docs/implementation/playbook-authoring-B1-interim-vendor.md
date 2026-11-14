@@ -447,3 +447,25 @@ What changed for the server (the engine's list of 38 differences is
   the host's defaults apply.
 - Unchanged rulings: the server sends no request times, and an accepted row
   is never sent as a new event again.
+
+### The 500-run routing scale test on 0.2.0
+
+Same test, harness and command as above, release build, once after the
+re-vendor (2026-11-13/14; the host was shared with other builds, load average
+about 7 to 10): all 500 runs completed `routed` in 742 s (846 s on e7df379).
+
+| Run | Slowest tick | Snapshot (`encrypted_snapshot` bytes) |
+| --- | --- | --- |
+| 1 | 178 ms | 5,957 |
+| 50 | 380 ms | 148,065 |
+| 100 | 247 ms | 171,561 |
+| 200 | 203 ms | |
+| 250 | 218 ms | 221,633 |
+| 500 | 275 ms | 224,923 |
+
+Over all 500 runs the median slowest tick was 215 ms (216.5 ms over the
+first hundred and over the last hundred) and the 95th percentile 359 ms. Two
+runs were above 700 ms, one above 1 s (run 338: 1,083 ms); isolated, not a
+trend. The tick stays flat. The snapshot stops growing as before (the
+harness keeps `keep_finished` 20: 102 `runtime_index` rows from run 50 on);
+finished runs are in `aq_playbooks.run_history` (13,000 rows for 500 runs).

@@ -250,6 +250,19 @@ async fn unrouted_task_is_not_offered_when_routing_is_on_and_is_offered_when_off
     assert_eq!(not_offered(&c).await, 0, "a wait is not a refusal");
     assert!(history(&c).await.is_empty(), "waiting writes no route");
     assert_eq!(holds(&c).await, 0, "waiting is not a hold");
+    // The wait is recorded once for the playbook owner, which asks for a route from it.
+    let wanted: Vec<(i64, i64, i64, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT wanted_version,task_version,emitted_at_ms,workspace_id,project_id FROM route_needed_emissions WHERE task_id=$1",
+    )
+    .bind(c.env.lineage.task_id)
+    .fetch_all(&c.env.env.pool)
+    .await
+    .unwrap();
+    let l = &c.env.lineage;
+    assert_eq!(wanted.len(), 1);
+    assert!(wanted[0].0 >= 1, "the task version that waits");
+    assert_eq!(wanted[0].1..=wanted[0].2, 0..=0, "nothing asked yet");
+    assert_eq!((wanted[0].3, wanted[0].4), (l.workspace_id, l.project_id));
     // Off, placement is as before: the router's own profile.
     routing(&c, false).await;
     assert_eq!(offered_on(&c).await, format!("intelligence:{ROUTER}"));
@@ -266,6 +279,56 @@ async fn route_is_ignored_for_a_binding_pinned_to_a_named_profile() {
     assert_eq!(decided(&c).await, (json!("engineering@2"), None));
     assert!(stored_route(&c).is_some(), "the route is left alone");
     assert!(history(&c).await.is_empty());
+    // And without a route: placed as before, and no route is asked for.
+    assert_eq!(waiting(&c).await, 0);
+}
+
+/// Tasks recorded as waiting for a route.
+async fn waiting(c: &Case) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM route_needed_emissions")
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+
+/// A router route is for the attempts the task had when it was written. After a later
+/// attempt ended, the task is routed again: a failure may change the level.
+#[tokio::test]
+async fn a_task_retried_after_routing_is_routed_again() {
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    routing(&c, true).await;
+    route(&c, "standard-high", &[]);
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(waiting(&c).await, 0, "a routed task does not wait");
+    fail_and_release(&c, page.offers.remove(0).offered.offer.binding.attempt_id).await;
+    // The route was written before that attempt ended (`a` 0 < 1 ended attempt).
+    for _ in 0..3 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(offered(&body).is_empty(), "{body}");
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    assert_eq!(attempts(&c).await, 1, "not offered on the outdated route");
+    assert_eq!(stored_route(&c), None, "the outdated route is cleared");
+    assert_eq!(history(&c).await, [None]);
+    assert_eq!(
+        (skips(&c).await, holds(&c).await),
+        (0, 0),
+        "a wait, not a refusal"
+    );
+    assert_eq!(waiting(&c).await, 1, "and a route is asked for");
+    // A route written after that attempt ended (`a` 1) is placed.
+    let again = json!({"c":"standard-high","h":[],"p":[],"pf":[],"l":null,"i":"any","d":null,"s":"router","n":2,"a":1});
+    *c.metadata.lock().unwrap() = json!({"aq:route": again});
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(attempts(&c).await, 2);
 }
 
 #[tokio::test]
@@ -301,7 +364,9 @@ async fn route_whose_class_lost_its_profile_is_cleared_and_not_launched_on_the_r
         panic!("{body}")
     };
     fail_and_release(&c, page.offers.remove(0).offered.offer.binding.attempt_id).await;
-    route(&c, "deep-max", &[]);
+    // Routed after that attempt ended (`a` 1), to a class without a profile.
+    let unassigned = json!({"c":"deep-max","h":[],"p":[],"pf":[],"l":null,"i":"any","d":null,"s":"router","n":1,"a":1});
+    *c.metadata.lock().unwrap() = json!({"aq:route": unassigned});
     for _ in 0..4 {
         let (status, body) = poll(&c).await;
         assert_eq!(status, 200, "{body}");

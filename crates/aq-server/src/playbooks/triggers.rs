@@ -188,6 +188,88 @@ impl Service {
         tx.commit().await?;
         Ok(count)
     }
+    /// B5: the server asks for a route. One `aq.work.route_needed` per cause
+    /// for each ready task placement recorded as waiting
+    /// (`routing::placements`), while a routing artifact is active; see
+    /// `host9::route_needed_due`. R1: every project with
+    /// `installation_routing`, else the namespace's.
+    pub async fn collect_route_needed(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
+        use aq_playbook_domain::host9;
+        if self.profile != super::review_domain::CatalogProfile::Host9 || self.host.is_none() {
+            return Ok(0);
+        }
+        let now = self.now()?;
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        let (Some(artifact), _) = self.routing_artifact(&mut tx).await? else {
+            return Ok(0);
+        };
+        let rows = sqlx::query("SELECT r.task_id,r.wanted_version,r.task_version,r.emitted_at_ms,r.outcome,r.artifact_digest,r.options_digest,EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=r.task_id::text AND e.created_at_ms>=r.emitted_at_ms AND NOT playbook_run_finished($1,$2,e.run_id)) AS run_unfinished FROM route_needed_emissions r WHERE r.wanted_at_ms>=$3 AND ($4 OR r.project_id=$5) AND (r.emitted_at_ms=0 OR r.wanted_version<>r.task_version OR GREATEST(r.emitted_at_ms,r.checked_at_ms)<=$6) ORDER BY r.wanted_at_ms,r.task_id LIMIT $7 FOR UPDATE OF r SKIP LOCKED")
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(now - host9::ROUTE_WANTED_FRESH_MS)
+            .bind(self.installation_routing)
+            .bind(self.namespace.project_id)
+            .bind(now - host9::ROUTE_NEEDED_REPEAT_MS)
+            .bind(i64::from(limit))
+            .fetch_all(&mut *tx)
+            .await?;
+        let settled = |row: &sqlx::postgres::PgRow| row.get::<Option<String>, _>("outcome");
+        let offers = match rows
+            .iter()
+            .any(|r| settled(r).as_deref() == Some("not_offered"))
+        {
+            true => Some(host9::options_digest(
+                &self
+                    .host
+                    .as_deref()
+                    .ok_or(Error::Forbidden)?
+                    .routing
+                    .options()
+                    .await?,
+            )),
+            false => None,
+        };
+        let contract = self.profile.registry().events["aq.work.route_needed"].clone();
+        let mut count = 0;
+        for row in rows {
+            let (task, version): (Uuid, i64) = (row.get("task_id"), row.get("wanted_version"));
+            let emission = host9::Emission {
+                wanted_version: version,
+                emitted_version: row.get("task_version"),
+                emitted_at_ms: row.get("emitted_at_ms"),
+                outcome: settled(&row),
+                artifact_digest: row.get("artifact_digest"),
+                options_digest: row.get("options_digest"),
+                run_unfinished: row.get("run_unfinished"),
+            };
+            if !host9::route_needed_due(&emission, now, &artifact, offers.as_deref()) {
+                sqlx::query("UPDATE route_needed_emissions SET checked_at_ms=$2 WHERE task_id=$1")
+                    .bind(task)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                continue;
+            }
+            let (namespace, generation) = (self.namespace.namespace_id, self.namespace.generation);
+            let key = format!("{task}/{version}/{now}");
+            let id = stable_id("aq.work.route_needed", namespace, generation, &key)?;
+            let event = host9::route_needed_event(id, task, version, now, &contract);
+            self.queue_occurrence(&mut tx, id, &event.map_err(|_| Error::Invalid)?)
+                .await?;
+            sqlx::query("UPDATE route_needed_emissions SET task_version=$2,emitted_at_ms=$3,checked_at_ms=0,outcome=NULL,reasons=NULL,artifact_digest=$4,options_digest=NULL WHERE task_id=$1")
+                .bind(task)
+                .bind(version)
+                .bind(now)
+                .bind(&artifact)
+                .execute(&mut *tx)
+                .await?;
+            count += 1;
+        }
+        tx.commit().await?;
+        Ok(count)
+    }
     async fn calendar_due(
         tx: &mut Transaction<'_, Postgres>,
         schedule: &DailySchedule,

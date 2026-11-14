@@ -281,6 +281,7 @@ impl MailHost {
         super::host_adapters::HOST5_COMMANDS.contains(&name)
             || (self.service.profile.is_host2()
                 && super::host_adapters::HOST7_COMMANDS.contains(&name))
+            || self.service.profile.commands().contains(&name)
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
@@ -731,6 +732,14 @@ impl Driver {
                     .await,
             );
         }
+        partial.defer(
+            "asking for routes",
+            self.service.collect_route_needed(&self.runtime, 8).await,
+        );
+        partial.defer(
+            "expiring judgments",
+            self.service.expire_assessments(&self.runtime, 2).await,
+        );
         // Catalog profile 7 work.ensure completion (aq.operation.updated).
         partial.defer(
             "collecting work completions",

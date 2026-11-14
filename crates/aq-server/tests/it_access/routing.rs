@@ -202,6 +202,8 @@ fn route(source: Source) -> Route {
         policy_digest: Some("ab".repeat(32)),
         structure_revision: Some(7),
         source,
+        ended_attempts: 0,
+        judgment: None,
     }
 }
 
