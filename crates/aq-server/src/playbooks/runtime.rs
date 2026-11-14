@@ -179,8 +179,8 @@ impl Runtime {
             protected::storage(
                 client,
                 factory_config.engine_keys.clone(),
-                Duration::from_secs(2),
-                Duration::from_millis(500),
+                factory_config.timeouts.statement(),
+                factory_config.timeouts.lock(),
             )
         });
         let driver = Arc::new(
@@ -237,27 +237,29 @@ impl Runtime {
             return Err(error);
         }
         let reviews = Arc::new(reviews::Service::new(state.clone(), config.keys.clone()));
-        let (stop, mut receiver) = watch::channel(false);
+        let (stop, receiver) = watch::channel(false);
         driver.set_automatic_state(1);
         let owned = driver.clone();
-        let task = tokio::spawn(async move {
-            let mut timer = tokio::time::interval(config.interval);
-            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {biased; _=receiver.wait_for(|stop|*stop)=>break,_=timer.tick()=>{}}
-                match owned.quantum().await {
-                    Ok(_) | Err(super::domain::Error::Overloaded) => {}
-                    Err(_) => {
-                        owned.set_automatic_state(2);
-                        tracing::warn!(
-                            "playbook drive held after owner uncertainty or refusal; explicit reconciliation required"
-                        );
-                        let _ = receiver.wait_for(|stop| *stop).await;
-                        break;
-                    }
-                }
+        // A failed quantum is retried after a backoff from the drive interval
+        // up to the engine statement timeout; only shutdown stops the drive.
+        let quantum = move || {
+            let owned = owned.clone();
+            async move {
+                let result = match owned.quantum().await {
+                    Ok(_) | Err(super::domain::Error::Overloaded) => Ok(()),
+                    Err(error) => Err(error),
+                };
+                owned.drive_failed(result.is_err());
+                result
             }
-        });
+        };
+        let task = tokio::spawn(aq_playbook_host::drive::run(
+            receiver,
+            config.interval,
+            config.timeouts.statement(),
+            quantum,
+            |error, delay| tracing::warn!(?error, ?delay, "playbook quantum failed; retrying"),
+        ));
         let mut stopping = stop.subscribe();
         let draining = driver.clone();
         let drain = tokio::spawn(async move {

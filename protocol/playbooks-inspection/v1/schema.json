@@ -69,6 +69,13 @@
           "type": "integer",
           "format": "int64"
         },
+        "held_reason": {
+          "description": "Why a held (`unknown`) admission is held; `None` otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "request_id": {
           "type": "string",
           "format": "uuid"

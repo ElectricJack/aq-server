@@ -17,6 +17,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+pub mod drive;
 pub mod protected;
 pub use aq_playbooks_model as model;
 pub use aq_playbooks_postgres as postgres_storage;
@@ -61,6 +62,10 @@ pub enum Error {
     /// the outcome belongs to this one request.
     #[error("{0}")]
     Stale(String),
+    /// The engine does not hold what the request names (for an event:
+    /// it has forgotten it).
+    #[error("engine: not found: {0}")]
+    NotFound(String),
     #[error("synchronous owner thread could not start")]
     Thread,
 }
@@ -582,6 +587,7 @@ fn runner_error(e: aq_playbooks_runner::Error) -> Error {
     match e {
         aq_playbooks_runner::Error::Exhausted(_) => Error::Overloaded,
         stale @ aq_playbooks_runner::Error::Stale { .. } => Error::Stale(stale.to_string()),
+        aq_playbooks_runner::Error::NotFound(what) => Error::NotFound(what),
         other => Error::Engine(other.to_string()),
     }
 }

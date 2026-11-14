@@ -36,6 +36,9 @@ struct Configuration {
     engine_keyring_file: PathBuf,
     protection: ProtectionConfig,
     drive_interval_ms: u64,
+    /// `[playbooks.engine_timeouts]`; defaults 30 s statement, 500 ms lock.
+    #[serde(default)]
+    engine_timeouts: aq_playbook_host::protected::Timeouts,
     deployments: Vec<DeploymentInput>,
     /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
     #[serde(default)]
@@ -130,6 +133,7 @@ pub struct Loaded {
     socket_owner_uid: u32,
     port: u16,
     pub(crate) interval: Duration,
+    pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
     pub(crate) deployments: Vec<Deployment>,
     pub(crate) profile: CatalogProfile,
     pub(crate) integration: Option<IntegrationSettings>,
@@ -216,6 +220,7 @@ impl Configuration {
             || n.name.len() > 128
             || n.name.contains('\0')
             || !(250..=60000).contains(&self.drive_interval_ms)
+            || !self.engine_timeouts.valid()
             || self.deployments.len() > 4
         {
             return Err("invalid playbook owner identity or bounds");
@@ -344,6 +349,7 @@ impl Configuration {
             socket_owner_uid: self.socket_owner_uid,
             port,
             interval: Duration::from_millis(self.drive_interval_ms),
+            timeouts: self.engine_timeouts,
             deployments,
             profile,
             integration,

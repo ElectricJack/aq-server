@@ -117,15 +117,20 @@ no-canonical-change boundary are tracked in
 
 ## Live-state engine (interim, e7df379)
 
+**Not deployable**: e7df379 has no drain of namespaces written by 0173673;
+the final re-vendor is the first deployable version.
+
 The host consumes exact component source e7df379 (runner/Postgres/CLI 0.1.3,
 model/compiler 0.1.0 by number; the engine moves to 0.2.0 later), pinned in
 `vendor/aq-playbooks-source-0.1.3-e7df379.json`. A finished run leaves the
 State as history; `Request::Inspect` serves live State plus history, while
 `Request::Runs` lists live runs only. `Request::AdmitOnce` and `Request::Event`
-take an optional `requested_at_ms` (the host's creation time of the request)
-and call the engine's `admit_once_at` / `admit_event_at`; a repeat of a
-forgotten key with an old request time returns the new `Error::Stale`, the
-outcome of that one request. The engine has no namespace limits: the
+take an optional `requested_at_ms` and call the engine's `admit_once_at` /
+`admit_event_at`; aq-server sends `None`. A repeat of a forgotten key with an
+old request time would return the new `Error::Stale`, the outcome of that one
+request; `Error::NotFound` names what the engine no longer holds (a forgotten
+event, for `Fanout`). `drive::run` and `drive::retry` drive and reopen with a
+bounded backoff; `protected::Timeouts` are the engine session deadlines. The engine has no namespace limits: the
 `EngineConfig` limits in `Limits` are accepted and ignored. A storage wrapper
 must forward `persists_history`, `history_page` and `delete_history`, or
 `Engine::new` refuses it. See

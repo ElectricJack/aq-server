@@ -3,7 +3,7 @@
 use super::{domain::*, service::*};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
-    model::CommandContract,
+    model::{CommandContract, EventEnvelope},
     runner::{
         Authority, CancellationResult, DispatchResult, EventDisposition, Host, Intent,
         KeyedAdmissionDisposition, KeyedAdmissionReceipt, Storage,
@@ -19,6 +19,13 @@ fn host_error(error: aq_playbook_host::Error) -> Error {
     match error {
         aq_playbook_host::Error::Overloaded => Error::Overloaded,
         _ => Error::Unknown,
+    }
+}
+/// Why a failed row is held: an unknown outcome, or a refusal.
+fn held_reason(error: &Error) -> &'static str {
+    match error {
+        Error::Unknown => "uncertain",
+        _ => "refused",
     }
 }
 // Capacity refuses new work without preventing already retained work from
@@ -413,12 +420,21 @@ impl Driver {
         self.automatic
             .store(state, std::sync::atomic::Ordering::SeqCst);
     }
+    /// The automatic drive's last quantum failed (5) or succeeded again (1).
+    pub(crate) fn drive_failed(&self, failed: bool) {
+        let (from, to) = if failed { (1, 5) } else { (5, 1) };
+        let ordering = std::sync::atomic::Ordering::SeqCst;
+        let _ = self
+            .automatic
+            .compare_exchange(from, to, ordering, ordering);
+    }
     pub(crate) fn automatic_state(&self) -> &'static str {
         match self.automatic.load(std::sync::atomic::Ordering::SeqCst) {
             1 => "active",
             2 => "held",
             3 => "stopping",
             4 => "stopped",
+            5 => "retrying",
             _ => "manual",
         }
     }
@@ -543,7 +559,7 @@ impl Driver {
                 .call(
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
-                        requested_at_ms: Some(retained.created_at_ms),
+                        requested_at_ms: None,
                         now_ms: (self.service_clock()),
                     },
                     CALL,
@@ -552,11 +568,15 @@ impl Driver {
             {
                 Ok(value) => value,
                 Err(aq_playbook_host::Error::Overloaded) => return Err(Error::Overloaded),
-                // A stale refusal (the engine forgot the key and the request is
-                // older than its window) is held like any uncertain outcome,
-                // never re-admitted.
-                Err(_) => {
-                    let _ = self.service.hold_admission(&self.runtime, id).await;
+                Err(error) => {
+                    let reason = match error {
+                        aq_playbook_host::Error::Stale(_) => "stale",
+                        aq_playbook_host::Error::Unknown | aq_playbook_host::Error::Stopped => {
+                            "uncertain"
+                        }
+                        _ => "refused",
+                    };
+                    let _ = self.service.hold(&self.runtime, false, id, reason).await;
                     return Err(Error::Unknown);
                 }
             };
@@ -626,10 +646,11 @@ impl Driver {
                 overloaded = true;
                 continue;
             }
-            if result.is_err() {
+            if let Err(error) = result {
                 // Retain failed/uncertain immutable work visibly. A poison or
                 // expired first page must not starve every later admission.
-                self.service.hold_admission(&self.runtime, *id).await?;
+                let reason = held_reason(&error);
+                self.service.hold(&self.runtime, false, *id, reason).await?;
             }
         }
         defer_capacity(
@@ -677,15 +698,13 @@ impl Driver {
                 &mut overloaded,
             )?;
         }
-        let page = self
-            .service
-            .outbox_requests(&self.runtime, *cursor, 2)
-            .await?;
+        let page = self.service.outbox_page(&self.runtime, *cursor, 2).await?;
         if page.is_empty() {
             *cursor = 0;
         }
-        for (sequence, id, event, created_at_ms) in &page {
-            if self.service.profile.is_host2()
+        for (sequence, id, event, accepted) in &page {
+            if !accepted
+                && self.service.profile.is_host2()
                 && !self
                     .declared_events
                     .lock()
@@ -709,61 +728,18 @@ impl Driver {
                 *cursor = *sequence;
                 continue;
             }
-            let delivery: Result<()> = async {
-                let result = match self
-                    .owner
-                    .call(
-                        Request::Event {
-                            authenticated_producer: event.producer.clone(),
-                            epoch: 0,
-                            event: Box::new(event.clone()),
-                            requested_at_ms: Some(*created_at_ms),
-                            now_ms: self.service_clock(),
-                        },
-                        CALL,
-                    )
-                    .await
-                {
-                    // The outcome of this one event: hold its row and go on.
-                    Err(aq_playbook_host::Error::Stale(_)) => {
-                        return self.service.hold_event(&self.runtime, *id).await;
-                    }
-                    result => result.map_err(host_error)?,
-                };
-                let receipt: EventDisposition = serde_json::from_value(result)?;
-                self.owner
-                    .call(
-                        Request::Fanout {
-                            event_key: receipt.key.clone(),
-                            limit: 64,
-                            now_ms: self.service_clock(),
-                        },
-                        CALL,
-                    )
-                    .await
-                    .map_err(host_error)?;
-                let status = self
-                    .owner
-                    .call(
-                        Request::EventStatus {
-                            event_key: receipt.key.clone(),
-                        },
-                        CALL,
-                    )
-                    .await
-                    .map_err(host_error)?;
-                let complete = status["pending"].as_u64().ok_or(Error::Unknown)? == 0;
-                self.service
-                    .acknowledge_event(&self.runtime, *id, receipt, complete)
-                    .await?;
-                Ok(())
+            match self.deliver(*id, event, *accepted).await {
+                Err(Error::Overloaded) => {
+                    overloaded = true;
+                    break;
+                }
+                // One row's failure is that row's outcome: hold it, go on.
+                Err(error) => {
+                    let reason = held_reason(&error);
+                    self.service.hold(&self.runtime, true, *id, reason).await?
+                }
+                Ok(()) => {}
             }
-            .await;
-            if matches!(delivery, Err(Error::Overloaded)) {
-                overloaded = true;
-                break;
-            }
-            delivery?;
             *cursor = *sequence;
         }
         self.owner
@@ -804,6 +780,53 @@ impl Driver {
         Ok(
             serde_json::json!({"admissions_checked":pending.len(),"events_checked":page.len(),"tick":tick}),
         )
+    }
+    /// One outbox row. A row the engine has accepted is never sent as a new
+    /// event again; it only continues its fan-out. An accepted event the
+    /// engine no longer remembers has nothing queued that holds it (what is
+    /// left is blocked by its input), so its row is complete.
+    async fn deliver(&self, id: Uuid, event: &EventEnvelope, accepted: bool) -> Result<()> {
+        if !accepted {
+            let request = Request::Event {
+                authenticated_producer: event.producer.clone(),
+                epoch: 0,
+                event: Box::new(event.clone()),
+                requested_at_ms: None,
+                now_ms: self.service_clock(),
+            };
+            let receipt = match self.owner.call(request, CALL).await {
+                Err(aq_playbook_host::Error::Stale(_)) => {
+                    return self.service.hold(&self.runtime, true, id, "stale").await;
+                }
+                result => serde_json::from_value(result.map_err(host_error)?)?,
+            };
+            self.service
+                .acknowledge_event(&self.runtime, id, receipt, false)
+                .await?;
+        }
+        let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+        let fanout = Request::Fanout {
+            event_key: key.clone(),
+            limit: 64,
+            now_ms: self.service_clock(),
+        };
+        let status = match self.owner.call(fanout, CALL).await {
+            Ok(_) => {
+                self.owner
+                    .call(Request::EventStatus { event_key: key }, CALL)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        let complete = match status {
+            Ok(status) => status["pending"].as_u64().ok_or(Error::Unknown)? == 0,
+            Err(aq_playbook_host::Error::NotFound(_) | aq_playbook_host::Error::Invalid) => true,
+            Err(error) => return Err(host_error(error)),
+        };
+        if complete {
+            self.service.complete_event(&self.runtime, id).await?;
+        }
+        Ok(())
     }
     pub async fn inspect_binding(&self, binding: String) -> Result<serde_json::Value> {
         if binding.is_empty() || binding.len() > 128 || binding.contains('\0') {
@@ -970,8 +993,8 @@ impl Driver {
     /// Exact retained-event cut fixture: engine commits, AQ ACK is omitted.
     /// Not mounted as an HTTP route or present in ordinary release builds.
     pub async fn test_commit_event_without_aq_ack(&self) -> Result<EventDisposition> {
-        let page = self.service.outbox_requests(&self.runtime, 0, 1).await?;
-        let (_, _, event, created_at_ms) = page.into_iter().next().ok_or(Error::Invalid)?;
+        let page = self.service.outbox(&self.runtime, 0, 1).await?;
+        let (_, _, event) = page.into_iter().next().ok_or(Error::Invalid)?;
         let value = self
             .owner
             .call(
@@ -979,7 +1002,7 @@ impl Driver {
                     authenticated_producer: event.producer.clone(),
                     epoch: 0,
                     event: Box::new(event),
-                    requested_at_ms: Some(created_at_ms),
+                    requested_at_ms: None,
                     now_ms: self.service_clock(),
                 },
                 CALL,

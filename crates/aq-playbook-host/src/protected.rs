@@ -73,6 +73,34 @@ pub fn read_keyring(path: &Path) -> Result<ProtectionKeyring, Error> {
     };
     load().ok_or(Error::Invalid)
 }
+/// Engine session deadlines, from `[playbooks.engine_timeouts]`: one engine
+/// statement and one lock wait, in milliseconds. Defaults 30 s and 500 ms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Timeouts {
+    pub statement_ms: u64,
+    pub lock_ms: u64,
+}
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            statement_ms: 30_000,
+            lock_ms: 500,
+        }
+    }
+}
+impl Timeouts {
+    pub fn statement(&self) -> Duration {
+        Duration::from_millis(self.statement_ms)
+    }
+    pub fn lock(&self) -> Duration {
+        Duration::from_millis(self.lock_ms)
+    }
+    /// What [`storage`] accepts: 1 ms to 30 s, the lock wait at most the statement.
+    pub fn valid(&self) -> bool {
+        (1..=30_000).contains(&self.statement_ms) && (1..=self.statement_ms).contains(&self.lock_ms)
+    }
+}
 /// Call inside Owner::start's factory. Connection establishment must have its own
 /// connect deadline and verified TLS policy. These bounded session deadlines are
 /// applied before the embedded engine's schema migration/ownership work.
@@ -102,4 +130,25 @@ pub fn storage(
     configure().map_err(|_| Error::Engine("database session configuration failed".into()))?;
     PostgresStorage::from_client_protected(client, keyring)
         .map_err(|_| Error::Engine("protected namespace backend initialization failed".into()))
+}
+#[cfg(test)]
+mod tests {
+    use super::Timeouts;
+    #[test]
+    fn engine_timeouts_default_to_30_s_and_500_ms_and_are_bounded() {
+        let parsed: Timeouts = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed, Timeouts::default());
+        assert_eq!(parsed.statement().as_millis(), 30_000);
+        assert_eq!(parsed.lock().as_millis(), 500);
+        assert!(parsed.valid());
+        let set: Timeouts = serde_json::from_str(r#"{"statement_ms":2000,"lock_ms":100}"#).unwrap();
+        assert!(set.valid() && set.statement().as_millis() == 2000);
+        for (statement, lock) in [(0, 0), (30_001, 500), (1000, 1001), (1000, 0)] {
+            let t = Timeouts {
+                statement_ms: statement,
+                lock_ms: lock,
+            };
+            assert!(!t.valid(), "{statement} {lock}");
+        }
+    }
 }

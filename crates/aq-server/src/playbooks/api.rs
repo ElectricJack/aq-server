@@ -50,6 +50,7 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
             "/api/playbooks/admissions/{id}/retry",
             post(retry_admission),
         )
+        .route("/api/playbooks/events/{id}/retry", post(retry_event))
         .route("/api/playbooks/drive", post(drive))
         .route("/api/playbooks/recover", post(recover))
         .route("/api/playbooks/runs/{id}/cancel", post(cancel))
@@ -90,8 +91,9 @@ async fn status(
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
     let registry = d.service.profile.registry();
+    let held = d.service.held_events().await?;
     Ok(Json(
-        json!({"namespace":d.service.namespace,"catalog_digest":digest(&registry)?,"registered_commands":registry.commands.keys().collect::<Vec<_>>(),"automatic_driver":d.automatic_state()!="manual","automatic_driver_state":d.automatic_state(),"synchronous_calls_interruptible":false}),
+        json!({"namespace":d.service.namespace,"held_events":held,"catalog_digest":digest(&registry)?,"registered_commands":registry.commands.keys().collect::<Vec<_>>(),"automatic_driver":d.automatic_state()!="manual","automatic_driver_state":d.automatic_state(),"synchronous_calls_interruptible":false}),
     ))
 }
 async fn binding(
@@ -160,7 +162,22 @@ async fn retry_admission(
     Json(_): Json<Empty>,
 ) -> Result<impl IntoResponse> {
     owner(&d, user.id)?;
-    Ok(Json(d.admission(user.id, id, false).await?))
+    let held = d.service.admission(user.id, id).await?.status.status == "unknown";
+    let mut status = serde_json::to_value(d.admission(user.id, id, false).await?)?;
+    if held {
+        status["warning"] = "Its earlier outcome was unknown: the engine may already have run it, so this retry may run the work again.".into();
+    }
+    Ok(Json(status))
+}
+async fn retry_event(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    Path(id): Path<Uuid>,
+    Json(_): Json<Empty>,
+) -> Result<Json<Value>> {
+    owner(&d, user.id)?;
+    d.service.retry_event(user.id, id).await?;
+    Ok(Json(json!({"event_id":id,"disposition":"pending"})))
 }
 async fn drive(
     RequireOwner(user): RequireOwner,

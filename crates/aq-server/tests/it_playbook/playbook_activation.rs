@@ -490,6 +490,10 @@ async fn explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drai
 #[tokio::test]
 async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_socket_directory() {
     let s = setup().await;
+    let timeouts = |table: &str| {
+        let table = format!("drive_interval_ms=250\n[playbooks.engine_timeouts]\n{table}\n");
+        s.text.replace("drive_interval_ms=250\n", &table)
+    };
     for text in [
         s.text
             .replace("enabled=true\nprofile=", "enabled=false\nprofile="),
@@ -501,9 +505,15 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
             "drive_interval_ms=250",
             "drive_interval_ms=250\nprovider_token=\"not-allowed\"",
         ),
+        timeouts("statement_ms=0"),
+        timeouts("statement_ms=30001"),
+        timeouts("statement_ms=1000\nlock_ms=1001"),
+        timeouts("idle_ms=1"),
     ] {
         assert!(toml::from_str::<Config>(&text).is_err());
     }
+    // The engine session deadlines are configuration (defaults 30 s / 500 ms).
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=2000\nlock_ms=100")).is_ok());
     let dsn = s._dir.path().join("dsn");
     private(
         &dsn,

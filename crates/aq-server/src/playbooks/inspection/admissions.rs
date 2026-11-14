@@ -14,6 +14,20 @@ impl Service {
         tx.commit().await?;
         Ok(())
     }
+    /// Held outbox events (at most 25, newest first) and why they are held.
+    pub(crate) async fn held_events(&self) -> Result<Vec<serde_json::Value>> {
+        let rows: Vec<(Uuid, String, i64, Option<String>)> = sqlx::query_as("SELECT event_id,producer,created_at_ms,held_reason FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND status='unknown' ORDER BY sequence DESC LIMIT 25").bind(self.namespace.namespace_id).bind(self.namespace.generation).fetch_all(&self.pool).await?;
+        let view = |(id, producer, at, reason)| serde_json::json!({"event_id":id,"producer":producer,"created_at_ms":at,"held_reason":reason});
+        Ok(rows.into_iter().map(view).collect())
+    }
+    /// A held outbox event goes back to the queue: a new delivery.
+    pub(crate) async fn retry_event(&self, actor: Uuid, id: Uuid) -> Result<()> {
+        self.authorize_inspection(actor).await?;
+        let retried = sqlx::query("UPDATE playbook_outbox SET status='pending',held_reason=NULL WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='unknown'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&self.pool).await?;
+        (retried.rows_affected() == 1)
+            .then_some(())
+            .ok_or(Error::Conflict)
+    }
     pub async fn inspect_admissions(
         &self,
         actor: Uuid,
@@ -29,7 +43,7 @@ impl Service {
         let mut tx = self.tx().await?;
         Self::owner(&mut tx, actor).await?;
         self.namespace_locked(&mut tx).await?;
-        let rows=sqlx::query("SELECT request_id,status,created_at_ms,receipt,engine_key,request_digest,expected_activation_revision FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND ($3::uuid IS NULL OR request_id>$3) ORDER BY request_id LIMIT $4")
+        let rows=sqlx::query("SELECT request_id,status,held_reason,created_at_ms,receipt,engine_key,request_digest,expected_activation_revision FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND ($3::uuid IS NULL OR request_id>$3) ORDER BY request_id LIMIT $4")
             .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind((limit+1) as i64).fetch_all(&mut *tx).await?;
         let more = rows.len() > limit;
         let mut items = Vec::with_capacity(limit);
@@ -54,6 +68,7 @@ impl Service {
                 run_id: receipt.as_ref().map(|r| r.run_id.clone()),
                 activation_revision: receipt.as_ref().map(|r| r.activation_revision.to_string()),
                 catalog_revision: receipt.as_ref().map(|r| r.catalog_revision.to_string()),
+                held_reason: row.get("held_reason"),
             });
         }
         let next_cursor = if more {

@@ -819,8 +819,6 @@ pub struct RetainedAdmission {
     pub(super) request: aq_playbook_host::runner::KeyedAdmissionRequest,
     pub(super) grant_id: Uuid,
     pub(super) grant_revision: i64,
-    /// The engine request time: when this admission was retained.
-    pub(super) created_at_ms: i64,
 }
 impl Service {
     pub(super) fn aad(&self, domain: &str, id: Uuid, digest: &str) -> Result<Vec<u8>> {
@@ -949,7 +947,6 @@ impl Service {
             request,
             grant_id,
             grant_revision: revision,
-            created_at_ms: row.get("created_at_ms"),
         })
     }
     pub async fn acknowledge_admission(
@@ -1002,16 +999,16 @@ impl Service {
         after: i64,
         limit: u32,
     ) -> Result<Vec<(i64, Uuid, EventEnvelope)>> {
-        let page = self.outbox_requests(owner, after, limit).await?;
+        let page = self.outbox_page(owner, after, limit).await?;
         Ok(page.into_iter().map(|(s, id, e, _)| (s, id, e)).collect())
     }
-    /// [`Self::outbox`] with each row's `created_at_ms`, the engine request time.
-    pub(super) async fn outbox_requests(
+    /// [`Self::outbox`], each row with whether the engine accepted it.
+    pub(super) async fn outbox_page(
         &self,
         owner: &RuntimeOwner,
         after: i64,
         limit: u32,
-    ) -> Result<Vec<(i64, Uuid, EventEnvelope, i64)>> {
+    ) -> Result<Vec<(i64, Uuid, EventEnvelope, bool)>> {
         if after < 0 || !(1..=16).contains(&limit) {
             return Err(Error::Invalid);
         }
@@ -1030,20 +1027,24 @@ impl Service {
                 nonce: row.get("nonce"),
                 ciphertext: row.get("ciphertext"),
             };
-            let bytes = self
-                .keys
-                .open(&self.aad("aq.playbooks.outbox", id, &digest)?, &sealed)
-                .map_err(|_| Error::Unknown)?;
-            let event: EventEnvelope = serde_json::from_slice(&bytes)?;
-            if super::domain::digest(&event)? != digest
-                || event.event_id != id.to_string()
-                || event.producer != row.get::<String, _>("producer")
-            {
-                return Err(Error::Conflict);
-            }
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
-                .map_err(|_| Error::Invalid)?;
-            result.push((row.get("sequence"), id, event, row.get("created_at_ms")));
+            let aad = self.aad("aq.playbooks.outbox", id, &digest)?;
+            let producer: String = row.get("producer");
+            let event = (self.keys.open(&aad, &sealed).ok())
+                .and_then(|bytes| serde_json::from_slice::<EventEnvelope>(&bytes).ok())
+                .filter(|event| {
+                    super::domain::digest(event).is_ok_and(|d| d == digest)
+                        && event.event_id == id.to_string()
+                        && event.producer == producer
+                        && aq_playbook_host::model::validate_event(event, &self.profile.registry())
+                            .is_ok()
+                });
+            let Some(event) = event else {
+                // A row that can never be delivered is held, not retried forever.
+                sqlx::query("UPDATE playbook_outbox SET status='unknown',held_reason='invalid' WHERE namespace_id=$1 AND generation=$2 AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
+                continue;
+            };
+            let accepted = row.get::<String, _>("status") == "engine_accepted";
+            result.push((row.get("sequence"), id, event, accepted));
         }
         tx.commit().await?;
         Ok(result)
@@ -1147,21 +1148,40 @@ impl Service {
         tx.commit().await?;
         Ok(())
     }
-    /// Hold a pending outbox event the engine refused as stale: it is kept,
-    /// visibly, and no longer delivered.
-    pub(super) async fn hold_event(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
+    /// Hold pending work with its reason (an outbox event, else an
+    /// admission): it is kept, listed with the reason, no longer delivered,
+    /// and can be retried.
+    pub(super) async fn hold(
+        &self,
+        owner: &RuntimeOwner,
+        event: bool,
+        id: Uuid,
+        reason: &str,
+    ) -> Result<()> {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        sqlx::query("UPDATE playbook_outbox SET status='unknown' WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
+        let sql = if event {
+            "UPDATE playbook_outbox SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'"
+        } else {
+            "UPDATE playbook_admissions SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'"
+        };
+        sqlx::query(sql)
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(id)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
-    pub async fn hold_admission(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
+    /// The engine has started or forgotten every destination of an accepted event.
+    pub(super) async fn complete_event(&self, owner: &RuntimeOwner, id: Uuid) -> Result<()> {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        sqlx::query("UPDATE playbook_admissions SET status='unknown' WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_outbox SET fanout_complete=true WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='engine_accepted'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }

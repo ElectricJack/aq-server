@@ -1290,23 +1290,32 @@ async fn outbox_replay_delivers_each_event_once() {
 
 /// Older than the engine's default windows (24 h for AQ events, 7 days for
 /// keyed admissions) at the fixture clock.
-const EIGHT_DAYS_AGO: i64 = NOW as i64 - 8 * 86_400_000;
-/// A request time older than the engine's replay window for a key it does
-/// not remember is refused as stale. That is the outcome of the one outbox
-/// row: it is held (`unknown`, no longer delivered) and the event behind it
-/// in the same page is delivered.
+const EIGHT_DAYS: i64 = 8 * 86_400_000;
+/// One confirmed graph operation with its pending graph outbox row.
+async fn graph_event(e: &Env) -> Uuid {
+    let pool = e.f.db.pool().await;
+    let (operation, event) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) VALUES($1,$2,$3,'{}','d3','{}','{}','{}','confirmed',0,0)")
+        .bind(operation).bind(e.attempt).bind(e.f.node.node_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO agent_graph_outbox(event_id,operation_id,kind,payload) VALUES($1,$2,'graph.operation_confirmed','{}')")
+        .bind(event).bind(operation).execute(&pool).await.unwrap();
+    event
+}
+async fn outbox_status(e: &Env, event: Uuid) -> (String, bool) {
+    sqlx::query_as("SELECT status,fanout_complete FROM playbook_outbox WHERE event_id=$1")
+        .bind(event)
+        .fetch_one(&e.f.db.pool().await)
+        .await
+        .unwrap()
+}
+/// The server sends no request time: a row is delivered on its first
+/// delivery however old it is, and after a forward clock jump has pinned the
+/// engine's retention clock.
 #[tokio::test]
-async fn one_stale_event_is_held_and_does_not_block_the_events_behind_it() {
+async fn an_old_event_and_one_after_a_clock_jump_are_accepted_on_first_delivery() {
     let e = setup_with(true).await;
     let pool = e.f.db.pool().await;
-    let events = [Uuid::new_v4(), Uuid::new_v4()];
-    for event in events {
-        let operation = Uuid::new_v4();
-        sqlx::query("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) VALUES($1,$2,$3,'{}','d3','{}','{}','{}','confirmed',0,0)")
-            .bind(operation).bind(e.attempt).bind(e.f.node.node_id).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO agent_graph_outbox(event_id,operation_id,kind,payload) VALUES($1,$2,'graph.operation_confirmed','{}')")
-            .bind(event).bind(operation).execute(&pool).await.unwrap();
-    }
+    let old = graph_event(&e).await;
     let driver = aq_server::playbooks::driver::Driver::start(
         e.service.clone(),
         aq_playbook_host::Limits::default(),
@@ -1321,50 +1330,393 @@ async fn one_stale_event_is_held_and_does_not_block_the_events_behind_it() {
         .install(aq_playbook_host::model::Artifact::seal(a.content).unwrap())
         .await
         .unwrap();
-    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 2);
-    // The first row was created before every event window.
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
     sqlx::query("UPDATE playbook_outbox SET created_at_ms=$2 WHERE event_id=$1")
-        .bind(events[0])
-        .bind(EIGHT_DAYS_AGO)
+        .bind(old)
+        .bind(NOW as i64 - EIGHT_DAYS)
         .execute(&pool)
         .await
         .unwrap();
     driver.quantum().await.unwrap();
-    let rows: Vec<(Uuid, String, bool)> = sqlx::query_as(
-        "SELECT event_id,status,fanout_complete FROM playbook_outbox ORDER BY sequence",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
     assert_eq!(
-        rows,
-        [
-            (events[0], "unknown".into(), false),
-            (events[1], "engine_accepted".into(), true)
-        ]
+        outbox_status(&e, old).await,
+        ("engine_accepted".into(), true)
     );
-    let delivered: Vec<bool> = sqlx::query_scalar(
-        "SELECT delivered FROM agent_graph_outbox WHERE event_id=ANY($1) ORDER BY event_id=$2 DESC",
-    )
-    .bind(&events[..])
-    .bind(events[0])
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(delivered, [false, true]);
-    // A held row is not delivered again: no outbox row is left to send.
-    assert!(matches!(
-        driver.test_commit_event_without_aq_ack().await,
-        Err(Error::Invalid)
-    ));
+    // One delivery at a host time eight days ahead pins the retention clock.
+    let ahead = graph_event(&e).await;
+    let clock = &e.f.time;
+    clock.store(NOW as i64 + EIGHT_DAYS, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
     driver.quantum().await.unwrap();
+    assert_eq!(
+        outbox_status(&e, ahead).await,
+        ("engine_accepted".into(), true)
+    );
+    clock.store(NOW as i64, std::sync::atomic::Ordering::SeqCst);
+    let after = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        outbox_status(&e, after).await,
+        ("engine_accepted".into(), true)
+    );
     driver.stop().await.unwrap();
 }
 
-/// A retained admission the engine refuses as stale is held, never admitted
-/// as new, and does not stop the admission behind it.
+/// A graph-event consumer started by every event. A `blocked` one takes the
+/// whole event payload as its input but allows 8 payload bytes, so every
+/// destination of it is blocked by its input.
+fn trigger_artifact(id: &str, blocked: bool) -> aq_playbook_host::model::Artifact {
+    use aq_playbook_host::model::*;
+    let event = aq_server::playbooks::review_domain::graph_operation_event();
+    let mut content = pure_artifact().content;
+    content.source.digest = hash_bytes(id.as_bytes());
+    content.source.header.id = id.into();
+    content.playbook.id = id.into();
+    let input = if blocked {
+        let entry = content.playbook.entries.get_mut("main").unwrap();
+        entry.input = event.payload.clone();
+        content.playbook.limits.max_payload_bytes = 8;
+        Expr::reference("event")
+    } else {
+        Expr::literal(serde_json::Value::Null)
+    };
+    content.playbook.triggers = vec![Trigger {
+        id: "confirmed".into(),
+        event: ContractRef {
+            name: event.name.clone(),
+            fingerprint: event.fingerprint().unwrap(),
+        },
+        entry: "main".into(),
+        input,
+    }];
+    content.registry = aq_server::playbooks::review_domain::CatalogProfile::GraphEvents3.registry();
+    Artifact::seal(content).unwrap()
+}
+async fn finished_runs(e: &Env) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM aq_playbooks.run_history WHERE kind='runs'")
+        .fetch_one(&e.f.db.pool().await)
+        .await
+        .unwrap()
+}
+/// An accepted event is never sent to the engine as a new event again. Its
+/// destination blocked by its input keeps the row incomplete until the
+/// engine forgets the event (here: 257 newer events push it out of the
+/// 256-entry repeat set); then the row is complete, no second run starts for
+/// it and the drive goes on. About four minutes in a debug build (130 quanta
+/// on a protected record of 256 events), so it is run by hand;
+/// `an_accepted_event_forgotten_by_its_window_...` covers the same path fast.
 #[tokio::test]
-async fn a_stale_admission_is_held_and_the_next_one_is_admitted() {
+#[ignore = "slow: about 4 minutes; run by hand (B1 interim note)"]
+async fn a_forgotten_accepted_event_completes_its_row_and_starts_no_second_run() {
+    let e = setup_with(true).await;
+    let driver = aq_server::playbooks::driver::Driver::start(
+        e.service.clone(),
+        aq_playbook_host::Limits::default(),
+        protected_factory(source_url(&e)),
+    )
+    .await
+    .unwrap();
+    for (binding, blocked) in [("runs", false), ("blocked", true)] {
+        let a = trigger_artifact(binding, blocked);
+        let hash = a.digest.clone();
+        driver.install(a).await.unwrap();
+        driver
+            .activate(binding.into(), hash, e.grant, 1)
+            .await
+            .unwrap();
+    }
+    let first = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), false)
+    );
+    // Later events no longer reach the blocked consumer, so only the first
+    // row stays incomplete (and the newer ones need no second visit).
+    let mut quiet = pure_artifact();
+    quiet.content.registry =
+        aq_server::playbooks::review_domain::CatalogProfile::GraphEvents3.registry();
+    let quiet = aq_playbook_host::model::Artifact::seal(quiet.content).unwrap();
+    let hash = quiet.digest.clone();
+    driver.install(quiet).await.unwrap();
+    driver
+        .activate("blocked".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    const NEWER: i64 = 257;
+    for _ in 0..NEWER {
+        graph_event(&e).await;
+    }
+    let mut quanta = 0;
+    while !outbox_status(&e, first).await.1 {
+        quanta += 1;
+        assert!(quanta < 1000, "the first row never completed");
+        driver.test_collect_graph_events().await.unwrap();
+        driver.quantum().await.unwrap();
+    }
+    // Every event, the first included, started exactly one run.
+    for _ in 0..1000 {
+        if finished_runs(&e).await > NEWER {
+            break;
+        }
+        driver.quantum().await.unwrap();
+    }
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(finished_runs(&e).await, NEWER + 1);
+    driver.stop().await.unwrap();
+}
+
+/// The same path when the engine forgets the accepted event because its 24 h
+/// window passed: the row is complete, the first event's runs are not
+/// started again, and the drive goes on.
+#[tokio::test]
+async fn an_accepted_event_forgotten_by_its_window_completes_without_a_second_run() {
+    let e = setup_with(true).await;
+    let driver = aq_server::playbooks::driver::Driver::start(
+        e.service.clone(),
+        aq_playbook_host::Limits::default(),
+        protected_factory(source_url(&e)),
+    )
+    .await
+    .unwrap();
+    for (binding, blocked) in [("runs", false), ("blocked", true)] {
+        let a = trigger_artifact(binding, blocked);
+        let hash = a.digest.clone();
+        driver.install(a).await.unwrap();
+        driver
+            .activate(binding.into(), hash, e.grant, 1)
+            .await
+            .unwrap();
+    }
+    let first = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), false)
+    );
+    assert_eq!(finished_runs(&e).await, 1);
+    let day = 86_400_000;
+    e.f.time.store(
+        NOW as i64 + day + 60_000,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        outbox_status(&e, first).await,
+        ("engine_accepted".into(), true)
+    );
+    let later = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        outbox_status(&e, later).await,
+        ("engine_accepted".into(), false)
+    );
+    // The first event's run and the later one's: no second run for the first.
+    assert_eq!(finished_runs(&e).await, 2);
+    driver.stop().await.unwrap();
+}
+
+/// A row that always fails (its stored event no longer matches its digest)
+/// is held with its reason; the rows behind it are delivered, quantum after
+/// quantum.
+#[tokio::test]
+async fn a_row_that_always_fails_is_held_and_later_rows_are_delivered() {
+    let e = setup_with(true).await;
+    let pool = e.f.db.pool().await;
+    let broken = graph_event(&e).await;
+    let driver = aq_server::playbooks::driver::Driver::start(
+        e.service.clone(),
+        aq_playbook_host::Limits::default(),
+        protected_factory(source_url(&e)),
+    )
+    .await
+    .unwrap();
+    let mut a = pure_artifact();
+    a.content.registry =
+        aq_server::playbooks::review_domain::CatalogProfile::GraphEvents3.registry();
+    driver
+        .install(aq_playbook_host::model::Artifact::seal(a.content).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    sqlx::query("UPDATE playbook_outbox SET event_digest=$2 WHERE event_id=$1")
+        .bind(broken)
+        .bind("0".repeat(64))
+        .execute(&pool)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        let later = graph_event(&e).await;
+        assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+        driver.quantum().await.unwrap();
+        driver.quantum().await.unwrap();
+        assert_eq!(
+            outbox_status(&e, later).await,
+            ("engine_accepted".into(), true)
+        );
+    }
+    let held: (String, Option<String>) =
+        sqlx::query_as("SELECT status,held_reason FROM playbook_outbox WHERE event_id=$1")
+            .bind(broken)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(held, ("unknown".into(), Some("invalid".into())));
+    driver.stop().await.unwrap();
+}
+
+/// Held work is listed with its reason and can be retried; a retry is a new
+/// delivery. Retrying an admission whose outcome is unknown says the work may
+/// run again; one already accepted is never admitted again.
+#[tokio::test]
+async fn held_work_shows_its_reason_and_retries_as_a_new_delivery() {
+    let e = setup_with(true).await;
+    let pool = e.f.db.pool().await;
+    let event = graph_event(&e).await;
+    let driver = Arc::new(
+        aq_server::playbooks::driver::Driver::start(
+            e.service.clone(),
+            aq_playbook_host::Limits::default(),
+            protected_factory(source_url(&e)),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut a = pure_artifact();
+    a.content.registry =
+        aq_server::playbooks::review_domain::CatalogProfile::GraphEvents3.registry();
+    let a = aq_playbook_host::model::Artifact::seal(a.content).unwrap();
+    let hash = a.digest.clone();
+    driver.install(a).await.unwrap();
+    let binding = driver
+        .activate("held".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    let digest: String =
+        sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let set_digest = |value: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE playbook_outbox SET event_digest=$2 WHERE event_id=$1")
+                .bind(event)
+                .bind(value)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+    set_digest("0".repeat(64)).await;
+    driver.quantum().await.unwrap();
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let (code, status) = api(
+        app.clone(),
+        "GET",
+        "/api/playbooks/status",
+        false,
+        json!(null),
+    )
+    .await;
+    assert_eq!(code, 200, "{status}");
+    assert_eq!(
+        status["held_events"][0]["event_id"],
+        event.to_string(),
+        "{status}"
+    );
+    assert_eq!(
+        status["held_events"][0]["held_reason"], "invalid",
+        "{status}"
+    );
+    set_digest(digest).await;
+    let retry = format!("/api/playbooks/events/{event}/retry");
+    let (code, body) = api(app.clone(), "POST", &retry, true, json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        outbox_status(&e, event).await,
+        ("engine_accepted".into(), true)
+    );
+    let (code, _) = api(app.clone(), "POST", &retry, true, json!({})).await;
+    assert_eq!(code, 409, "only a held row can be retried");
+
+    let id = Uuid::new_v4();
+    e.service
+        .prepare(
+            e.f.actor,
+            PrepareRequest {
+                request_id: id,
+                grant_id: e.grant,
+                grant_revision: 1,
+                binding: "held".into(),
+                expected_activation_revision: binding["revision"].as_u64().unwrap(),
+                entry: "main".into(),
+                input: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE playbook_admissions SET status='unknown',held_reason='uncertain' WHERE request_id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (code, page) = api(
+        app.clone(),
+        "GET",
+        "/api/playbooks/inspection/admissions",
+        false,
+        json!(null),
+    )
+    .await;
+    assert_eq!(code, 200, "{page}");
+    let item = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["request_id"] == id.to_string())
+        .unwrap();
+    assert_eq!(
+        (item["status"].as_str(), item["held_reason"].as_str()),
+        (Some("unknown"), Some("uncertain"))
+    );
+    let retry = format!("/api/playbooks/admissions/{id}/retry");
+    let (code, first) = api(app.clone(), "POST", &retry, true, json!({})).await;
+    assert_eq!(code, 200, "{first}");
+    assert_eq!(first["status"], "engine_accepted", "{first}");
+    assert!(
+        first["warning"]
+            .as_str()
+            .unwrap()
+            .contains("may run the work again"),
+        "{first}"
+    );
+    let (code, again) = api(app.clone(), "POST", &retry, true, json!({})).await;
+    assert_eq!(code, 200, "{again}");
+    assert_eq!(again["receipt"], first["receipt"]);
+    assert!(again.get("warning").is_none(), "{again}");
+    driver.stop().await.unwrap();
+}
+
+/// A retained admission created long before now is admitted on its first
+/// delivery.
+#[tokio::test]
+async fn an_old_admission_is_admitted_on_first_delivery() {
     let e = setup().await;
     let driver = aq_server::playbooks::driver::Driver::start(
         e.service.clone(),
@@ -1377,44 +1729,34 @@ async fn a_stale_admission_is_held_and_the_next_one_is_admitted() {
     let hash = a.digest.clone();
     driver.install(a).await.unwrap();
     let activation = driver
-        .activate("stale".into(), hash, e.grant, 1)
+        .activate("old".into(), hash, e.grant, 1)
         .await
         .unwrap();
-    for id in [1, 2] {
-        e.service
-            .prepare(
-                e.f.actor,
-                PrepareRequest {
-                    request_id: Uuid::from_u128(id),
-                    grant_id: e.grant,
-                    grant_revision: 1,
-                    binding: "stale".into(),
-                    expected_activation_revision: activation["revision"].as_u64().unwrap(),
-                    entry: "main".into(),
-                    input: serde_json::Value::Null,
-                },
-            )
-            .await
-            .unwrap();
-    }
-    // The first was retained before the admission window.
+    let id = Uuid::from_u128(1);
+    e.service
+        .prepare(
+            e.f.actor,
+            PrepareRequest {
+                request_id: id,
+                grant_id: e.grant,
+                grant_revision: 1,
+                binding: "old".into(),
+                expected_activation_revision: activation["revision"].as_u64().unwrap(),
+                entry: "main".into(),
+                input: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
     sqlx::query("UPDATE playbook_admissions SET created_at_ms=$2 WHERE request_id=$1")
-        .bind(Uuid::from_u128(1))
-        .bind(EIGHT_DAYS_AGO)
+        .bind(id)
+        .bind(NOW as i64 - EIGHT_DAYS)
         .execute(&e.f.db.pool().await)
         .await
         .unwrap();
     driver.quantum().await.unwrap();
-    let status = |id: u128| {
-        let (service, actor) = (e.service.clone(), e.f.actor);
-        async move {
-            let admission = service.admission(actor, Uuid::from_u128(id)).await;
-            admission.unwrap().status
-        }
-    };
-    let held = status(1).await;
-    assert_eq!((held.status.as_str(), held.receipt), ("unknown", None));
-    assert_eq!(status(2).await.status, "engine_accepted");
+    let admission = e.service.admission(e.f.actor, id).await.unwrap().status;
+    assert_eq!(admission.status, "engine_accepted");
     driver.stop().await.unwrap();
 }
 

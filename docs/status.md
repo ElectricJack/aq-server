@@ -1,5 +1,12 @@
 # AQ v2 platform status
 
+> **Do not deploy `feat/internal-work` to a live playbook namespace.** It
+> vendors the interim engine `aq-playbooks-e7df379`, which has no drain of
+> namespaces written by the engine the live stack runs (0173673). Deploying
+> needs the final re-vendor first: the legacy drain (engine at or after
+> 25d6545, plus the engine's Tasks 10–12) and the engine's remaining tasks
+> ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
+
 **As of:** 2026-11-12. **Scope:** all six repositories (aq-server, aq-worker,
 aq-dashboard, aq-playbooks, aq-git, aq-graph).
 

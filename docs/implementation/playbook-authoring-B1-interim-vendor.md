@@ -1,5 +1,12 @@
 # Playbook authoring B1 (interim): the server on the live-state engine
 
+> **Not deployable. Do not deploy this to a live playbook namespace.** The
+> interim engine e7df379 has no drain of namespaces written by 0173673 (the
+> engine the live stack runs): a live namespace would keep its whole old
+> record on every commit. The final re-vendor is the first deployable
+> version; its preconditions are listed in "Final re-vendor: preconditions
+> for deploying" below.
+
 Plan: `docs/superpowers/plans/2026-11-13-playbook-authoring.md`, Task B1.
 This is an interim version of that task. It moves aq-server from
 `vendor/aq-playbooks-0173673` to the engine as it is now, so the server tasks
@@ -40,22 +47,17 @@ no dependency.
    On an engine refusal the driver now reads the run through inspection and
    confirms the cancel when the run is finished; an unknown run is still
    `unknown`.
-2. **Request times and `Error::Stale`.** `aq-playbook-host` `Request::AdmitOnce`
-   and `Request::Event` carry `requested_at_ms: Option<i64>` (serde default
-   `None`) and call `admit_once_at` / `admit_event_at`. The driver passes the
-   row's `created_at_ms`: the `playbook_admissions` row for a keyed admission,
-   the `playbook_outbox` row for an event. Both are stamped once, from the
-   service clock that also supplies `now_ms`, when the row is created.
-   `aq-playbook-host::Error::Stale(text)` is new; `runner_error` maps the
-   engine's `Error::Stale` to it.
-   - A stale admission takes the existing hold path: the row becomes
-     `unknown`, the quantum goes on, and it is never admitted as new.
-   - A stale event is the outcome of that one outbox row: `Service::hold_event`
-     sets it to `unknown` and the quantum goes on with the next event. Before
-     this, any engine error on an event failed the whole quantum. The outbox
-     page now selects `pending` rows and accepted rows whose fan-out is
-     incomplete, so a held row is not delivered again. `unknown` was already an
-     allowed outbox status (migration 0023) and was never written before.
+2. **No request times** (fix round 1, ruling 1). `aq-playbook-host`
+   `Request::AdmitOnce` and `Request::Event` carry `requested_at_ms:
+   Option<i64>` (serde default `None`) and call `admit_once_at` /
+   `admit_event_at`, but the server sends `None` on every request, first
+   delivery or re-send. A request time based on the row's creation time
+   refused work the engine had never seen (queue delay, an outage or a
+   forward clock jump counted against the window). The accepted consequence:
+   a re-send that reaches the engine after it has forgotten the key runs
+   again. `aq-playbook-host::Error::Stale(text)` stays as a safety net: a
+   stale answer holds that one row (reason `stale`) and never fails a
+   quantum.
 3. **No namespace limits.** The quota mechanism is gone from the engine. The
    host's special case for the quota refusal text in `runner_error` is
    removed (dead). `EngineConfig`'s `max_*` values are accepted and ignored by
@@ -70,7 +72,41 @@ no dependency.
    schema `aq_playbooks`; `scripts/dev-playbook-db.sh`). Migration 7 needs
    exactly what migration 6 needs of that role, so nothing changes in role
    setup. No aq-server migration was added.
-6. **History-forwarding storage wrappers.** `Engine::new` refuses a backend
+6. **Accepted events are never sent as new events again** (ruling 2). The
+   outbox page says which rows the engine has accepted. For those the driver
+   only continues the fan-out by the event's key (`Fanout`, then
+   `EventStatus`). When the engine no longer remembers the event (`NotFound`
+   or `Invalid`), nothing it still queues holds it, so the row is complete. A
+   new row is acknowledged as accepted right after the engine accepts it,
+   before its fan-out. `Driver::deliver` (`playbooks/driver.rs`).
+7. **The drive never stops for good** (ruling 3). A failing outbox row or
+   admission is held with its reason and the quantum goes on; a row whose
+   stored event no longer matches its record is held `invalid` by the outbox
+   page itself. A failing quantum is logged and retried after a backoff that
+   starts at the drive interval and doubles up to the engine statement
+   timeout (both configuration); the drive state reads `retrying` meanwhile
+   and `active` again after a good quantum. Only shutdown stops it
+   (`aq_playbook_host::drive::run`).
+8. **Engine timeouts are configuration** (ruling 4): `[playbooks.engine_timeouts]`
+   `statement_ms` (default 30,000) and `lock_ms` (default 500), checked at
+   load (1 ms to 30 s, lock at most statement). They were literals (2 s and
+   500 ms) in `playbooks/runtime.rs`.
+9. **Held work shows its reason and can be retried** (rulings 5 and 6).
+   Migration 0125 adds `held_reason` (`stale`, `uncertain`, `refused`, and
+   `invalid` for outbox rows) to `playbook_admissions` and `playbook_outbox`.
+   - Admissions: `GET /api/playbooks/inspection/admissions` items carry
+     `held_reason`. `POST /api/playbooks/admissions/{id}/retry` re-sends a
+     held one; its answer carries a `warning` that the work may run again.
+     An admission the server has recorded as accepted is never admitted again
+     (the retry and the dashboard's reconcile return its receipt). The
+     dashboard's reconcile of a held admission is a lookup only.
+   - Outbox events: no read listed outbox rows, so the nearest existing read,
+     `GET /api/playbooks/status`, gains `held_events` (at most 25, newest
+     first: event id, producer, creation time, reason). `POST
+     /api/playbooks/events/{id}/retry` puts a held event back in the queue as
+     a new delivery.
+   - Rolling deletion of these tables is a later task (B1b).
+10. **History-forwarding storage wrappers.** `Engine::new` refuses a backend
    that does not persist history. The test wrappers in
    `crates/aq-playbook-host/tests/{owner.rs,catalog.rs}` forward
    `persists_history`, `history_page` and `delete_history`.
@@ -107,13 +143,37 @@ are now ignored and can be dropped when the host stops validating them.
   in the engine's `docs/implementation/0003-live-state-only.md` (actor from
   the authenticated identity, the server clock as `now_ms`, `to_ms` checked
   against PostgreSQL `now()`, dry run first, explicit confirmation).
+- **A failed engine open still aborts server startup** (ruling 4, second
+  half). The server's router takes the playbook driver when it is built, so
+  starting without it and opening later needs the admin router to be swapped
+  (or the routes to resolve the driver late) plus a retry loop
+  (`aq_playbook_host::drive::retry` exists for it). That is about 35 lines
+  in the aq-server lib, which is at 110,262 of its 110,267 ratchet after this
+  round; it was stopped there, as instructed, rather than raising the ratchet.
 - **The server's own namespace counters.** `playbook_namespaces`
   `admission_count`, `effect_count`, `cancellation_count`, `outbox_count` and
   `retained_bytes` are lifetime counters with fixed caps (migration 0023,
   lines 15-19), raised by `Service::budget` (`playbooks/service.rs`) and never
   lowered. They are unchanged here.
 
-## For the second re-vendor (engine 0.2.0)
+## Final re-vendor: preconditions for deploying
+
+These are preconditions, not follow-ups: nothing on this branch may reach a
+live playbook namespace before they are met.
+
+- **The legacy drain**: the engine at or after 25d6545, plus the engine's
+  Tasks 10–12, so a namespace written by 0173673 moves its finished runs to
+  history instead of rewriting its whole old record on every commit.
+- **The engine's remaining tasks** (simulation crate, CLI commands, legacy
+  namespaces, thinner `collect_garbage`), at crates 0.2.0.
+- A measured first open and drain of a copy of the live namespace under the
+  configured engine statement timeout (`[playbooks.engine_timeouts]`).
+- Startup must not abort when the engine open fails (ruling 4, second half,
+  not done in this interim round; see "Not done here").
+- The server's lifetime counters removed and rolling deletion of the playbook
+  tables (B1b).
+
+Mechanics:
 
 - New tree `vendor/aq-playbooks-<rev>/`, pin and archive
   `vendor/aq-playbooks-source-0.2.0.{json,tar}` with the same archive list,
@@ -130,7 +190,7 @@ are now ignored and can be dropped when the host stops validating them.
   `collect_garbage`, and the new compiler and simulation items.
 - The retention Settings above, if that task is scheduled with it.
 
-## Upgrading a live namespace
+## What the first open of an old namespace does (reference for the final re-vendor, not instructions for this one)
 
 - The first open runs engine migrations 6 and 7 (new tables and indexes,
   empty for a namespace that has no history yet) and one bookkeeping commit
@@ -140,9 +200,8 @@ are now ignored and can be dropped when the host stops validating them.
   engine has no drain yet. They stay in the State, are served by inspection
   as before, and never block new work. New runs leave the State when they
   finish.
-- Outbox rows and admissions that are older than their window when first
-  delivered are held as stale (`unknown`), not delivered. With the default
-  windows that is 24 hours for events and 7 days for admissions.
+- With no request times, an old outbox row or admission is delivered on its
+  first delivery however old it is.
 - Retire the old owner before starting the new one, as for every engine
   change (one owner per namespace).
 
@@ -188,12 +247,22 @@ count (`inspection_rows` stays 0).
 
 New:
 
-- `playbook_bridge::one_stale_event_is_held_and_does_not_block_the_events_behind_it`
-  (two outbox events in one page, the first with a request time older than
-  every window: it is held `unknown`, the second is accepted and fanned out,
-  and the quantum succeeds; without the driver's `Stale` arm the quantum
-  fails `Unknown`);
-- `playbook_bridge::a_stale_admission_is_held_and_the_next_one_is_admitted`;
+- `playbook_bridge::an_old_event_and_one_after_a_clock_jump_are_accepted_on_first_delivery`
+  and `playbook_bridge::an_old_admission_is_admitted_on_first_delivery`
+  (ruling 1; both were held as stale with creation-time request times);
+- `playbook_bridge::an_accepted_event_forgotten_by_its_window_completes_without_a_second_run`
+  (ruling 2; with accepted rows re-sent as new events the row never
+  completes) and the slow, ignored
+  `playbook_bridge::a_forgotten_accepted_event_completes_its_row_and_starts_no_second_run`
+  (257 newer events; 261 s in a debug build, run by hand);
+- `playbook_bridge::a_row_that_always_fails_is_held_and_later_rows_are_delivered`
+  (ruling 3: before, the page failed every quantum) and the host's
+  `drive::tests` (a failing quantum is retried with a backoff of 10, 20, 40 ms
+  and the drive recovers; it held for good before);
+- `playbook_bridge::held_work_shows_its_reason_and_retries_as_a_new_delivery`
+  (rulings 5 and 6);
+- `playbook_activation::config_refuses_...` cases for `[playbooks.engine_timeouts]`
+  and the host's `protected::tests` (ruling 4);
 - `playbook_bridge::cancelling_a_finished_run_is_confirmed_and_an_unknown_run_is_not`
   (fails `Unknown` without the `cancel_run` change);
 - `aq-playbook-host` `owner::a_stale_keyed_admission_is_typed_and_writes_nothing`.

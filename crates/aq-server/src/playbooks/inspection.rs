@@ -194,6 +194,8 @@ pub struct AdmissionView {
     pub run_id: Option<String>,
     pub activation_revision: Option<String>,
     pub catalog_revision: Option<String>,
+    /// Why a held (`unknown`) admission is held; `None` otherwise.
+    pub held_reason: Option<String>,
 }
 fn text(v: &Value, key: &str) -> Result<String> {
     v.get(key)
