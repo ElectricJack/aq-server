@@ -17,7 +17,7 @@ def load(name):
     return json.loads((root / 'fixtures' / (name + '.json')).read_text())
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-TYPED = ('task.graph.create', 'task.edit', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.dependency.add',
+TYPED = ('task.graph.create', 'task.edit', 'task.activate', 'task.reopen', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.dependency.add',
          'task.dependency.remove', 'knowledge.author', 'knowledge.correct', 'knowledge.verify',
          'knowledge.retire', 'knowledge.restore')
 def validate_task(task):
@@ -192,4 +192,4 @@ for contract in compat['read']['data']['contracts']:
 assert len(compat['read']['data']['contracts']) == 2
 assert compat['read']['api_version'] == 'dashboard-read-1'
 validate_request(load('request-task-create-metadata'))
-print('25 requests, 5 dispositions, current-versions conflicts, 10 errors, cursor, replay, invalid and compatibility fixtures passed')
+print('27 requests, 5 dispositions, current-versions conflicts, 10 errors, cursor, replay, invalid and compatibility fixtures passed')

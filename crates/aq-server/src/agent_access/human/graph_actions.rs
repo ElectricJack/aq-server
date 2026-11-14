@@ -45,6 +45,11 @@ pub(crate) trait GraphPayload:
     }
     /// Bounds serde cannot express; the published schema states the same limits.
     fn valid(&self) -> bool;
+    /// Whether the task must never have had an attempt. A task with one
+    /// carries execution history the scheduler will not start over.
+    fn never_attempted() -> bool {
+        false
+    }
     /// Additional task references that must belong to the subject's project.
     fn tasks(&self) -> Vec<Uuid> {
         vec![]
@@ -100,6 +105,64 @@ impl GraphPayload for TaskDelete {
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
         Ok(vec![
             json!({"op":"delete_node","id":c.subject,"expected_version":c.version}),
+        ])
+    }
+}
+impl GraphPayload for aq_human_work::TaskActivate {
+    const KIND: &'static str = "task.activate";
+    const GRANT: &'static str = "task.activate";
+    const ENTITY: &'static str = "task";
+    fn operation_id(&self) -> Uuid {
+        self.operation_id
+    }
+    fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+    fn expected(&self) -> &str {
+        &self.expected_version
+    }
+    fn valid(&self) -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        // Only a draft: it has never had an attempt, so there is nothing to
+        // reconcile. Reopening a finished task is a different question.
+        if c.node["task_state"] != "draft" {
+            return Err(ApiError::invalid());
+        }
+        Ok(vec![
+            json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"active"}}),
+        ])
+    }
+}
+impl GraphPayload for aq_human_work::TaskReopen {
+    const KIND: &'static str = "task.reopen";
+    const GRANT: &'static str = "task.reopen";
+    const ENTITY: &'static str = "task";
+    fn operation_id(&self) -> Uuid {
+        self.operation_id
+    }
+    fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+    fn expected(&self) -> &str {
+        &self.expected_version
+    }
+    fn valid(&self) -> bool {
+        true
+    }
+    fn never_attempted() -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        if !matches!(
+            c.node["task_state"].as_str(),
+            Some("completed" | "canceled")
+        ) {
+            return Err(ApiError::invalid());
+        }
+        Ok(vec![
+            json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"active"}}),
         ])
     }
 }
@@ -562,6 +625,10 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task delete adapter");
     r.register(GraphAction::<aq_human_work::Execution>::new(state))
         .expect("task cancel adapter");
+    r.register(GraphAction::<aq_human_work::TaskActivate>::new(state))
+        .expect("task activate adapter");
+    r.register(GraphAction::<aq_human_work::TaskReopen>::new(state))
+        .expect("task reopen adapter");
     r.register(GraphAction::<TaskEdit>::new(state))
         .expect("task edit adapter");
     r.register(GraphAction::<TaskReprioritize>::new(state))
@@ -588,6 +655,10 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task delete schema");
     r.register_schema::<GraphAction<aq_human_work::Execution>>()
         .expect("task cancel schema");
+    r.register_schema::<GraphAction<aq_human_work::TaskActivate>>()
+        .expect("task activate schema");
+    r.register_schema::<GraphAction<aq_human_work::TaskReopen>>()
+        .expect("task reopen schema");
     r.register_schema::<GraphAction<TaskEdit>>()
         .expect("task edit schema");
     r.register_schema::<GraphAction<TaskReprioritize>>()
@@ -905,6 +976,18 @@ impl<P: GraphPayload> GraphAction<P> {
                 node: &node,
             })
             .map_err(|_| invalid())?;
+        if P::never_attempted() {
+            let attempted: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE task_id=$1)",
+            )
+            .bind(subject)
+            .fetch_one(&state.store.pool)
+            .await
+            .map_err(|_| AppError::Internal)?;
+            if attempted {
+                return Ok(existing::disposition(Disposition::Rejected));
+            }
+        }
         let id = payload.operation_id();
         let reason = request
             .reason
