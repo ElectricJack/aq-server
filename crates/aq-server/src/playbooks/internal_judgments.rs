@@ -1,6 +1,7 @@
 //! `judgment.request` served by internal work (spec 0012 §6).
 use super::host_adapters::{
-    JudgmentProvider, JudgmentReply, JudgmentRequest, ProviderFailure, estimate_input_tokens,
+    AssessReply, AssessRequest, JudgmentProvider, JudgmentReply, JudgmentRequest, ProviderFailure,
+    estimate_input_tokens,
 };
 use crate::{InternalWork, error::AppError};
 use aq_internal_work::{Affected, AnswerShape, Outcome, Purpose, Reason, Request};
@@ -83,5 +84,60 @@ impl JudgmentProvider for InternalJudgments {
             output_tokens,
             cost_microunits: 0,
         })
+    }
+
+    /// `judgment.assess`: one JSON answer of the request's schema, under the
+    /// purpose of the source the playbook was authored for.
+    async fn assess(&self, r: &AssessRequest) -> Result<AssessReply, &'static str> {
+        let request = Request {
+            purpose: r.purpose,
+            instructions: r.instructions.clone(),
+            input: r.input.clone(),
+            answer: AnswerShape::Json {
+                schema: r.schema.clone(),
+            },
+            blocking: true,
+            affected: Affected {
+                kind: "playbook_operation".into(),
+                id: r.operation.to_string(),
+                project_id: None,
+            },
+            deadline_ms: r.deadline_ms,
+            max_output_bytes: r.max_output_bytes,
+            escalate: false,
+            profile_override: None,
+            agent: None,
+        };
+        let estimate = |bytes: usize| (bytes as u64).div_ceil(4);
+        match self.work.run(request).await {
+            Ok(Outcome::Answered {
+                answer,
+                provider,
+                model,
+                usage,
+                ..
+            }) => {
+                let sent = estimate(r.instructions.len() + r.input.len());
+                let (input_tokens, output_tokens) = usage
+                    .map_or((sent, estimate(answer.to_string().len())), |u| {
+                        (u.input_tokens, u.output_tokens)
+                    });
+                Ok(AssessReply {
+                    answer,
+                    provider,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                })
+            }
+            Ok(Outcome::Failed { reason, .. }) => Err(match reason {
+                Reason::DeadlineExceeded => "deadline_exceeded",
+                Reason::ProviderUnavailable | Reason::NoCandidate => "provider_unavailable",
+                Reason::InvalidOutput | Reason::BudgetExceeded => "indeterminate",
+                _ => "provider_error",
+            }),
+            Err(AppError::BadRequest(_)) => Err("provider_error"),
+            Err(_) => Err("provider_unavailable"),
+        }
     }
 }

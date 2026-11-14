@@ -209,6 +209,177 @@ pub fn options_digest(options: &Options) -> String {
     aq_playbook_host::model::digest(options).unwrap_or_default()
 }
 
+// ------------------------------------------------------------ judgment.assess
+
+/// Largest `judgment.assess` request the host runs, in canonical bytes.
+pub const ASSESS_REQUEST_BYTES: usize = 65_536;
+
+fn ids(items: &Value) -> Vec<&str> {
+    let items = items.as_array().map(Vec::as_slice).unwrap_or(&[]);
+    items.iter().filter_map(|i| i["id"].as_str()).collect()
+}
+fn distinct(names: &[&str]) -> bool {
+    names
+        .iter()
+        .enumerate()
+        .all(|(i, n)| !n.is_empty() && !names[..i].contains(n))
+}
+
+/// Why the host does not run a `judgment.assess` request, if it does not.
+/// `invalid_request`: over [`ASSESS_REQUEST_BYTES`]; no question; no field
+/// (a request must ask at least one labelled question); a field or flag id
+/// that is empty or used twice; a field without choices, or with an empty or
+/// repeated choice. `budget_exceeded`: a deadline above `max_deadline_ms` or
+/// an output budget above `max_output_tokens` (the host's caps).
+pub fn assess_refusal(
+    input: &Value,
+    max_deadline_ms: u64,
+    max_output_tokens: u64,
+) -> Option<&'static str> {
+    let bytes = aq_playbook_host::model::canonical_bytes(input).map(|b| b.len());
+    let fields = input["fields"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let choices_ok = |field: &Value| {
+        let choices: Vec<&str> = (field["choices"].as_array().into_iter().flatten())
+            .filter_map(Value::as_str)
+            .collect();
+        !choices.is_empty() && distinct(&choices)
+    };
+    if !bytes.is_ok_and(|b| b <= ASSESS_REQUEST_BYTES)
+        || input["question"]
+            .as_str()
+            .is_none_or(|q| q.trim().is_empty())
+        || fields.is_empty()
+        || !distinct(&ids(&input["fields"]))
+        || !distinct(&ids(&input["flags"]))
+        || !fields.iter().all(choices_ok)
+    {
+        return Some("invalid_request");
+    }
+    let budget = &input["budget"];
+    let over = |name: &str, max: u64| budget[name].as_u64().is_none_or(|v| v > max);
+    (over("deadline_ms", max_deadline_ms) || over("max_output_tokens", max_output_tokens))
+        .then_some("budget_exceeded")
+}
+
+/// JSON Schema (draft 2020-12) of the answer the model gives, by name:
+/// `{labels: {<field id>: <choice>}, flags: {<flag id>: bool}, rationale}`.
+pub fn assess_schema(input: &Value) -> Value {
+    let object = |properties: serde_json::Map<String, Value>| {
+        let required: Vec<&String> = properties.keys().collect();
+        json!({"type": "object", "additionalProperties": false, "required": required, "properties": properties})
+    };
+    let fields = (input["fields"].as_array().into_iter().flatten())
+        .map(|f| {
+            (
+                f["id"].as_str().unwrap_or("").to_owned(),
+                json!({"type": "string", "enum": f["choices"]}),
+            )
+        })
+        .collect();
+    let flags = (ids(&input["flags"]).into_iter())
+        .map(|id| (id.to_owned(), json!({"type": "boolean"})))
+        .collect();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["labels", "flags", "rationale"],
+        "properties": {
+            "labels": object(fields),
+            "flags": object(flags),
+            "rationale": {"type": "string", "maxLength": input["rationale_max_bytes"].as_u64().unwrap_or(0)},
+        }
+    })
+}
+
+/// What the model is told (instructions) and shown (input): the question,
+/// each labelled question with its choices, each yes/no question, and the
+/// context items.
+pub fn assess_prompt(input: &Value) -> (String, String) {
+    let mut text = format!(
+        "{}\n\nAnswer with one JSON object.\n",
+        input["question"].as_str().unwrap_or("")
+    );
+    text.push_str("\n\"labels\": for each of these, exactly one of its choices:\n");
+    for field in input["fields"].as_array().into_iter().flatten() {
+        let choices: Vec<&str> = (field["choices"].as_array().into_iter().flatten())
+            .filter_map(Value::as_str)
+            .collect();
+        text.push_str(&format!(
+            "- {}: {} Choices: {}\n",
+            field["id"].as_str().unwrap_or(""),
+            field["description"].as_str().unwrap_or(""),
+            serde_json::to_string(&choices).unwrap_or_default()
+        ));
+    }
+    let flags = input["flags"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if !flags.is_empty() {
+        text.push_str("\n\"flags\": for each of these, true or false:\n");
+    }
+    for flag in flags {
+        let (id, description) = (flag["id"].as_str(), flag["description"].as_str());
+        text.push_str(&format!(
+            "- {}: {}\n",
+            id.unwrap_or(""),
+            description.unwrap_or("")
+        ));
+    }
+    let limit = input["rationale_max_bytes"].as_u64().unwrap_or(0);
+    text.push_str(&format!(
+        "\n\"rationale\": why, in at most {limit} bytes.\n"
+    ));
+    let context = (input["context"]["items"].as_array().into_iter().flatten())
+        .map(|i| {
+            format!(
+                "## {}\n{}\n",
+                i["label"].as_str().unwrap_or(""),
+                i["text"].as_str().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (text, context)
+}
+
+/// The catalog's answer from the model's: exactly one label per field in
+/// field order, each one of that field's choices; the flags that hold, in
+/// request order; the rationale, cut to `rationale_max_bytes`. An answer
+/// that names no valid choice for a field, or leaves a flag out, is an error.
+pub fn assess_answer(
+    answer: &Value,
+    input: &Value,
+) -> Result<(Vec<String>, Vec<String>, String), String> {
+    let mut labels = vec![];
+    for field in input["fields"].as_array().into_iter().flatten() {
+        let id = field["id"].as_str().unwrap_or("");
+        let label = (answer["labels"][id].as_str())
+            .filter(|l| {
+                field["choices"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|x| x == l))
+            })
+            .ok_or_else(|| format!("no valid label for field {id}"))?;
+        labels.push(label.to_owned());
+    }
+    let mut flags = vec![];
+    for id in ids(&input["flags"]) {
+        let holds = answer["flags"][id]
+            .as_bool()
+            .ok_or_else(|| format!("no answer for flag {id}"))?;
+        if holds {
+            flags.push(id.to_owned());
+        }
+    }
+    let rationale = answer["rationale"].as_str().ok_or("no rationale")?;
+    let max = input["rationale_max_bytes"].as_u64().unwrap_or(0) as usize;
+    Ok((labels, flags, truncate(rationale, max).to_owned()))
+}
+
+/// The `failed` or `refused` output of a judgment.
+pub fn assess_ended(reference: &str, subject: &Value, reason: &str) -> Value {
+    json!({"reason": reason, "reference": reference, "subject": subject})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,6 +550,119 @@ mod tests {
         assert_ne!(
             options_digest(&options()),
             options_digest(&Options::default())
+        );
+    }
+    fn assess_input() -> Value {
+        json!({"subject": {"id": "t", "revision": 3}, "question": "How risky is this task?",
+            "context": {"items": [{"label": "Title", "text": "Fix billing"}, {"label": "Description", "text": "Rounding"}]},
+            "fields": [
+                {"id": "risk", "description": "Risk of the change.", "choices": ["low", "medium", "high", "unknown"]},
+                {"id": "kind", "description": "What it is.", "choices": ["bugfix", "feature"]}],
+            "flags": [{"id": "narrow", "description": "Touches one module."}, {"id": "hard", "description": "Unusually hard reasoning."}],
+            "rationale_max_bytes": 12, "budget": {"deadline_ms": 120000, "max_output_tokens": 2048}})
+    }
+
+    #[test]
+    fn an_assessment_schema_asks_each_field_and_flag_by_name() {
+        let schema = assess_schema(&assess_input());
+        assert_eq!(
+            schema["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(schema["additionalProperties"], false);
+        let labels = &schema["properties"]["labels"];
+        assert_eq!(
+            labels["properties"]["risk"],
+            json!({"type": "string", "enum": ["low", "medium", "high", "unknown"]})
+        );
+        assert_eq!(
+            (
+                &labels["additionalProperties"],
+                labels["required"].as_array().unwrap().len()
+            ),
+            (&json!(false), 2)
+        );
+        let flags = &schema["properties"]["flags"];
+        assert_eq!(flags["properties"]["hard"], json!({"type": "boolean"}));
+        assert_eq!(flags["required"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            schema["properties"]["rationale"],
+            json!({"type": "string", "maxLength": 12})
+        );
+        let (instructions, context) = assess_prompt(&assess_input());
+        for part in [
+            "How risky is this task?",
+            "- risk: Risk of the change. Choices: [\"low\",\"medium\",\"high\",\"unknown\"]",
+            "- hard: Unusually hard reasoning.",
+            "at most 12 bytes",
+        ] {
+            assert!(instructions.contains(part), "{instructions}");
+        }
+        assert_eq!(
+            context,
+            "## Title\nFix billing\n\n## Description\nRounding\n"
+        );
+    }
+
+    #[test]
+    fn an_answer_becomes_one_label_per_field_in_field_order_and_the_flags_that_hold() {
+        let input = assess_input();
+        let answer = json!({"flags": {"hard": true, "narrow": false}, "labels": {"kind": "bugfix", "risk": "high"},
+            "rationale": "Billing is délicat."});
+        let (labels, flags, rationale) = assess_answer(&answer, &input).unwrap();
+        assert_eq!(
+            (labels, flags),
+            (
+                vec!["high".to_string(), "bugfix".to_string()],
+                vec!["hard".to_string()]
+            )
+        );
+        assert_eq!(rationale, "Billing is d");
+        let both = json!({"flags": {"hard": true, "narrow": true}, "labels": {"kind": "feature", "risk": "low"}, "rationale": ""});
+        assert_eq!(assess_answer(&both, &input).unwrap().1, ["narrow", "hard"]);
+        for bad in [
+            json!({"flags": {"hard": true, "narrow": false}, "labels": {"kind": "bugfix", "risk": "severe"}, "rationale": ""}),
+            json!({"flags": {"hard": true, "narrow": false}, "labels": {"risk": "high"}, "rationale": ""}),
+            json!({"flags": {"hard": true}, "labels": {"kind": "bugfix", "risk": "high"}, "rationale": ""}),
+            json!({"flags": {"hard": true, "narrow": false}, "labels": {"kind": "bugfix", "risk": "high"}}),
+        ] {
+            assert!(assess_answer(&bad, &input).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_request_the_host_does_not_run_says_why() {
+        let ok = assess_input();
+        assert_eq!(assess_refusal(&ok, 900_000, 262_144), None);
+        let with = |change: fn(&mut Value)| {
+            let mut input = assess_input();
+            change(&mut input);
+            assess_refusal(&input, 900_000, 262_144)
+        };
+        let invalid = Some("invalid_request");
+        assert_eq!(with(|i| i["fields"] = json!([])), invalid);
+        assert_eq!(with(|i| i["fields"][1]["id"] = json!("risk")), invalid);
+        assert_eq!(with(|i| i["fields"][0]["choices"] = json!([])), invalid);
+        assert_eq!(
+            with(|i| i["fields"][0]["choices"] = json!(["low", "low"])),
+            invalid
+        );
+        assert_eq!(with(|i| i["flags"][1]["id"] = json!("narrow")), invalid);
+        assert_eq!(with(|i| i["question"] = json!("  ")), invalid);
+        assert_eq!(
+            with(|i| i["context"]["items"][0]["text"] = json!("x".repeat(70_000))),
+            invalid
+        );
+        // A field and a flag may share an id: they are answered apart.
+        assert_eq!(with(|i| i["flags"][0]["id"] = json!("risk")), None);
+        assert_eq!(
+            assess_refusal(&ok, 60_000, 262_144),
+            Some("budget_exceeded")
+        );
+        assert_eq!(assess_refusal(&ok, 900_000, 1024), Some("budget_exceeded"));
+        assert_eq!(
+            assess_ended("judgment:1", &ok["subject"], "indeterminate"),
+            json!({"reason": "indeterminate", "reference": "judgment:1", "subject": {"id": "t", "revision": 3}})
         );
     }
 }

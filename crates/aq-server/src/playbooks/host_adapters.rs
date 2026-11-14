@@ -18,11 +18,13 @@ use sqlx::{PgConnection, PgExecutor, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod assess;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
+pub use assess::{AssessReply, AssessRequest};
 pub use delivery_port::*;
 pub use integration::*;
 pub use requests::*;
@@ -170,6 +172,7 @@ impl Service {
             "work.change" => self.work_change(owner, id, revision, intent).await,
             "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
+            "judgment.assess" => self.judgment_assess(owner, id, revision, intent).await,
             "check.request" => self.check_request(owner, id, revision, intent).await,
             "operation.get" => self.host_operation_get(owner, id, revision, intent).await,
             "candidate.prepare" => self.candidate_prepare(owner, id, revision, intent).await,

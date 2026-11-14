@@ -731,6 +731,10 @@ impl Driver {
                     .await,
             );
         }
+        partial.defer(
+            "expiring judgments",
+            self.service.expire_assessments(&self.runtime, 2).await,
+        );
         // Catalog profile 7 work.ensure completion (aq.operation.updated).
         partial.defer(
             "collecting work completions",
