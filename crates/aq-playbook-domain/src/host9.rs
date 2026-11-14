@@ -380,6 +380,76 @@ pub fn assess_ended(reference: &str, subject: &Value, reason: &str) -> Value {
     json!({"reason": reason, "reference": reference, "subject": subject})
 }
 
+// ------------------------------------------------------- aq.work.route_needed
+
+/// A task still without a route is asked about again after this long.
+pub const ROUTE_NEEDED_REPEAT_MS: i64 = 120_000;
+/// Placement refreshes a waiting task's row at most this often.
+pub const ROUTE_WANTED_REFRESH_MS: i64 = 30_000;
+/// A row placement has not refreshed for this long is no longer waiting.
+pub const ROUTE_WANTED_FRESH_MS: i64 = 300_000;
+
+/// One task's `route_needed_emissions` row, as the emitter reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Emission {
+    /// The task version placement last saw waiting.
+    pub wanted_version: i64,
+    /// The version last asked about (0 with `emitted_at_ms` 0: never).
+    pub emitted_version: i64,
+    pub emitted_at_ms: i64,
+    /// `not_offered` or `unroutable`: how the last ask ended for good.
+    pub outcome: Option<String>,
+    pub artifact_digest: Option<String>,
+    pub options_digest: Option<String>,
+    /// A run that read this task since the last ask has not finished.
+    pub run_unfinished: bool,
+}
+
+/// Whether to send `aq.work.route_needed` for the row now (one event per
+/// cause): never asked, or the task changed, at once; a task raised as
+/// `unroutable` only under another routing artifact; one refused
+/// `not_offered` only under another artifact or other Settings offers
+/// (`offers`, their digest); otherwise again after
+/// [`ROUTE_NEEDED_REPEAT_MS`], unless a run for it is unfinished.
+pub fn route_needed_due(e: &Emission, now_ms: i64, artifact: &str, offers: Option<&str>) -> bool {
+    if e.emitted_at_ms == 0 || e.wanted_version != e.emitted_version {
+        return true;
+    }
+    let other_artifact = e.artifact_digest.as_deref() != Some(artifact);
+    match e.outcome.as_deref() {
+        Some("unroutable") => other_artifact,
+        Some(_) => other_artifact || e.options_digest.as_deref() != offers,
+        None => now_ms - e.emitted_at_ms >= ROUTE_NEEDED_REPEAT_MS && !e.run_unfinished,
+    }
+}
+
+/// The trusted `aq.work.route_needed` event for a task version.
+pub fn route_needed_event(
+    event_id: Uuid,
+    task: Uuid,
+    version: i64,
+    now_ms: i64,
+    contract: &aq_playbook_host::model::EventContract,
+) -> Result<aq_playbook_host::model::EventEnvelope, aq_playbook_host::model::ModelError> {
+    let revision = version.max(0) as u64;
+    Ok(aq_playbook_host::model::EventEnvelope {
+        producer: "aq.host.bridge@1".into(),
+        event_id: event_id.to_string(),
+        contract: aq_playbook_host::model::ContractRef {
+            name: contract.name.clone(),
+            fingerprint: contract.fingerprint()?,
+        },
+        scope: "project".into(),
+        correlation: Default::default(),
+        subject: Some(task.to_string()),
+        revision: Some(revision),
+        causation: None,
+        occurred_at_ms: Some(now_ms),
+        observed_at_ms: Some(now_ms),
+        payload: json!({"subject": {"id": task.to_string(), "revision": revision}}),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +734,100 @@ mod tests {
             assess_ended("judgment:1", &ok["subject"], "indeterminate"),
             json!({"reason": "indeterminate", "reference": "judgment:1", "subject": {"id": "t", "revision": 3}})
         );
+    }
+    #[test]
+    fn route_needed_is_sent_once_per_cause() {
+        let asked = Emission {
+            wanted_version: 4,
+            emitted_version: 4,
+            emitted_at_ms: 1_000,
+            ..Default::default()
+        };
+        let due = |e: &Emission, now| route_needed_due(e, now, "art-1", Some("offers-1"));
+        // Never asked, and a new task version: at once.
+        assert!(due(
+            &Emission {
+                wanted_version: 4,
+                ..Default::default()
+            },
+            1
+        ));
+        assert!(due(
+            &Emission {
+                wanted_version: 5,
+                ..asked.clone()
+            },
+            1_001
+        ));
+        // The same version: again after two minutes, not while a run is unfinished.
+        assert!(!due(&asked, 120_999));
+        assert!(due(&asked, 121_000));
+        assert!(!due(
+            &Emission {
+                run_unfinished: true,
+                ..asked.clone()
+            },
+            500_000
+        ));
+        // Raised as unroutable: only another routing artifact asks again.
+        let settled = |outcome: &str| Emission {
+            outcome: Some(outcome.into()),
+            artifact_digest: Some("art-1".into()),
+            options_digest: Some("offers-1".into()),
+            ..asked.clone()
+        };
+        assert!(!due(&settled("unroutable"), 900_000));
+        assert!(route_needed_due(
+            &settled("unroutable"),
+            900_000,
+            "art-2",
+            Some("offers-1")
+        ));
+        assert!(!route_needed_due(
+            &settled("unroutable"),
+            900_000,
+            "art-1",
+            Some("offers-2")
+        ));
+        // Refused not_offered: another artifact, or other Settings offers.
+        assert!(!due(&settled("not_offered"), 900_000));
+        assert!(route_needed_due(
+            &settled("not_offered"),
+            900_000,
+            "art-2",
+            Some("offers-1")
+        ));
+        assert!(route_needed_due(
+            &settled("not_offered"),
+            900_000,
+            "art-1",
+            Some("offers-2")
+        ));
+        assert!(due(
+            &Emission {
+                wanted_version: 5,
+                ..settled("unroutable")
+            },
+            2_000
+        ));
+    }
+
+    #[test]
+    fn the_route_needed_event_names_the_task_version_and_is_valid() {
+        let registry = crate::review_domain::CatalogProfile::Host9.registry();
+        let (id, task) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let contract = &registry.events["aq.work.route_needed"];
+        let event = route_needed_event(id, task, 7, 5_000, contract).unwrap();
+        aq_playbook_host::model::validate_event(&event, &registry).unwrap();
+        assert_eq!(
+            event.payload,
+            json!({"subject": {"id": task.to_string(), "revision": 7}})
+        );
+        assert_eq!(
+            (event.subject.as_deref(), event.revision),
+            (Some(task.to_string().as_str()), Some(7))
+        );
+        assert!(event.correlation.is_empty());
+        assert_eq!(event.producer, "aq.host.bridge@1");
     }
 }

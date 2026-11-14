@@ -291,7 +291,6 @@ mod adapters {
         pub runtime: RuntimeOwner,
         pub grant: Uuid,
         pub scope: GrantScope,
-        pub now: i64,
         pub graph: Arc<FakeGraph>,
         pub routing: Arc<FakeRouting>,
         pub other_project: Uuid,
@@ -390,7 +389,6 @@ mod adapters {
             runtime,
             grant,
             scope,
-            now,
             graph,
             routing,
             other_project,
@@ -403,7 +401,7 @@ mod adapters {
                 run: "synthetic-run".into(),
                 step: name.replace('.', "-"),
                 invocation: 1,
-                deadline_at_ms: self.now + 5000,
+                deadline_at_ms: (self.f.state.clock)().timestamp_millis() + 5000,
                 command: CatalogProfile::Host9.registry().commands[name].clone(),
                 input_digest: digest(&input).unwrap(),
                 input,
@@ -1033,5 +1031,272 @@ mod adapters {
                 handle
             )]
         );
+    }
+    // --------------------------------------------------- aq.work.route_needed
+
+    impl Host {
+        /// A routing artifact is active: the newest activation of `aq.routing`.
+        async fn activated(&self, digest: &str) {
+            sqlx::query("INSERT INTO playbook_activations(namespace_id,op_id,kind,binding,artifact,created_at_ms) VALUES($1,$2,'activate','aq.routing',$3,1)")
+                .bind(self.service.namespace.namespace_id)
+                .bind(Uuid::new_v4().to_string())
+                .bind(digest)
+                .execute(&self.f.db.pool().await)
+                .await
+                .unwrap();
+        }
+        fn clock(&self) -> i64 {
+            (self.f.state.clock)().timestamp_millis()
+        }
+        /// What placement records for a ready task that waits for a route.
+        async fn wanted(&self, task: Uuid, version: i64, project: Uuid) {
+            sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id) VALUES($1,0,0,$2,$3,$4,$5) ON CONFLICT(task_id) DO UPDATE SET wanted_version=$2,wanted_at_ms=$3")
+                .bind(task)
+                .bind(version)
+                .bind(self.clock())
+                .bind(self.scope.workspace_id)
+                .bind(project)
+                .execute(&self.f.db.pool().await)
+                .await
+                .unwrap();
+        }
+        async fn asked(&self) -> usize {
+            (self.service.collect_route_needed(&self.runtime, 8).await).unwrap()
+        }
+        /// Time passes; placement keeps seeing the task wait.
+        async fn later(&self, ms: i64, task: Uuid, version: i64) {
+            self.f
+                .time
+                .fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
+            self.wanted(task, version, self.scope.project_id).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unrouted_ready_task_emits_one_event_and_not_again_within_two_minutes() {
+        let h = host(true, None).await;
+        h.activated("sha256:routing-1").await;
+        let task = h.graph.task("Waiting for a route", json!({}));
+        h.wanted(task, 3, h.scope.project_id).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.events().await, 1);
+        // The sealed event is the catalog's, for the task version.
+        let page = h.service.outbox(&h.runtime, 0, 8).await.unwrap();
+        let event = &page[0].2;
+        assert_eq!(event.contract.name, "aq.work.route_needed");
+        assert_eq!(
+            event.payload,
+            json!({"subject": {"id": task.to_string(), "revision": 3}})
+        );
+        assert_eq!(h.emission(task).await.unwrap().0, 3);
+        // Not again while placement keeps seeing it wait, until two minutes passed.
+        assert_eq!(h.asked().await, 0);
+        h.later(119_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+        h.later(1_000, task, 3).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.events().await, 2);
+        // A task placement no longer sees waiting (routed, or not ready) is left alone.
+        h.f.time
+            .fetch_add(600_000, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(h.asked().await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_new_task_version_emits_at_once() {
+        let h = host(true, None).await;
+        h.activated("sha256:routing-1").await;
+        let task = h.graph.task("Edited while waiting", json!({}));
+        h.wanted(task, 3, h.scope.project_id).await;
+        assert_eq!(h.asked().await, 1);
+        h.later(1_000, task, 4).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(
+            (h.events().await, h.emission(task).await.unwrap().0),
+            (2, 4)
+        );
+        assert_eq!(h.asked().await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_task_nothing_can_take_is_not_asked_about_again_until_something_changes() {
+        let h = host(true, None).await;
+        h.activated("sha256:routing-1").await;
+        let task = h.graph.task("No level for it", json!({}));
+        h.wanted(task, 3, h.scope.project_id).await;
+        assert_eq!(h.asked().await, 1);
+        // The playbook's route is refused: Settings offer nothing at the level.
+        let refused = h.route(task, 3, json!({"level": "deep-high"})).await;
+        assert_eq!(refused.output["reason"], "not_offered");
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+        // Settings change: asked again, once.
+        (h.routing.options.lock().unwrap().classes).insert(
+            "deep-high".parse().unwrap(),
+            vec![offer("anthropic", "claude")],
+        );
+        h.later(120_000, task, 3).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.emission(task).await.unwrap().1, None);
+        // The document allows nobody: not again for Settings, only for a new artifact.
+        let input = json!({"subject": {"id": task.to_string(), "revision": 3},
+            "reasons": [{"code": "policy", "detail": "Never."}]});
+        assert_eq!(
+            h.run("never", "work.unroutable", input).await.outcome,
+            "recorded"
+        );
+        h.routing.options.lock().unwrap().classes.clear();
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+        h.activated("sha256:routing-2").await;
+        h.later(120_000, task, 3).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.events().await, 3);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_emitted_without_an_active_routing_playbook_or_for_another_project() {
+        // No routing artifact is active: there is nothing to route with.
+        let h = host(true, None).await;
+        let task = h.graph.task("Nobody to ask", json!({}));
+        h.wanted(task, 3, h.scope.project_id).await;
+        assert_eq!((h.asked().await, h.events().await), (0, 0));
+        h.activated("sha256:routing-1").await;
+        assert_eq!(h.asked().await, 1);
+        // Without installation routing, only the namespace's project is asked about.
+        let own = host(false, None).await;
+        own.activated("sha256:routing-1").await;
+        let elsewhere = own.graph.task("Another project", json!({}));
+        own.wanted(elsewhere, 3, own.other_project).await;
+        assert_eq!((own.asked().await, own.events().await), (0, 0));
+        let wide = host(true, None).await;
+        wide.activated("sha256:routing-1").await;
+        wide.wanted(elsewhere, 3, wide.other_project).await;
+        assert_eq!(wide.asked().await, 1);
+    }
+
+    /// Answers the first field `low` (or its first choice) and no flag.
+    struct LowRisk;
+    #[async_trait::async_trait]
+    impl JudgmentProvider for LowRisk {
+        fn credential_profile(&self, _: Uuid, _: Uuid) -> Option<String> {
+            Some("profile/judge".into())
+        }
+        async fn complete(
+            &self,
+            _: &JudgmentRequest,
+        ) -> std::result::Result<JudgmentReply, ProviderFailure> {
+            Err(ProviderFailure::Unavailable)
+        }
+        async fn assess(
+            &self,
+            r: &AssessRequest,
+        ) -> std::result::Result<AssessReply, &'static str> {
+            let properties = |part: &str| {
+                r.schema["properties"][part]["properties"]
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            };
+            let labels: serde_json::Map<String, Value> = (properties("labels").into_iter())
+                .map(|(id, field)| {
+                    let choices = field["enum"].as_array().unwrap();
+                    let low = choices.iter().find(|c| *c == "low").unwrap_or(&choices[0]);
+                    (id, low.clone())
+                })
+                .collect();
+            let flags: serde_json::Map<String, Value> = (properties("flags").into_iter())
+                .map(|(id, _)| (id, json!(false)))
+                .collect();
+            Ok(AssessReply {
+                answer: json!({"labels": labels, "flags": flags, "rationale": "Only documentation changes."}),
+                provider: "fixture".into(),
+                model: "model-a".into(),
+                input_tokens: 1,
+                output_tokens: 1,
+            })
+        }
+    }
+
+    // The whole path: placement records a waiting task, the server sends
+    // aq.work.route_needed, the event starts a run of the installed artifact
+    // that triggers on it (the engine's worked example, sealed here), and
+    // the run reads the task, asks the judgment and writes the route.
+    #[tokio::test]
+    async fn the_event_starts_a_run_of_an_installed_artifact_that_triggers_on_it() {
+        use aq_playbooks_compiler::draft;
+        use aq_server::playbooks::driver::Driver;
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../vendor/aq-playbooks-5b86e0f/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
+        let workspace = draft::Workspace::read(&example).unwrap();
+        let artifact = draft::seal(&workspace).unwrap();
+        let h = host(true, Some(Arc::new(LowRisk))).await;
+        (h.routing.options.lock().unwrap().classes).insert(
+            "simple-high".parse().unwrap(),
+            vec![offer("anthropic", "claude")],
+        );
+        h.service.retire_runtime(&h.runtime).await.unwrap();
+        // The engine on protected PostgreSQL, in the fixture's database.
+        let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+        url.set_path(h.f.db.options().get_database().unwrap());
+        let factory = move || {
+            let config = url
+                .as_str()
+                .parse::<aq_playbook_host::postgres_client::Config>();
+            let client = (config.unwrap()).connect(aq_playbook_host::postgres_client::NoTls);
+            let keys = aq_playbook_host::postgres_storage::ProtectionKeyring::new(
+                "host9",
+                BTreeMap::from([("host9".into(), [9; 32])]),
+            );
+            aq_playbook_host::protected::storage(
+                client.map_err(|_| aq_playbook_host::Error::Unknown)?,
+                keys.unwrap(),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(500),
+            )
+        };
+        let limits = aq_playbook_host::Limits::default();
+        let driver = Driver::start(h.service.clone(), limits, factory)
+            .await
+            .unwrap();
+        driver.install(artifact.clone()).await.unwrap();
+        let binding = artifact.content.playbook.id.clone();
+        (driver
+            .activate(binding, artifact.digest.clone(), h.grant, 1)
+            .await)
+            .unwrap();
+        h.activated(&artifact.digest).await;
+        let task = h
+            .graph
+            .task("Fix a typo in the install guide", json!({"aq:priority": 2}));
+        h.wanted(task, 3, h.scope.project_id).await;
+        for _ in 0..200 {
+            driver.quantum().await.unwrap();
+            if h.graph.stored(task).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let stored = h.graph.stored(task).expect("the run routed the task");
+        assert_eq!(
+            (stored.c.to_string().as_str(), stored.s),
+            ("simple-high", Source::Router)
+        );
+        assert_eq!(stored.d.as_deref(), Some(&artifact.digest[..16]));
+        let (_, route) = h.routing.writes.lock().unwrap()[0].clone();
+        let route = route.unwrap();
+        assert_eq!(route.judgment.as_ref().unwrap()["labels"], json!(["low"]));
+        assert!(!route.reasons.is_empty());
+        // One cause, one run: more quanta start nothing and write nothing.
+        for _ in 0..10 {
+            driver.quantum().await.unwrap();
+        }
+        let runs = driver
+            .inspect_runs(h.f.actor, Default::default())
+            .await
+            .unwrap();
+        assert_eq!(runs.items.len(), 1);
+        assert_eq!(h.routing.writes.lock().unwrap().len(), 1);
+        driver.stop().await.unwrap();
     }
 }

@@ -273,9 +273,41 @@ pub async fn placements(
         return Ok(out);
     }
     let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);
+    let ids: Vec<Uuid> = ready.iter().map(|r| r.revision.task_id).collect();
+    let ended: std::collections::BTreeMap<Uuid, i64> = sqlx::query_as(
+        "SELECT task_id,count(*) FROM execution_attempts WHERE task_id=ANY($1) AND NOT holds_task GROUP BY 1",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await
+    .map_err(db)?
+    .into_iter()
+    .collect();
+    let (now, project) = (
+        (state.clock)().timestamp_millis(),
+        record.binding.project_id,
+    );
     let mut assigned = std::collections::BTreeMap::new();
     for task in ready {
-        let mut placement = Placement::of(true, on, &task.node["metadata"], 0);
+        let (id, metadata) = (task.revision.task_id, &task.node["metadata"]);
+        let attempts = ended.get(&id).map_or(0, |n| *n as u64);
+        let mut placement = Placement::of(true, on, metadata, attempts);
+        if placement == Placement::Reroute
+            && matches!(CompactRoute::from_metadata(metadata), Ok(Some(_)))
+        {
+            // Retried after it was routed: the route goes, and the task is
+            // asked about at its new version on the next poll.
+            let t = &task.revision;
+            let cleared = clear(state, t.workspace_id, id, t.version, Source::Router).await;
+            if let Err(error) = cleared {
+                tracing::warn!(task = %id, ?error, "outdated route not cleared");
+            }
+            out.insert(id, Placement::Wait);
+            continue;
+        }
+        if placement == Placement::Wait {
+            wanted(pool, now, project, &task.revision).await?;
+        }
         if let Placement::Routed(route) = &placement {
             let known = assigned.get(&route.c).copied();
             let has = match known {
@@ -292,6 +324,34 @@ pub async fn placements(
         }
     }
     Ok(out)
+}
+
+/// Records that a ready task waits for a route. The playbook owner sends
+/// `aq.work.route_needed` from these rows (`collect_route_needed`); a row is
+/// rewritten only for a new task version or every 30 s while the task waits.
+async fn wanted(
+    pool: &PgPool,
+    now: i64,
+    project: Uuid,
+    task: &aq_admission::TaskRevision,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id)
+         VALUES($1,0,0,$2,$3,$4,$5) ON CONFLICT(task_id) DO UPDATE
+         SET wanted_version=$2,wanted_at_ms=$3,workspace_id=$4,project_id=$5
+         WHERE route_needed_emissions.wanted_version IS DISTINCT FROM $2
+            OR route_needed_emissions.wanted_at_ms IS NULL OR route_needed_emissions.wanted_at_ms<=$3-$6",
+    )
+    .bind(task.task_id)
+    .bind(task.version as i64)
+    .bind(now)
+    .bind(task.workspace_id)
+    .bind(project)
+    .bind(aq_playbook_domain::host9::ROUTE_WANTED_REFRESH_MS)
+    .execute(pool)
+    .await
+    .map_err(db)?;
+    Ok(())
 }
 
 /// A ready task whose route cannot be placed is routed again. The refusal is recorded only

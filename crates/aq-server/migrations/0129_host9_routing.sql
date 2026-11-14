@@ -8,6 +8,11 @@
 -- Settings offers. A new task version, artifact or (for not_offered)
 -- offers asks again. workspace_id and project_id say where the task lives,
 -- so a routing playbook can read a task of any project on the router (R1).
+-- Placement records a ready task that waits for a route (wanted_version,
+-- wanted_at_ms); the playbook owner sends aq.work.route_needed from these
+-- rows, where task_version and emitted_at_ms are the version last asked
+-- about and when (0: never), and checked_at_ms when a row was last looked at
+-- without asking.
 SET LOCAL lock_timeout = '5s';
 ALTER TABLE playbook_namespaces DROP CONSTRAINT playbook_namespaces_catalog_profile_check;
 ALTER TABLE playbook_namespaces ADD CHECK(catalog_profile IN (1,2,3,4,5,6,7,8,9));
@@ -24,6 +29,9 @@ ALTER TABLE route_needed_emissions
  ADD COLUMN artifact_digest TEXT,
  ADD COLUMN options_digest TEXT,
  ADD COLUMN workspace_id UUID,
- ADD COLUMN project_id UUID;
+ ADD COLUMN project_id UUID,
+ ADD COLUMN wanted_version BIGINT,
+ ADD COLUMN wanted_at_ms BIGINT,
+ ADD COLUMN checked_at_ms BIGINT NOT NULL DEFAULT 0;
 SET LOCAL lock_timeout TO DEFAULT;
 UPDATE meta SET value='129' WHERE key='state_format_version';
