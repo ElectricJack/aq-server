@@ -512,6 +512,12 @@ async fn reconcile_works_past_100_cleared_episodes_and_old_cleared_ones_are_dele
         keep_finished: 10,
         delete_batch: 100,
     };
+    // An unexpired scan still to be reconciled holds the partition's old
+    // revisions in its baseline: no cleared episode is deleted under it.
+    e.scan("waiting", true).await;
+    assert_eq!(e.s.prune(&e.owner, &retention, episodes).await.unwrap(), 0);
+    e.f.time
+        .fetch_add(60_001, std::sync::atomic::Ordering::SeqCst);
     let mut deleted = vec![];
     for _ in 0..3 {
         deleted.push(e.s.prune(&e.owner, &retention, episodes).await.unwrap());

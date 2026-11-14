@@ -26,4 +26,4 @@ ALTER TABLE route_needed_emissions
  ADD COLUMN workspace_id UUID,
  ADD COLUMN project_id UUID;
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='128' WHERE key='state_format_version';
+UPDATE meta SET value='129' WHERE key='state_format_version';

@@ -4,7 +4,7 @@
 use aq_server::test_support::{TestDb, migrate_profile};
 use uuid::Uuid;
 
-const MIGRATION: &str = include_str!("../../migrations/0128_host9_routing.sql");
+const MIGRATION: &str = include_str!("../../migrations/0129_host9_routing.sql");
 
 #[tokio::test]
 async fn the_host9_migration_admits_profile_9_and_records_route_outcomes() {
