@@ -146,6 +146,44 @@ are now ignored and can be dropped when the host stops validating them.
 - Retire the old owner before starting the new one, as for every engine
   change (one owner per namespace).
 
+## The 500-run routing scale test
+
+First measurement of the new engine inside the server.
+`real_adapter_pilots::routing_scale::five_hundred_routing_runs_in_one_protected_namespace`,
+unchanged (`docs/implementation/0011-R3-scale.md`: same harness, protected
+PostgreSQL, `transitions: 2`, 2 s statement timeout), release build:
+
+```
+timeout 3600 cargo test --release --locked -p aq-server --test it_playbook -- --ignored routing_scale --nocapture
+```
+
+All 500 runs completed `routed` (846 s). Slowest tick per run, against the
+old engine (0173673):
+
+| Run | e7df379 | 0173673 | Snapshot (`pg_column_size(encrypted_snapshot)`) e7df379 / 0173673 |
+| --- | --- | --- | --- |
+| 1 | 175 ms | 150 ms | 5,650 / 39,958 B |
+| 50 | 223 ms | 815 ms | 147,758 / 1,890,378 B |
+| 100 | 235 ms | 1,265 ms | 292,858 / 3,782,328 B |
+| 200 | 224 ms | 2,532 ms | |
+| 206 | 228 ms | 2,829 ms | |
+| 207 | completed | tick failed `Unknown` | |
+| 250 | 250 ms | not reached | 374,283 B |
+| 500 | 232 ms | not reached | 374,727 B |
+
+Over all 500 runs the median slowest tick was 242 ms and the 95th percentile
+481 ms. Eight runs had a slowest tick above 700 ms, three above 1 s (run 86:
+1,198 ms; run 257: 1,272 ms; run 258: 1,218 ms); they are isolated, not a
+trend. The host was shared with other agents' builds: load average 33.0 at
+the start, 7.7 at the end.
+
+The record stops growing once the remembered set is full: each run leaves two
+event entries, so the 256-entry `replay_keep` bound is reached after about 128
+runs; `runtime_index` holds 256 events at runs 250 and 500, and the snapshot
+is 374 KB at both. The old engine grew about 37 KB per run. Finished runs
+are in `aq_playbooks.run_history`, which the harness's storage report does not
+count (`inspection_rows` stays 0).
+
 ## Tests
 
 New:
