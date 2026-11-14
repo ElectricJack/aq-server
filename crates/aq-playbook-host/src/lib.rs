@@ -18,6 +18,7 @@ use std::{
 use tokio::sync::oneshot;
 
 pub mod drive;
+pub mod engine_retention;
 pub mod protected;
 pub mod retention;
 pub use aq_playbooks_model as model;
@@ -83,6 +84,8 @@ pub struct Limits {
     pub timeouts: protected::Timeouts,
     /// Rolling deletion of the server's finished bridge rows.
     pub retention: retention::Retention,
+    /// The engine's replay windows and rolling sizes, applied at open.
+    pub engine_retention: engine_retention::EngineRetention,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -95,6 +98,7 @@ impl Default for Limits {
             engine: EngineConfig::default(),
             timeouts: protected::Timeouts::default(),
             retention: retention::Retention::default(),
+            engine_retention: engine_retention::EngineRetention::default(),
         }
     }
 }
@@ -107,6 +111,7 @@ impl Limits {
             || !(1..=64).contains(&self.transitions)
             || !self.timeouts.valid()
             || !self.retention.valid()
+            || !self.engine_retention.valid()
             || self.engine.max_runs == 0
             || self.engine.max_events == 0
             || self.engine.max_runs > 10_000
@@ -398,6 +403,15 @@ impl Owner {
                     {
                         let _ = engine.release();
                         return Err(Error::Invalid);
+                    }
+                    if let Some(policy) = shared
+                        .limits
+                        .engine_retention
+                        .changed(&state.retention.policy)
+                        && let Err(error) = engine.set_retention_policy(policy)
+                    {
+                        let _ = engine.release();
+                        return Err(engine_error(error));
                     }
                     Ok(engine)
                 });

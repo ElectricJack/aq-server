@@ -1,11 +1,10 @@
 # AQ v2 platform status
 
-> **Do not deploy `feat/internal-work` to a live playbook namespace.** It
-> vendors the interim engine `aq-playbooks-e7df379`, which has no drain of
-> namespaces written by the engine the live stack runs (0173673). Deploying
-> needs the final re-vendor first: the legacy drain (engine at or after
-> 25d6545, plus the engine's Tasks 10–12) and the engine's remaining tasks
-> ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
+> **Before deploying `feat/internal-work-engine` to a live playbook namespace:**
+> it vendors engine `aq-playbooks-5b86e0f` (0.2.0), which drains a namespace
+> written by the engine the live stack runs (0173673). Measure the first open
+> and drain on a copy of the live namespace under `[playbooks.engine_timeouts]`
+> first ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
 
 **As of:** 2026-11-12. **Scope:** all six repositories (aq-server, aq-worker,
 aq-dashboard, aq-playbooks, aq-git, aq-graph).
@@ -109,11 +108,10 @@ What the routing policy layer still needs, in dependency order:
    reads it yet. The Settings field itself is on aq-server #131, not on `main`.
    The rest of this list is specified in
    [`specs/0011-routing-policy.md`](specs/0011-routing-policy.md) (draft).
-2. aq-server re-vendored onto the current aq-playbooks runner. **Interim on
-   `feat/internal-work`** (2026-11-13): it vendors `aq-playbooks-e7df379`, the
-   live-state engine (finished runs leave the State as history, rolling repeat
-   protection with request times, no namespace limits), crates still at 0.1.3.
-   The 0.2.0 re-vendor follows when the engine is final
+2. aq-server re-vendored onto the current aq-playbooks runner. **Done on
+   `feat/internal-work-engine`** (2026-11-13): it vendors `aq-playbooks-5b86e0f`,
+   engine 0.2.0 (finished runs leave the State as history, rolling repeat
+   protection, no namespace limits, the legacy drain, authoring tools)
    ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
 3. `judgment.request` bound to a provider. The server registers all twelve
    host commands but leaves `judgment.request` and `check.request` unbound, so

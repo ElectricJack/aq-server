@@ -421,6 +421,44 @@ async fn a_stale_keyed_admission_is_typed_and_writes_nothing() {
     owner.call(Request::Stop, DEADLINE).await.unwrap();
 }
 
+// The configured engine windows are written into the namespace at open; an
+// open with the same values writes nothing more.
+#[tokio::test]
+async fn the_owner_applies_configured_event_and_admission_windows() {
+    let store = MemoryStorage::default();
+    let inspect = store.clone();
+    let limits = HostLimits {
+        engine_retention: aq_playbook_host::engine_retention::EngineRetention {
+            event_replay_ms: 600_000,
+            admission_replay_ms: 600_000,
+            ..Default::default()
+        },
+        ..HostLimits::default()
+    };
+    for _ in 0..2 {
+        let store = store.clone();
+        let owner = Owner::start("windows".into(), limits.clone(), move || Ok(store))
+            .await
+            .unwrap();
+        let policy = inspect.load("windows").unwrap().state.retention.policy;
+        assert_eq!(
+            (policy.event_replay_ms, policy.admission_replay_ms),
+            (600_000, 600_000)
+        );
+        assert_eq!((policy.replay_keep, policy.history_keep), (256, 10_000));
+        owner.call(Request::Stop, DEADLINE).await.unwrap();
+    }
+    let zero = HostLimits {
+        engine_retention: aq_playbook_host::engine_retention::EngineRetention {
+            replay_keep: 0,
+            ..Default::default()
+        },
+        ..HostLimits::default()
+    };
+    let refused = Owner::start("windows".into(), zero, move || Ok(store)).await;
+    assert!(matches!(refused, Err(Error::Invalid)));
+}
+
 async fn activate(owner: &Owner) {
     let a = artifact();
     owner

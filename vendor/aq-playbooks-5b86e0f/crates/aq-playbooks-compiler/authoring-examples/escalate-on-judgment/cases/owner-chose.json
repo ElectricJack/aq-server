@@ -1,0 +1,52 @@
+{
+  "name": "owner-chose",
+  "situation": "The owner has already chosen who takes the task",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-31",
+        "revision": 1
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-31@1",
+          "subject": {
+            "id": "task-31",
+            "revision": 1
+          },
+          "facts": {
+            "kind": "",
+            "title": "Update the logo",
+            "description": "",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "owner"
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "skipped",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-31",
+            "revision": 1
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "changed-and-still-bare",
+  "situation": "A playbook changes a task, and ten minutes later it still has no description",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "changed",
+      "reference": "task-40@4",
+      "subject": {
+        "id": "task-40",
+        "revision": 4
+      }
+    },
+    "correlation": {
+      "operation": "work-op-2"
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-40@5",
+          "subject": {
+            "id": "task-40",
+            "revision": 5
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a dark theme",
+            "description": "",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none"
+          }
+        }
+      }
+    ],
+    "message.send": [
+      {
+        "outcome": "queued",
+        "output": {
+          "reference": "message-1",
+          "subject": {
+            "id": "task-40",
+            "revision": 5
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "reminded",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-40",
+            "revision": 4
+          }
+        }
+      },
+      {
+        "command": "message.send",
+        "input": {
+          "identity": "task-40@5",
+          "recipient": "user:owner-1",
+          "visibility": "project",
+          "body": "This task has had no description for ten minutes. Please add one, so that it can be worked on."
+        }
+      }
+    ]
+  }
+}

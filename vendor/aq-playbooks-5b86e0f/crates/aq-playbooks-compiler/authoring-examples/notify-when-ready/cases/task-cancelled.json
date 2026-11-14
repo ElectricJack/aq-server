@@ -1,0 +1,24 @@
+{
+  "name": "task-cancelled",
+  "situation": "The change that started the run cancelled the task",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.changed",
+    "payload": {
+      "outcome": "cancelled",
+      "reference": "task-40@2",
+      "subject": {
+        "id": "task-40",
+        "revision": 2
+      }
+    },
+    "correlation": {
+      "operation": "work-op-5"
+    }
+  },
+  "returns": {},
+  "expect": {
+    "outcome": "ended",
+    "calls": []
+  }
+}

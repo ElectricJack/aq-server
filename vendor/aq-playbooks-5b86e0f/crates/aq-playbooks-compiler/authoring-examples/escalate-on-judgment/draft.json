@@ -1,0 +1,724 @@
+{
+  "purpose": "Decide how strong a model a task needs and who may take it",
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "max_length": 4096
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ]
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "outcomes": {
+        "routed": {
+          "type": "null"
+        },
+        "unroutable": {
+          "type": "null"
+        },
+        "skipped": {
+          "type": "null"
+        },
+        "refused": {
+          "type": "null"
+        },
+        "failed": {
+          "type": "null"
+        }
+      },
+      "start": "read"
+    }
+  },
+  "triggers": [
+    {
+      "id": "task-ready",
+      "event": "aq.work.route_needed",
+      "entry": "main",
+      "input": {
+        "op": "object",
+        "fields": {
+          "task": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "subject"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "steps": {
+    "read": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.read",
+        "bind": "task",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "observed": "owned",
+        "refused": "skipped"
+      },
+      "on_error": "failed"
+    },
+    "owned": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "eq",
+          "left": {
+            "op": "ref",
+            "root": "task",
+            "path": [
+              "facts",
+              "route"
+            ]
+          },
+          "right": {
+            "op": "literal",
+            "value": "owner"
+          }
+        }
+      },
+      "edges": {
+        "true": "skipped",
+        "false": "triage",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "triage": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "lt",
+          "left": {
+            "op": "literal",
+            "value": 2
+          },
+          "right": {
+            "op": "ref",
+            "root": "task",
+            "path": [
+              "facts",
+              "charged_failures"
+            ]
+          }
+        }
+      },
+      "edges": {
+        "true": "nobody",
+        "false": "ask",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "nobody": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.unroutable",
+        "bind": "unroutable_result",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "policy",
+                  "detail": "A task that has already failed three times for a real reason is never given to an agent again."
+                }
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "recorded": "unroutable",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "ask": {
+      "op": {
+        "kind": "invoke",
+        "command": "judgment.assess",
+        "bind": "j",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "question": {
+              "op": "literal",
+              "value": "How much damage could this change do if it is wrong? High risk is anything that touches stored data, permissions or money. Low risk is docs, wording and tests. Everything else is medium risk. Answer unknown if you cannot tell."
+            },
+            "context": {
+              "op": "object",
+              "fields": {
+                "items": {
+                  "op": "array",
+                  "items": [
+                    {
+                      "op": "object",
+                      "fields": {
+                        "label": {
+                          "op": "literal",
+                          "value": "Title"
+                        },
+                        "text": {
+                          "op": "ref",
+                          "root": "task",
+                          "path": [
+                            "facts",
+                            "title"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "op": "object",
+                      "fields": {
+                        "label": {
+                          "op": "literal",
+                          "value": "Description"
+                        },
+                        "text": {
+                          "op": "ref",
+                          "root": "task",
+                          "path": [
+                            "facts",
+                            "description"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "fields": {
+              "op": "literal",
+              "value": [
+                {
+                  "id": "risk",
+                  "description": "How much damage the change could do if it is wrong.",
+                  "choices": [
+                    "low",
+                    "medium",
+                    "high",
+                    "unknown"
+                  ]
+                }
+              ]
+            },
+            "flags": {
+              "op": "literal",
+              "value": [
+                {
+                  "id": "small_and_tested",
+                  "description": "The work is small, its requirements are settled, and a test checks the result."
+                }
+              ]
+            },
+            "rationale_max_bytes": {
+              "op": "literal",
+              "value": 512
+            },
+            "budget": {
+              "op": "literal",
+              "value": {
+                "deadline_ms": 180000,
+                "max_output_tokens": 1024
+              }
+            }
+          }
+        }
+      },
+      "edges": {
+        "accepted": "await",
+        "assessed": "assume",
+        "failed": "assume",
+        "refused": "assume"
+      },
+      "on_error": "assume"
+    },
+    "await": {
+      "op": {
+        "kind": "join",
+        "members": [
+          {
+            "op": "ref",
+            "root": "j",
+            "path": []
+          }
+        ],
+        "member_keys": [
+          "c"
+        ],
+        "mode": "all",
+        "accepted_outcomes": [
+          "assessed"
+        ],
+        "deadline_ms": 180000,
+        "remaining": "track",
+        "bind": "answer"
+      },
+      "edges": {
+        "completed": "route",
+        "no_match": "assume",
+        "timeout": "assume"
+      },
+      "on_error": "assume"
+    },
+    "route": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.route",
+        "bind": "route_result",
+        "retry": null,
+        "input": {
+          "op": "let",
+          "bindings": [
+            {
+              "name": "risk",
+              "value": {
+                "op": "ref",
+                "root": "answer",
+                "path": [
+                  "c",
+                  "output",
+                  "labels",
+                  "0"
+                ]
+              }
+            },
+            {
+              "name": "small",
+              "value": {
+                "op": "contains",
+                "collection": {
+                  "op": "ref",
+                  "root": "answer",
+                  "path": [
+                    "c",
+                    "output",
+                    "flags"
+                  ]
+                },
+                "value": {
+                  "op": "literal",
+                  "value": "small_and_tested"
+                }
+              }
+            },
+            {
+              "name": "row",
+              "value": {
+                "op": "lookup",
+                "key": {
+                  "op": "ref",
+                  "root": "risk",
+                  "path": []
+                },
+                "cases": [
+                  {
+                    "when": "low",
+                    "then": {
+                      "op": "literal",
+                      "value": {
+                        "level": "simple-high",
+                        "harnesses": [],
+                        "reasons": [
+                          {
+                            "code": "policy",
+                            "detail": "Low risk work is Simple, high effort, and any agent may take it."
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "when": "medium",
+                    "then": {
+                      "op": "lookup",
+                      "key": {
+                        "op": "ref",
+                        "root": "small",
+                        "path": []
+                      },
+                      "cases": [
+                        {
+                          "when": true,
+                          "then": {
+                            "op": "literal",
+                            "value": {
+                              "level": "simple-high",
+                              "harnesses": [],
+                              "reasons": [
+                                {
+                                  "code": "risk_relaxed",
+                                  "detail": "Medium risk work that is small, settled and checked by a test is Simple, high effort."
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ],
+                      "default": {
+                        "op": "literal",
+                        "value": {
+                          "level": "standard-high",
+                          "harnesses": [],
+                          "reasons": [
+                            {
+                              "code": "raised_for_risk",
+                              "detail": "Medium risk work is Standard, high effort."
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "when": "high",
+                    "then": {
+                      "op": "literal",
+                      "value": {
+                        "level": "complex-high",
+                        "harnesses": [
+                          "claude",
+                          "codex"
+                        ],
+                        "reasons": [
+                          {
+                            "code": "raised_for_risk",
+                            "detail": "High risk work is Complex, high effort."
+                          },
+                          {
+                            "code": "harnesses_limited",
+                            "detail": "Only Claude or Codex may take high risk work."
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "default": {
+                  "op": "literal",
+                  "value": {
+                    "level": "complex-high",
+                    "harnesses": [
+                      "claude",
+                      "codex"
+                    ],
+                    "reasons": [
+                      {
+                        "code": "risk_assumed",
+                        "detail": "The risk could not be told, so the task is treated as high risk."
+                      },
+                      {
+                        "code": "raised_for_risk",
+                        "detail": "High risk work is Complex, high effort."
+                      },
+                      {
+                        "code": "harnesses_limited",
+                        "detail": "Only Claude or Codex may take high risk work."
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "body": {
+            "op": "object",
+            "fields": {
+              "subject": {
+                "op": "ref",
+                "root": "task",
+                "path": [
+                  "subject"
+                ]
+              },
+              "level": {
+                "op": "ref",
+                "root": "row",
+                "path": [
+                  "level"
+                ]
+              },
+              "harnesses": {
+                "op": "ref",
+                "root": "row",
+                "path": [
+                  "harnesses"
+                ]
+              },
+              "providers": {
+                "op": "literal",
+                "value": []
+              },
+              "prefer": {
+                "op": "literal",
+                "value": []
+              },
+              "hold": {
+                "op": "literal",
+                "value": false
+              },
+              "reasons": {
+                "op": "ref",
+                "root": "row",
+                "path": [
+                  "reasons"
+                ]
+              },
+              "classification": {
+                "op": "object",
+                "fields": {
+                  "reference": {
+                    "op": "ref",
+                    "root": "answer",
+                    "path": [
+                      "c",
+                      "output",
+                      "reference"
+                    ]
+                  },
+                  "fields": {
+                    "op": "literal",
+                    "value": [
+                      "risk"
+                    ]
+                  },
+                  "labels": {
+                    "op": "ref",
+                    "root": "answer",
+                    "path": [
+                      "c",
+                      "output",
+                      "labels"
+                    ]
+                  },
+                  "flags": {
+                    "op": "ref",
+                    "root": "answer",
+                    "path": [
+                      "c",
+                      "output",
+                      "flags"
+                    ]
+                  },
+                  "rationale": {
+                    "op": "ref",
+                    "root": "answer",
+                    "path": [
+                      "c",
+                      "output",
+                      "rationale"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "edges": {
+        "routed": "routed",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "assume": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.route",
+        "bind": "assumed_route",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "ref",
+              "root": "task",
+              "path": [
+                "subject"
+              ]
+            },
+            "level": {
+              "op": "literal",
+              "value": "complex-high"
+            },
+            "harnesses": {
+              "op": "literal",
+              "value": [
+                "claude",
+                "codex"
+              ]
+            },
+            "providers": {
+              "op": "literal",
+              "value": []
+            },
+            "prefer": {
+              "op": "literal",
+              "value": []
+            },
+            "hold": {
+              "op": "literal",
+              "value": false
+            },
+            "reasons": {
+              "op": "literal",
+              "value": [
+                {
+                  "code": "classification_failed",
+                  "detail": "The risk could not be judged, so the task is treated as high risk."
+                },
+                {
+                  "code": "raised_for_risk",
+                  "detail": "High risk work is Complex, high effort."
+                },
+                {
+                  "code": "harnesses_limited",
+                  "detail": "Only Claude or Codex may take high risk work."
+                }
+              ]
+            },
+            "classification": {
+              "op": "literal",
+              "value": null
+            }
+          }
+        }
+      },
+      "edges": {
+        "routed": "routed",
+        "stale": "skipped",
+        "refused": "refused"
+      },
+      "on_error": "failed"
+    },
+    "routed": {
+      "op": {
+        "kind": "return",
+        "outcome": "routed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "unroutable": {
+      "op": {
+        "kind": "return",
+        "outcome": "unroutable",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "skipped": {
+      "op": {
+        "kind": "return",
+        "outcome": "skipped",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "refused": {
+      "op": {
+        "kind": "return",
+        "outcome": "refused",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    }
+  },
+  "source_map": {
+    "read": 3,
+    "owned": 4,
+    "triage": 6,
+    "nobody": 7,
+    "ask": 9,
+    "route": 13,
+    "await": 20,
+    "assume": 19,
+    "routed": 23
+  }
+}

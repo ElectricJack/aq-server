@@ -1,0 +1,79 @@
+{
+  "name": "unroutable-stale",
+  "situation": "A task that failed three times changes before it is left for the owner",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-30",
+        "revision": 2
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-30@2",
+          "subject": {
+            "id": "task-30",
+            "revision": 2
+          },
+          "facts": {
+            "kind": "",
+            "title": "Migrate the settings table",
+            "description": "Add a column for the time zone.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 3,
+            "ended_attempts": 3,
+            "route": "router"
+          }
+        }
+      }
+    ],
+    "work.unroutable": [
+      {
+        "outcome": "stale",
+        "output": {
+          "reference": "unroutable-1",
+          "subject": {
+            "id": "task-30",
+            "revision": 2
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "skipped",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-30",
+            "revision": 2
+          }
+        }
+      },
+      {
+        "command": "work.unroutable",
+        "input": {
+          "subject": {
+            "id": "task-30",
+            "revision": 2
+          },
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "A task that has already failed three times for a real reason is never given to an agent again."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "document": "stuck/how-long.md",
+  "why": "This version does not say how long to wait. A vague time or quantity in a document is a question for the owner, never a number you choose: ask, name the sentence, and end. The same holds for any time the document gives, such as how long a judgment may take: write it in the document's words, as escalate-on-judgment's 'within three minutes', and use exactly that.",
+  "run": [
+    "ask",
+    "--line",
+    "3",
+    "How long should a new or changed task wait before you are sent a message asking for its description?"
+  ],
+  "writes": {
+    "kind": "question",
+    "question": "How long should a new or changed task wait before you are sent a message asking for its description?",
+    "sentences": [
+      {
+        "line": 3,
+        "text": "When a playbook files a task, or changes one, wait a while first."
+      }
+    ]
+  }
+}

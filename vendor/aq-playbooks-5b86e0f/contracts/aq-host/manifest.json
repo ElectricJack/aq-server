@@ -1,0 +1,30 @@
+{
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "fingerprint": "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1",
+  "version": "1.0.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

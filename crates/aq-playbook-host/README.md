@@ -1,7 +1,7 @@
 # AQ playbook owner foundation
 
 An internal embedding of the exact aq-playbooks source pinned in
-`vendor/aq-playbooks-source-0.1.3-e7df379.json`. By default, no domain commands or events
+`vendor/aq-playbooks-source-0.2.0.json`. By default, no domain commands or events
 are registered. Explicit AQ adapters remain the embedding owner's responsibility.
 The CLI and synthetic host are not dependencies. There is no automatic driver,
 production registration, worker launch, supervisor, notification dispatcher or
@@ -115,14 +115,16 @@ legacy database as a metadata preview. The consumer source qualification and
 no-canonical-change boundary are tracked in
 [API-05 current catalog](../../docs/implementation/API-05-current-catalog.md).
 
-## Live-state engine (interim, e7df379)
+## Live-state engine (0.2.0, 5b86e0f)
 
-**Not deployable**: e7df379 has no drain of namespaces written by 0173673;
-the final re-vendor is the first deployable version.
-
-The host consumes exact component source e7df379 (runner/Postgres/CLI 0.1.3,
-model/compiler 0.1.0 by number; the engine moves to 0.2.0 later), pinned in
-`vendor/aq-playbooks-source-0.1.3-e7df379.json`. A finished run leaves the
+The host consumes exact component source 5b86e0f (model, compiler, runner,
+postgres, simulation and CLI all 0.2.0), pinned in
+`vendor/aq-playbooks-source-0.2.0.json`. This engine drains a namespace an
+older engine wrote, a bounded amount per commit. `Limits::engine_retention`
+(`[playbooks.engine_retention]`: `event_replay_ms`, `admission_replay_ms`,
+`replay_keep`, `history_keep`, `audit_ms`; the engine's defaults) is written
+into the namespace's retention policy at open, in one commit, only when it
+differs from the stored policy. A finished run leaves the
 State as history; `Request::Inspect` serves live State plus history, while
 `Request::Runs` lists live runs only. `Request::AdmitOnce` and `Request::Event`
 take an optional `requested_at_ms` and call the engine's `admit_once_at` /
@@ -134,4 +136,4 @@ bounded backoff; `protected::Timeouts` are the engine session deadlines. The eng
 `EngineConfig` limits in `Limits` are accepted and ignored. A storage wrapper
 must forward `persists_history`, `history_page` and `delete_history`, or
 `Engine::new` refuses it. See
-[the interim vendor note](../../docs/implementation/playbook-authoring-B1-interim-vendor.md).
+[the vendor note](../../docs/implementation/playbook-authoring-B1-interim-vendor.md).

@@ -42,6 +42,9 @@ struct Configuration {
     /// `[playbooks.retention]`; defaults keep 10,000 finished rows, delete 500.
     #[serde(default)]
     retention: aq_playbook_host::retention::Retention,
+    /// `[playbooks.engine_retention]`; the engine's defaults.
+    #[serde(default)]
+    engine_retention: aq_playbook_host::engine_retention::EngineRetention,
     deployments: Vec<DeploymentInput>,
     /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
     #[serde(default)]
@@ -138,6 +141,7 @@ pub struct Loaded {
     pub(crate) interval: Duration,
     pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
     pub(crate) retention: aq_playbook_host::retention::Retention,
+    pub(crate) engine_retention: aq_playbook_host::engine_retention::EngineRetention,
     pub(crate) deployments: Vec<Deployment>,
     pub(crate) profile: CatalogProfile,
     pub(crate) integration: Option<IntegrationSettings>,
@@ -226,6 +230,7 @@ impl Configuration {
             || !(250..=60000).contains(&self.drive_interval_ms)
             || !self.engine_timeouts.valid()
             || !self.retention.valid()
+            || !self.engine_retention.valid()
             || self.deployments.len() > 4
         {
             return Err("invalid playbook owner identity or bounds");
@@ -356,6 +361,7 @@ impl Configuration {
             interval: Duration::from_millis(self.drive_interval_ms),
             timeouts: self.engine_timeouts,
             retention: self.retention,
+            engine_retention: self.engine_retention,
             deployments,
             profile,
             integration,

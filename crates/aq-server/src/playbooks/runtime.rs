@@ -231,14 +231,7 @@ impl Runtime {
             control_queue: 4,
             timeouts: config.timeouts,
             retention: config.retention,
-            // Accepted and ignored by the engine: it has no namespace limits.
-            engine: aq_playbook_host::runner::EngineConfig {
-                max_runs: 128,
-                max_events: 2048,
-                max_queued_destinations: 256,
-                max_receipts: 4096,
-                max_state_bytes: 8_388_608,
-            },
+            engine_retention: config.engine_retention,
             ..Limits::default()
         };
         let started = Driver::open(service.clone(), limits, move || {
