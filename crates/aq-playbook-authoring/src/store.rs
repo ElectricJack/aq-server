@@ -41,7 +41,7 @@ fn purpose_text(purpose: Purpose) -> String {
 /// The source `id`, if there is one.
 pub async fn get(pool: &PgPool, id: &str) -> Result<Option<SourceRecord>> {
     let row = sqlx::query(&format!(
-        "SELECT {COLUMNS} FROM playbook_sources WHERE id=$1"
+        "SELECT {COLUMNS} FROM playbook_sources WHERE id=$1 AND deleted_at_ms IS NULL"
     ))
     .bind(id)
     .fetch_optional(pool)
@@ -53,7 +53,8 @@ pub async fn get(pool: &PgPool, id: &str) -> Result<Option<SourceRecord>> {
 /// an unknown source and for the built-in one, whose Markdown the host keeps.
 pub async fn stored_markdown(pool: &PgPool, id: &str) -> Result<Option<(String, u64)>> {
     let row: Option<(String, i64)> = sqlx::query_as(
-        "SELECT markdown,revision FROM playbook_sources WHERE id=$1 AND markdown IS NOT NULL",
+        "SELECT markdown,revision FROM playbook_sources WHERE id=$1 AND markdown IS NOT NULL
+            AND deleted_at_ms IS NULL",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -92,7 +93,7 @@ pub async fn register(pool: &PgPool, record: &SourceRecord, markdown: &str) -> R
 async fn write(pool: &PgPool, record: &SourceRecord, markdown: Option<&str>) -> Result<()> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(&format!(
-        "SELECT {COLUMNS},markdown FROM playbook_sources WHERE id=$1 FOR UPDATE"
+        "SELECT {COLUMNS},markdown,deleted_at_ms FROM playbook_sources WHERE id=$1 FOR UPDATE"
     ))
     .bind(&record.id)
     .fetch_optional(&mut *tx)
@@ -105,7 +106,8 @@ async fn write(pool: &PgPool, record: &SourceRecord, markdown: Option<&str>) -> 
                 return Err(kind_taken(record));
             }
             let text: Option<String> = row.try_get("markdown")?;
-            if stored.same_as(record) && text.as_deref() == markdown {
+            let deleted: Option<i64> = row.try_get("deleted_at_ms")?;
+            if stored.same_as(record) && text.as_deref() == markdown && deleted.is_none() {
                 return Ok(());
             }
             stored.revision + 1
@@ -139,7 +141,7 @@ async fn upsert(
             purpose=EXCLUDED.purpose,judgment_purpose=EXCLUDED.judgment_purpose,
             commands=EXCLUDED.commands,events=EXCLUDED.events,
             capabilities=EXCLUDED.capabilities,facts=EXCLUDED.facts,markdown=EXCLUDED.markdown,
-            revision=EXCLUDED.revision,updated_at_ms=EXCLUDED.updated_at_ms
+            revision=EXCLUDED.revision,updated_at_ms=EXCLUDED.updated_at_ms,deleted_at_ms=NULL
          WHERE playbook_sources.kind=EXCLUDED.kind",
     )
     .bind(&record.id)
@@ -179,4 +181,76 @@ fn kind_taken(record: &SourceRecord) -> Error {
 
 fn binding_used(binding: &str, by: &str) -> Error {
     Error::Conflict(format!("The binding {binding} is already used by {by}"))
+}
+
+/// Every source, by id.
+pub async fn list(pool: &PgPool) -> Result<Vec<SourceRecord>> {
+    let rows = sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM playbook_sources WHERE deleted_at_ms IS NULL ORDER BY id"
+    ))
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(decode).collect()
+}
+
+/// Replaces a registered source's Markdown when its revision is still
+/// `expected`, and returns the new revision.
+pub async fn set_markdown(pool: &PgPool, id: &str, markdown: &str, expected: u64) -> Result<u64> {
+    let record = (get(pool, id).await?)
+        .ok_or_else(|| Error::NotFound(format!("There is no playbook source {id}")))?;
+    if record.kind != SourceKind::Registered {
+        return Err(Error::Conflict(format!(
+            "{id} is a built-in source: its document is edited where the server keeps it"
+        )));
+    }
+    let revision: Option<i64> = sqlx::query_scalar(
+        "UPDATE playbook_sources SET markdown=$2,revision=revision+1,updated_at_ms=$4
+         WHERE id=$1 AND kind='registered' AND deleted_at_ms IS NULL AND revision=$3
+         RETURNING revision",
+    )
+    .bind(id)
+    .bind(markdown)
+    .bind(i64::try_from(expected).map_err(|_| Error::Invalid("expected_revision".into()))?)
+    .bind(now_ms())
+    .fetch_optional(pool)
+    .await?;
+    let revision = revision.ok_or_else(|| {
+        Error::Conflict(format!(
+            "{id} was changed by someone else; read it again before saving"
+        ))
+    })?;
+    u64::try_from(revision).map_err(|_| Error::Corrupt)
+}
+
+/// Marks a registered source deleted: its runs stop, nothing of it is
+/// active, and its run history stays. The built-in source is refused.
+pub async fn remove(pool: &PgPool, id: &str) -> Result<()> {
+    let record = (get(pool, id).await?)
+        .ok_or_else(|| Error::NotFound(format!("There is no playbook source {id}")))?;
+    if record.kind != SourceKind::Registered {
+        return Err(Error::Conflict(format!(
+            "{id} is a built-in source and cannot be deleted"
+        )));
+    }
+    let now = now_ms();
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE playbook_sources SET deleted_at_ms=$2 WHERE id=$1")
+        .bind(id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE playbook_authoring_runs SET status='superseded',finished_at_ms=$2
+         WHERE source_id=$1 AND status='running'",
+    )
+    .bind(id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE playbook_authoring_runs SET active=FALSE WHERE source_id=$1 AND active")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }

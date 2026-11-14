@@ -456,6 +456,25 @@ impl Service {
         tx.commit().await?;
         Ok(())
     }
+    /// The grant the server holds for a playbook source on the owner's
+    /// behalf (spec 0013 ruling R2): written as the namespace owner, and it
+    /// never expires. [`Self::grant`] keeps its 24 h cap.
+    pub async fn source_grant(&self, id: Uuid, scope: GrantScope) -> Result<()> {
+        self.profile.validate_scope(&scope)?;
+        let (ns, actor) = (&self.namespace, self.namespace.owner_user_id);
+        if id.is_nil() || scope.project_id != ns.project_id || scope.workspace_id != ns.workspace_id
+        {
+            return Err(Error::Forbidden);
+        }
+        let expires = aq_playbook_authoring::SOURCE_GRANT_EXPIRES_AT_MS;
+        let payload = digest(&(ns.namespace_id, ns.generation, id, &scope, expires, actor))?;
+        let mut tx = self.tx().await?;
+        self.namespace_locked(&mut tx).await?;
+        Self::owner(&mut tx, actor).await?;
+        sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7) ON CONFLICT(grant_id) DO NOTHING").bind(id).bind(ns.namespace_id).bind(ns.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
     pub async fn revoke(&self, actor: Uuid, id: Uuid) -> Result<()> {
         if actor != self.namespace.owner_user_id {
             return Err(Error::Forbidden);

@@ -1024,3 +1024,196 @@ async fn different_producers_with_same_event_uuid_acknowledge_independently() {
         .unwrap();
     assert!(e.s.outbox(&e.owner, 0, 2).await.unwrap().is_empty());
 }
+
+/// A playbook with no commands, as an authoring run would seal it for
+/// `binding`; `purpose` makes two of them differ.
+fn authored(binding: &str, purpose: &str) -> Artifact {
+    Artifact::seal(ArtifactContent {
+        format_version: 1,
+        compiler: "authoring deployment test".into(),
+        source: SourceBinding {
+            digest: hash_bytes(purpose.as_bytes()),
+            header: SourceHeader {
+                format_version: 1,
+                id: binding.into(),
+                scope: "project".into(),
+                interfaces: BTreeSet::from(["main".into()]),
+                definitions: BTreeSet::new(),
+            },
+        },
+        playbook: Playbook {
+            id: binding.into(),
+            purpose: purpose.into(),
+            scope: "project".into(),
+            entries: BTreeMap::from([(
+                "main".into(),
+                EntryPoint {
+                    input: Schema::Null,
+                    outcomes: BTreeMap::from([("ok".into(), Schema::Null)]),
+                    start: "done".into(),
+                },
+            )]),
+            steps: BTreeMap::from([(
+                "done".into(),
+                Step {
+                    op: Operation::Return {
+                        outcome: "ok".into(),
+                        output: Expr::literal(Value::Null),
+                    },
+                    edges: BTreeMap::new(),
+                    on_error: None,
+                },
+            )]),
+            triggers: vec![],
+            limits: Limits::default(),
+            required_capabilities: BTreeSet::new(),
+        },
+        registry: Registry::default(),
+        dependencies: BTreeMap::new(),
+        definitions: BTreeMap::new(),
+        source_map: BTreeMap::new(),
+    })
+    .unwrap()
+}
+
+/// Playbook authoring (spec 0013 ruling R2, plan task C4) on the real engine
+/// and grant tables: the server's grant for a source never expires and is
+/// reused, a changed set of abilities replaces it, the owner's own grants
+/// keep their 24 hour cap, and what is active survives a restart.
+#[tokio::test]
+async fn an_authored_playbook_runs_under_a_source_grant_that_never_expires() {
+    use aq_playbook_authoring::{self as authoring, Deployer};
+    use aq_server::playbooks::driver::Driver;
+    const SOURCE: &str = "probe";
+    const BINDING: &str = "aq.probe";
+    let e = setup().await;
+    e.s.retire_runtime(&e.owner).await.unwrap();
+    let start = || {
+        Driver::start(
+            e.s.clone(),
+            aq_playbook_host::Limits::default(),
+            protected_factory(&e),
+        )
+    };
+    let driver = Arc::new(start().await.unwrap());
+    let state = e.f.state.clone();
+    state.internal_work.test_engine(driver.clone());
+    let pool = e.f.db.pool().await;
+    let names =
+        |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
+    let record = authoring::SourceRecord {
+        id: SOURCE.into(),
+        kind: authoring::SourceKind::Registered,
+        binding: BINDING.into(),
+        scope: "project".into(),
+        purpose: "Probe".into(),
+        judgment_purpose: aq_internal_work::Purpose::PlaybookCall,
+        commands: BTreeSet::new(),
+        events: BTreeSet::new(),
+        capabilities: names(&["context.read"]),
+        facts: vec![],
+        revision: 0,
+    };
+    authoring::register(&pool, &record, "A document.\n")
+        .await
+        .unwrap();
+
+    // Saving a source twice reuses its grant, which never expires.
+    let caps = names(&["context.read"]);
+    let (grant, revision) = state.ensure_grant(SOURCE, &caps).await.unwrap();
+    assert_eq!(
+        state.ensure_grant(SOURCE, &caps).await.unwrap(),
+        (grant, revision)
+    );
+    let expiry = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (i64, Option<i64>)>(
+                "SELECT expires_at_ms,revoked_at_ms FROM playbook_grants WHERE grant_id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(expiry(grant).await, (i64::MAX, None));
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_source_grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 1);
+
+    let (first, second) = (authored(BINDING, "first"), authored(BINDING, "second"));
+    state.install(&first).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &first.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], first.digest);
+    // Activating what is active already changes nothing.
+    state
+        .activate(SOURCE, BINDING, &first.digest)
+        .await
+        .unwrap();
+    let again = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(again["revision"], bound["revision"]);
+
+    // 25 hours later the source grant still authorizes; the owner's does not.
+    e.f.time
+        .fetch_add(25 * 3_600_000, std::sync::atomic::Ordering::SeqCst);
+    state.install(&second).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+    let owners = driver
+        .activate("aq.other".into(), first.digest.clone(), e.grant, 1)
+        .await;
+    assert!(matches!(owners, Err(Error::Forbidden)), "{owners:?}");
+    // An owner grant asked for longer than 24 hours is still refused.
+    let now = (e.f.state.clock)().timestamp_millis();
+    let long =
+        e.s.grant(e.f.actor, Uuid::new_v4(), e.scope.clone(), now + 86_400_001)
+            .await;
+    assert!(matches!(long, Err(Error::Invalid)), "{long:?}");
+    e.s.grant(e.f.actor, Uuid::new_v4(), e.scope.clone(), now + 86_400_000)
+        .await
+        .unwrap();
+
+    // A changed set of abilities replaces the grant; the old one is revoked.
+    let wider = names(&["context.read", "findings.reconcile"]);
+    let (next, _) = state.ensure_grant(SOURCE, &wider).await.unwrap();
+    assert_ne!(next, grant);
+    assert!(expiry(grant).await.1.is_some());
+    assert_eq!(expiry(next).await, (i64::MAX, None));
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+
+    // After a restart the artifact is installed again and still active.
+    driver.stop().await.unwrap();
+    let driver = Arc::new(start().await.unwrap());
+    state.internal_work.test_engine(driver.clone());
+    state.install(&second).await.unwrap();
+    state
+        .activate(SOURCE, BINDING, &second.digest)
+        .await
+        .unwrap();
+    let bound = driver.inspect_binding(BINDING.into()).await.unwrap();
+    assert_eq!(bound["artifact"], second.digest);
+
+    // Deleting the source revokes its grant: its playbook can do nothing more.
+    state.revoke_grant(SOURCE).await.unwrap();
+    assert!(expiry(next).await.1.is_some());
+    let refused = state.activate(SOURCE, BINDING, &first.digest).await;
+    assert!(
+        matches!(refused, Err(authoring::Error::Conflict(_))),
+        "{refused:?}"
+    );
+    driver.stop().await.unwrap();
+}

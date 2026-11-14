@@ -45,6 +45,10 @@ struct Configuration {
     /// `[playbooks.engine_retention]`; the engine's defaults.
     #[serde(default)]
     engine_retention: aq_playbook_host::engine_retention::EngineRetention,
+    /// Largest request to the engine owner, in bytes; an install carries its
+    /// whole artifact. Default 262,144; the host accepts 1,024 to 1,048,576.
+    #[serde(default)]
+    request_bytes: Option<usize>,
     deployments: Vec<DeploymentInput>,
     /// R1: `work.read`, `work.route`, `work.unroutable` and `judgment.assess`
     /// serve a task of any project on the automatic router (`host_v9` only).
@@ -148,6 +152,7 @@ pub struct Loaded {
     pub(crate) timeouts: aq_playbook_host::protected::Timeouts,
     pub(crate) retention: aq_playbook_host::retention::Retention,
     pub(crate) engine_retention: aq_playbook_host::engine_retention::EngineRetention,
+    pub(crate) request_bytes: Option<usize>,
     pub(crate) installation_routing: bool,
     pub(crate) deployments: Vec<Deployment>,
     pub(crate) profile: CatalogProfile,
@@ -373,6 +378,7 @@ impl Configuration {
             timeouts: self.engine_timeouts,
             retention: self.retention,
             engine_retention: self.engine_retention,
+            request_bytes: self.request_bytes,
             installation_routing: self.installation_routing,
             deployments,
             profile,

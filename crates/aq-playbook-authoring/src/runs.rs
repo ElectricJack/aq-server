@@ -50,7 +50,11 @@ pub struct ActiveRun {
     pub record_digest: String,
     pub artifact_digest: String,
     pub artifact: Value,
+    /// The artifact a rollback would bring back.
+    pub previous_digest: Option<String>,
     pub finished_at_ms: Option<i64>,
+    /// When the artifact took effect (again, after a rollback).
+    pub activated_at_ms: Option<i64>,
 }
 
 /// How a run ended, as [`finish`] records it.
@@ -90,6 +94,10 @@ pub struct Finished {
     pub question: Option<Value>,
     pub unable: Option<Value>,
     pub refusal: Option<String>,
+    /// The document a saved run was authored from.
+    pub markdown: Option<String>,
+    /// The cases a saved run was saved with, as the agent wrote them.
+    pub case_files: Option<Value>,
 }
 
 fn revision(value: i64) -> Result<u64> {
@@ -302,7 +310,8 @@ pub async fn finish(pool: &PgPool, run: i64, finished: &Finished) -> Result<bool
     sqlx::query(
         "UPDATE playbook_authoring_runs SET status=$2,active=$3,artifact_digest=$4,artifact=$5,
             previous_digest=$6,comparison=$7,cases=$8,question=$9,unable=$10,refusal=$11,
-            finished_at_ms=$12 WHERE id=$1",
+            finished_at_ms=$12,markdown=$13,case_files=$14,
+            activated_at_ms=CASE WHEN $3 THEN $12 END WHERE id=$1",
     )
     .bind(run)
     .bind(finished.status.as_str())
@@ -316,6 +325,8 @@ pub async fn finish(pool: &PgPool, run: i64, finished: &Finished) -> Result<bool
     .bind(finished.unable.as_ref().map(Json))
     .bind(&finished.refusal)
     .bind(now_ms())
+    .bind(&finished.markdown)
+    .bind(finished.case_files.as_ref().map(Json))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -332,18 +343,30 @@ pub async fn active(pool: &PgPool, source: &str) -> Result<Option<ActiveRun>> {
         String,
         String,
         Json<Value>,
+        Option<String>,
+        Option<i64>,
         Option<i64>,
     );
     let row: Option<Row> = sqlx::query_as(
         "SELECT id,source_revision,source_digest,facts_digest,record_digest,artifact_digest,
-            artifact,finished_at_ms FROM playbook_authoring_runs
+            artifact,previous_digest,finished_at_ms,activated_at_ms FROM playbook_authoring_runs
          WHERE source_id=$1 AND status='saved' AND active",
     )
     .bind(source)
     .fetch_optional(pool)
     .await?;
-    let Some((id, rev, source_digest, facts_digest, record_digest, digest, artifact, finished)) =
-        row
+    let Some((
+        id,
+        rev,
+        source_digest,
+        facts_digest,
+        record_digest,
+        digest,
+        artifact,
+        previous,
+        finished,
+        activated,
+    )) = row
     else {
         return Ok(None);
     };
@@ -355,7 +378,9 @@ pub async fn active(pool: &PgPool, source: &str) -> Result<Option<ActiveRun>> {
         record_digest,
         artifact_digest: digest,
         artifact: artifact.0,
+        previous_digest: previous,
         finished_at_ms: finished,
+        activated_at_ms: activated,
     }))
 }
 
@@ -419,4 +444,47 @@ pub async fn in_flight(pool: &PgPool) -> Result<Vec<Run>> {
     .fetch_all(pool)
     .await?;
     rows.iter().map(decode).collect()
+}
+
+/// The run still running whose internal task is `task`.
+pub async fn running_for_task(pool: &PgPool, task: Uuid) -> Result<Option<Run>> {
+    let row = sqlx::query(&format!(
+        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs
+         WHERE internal_task_id=$1 AND status='running'"
+    ))
+    .bind(task)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(decode).transpose()
+}
+
+/// The run `id`, while it is still running.
+pub async fn running(pool: &PgPool, id: i64) -> Result<Option<Run>> {
+    let row = sqlx::query(&format!(
+        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs WHERE id=$1 AND status='running'"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(decode).transpose()
+}
+
+/// Rolling deletion: deletes the finished runs of `source` beyond its newest
+/// `keep`. The active run, the one a rollback would bring back and a run
+/// still running are never deleted. Returns how many it deleted.
+pub async fn prune(pool: &PgPool, source: &str, keep: u64) -> Result<u64> {
+    let keep = i64::try_from(keep).unwrap_or(i64::MAX);
+    let done = sqlx::query(
+        "DELETE FROM playbook_authoring_runs r WHERE r.source_id=$1 AND r.status<>'running'
+            AND NOT r.active
+            AND r.id NOT IN (SELECT id FROM playbook_authoring_runs
+                WHERE source_id=$1 AND status<>'running' ORDER BY id DESC LIMIT $2)
+            AND NOT EXISTS (SELECT 1 FROM playbook_authoring_runs a
+                WHERE a.source_id=$1 AND a.active AND a.previous_digest=r.artifact_digest)",
+    )
+    .bind(source)
+    .bind(keep)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }

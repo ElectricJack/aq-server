@@ -494,12 +494,17 @@ name = "aq-playbook-authoring"
 version = "0.1.0"
 dependencies = [
  "aq-internal-work",
+ "aq-playbooks-compiler",
+ "aq-playbooks-model",
+ "aq-playbooks-simulation",
+ "axum",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "sqlx-postgres",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -583,6 +588,17 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+]
+
+[[package]]
+name = "aq-playbooks-simulation"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "aq-playbooks-model",
+ "aq-playbooks-runner",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

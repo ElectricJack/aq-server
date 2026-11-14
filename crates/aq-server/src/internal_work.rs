@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// `Default` (tests only) is not wired: every call fails and nothing runs.
 #[derive(Clone)]
 #[cfg_attr(any(test, feature = "test-support"), derive(Default))]
-pub struct InternalWork(Option<Arc<Service>>);
+pub struct InternalWork(Option<Arc<Service>>, crate::playbook_authoring::Deployment);
 
 impl InternalWork {
     pub fn new(
@@ -34,7 +34,25 @@ impl InternalWork {
         });
         let choices = settings_choices(registry.clone(), preferences);
         let service = Service::new(pool, now, config, registry, choices)?.notify_supervisor(notify);
-        Ok(Self(Some(Arc::new(service))))
+        Ok(Self(Some(Arc::new(service)), Default::default()))
+    }
+    /// Where authored playbooks are installed, once the engine is open.
+    pub(crate) fn authoring(&self) -> &crate::playbook_authoring::Deployment {
+        &self.1
+    }
+    /// Tests: the engine authored playbooks are installed in.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_engine(&self, driver: Arc<crate::playbooks::driver::Driver>) {
+        self.1.set(driver);
+    }
+    /// Submits under the caller's id; an id already stored makes no second task.
+    pub(crate) async fn submit_as(&self, id: Uuid, request: &Request) -> Result<Uuid, Error> {
+        let unwired = || Error::Conflict("internal work is not available".into());
+        self.0
+            .as_deref()
+            .ok_or_else(unwired)?
+            .submit_as(id, request)
+            .await
     }
     fn service(&self) -> Result<&Service, AppError> {
         let unwired = || AppError::Conflict("internal work is not available".into());

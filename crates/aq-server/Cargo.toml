@@ -15,6 +15,7 @@ aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-profile-settings = { path = "../aq-profile-settings" }
 aq-routing = { path = "../aq-routing" }
 aq-internal-work = { path = "../aq-internal-work" }
+aq-playbook-authoring = { path = "../aq-playbook-authoring" }
 hmac = "=0.12.1"
 subtle = "=2.6.1"
 http-body = "=1.1.0"
@@ -103,7 +104,6 @@ tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
 aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-5b86e0f/crates/aq-playbooks-compiler", version = "=0.2.0" }
-aq-playbook-authoring = { path = "../aq-playbook-authoring" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true

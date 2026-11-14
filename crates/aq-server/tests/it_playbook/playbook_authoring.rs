@@ -29,6 +29,103 @@ struct Host {
     now: Arc<Mutex<BTreeMap<String, Now>>>,
     /// Read the pool too, as the server's host does (Settings, options).
     reads_pool: bool,
+    /// What the fake engine was asked to do.
+    engine: Arc<Mutex<Engine>>,
+    /// A registered source's document is the stored one, as on the server.
+    stored: bool,
+}
+
+/// A fake engine and grant store: it records installs, grants and activations.
+#[derive(Default)]
+struct Engine {
+    installed: BTreeSet<String>,
+    grants: BTreeMap<String, (Uuid, BTreeSet<String>)>,
+    granted: usize,
+    revoked: Vec<String>,
+    /// `(binding, artifact digest)`, in order.
+    activations: Vec<(String, String)>,
+    down: bool,
+}
+
+impl authoring::Deployer for Host {
+    async fn install(&self, artifact: &authoring::model::Artifact) -> authoring::Result<()> {
+        let mut engine = self.engine.lock().unwrap();
+        engine.installed.insert(artifact.digest.clone());
+        Ok(())
+    }
+    async fn ensure_grant(
+        &self,
+        source: &str,
+        capabilities: &BTreeSet<String>,
+    ) -> authoring::Result<(Uuid, i64)> {
+        let mut engine = self.engine.lock().unwrap();
+        if engine.down {
+            return Err(Error::Conflict("Playbooks are not running".into()));
+        }
+        if let Some((id, held)) = engine.grants.get(source)
+            && held == capabilities
+        {
+            return Ok((*id, 1));
+        }
+        let id = Uuid::new_v4();
+        engine.granted += 1;
+        (engine.grants).insert(source.into(), (id, capabilities.clone()));
+        Ok((id, 1))
+    }
+    async fn revoke_grant(&self, source: &str) -> authoring::Result<()> {
+        let mut engine = self.engine.lock().unwrap();
+        engine.grants.remove(source);
+        engine.revoked.push(source.into());
+        Ok(())
+    }
+    async fn activate(&self, _: &str, binding: &str, digest: &str) -> authoring::Result<()> {
+        let mut engine = self.engine.lock().unwrap();
+        assert!(
+            engine.installed.contains(digest),
+            "activated before install"
+        );
+        engine.activations.push((binding.into(), digest.into()));
+        Ok(())
+    }
+}
+
+fn login_candidate() -> aq_internal_work::Candidate {
+    aq_internal_work::Candidate {
+        provider: "anthropic".into(),
+        model: "claude-fixture".into(),
+        reasoning: None,
+        reasoning_reference: "default".into(),
+        options: BTreeMap::new(),
+        harness: Some("claude".into()),
+        way: aq_internal_work::Way::Login,
+        credential_index: 0,
+    }
+}
+
+fn clock_ms() -> i64 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since.unwrap().as_millis() as i64
+}
+
+impl authoring::Server for Host {
+    fn config(&self) -> authoring::Config {
+        authoring::Config {
+            keep_finished_runs: 3,
+            facts_restarts: 1,
+            ..authoring::Config::default()
+        }
+    }
+    fn now_ms(&self) -> i64 {
+        clock_ms()
+    }
+    async fn submit(&self, id: Uuid, request: &Request) -> authoring::Result<()> {
+        (request.validate()).map_err(|e| Error::Invalid(e.to_string()))?;
+        let candidates = [login_candidate()];
+        internal::submit_as(&self.pool, id, request, Ok(&candidates), clock_ms())
+            .await
+            .map_err(authoring::complete::internal_error)?;
+        Ok(())
+    }
 }
 
 impl AsRef<PgPool> for Host {
@@ -43,6 +140,10 @@ impl authoring::Host for Host {
             sqlx::query("SELECT pg_sleep(0.02)")
                 .execute(&self.pool)
                 .await?;
+        }
+        if self.stored {
+            let stored = authoring::stored_markdown(&self.pool, &source.id).await?;
+            return stored.ok_or_else(|| Error::Host("no document".into()));
         }
         let now = self.now.lock().unwrap();
         let (text, revision, _) = now.get(&source.id).cloned().unwrap_or_default();
@@ -74,6 +175,8 @@ async fn setup() -> (TestDb, Host) {
         pool,
         now: Arc::default(),
         reads_pool: false,
+        engine: Arc::default(),
+        stored: false,
     };
     (db, host)
 }
@@ -624,6 +727,8 @@ async fn concurrent_requests_with_a_host_that_reads_the_pool_all_finish() {
     // The test pool has two connections; the host reads through it too.
     let host = Host {
         reads_pool: true,
+        engine: Arc::default(),
+        stored: false,
         ..host
     };
     let pool = host.pool.clone();
@@ -742,4 +847,533 @@ async fn a_task_finished_while_the_server_was_down_is_recorded_once() {
     let (ended, finished) = status(&pool, run).await;
     assert_eq!(ended, "failed");
     assert!(finished.is_some());
+}
+
+// ---- Workspace, save, take effect, rollback (plan tasks C3, C4) ----
+
+/// A file of the engine's worked example `notify-when-ready`.
+fn example(path: &str) -> &'static str {
+    let path = format!("notify-when-ready/{path}");
+    let files = authoring::compiler::docs::example_files();
+    files.into_iter().find(|(p, _)| *p == path).unwrap().1
+}
+
+fn example_cases() -> Vec<Value> {
+    (authoring::compiler::docs::example_files().into_iter())
+        .filter(|(path, _)| path.starts_with("notify-when-ready/cases/"))
+        .map(|(_, text)| serde_json::from_str(text).unwrap())
+        .collect()
+}
+
+const NOTIFY: &str = "notify-when-ready";
+const BINDING: &str = "aq.notify-when-ready";
+
+fn notify() -> SourceRecord {
+    SourceRecord {
+        id: NOTIFY.into(),
+        kind: SourceKind::Registered,
+        binding: BINDING.into(),
+        scope: "project".into(),
+        purpose: "Ask for a description when a task has none".into(),
+        judgment_purpose: Purpose::PlaybookCall,
+        commands: names(&["message.send", "work.read"]),
+        events: names(&["aq.work.changed"]),
+        capabilities: names(&["message.send", "work.read"]),
+        facts: vec![],
+        revision: 0,
+    }
+}
+
+fn notify_facts() -> Value {
+    serde_json::from_str(example("facts.json")).unwrap()
+}
+
+/// Registers the worked example as a source whose document is `markdown`.
+async fn notify_source(host: &Host, markdown: &str, revision: u64) {
+    register(&host.pool, &notify(), markdown).await.unwrap();
+    host.set(NOTIFY, markdown, revision, notify_facts());
+}
+
+/// The example's document with a closing line: the same playbook, reworded.
+fn reworded(n: u64) -> String {
+    format!("{}\nNote {n}.\n", example("source.md"))
+}
+
+/// What a fake agent leaves in `out/outcome.json` after `aq-playbooks save`.
+fn saved_outcome() -> Value {
+    json!({"kind": "saved", "draft": serde_json::from_str::<Value>(example("draft.json")).unwrap(),
+        "cases": example_cases(), "artifact": format!("sha256:{}", "0".repeat(64)),
+        "facts_digest": format!("sha256:{}", "0".repeat(64))})
+}
+
+fn answered(answer: Value) -> aq_internal_work::Outcome {
+    aq_internal_work::Outcome::Answered {
+        answer,
+        provider: "anthropic".into(),
+        model: "claude-fixture".into(),
+        way: aq_internal_work::Way::Login,
+        elapsed_ms: 1,
+        usage: None,
+        attempts: vec![],
+    }
+}
+
+/// Authors the source and returns its run and internal task.
+async fn authored(host: &Host) -> (i64, Uuid) {
+    let run = authoring::author(host, NOTIFY)
+        .await
+        .unwrap()
+        .expect("a run");
+    let task: Uuid =
+        sqlx::query_scalar("SELECT internal_task_id FROM playbook_authoring_runs WHERE id=$1")
+            .bind(run)
+            .fetch_one(&host.pool)
+            .await
+            .unwrap();
+    (run, task)
+}
+
+async fn source_view(host: &Host) -> Value {
+    let record = authoring::get(&host.pool, NOTIFY).await.unwrap().unwrap();
+    authoring::view(&host.pool, &record, clock_ms())
+        .await
+        .unwrap()
+}
+
+/// The owner never reads an identifier in text meant for them.
+fn owner_text(text: &str) {
+    assert!(!text.contains("sha256:"), "{text}");
+}
+
+#[tokio::test]
+async fn submitting_records_the_internal_task_on_the_run() {
+    let (_db, host) = setup().await;
+    notify_source(&host, example("source.md"), 1).await;
+    let (run, task) = authored(&host).await;
+    let row = internal::get(&host.pool, task).await.unwrap().unwrap();
+    assert_eq!(row.status, "queued");
+    assert_eq!(row.workspace_kind, "agent");
+    assert_eq!(row.purpose, Purpose::PlaybookCompilation);
+    assert_eq!(
+        (row.affected_kind.as_str(), row.affected_id.as_str()),
+        ("playbook_source", NOTIFY)
+    );
+    let agent = row.request.agent.unwrap();
+    assert_eq!(agent.files["source.md"], example("source.md"));
+    for path in [
+        "GUIDE.md",
+        "LANGUAGE.md",
+        "CATALOG.md",
+        "record.json",
+        "catalog.json",
+    ] {
+        assert!(agent.files.contains_key(path), "{path}");
+    }
+    assert!(!agent.files.contains_key("previous.artifact.json"));
+    // The grant exists before the run starts (ruling R2).
+    assert_eq!(host.engine.lock().unwrap().granted, 1);
+    // Asking again while it runs starts nothing new.
+    assert_eq!(authored(&host).await, (run, task));
+    assert_eq!(runs(&host.pool).await, 1);
+    assert_eq!(source_view(&host).await["latest"]["status"], "running");
+}
+
+#[tokio::test]
+async fn a_saved_playbook_is_installed_and_activated_and_the_previous_kept_for_rollback() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (first, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, first).await.0, "saved");
+    let one = active(&pool, NOTIFY).await.unwrap().unwrap();
+    assert_eq!((one.id, one.previous_digest.clone()), (first, None));
+    // The digest is the server's own seal, not the agent's claim.
+    assert_ne!(one.artifact_digest, format!("sha256:{}", "0".repeat(64)));
+    {
+        let engine = host.engine.lock().unwrap();
+        assert!(engine.installed.contains(&one.artifact_digest));
+        assert_eq!(
+            engine.activations,
+            [(BINDING.to_string(), one.artifact_digest.clone())]
+        );
+    }
+    let view = source_view(&host).await;
+    assert_eq!(view["active"]["can_rollback"], false);
+    assert_eq!(view["active"]["comparison"], Value::Null);
+    let cases = view["active"]["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), example_cases().len());
+    for case in cases {
+        assert_eq!(case["passed"], true);
+        owner_text(case["result"].as_str().unwrap());
+    }
+    // Unchanged text and facts: nothing to author.
+    assert_eq!(authoring::author(&host, NOTIFY).await.unwrap(), None);
+
+    // The owner rewords the document; the second agent is shown the first playbook.
+    let reworded = format!("{}\nThank you.\n", example("source.md"));
+    notify_source(&host, &reworded, 2).await;
+    let (second, task) = authored(&host).await;
+    let files = internal::get(&pool, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .request
+        .agent
+        .unwrap()
+        .files;
+    assert!(files["previous.artifact.json"].contains(&one.artifact_digest));
+    assert_eq!(files["previous/source.md"], example("source.md"));
+    assert!(files.contains_key("previous/draft.json"));
+    let previous_cases = files
+        .keys()
+        .filter(|p| p.starts_with("previous/cases/"))
+        .count();
+    assert_eq!(previous_cases, example_cases().len());
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    let two = active(&pool, NOTIFY).await.unwrap().unwrap();
+    assert_eq!(two.id, second);
+    assert_ne!(two.artifact_digest, one.artifact_digest);
+    assert_eq!(
+        two.previous_digest.as_deref(),
+        Some(one.artifact_digest.as_str())
+    );
+    let view = source_view(&host).await;
+    assert_eq!(view["active"]["can_rollback"], true);
+    assert_eq!(view["active"]["comparison"], json!({"change": "wording"}));
+    assert!(view["active"]["previous"]["since_ms"].as_i64().unwrap() > 0);
+    // Recording the same result twice changes nothing.
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(host.engine.lock().unwrap().activations.len(), 2);
+}
+
+#[tokio::test]
+async fn rollback_reactivates_the_previous_artifact() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    // Nothing to go back to yet.
+    assert!(matches!(
+        authoring::rollback(&host, NOTIFY).await,
+        Err(Error::Conflict(_))
+    ));
+    let (first, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        authoring::rollback(&host, NOTIFY).await,
+        Err(Error::Conflict(_))
+    ));
+    notify_source(&host, &reworded(2), 2).await;
+    let (second, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    // A third version is being authored when the owner rolls back.
+    notify_source(&host, &reworded(3), 3).await;
+    let (third, _) = authored(&host).await;
+
+    authoring::rollback(&host, NOTIFY).await.unwrap();
+    let now = active(&pool, NOTIFY).await.unwrap().unwrap();
+    assert_eq!(now.id, first);
+    let last = host
+        .engine
+        .lock()
+        .unwrap()
+        .activations
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(last, (BINDING.to_string(), now.artifact_digest.clone()));
+    // The run in flight is superseded: the owner chose the previous playbook.
+    assert_eq!(status(&pool, third).await.0, "superseded");
+    assert_eq!(status(&pool, second).await.0, "saved");
+    let view = source_view(&host).await;
+    assert_eq!(view["active"]["artifact"], now.artifact_digest);
+    assert_eq!(view["active"]["can_rollback"], false);
+    assert_eq!(view["latest"]["status"], "superseded");
+    // A later save of the document starts a new run.
+    let (fourth, _) = authored(&host).await;
+    assert!(fourth > third);
+}
+
+#[tokio::test]
+async fn a_save_from_a_superseded_run_is_recorded_and_never_activated() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (older, older_task) = authored(&host).await;
+    // The owner saves again before the first agent has finished.
+    notify_source(&host, "Ask for a description.\n", 2).await;
+    let (newer, _) = authored(&host).await;
+    assert_ne!(older, newer);
+    authoring::completed(&host, older_task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, older).await.0, "superseded");
+    assert_eq!(status(&pool, newer).await.0, "running");
+    assert!(active(&pool, NOTIFY).await.unwrap().is_none());
+    let engine = host.engine.lock().unwrap();
+    assert!(engine.activations.is_empty() && engine.installed.is_empty());
+}
+
+#[tokio::test]
+async fn a_save_whose_facts_changed_is_refused_and_authoring_starts_again() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (run, task) = authored(&host).await;
+    // Settings change while the agent works.
+    host.set(
+        NOTIFY,
+        example("source.md"),
+        1,
+        json!({"owner": "user:owner-2"}),
+    );
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    let refusal: String =
+        sqlx::query_scalar("SELECT refusal FROM playbook_authoring_runs WHERE id=$1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status(&pool, run).await.0, "refused");
+    assert_eq!(refusal, authoring::FACTS_CHANGED);
+    assert!(active(&pool, NOTIFY).await.unwrap().is_none());
+    assert!(host.engine.lock().unwrap().activations.is_empty());
+    // Authoring started again for the new facts, with its task submitted.
+    let again = in_flight(&pool).await.unwrap();
+    assert_eq!(again.len(), 1);
+    assert!(again[0].id > run);
+    // It happens again: the restarts are capped (here at one), so it stops.
+    host.set(
+        NOTIFY,
+        example("source.md"),
+        1,
+        json!({"owner": "user:owner-3"}),
+    );
+    let task = again[0].internal_task_id.unwrap();
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, again[0].id).await.0, "refused");
+    assert!(in_flight(&pool).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_save_the_server_cannot_reproduce_is_refused_in_the_owners_words() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (run, task) = authored(&host).await;
+    let mut outcome = saved_outcome();
+    outcome["cases"][0]["expect"]["outcome"] = json!("no-such-outcome");
+    authoring::completed(&host, task, &answered(outcome))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "refused");
+    let view = source_view(&host).await;
+    let refusal = view["latest"]["refusal"].as_str().unwrap();
+    assert!(refusal.contains("does not run as it says"), "{refusal}");
+    owner_text(refusal);
+    assert_eq!(view["active"], Value::Null);
+    assert!(host.engine.lock().unwrap().installed.is_empty());
+    // An outcome that is not one at all fails the run.
+    let (run, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(json!({"kind": "saved"})))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "failed");
+}
+
+#[tokio::test]
+async fn a_question_or_unable_changes_nothing_and_keeps_the_sentence() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let lines: Vec<&str> = example("source.md").lines().collect();
+    let (run, task) = authored(&host).await;
+    // The agent's quote is a claim: the owner is shown the server's line.
+    let question = json!({"kind": "question", "question": "How long is ten minutes?",
+        "sentences": [{"line": 3, "end_line": 4, "text": "something the agent made up"}]});
+    authoring::completed(&host, task, &answered(question))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "question");
+    let view = source_view(&host).await;
+    assert_eq!(view["latest"]["status"], "question");
+    assert_eq!(
+        view["latest"]["question"]["question"],
+        "How long is ten minutes?"
+    );
+    let sentence = &view["latest"]["question"]["sentences"][0];
+    assert_eq!(sentence["line"], 3);
+    assert_eq!(sentence["text"], format!("{}\n{}", lines[2], lines[3]));
+    assert!(view["latest"]["elapsed_ms"].as_i64().unwrap() >= 0);
+
+    let (run, task) = authored(&host).await;
+    let unable = json!({"kind": "unable", "reason": "Nothing can make a phone call.",
+        "line": 1, "sentence": "not what line one says"});
+    authoring::completed(&host, task, &answered(unable))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "unable");
+    let view = source_view(&host).await;
+    assert_eq!(view["latest"]["unable"]["sentence"], lines[0]);
+    assert_eq!(view["latest"]["unable"]["line"], 1);
+    assert_eq!(
+        view["latest"]["unable"]["reason"],
+        "Nothing can make a phone call."
+    );
+
+    // A fault in a host file is the server's, not the document's.
+    let (run, task) = authored(&host).await;
+    let unable = json!({"kind": "unable", "reason": "record.json allows a command the catalog lacks.",
+        "file": "record.json"});
+    authoring::completed(&host, task, &answered(unable))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "unable");
+    let view = source_view(&host).await;
+    assert_eq!(view["latest"]["unable"]["host_fault"], true);
+    assert!(
+        view["latest"]["unable"]["sentence"]
+            .as_str()
+            .unwrap()
+            .contains("not in your document")
+    );
+
+    // A sentence that is not in the document fails the run.
+    let (run, task) = authored(&host).await;
+    let question = json!({"kind": "question", "question": "?",
+        "sentences": [{"line": 4000, "text": "x"}]});
+    authoring::completed(&host, task, &answered(question))
+        .await
+        .unwrap();
+    assert_eq!(status(&pool, run).await.0, "failed");
+
+    // None of it changed what is in effect.
+    assert!(active(&pool, NOTIFY).await.unwrap().is_none());
+    let engine = host.engine.lock().unwrap();
+    assert!(engine.installed.is_empty() && engine.activations.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_agent_fails_the_run_and_the_loop_records_what_ended() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (run, task) = authored(&host).await;
+    // Nothing has ended: a pass changes nothing.
+    assert_eq!(authoring::tick(&host).await.unwrap(), 1);
+    assert_eq!(status(&pool, run).await.0, "running");
+    // A fake agent runs the task and leaves a prepared outcome.
+    let claimed = internal::claim_login(&pool, &["claude"], true, "fake-agent", clock_ms())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id, task);
+    internal::complete(&pool, task, 0, &saved_outcome(), None, clock_ms())
+        .await
+        .unwrap();
+    authoring::tick(&host).await.unwrap();
+    assert_eq!(status(&pool, run).await.0, "saved");
+    assert_eq!(host.engine.lock().unwrap().activations.len(), 1);
+    assert_eq!(authoring::tick(&host).await.unwrap(), 0);
+
+    // An agent that ends without an outcome: the run fails, the playbook stays.
+    notify_source(&host, "Ask for a description.\n", 2).await;
+    let (run, task) = authored(&host).await;
+    let failed = aq_internal_work::Outcome::Failed {
+        reason: aq_internal_work::Reason::InvalidOutput,
+        detail: "the agent ended without saving, asking or giving up".into(),
+        attempts: vec![],
+    };
+    authoring::completed(&host, task, &failed).await.unwrap();
+    assert_eq!(status(&pool, run).await.0, "failed");
+    let view = source_view(&host).await;
+    assert!(
+        view["latest"]["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("without saving")
+    );
+    assert!(view["active"]["artifact"].is_string());
+    assert_eq!(host.engine.lock().unwrap().activations.len(), 1);
+}
+
+#[tokio::test]
+async fn finished_runs_are_a_rolling_set_that_keeps_the_active_and_the_previous() {
+    let (_db, host) = setup().await;
+    let pool = host.pool.clone();
+    notify_source(&host, example("source.md"), 1).await;
+    let (first, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    notify_source(&host, &reworded(2), 2).await;
+    let (second, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    // Six questions follow; the test host keeps three finished runs.
+    for revision in 3..9 {
+        notify_source(&host, &format!("Ask {revision} times.\n"), revision).await;
+        let (_, task) = authored(&host).await;
+        let question = json!({"kind": "question", "question": "How often?",
+            "sentences": [{"line": 1, "text": "x"}]});
+        authoring::completed(&host, task, &answered(question))
+            .await
+            .unwrap();
+    }
+    let kept: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id,status FROM playbook_authoring_runs ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(kept.len(), 5, "{kept:?}");
+    // The active run and the one a rollback brings back are never deleted.
+    assert_eq!((kept[0].0, kept[1].0), (first, second));
+    assert!(kept[2..].iter().all(|(_, status)| status == "question"));
+    assert_eq!(active(&pool, NOTIFY).await.unwrap().unwrap().id, second);
+    authoring::rollback(&host, NOTIFY).await.unwrap();
+    assert_eq!(active(&pool, NOTIFY).await.unwrap().unwrap().id, first);
+}
+
+#[tokio::test]
+async fn after_a_restart_the_active_playbooks_are_installed_and_activated_again() {
+    let (_db, host) = setup().await;
+    notify_source(&host, example("source.md"), 1).await;
+    let (_, task) = authored(&host).await;
+    authoring::completed(&host, task, &answered(saved_outcome()))
+        .await
+        .unwrap();
+    let digest = active(&host.pool, NOTIFY)
+        .await
+        .unwrap()
+        .unwrap()
+        .artifact_digest;
+    // A new process with an engine that lost the artifact.
+    *host.engine.lock().unwrap() = Engine::default();
+    assert_eq!(authoring::reinstall_active(&host).await.unwrap(), 1);
+    let engine = host.engine.lock().unwrap();
+    assert!(engine.installed.contains(&digest));
+    assert_eq!(engine.activations, [(BINDING.to_string(), digest)]);
+    assert_eq!(engine.granted, 1);
+}
+
+#[test]
+fn the_authoring_catalog_is_the_host9_registry() {
+    use aq_server::playbooks::review_domain::CatalogProfile;
+    let pinned = authoring::compiler::docs::catalog_registry();
+    assert!(pinned == CatalogProfile::Host9.registry());
 }

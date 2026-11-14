@@ -71,6 +71,9 @@ pub struct Config {
     /// Internal work (spec 0012): API endpoints for the model runners.
     #[serde(default)]
     pub internal_work: Option<aq_internal_work::InternalWorkConfig>,
+    /// Playbook authoring (spec 0013): `[playbook_authoring]`, all defaulted.
+    #[serde(default)]
+    pub playbook_authoring: aq_playbook_authoring::Config,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +199,10 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
                 c.format_version
             ),
         );
+    }
+    if !c.playbook_authoring.valid() {
+        let reason = "a bound is zero or more than internal work accepts for agent work";
+        return invalid("playbook_authoring", reason.into());
     }
     let production = c.environment == Environment::Production;
     if production && matches!(c.auth, AuthConfig::Dev { .. }) {
@@ -388,6 +395,7 @@ mod tests {
             intelligence: None,
             provider_quota: vec![],
             internal_work: None,
+            playbook_authoring: Default::default(),
         }
     }
 

@@ -240,13 +240,15 @@ impl Runtime {
         }
         initialized.step("initializing the namespace")?;
         let factory_config = config.clone();
+        let defaults = Limits::default();
         let limits = Limits {
             work_queue: 8,
             control_queue: 4,
+            request_bytes: config.request_bytes.unwrap_or(defaults.request_bytes),
             timeouts: config.timeouts,
             retention: config.retention,
             engine_retention: config.engine_retention,
-            ..Limits::default()
+            ..defaults
         };
         let started = Driver::open(service.clone(), limits, move || {
             factory_config
@@ -319,6 +321,7 @@ impl Runtime {
             return Err(error);
         }
         let reviews = Arc::new(reviews::Service::new(state.clone(), config.keys.clone()));
+        state.internal_work.authoring().set(driver.clone());
         let (stop, receiver) = watch::channel(false);
         driver.set_automatic_state(1);
         let owned = driver.clone();
