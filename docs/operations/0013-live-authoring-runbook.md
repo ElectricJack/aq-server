@@ -174,26 +174,59 @@ Record the live runs: `curl -fsS "$API/api/playbooks/inspection/runs" > "$R/runs
 3.2. First switch the server with the playbook config unchanged (step 4.3).
 Expected: the old profile keeps running on the new engine.
 
-3.3. Then move the profile, before routing is ever on.
-**(confirm config keys after B2)** From the plan:
+3.3. Then open a `host_v9` namespace, before routing is ever on. **A
+namespace never changes its profile or its generation**: there is no move.
+`host_v9` is a new namespace beside the old one.
 
 1. `post /api/playbooks/stop '{}'`. Expected: `{"disposition":"driver_stopped","queued_messages":"retained"}`.
-2. Wait until no run of the old generation waits on an effect, at most
+2. Wait until no run of the old namespace waits on an effect, at most
    30 min. A run still live after that is not continued. Write its id,
    binding and step into `$R/runs-not-continued.txt`.
-3. Edit `[playbooks]` in the vault config: profile `host_v9`,
-   `namespace.generation` plus 1, `installation_routing` on, the same
-   deployments. Recreate the server (the command of 4.3).
-4. Expected after: `GET /api/playbooks/status` shows the new generation and
-   a `registered_commands` list that includes `work.read`, `work.route` and
-   `judgment.assess`; `automatic_driver_state` is not `retrying`;
-   `held_events` is empty. `post /api/playbooks/coding/default '{}'`
-   re-installs the default pipeline. **(confirm after B2)**
+3. Edit `[playbooks]` in the vault config:
+   - `profile = "host_v9"`;
+   - `[playbooks.namespace]`: a **new `namespace_id`** (a fresh UUID), a new
+     `name`, `generation = 1`; workspace, project and owner as before;
+   - `installation_routing = true` (the routing commands then serve the
+     tasks of every project on the automatic router; refused for any other
+     profile);
+   - `deployments = []`, or deployments whose grant scope has no
+     recipients. A `human_review_v2` mail deployment cannot be carried over.
+   Recreate the server (the command of 4.3).
+4. Expected after: `GET /api/playbooks/status` shows the new namespace and
+   a `registered_commands` list that includes `work.read`, `work.route`,
+   `work.unroutable` and `judgment.assess`; `automatic_driver_state` is not
+   `retrying`; `held_events` is empty. `post /api/playbooks/coding/default '{}'`
+   re-installs the default pipeline. Opening the old namespace with the new
+   profile instead is refused with a text that says exactly this (playbook
+   routes answer 503 with it; the rest of the server runs).
+
+Grants and artifacts do not carry over: they belong to the old namespace.
+The old namespace's rows are kept and its unfinished runs are no longer
+driven. A `human_review_v2` namespace's review playbooks do not run in a
+`host_v9` namespace; one server has one `[playbooks]` namespace.
 
 3.4. Rollback of 3.3 only: turn routing off (5.7 rollback), restore the
-saved vault config (old profile, old generation number) and recreate the
-server on the same new image. The old generation's engine namespace was not
-deleted, so it resumes. Source grants of the new generation stay unused.
+saved vault config (old profile, old `namespace_id`, name and generation)
+and recreate the server on the same new image. The old engine namespace was
+not deleted, so it resumes. Source grants of the new namespace stay unused.
+
+3.5. Configuration keys added on this branch. All are optional; the
+defaults are given.
+
+| Table | Keys (default) | What it bounds |
+| --- | --- | --- |
+| `[playbook_authoring]` | `deadline_ms` (1800000), `max_turns` (200), `outcome_bytes` (4194304), `case_transitions` (40000), `check_deadline_ms` (60000), `keep_finished_runs` (50), `facts_restarts` (3), `poll_ms` (2000) | One authoring run: the agent's time and turns, the size of its outcome, the server's own re-run of the cases, how many finished runs a source keeps, how often authoring restarts by itself when Settings changed under it, and how often the server looks for finished runs. A value internal work would refuse is refused at start. |
+| `[playbooks]` | `request_bytes` (262144; 1024 to 1048576) | The largest request to the engine owner. An install carries its whole artifact: raise it when the routing artifact does not install. |
+| `[playbooks]` | `installation_routing` (false) | See 3.3. |
+| `[playbooks.retention]` | `keep_finished` (10000), `delete_batch` (500) | Rolling deletion of the server's finished playbook bridge rows, per table. |
+| `[playbooks.engine_retention]` | `event_replay_ms` (86400000), `admission_replay_ms` (604800000), `replay_keep` (256), `history_keep` (10000), `audit_ms` (604800000) | The engine's replay windows and rolling sizes, applied when the engine opens. |
+| `[playbooks.engine_timeouts]` | `statement_ms` (30000), `lock_ms` (500), `open_ms` (30000) | One engine statement, one lock wait, and one attempt to open the engine. Raise `open_ms` when the first open of a large namespace is abandoned and retried. |
+| `[workers.heartbeat_log]` | `keep` (256), `delete_batch` (4096) | Rolling deletion of the worker heartbeat log. |
+
+Also needed for authoring: an internal work profile for the purpose
+`playbook_compilation` that lists a logged-in harness (Claude or Codex) in
+Settings > Internal work, and the internal-work host image of 1.3 (it holds
+`/usr/local/libexec/aq-playbooks`).
 
 ## 4. Deploy order
 
@@ -301,15 +334,16 @@ Intelligence, routing editor, replace the text with the content of
 `parents` and `assignments` copied from a fresh GET (the `structure_save`
 helper of the 0119 runbook, reading the Markdown from the repo file).
 Expected: `"disposition": "saved"` and a revision one higher. The save
-creates the `routing` source grant and starts one authoring run.
-**(confirm route name after C6/D2)** Rollback: save the text of
+creates the `routing` source grant and starts one authoring run (nothing
+starts for an empty document, or when neither the text nor what Settings
+offers changed). Rollback: save the text of
 `routing-live.md` back; that starts another authoring run.
 
 5.4. Watch the run. It may take up to 30 minutes.
 
 ```bash
-curl -fsS "$API/api/settings/intelligence/routing"            # {enabled, source}  (confirm route name after C6/D2)
-curl -fsS "$API/api/playbooks/sources/routing"                # SourceView         (confirm route name after C6/D2)
+curl -fsS "$API/api/settings/intelligence/routing"            # {enabled, source: SourceView}
+curl -fsS "$API/api/playbooks/sources/routing"                # SourceView
 curl -fsS "$API/api/internal-work/runs?purpose=playbook_compilation"
 ```
 
@@ -343,10 +377,11 @@ step id or `sha256:` anywhere. Read each row against the document with the
 owner. A row the owner disagrees with is a reason not to switch on.
 
 5.6. Author again without changing the text: `post /api/playbooks/sources/routing/runs '{}'`
-**(confirm route name after C6/D2)**. Roll back to the previous playbook:
+(it starts nothing while the text and the offers are those of the playbook
+in effect). Roll back to the previous playbook:
 the "Roll back to the previous playbook" button, or
-`post /api/playbooks/sources/routing/rollback '{}'` **(confirm route name
-after C6/D2)**.
+`post /api/playbooks/sources/routing/rollback '{}'` (409 when there is no
+earlier playbook; a run in flight is superseded).
 
 5.7. Switch routing on, only after a `saved` run and the owner's reading of
 the cases:
@@ -634,9 +669,7 @@ Marked in the text. Collected here:
 | 2.1, 2.2 | Throwaway PostgreSQL with roles; starting the new server against the copy | At preparation |
 | 2.3 | Lock timeouts of 0127 and 0128 (none in the files at `be84c01a`; 0124 and 0126 have 5 s) | After the final migrations |
 | 3.1 | The live profile before the move (`host_v8` or `human_review_v2`) | Read-only pre-check |
-| 3.3 | Config keys `profile: host_v9`, `installation_routing`; status after the move | After B2 |
 | 4.6 | Worker rebuild and restart | At preparation |
-| 5.3, 5.4, 5.6 | Route names: `/api/settings/intelligence/routing` shape `{enabled, source}`, `/api/playbooks/sources/routing`, `…/runs`, `…/rollback`; that a structure save starts the run | After C6/D2 |
 | 6.1 | How to submit a probe agent run | After C2/C6 |
 | 6.4 | Exact-token search without exposing the token | At preparation |
 | 7.3 | Unroutable reasons, supervisor message, attention item | After D3 |
