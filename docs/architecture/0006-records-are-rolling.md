@@ -49,6 +49,35 @@ A store that follows this rule has a size that does not depend on how many
 runs have ever happened. Over any length of time the number of runs is
 unbounded.
 
+## 1a. No hard-coded limits
+
+Owner, 2026-11-13: "Remove any hard-coded limits. Any limits we have need to
+be configurable in settings."
+
+This answers the question of what to do with limits on work happening now
+(for example 30 offers per machine per hour, and the counts of attempts that
+may be live at once). They are not removed by the rolling rule, but none may
+be a constant in code or a number in a migration:
+
+1. Every limit that can hold, slow or refuse work is a value in Settings, with
+   a default, shown in the dashboard next to what it limits, and changeable by
+   the owner (and by supervisors) without a deploy.
+2. The same holds for every rolling size and age in §4 (how many records a
+   store keeps, and for how long). The numbers in this document are defaults.
+3. A limit may be switched off. "No limit" is a valid setting.
+4. When a limit holds work, the place that shows the held work names the
+   setting and its current value, so the owner can see what to change.
+5. A database CHECK or trigger must not encode a limit. Constraints protect
+   the shape of data, not a quantity someone may want to change.
+
+Limits a playbook declares for itself in its artifact, and size checks on a
+single input, are part of a definition or a protocol and are not Settings.
+
+Implementation is pending. The audit
+([`../research/2026-11-13-retention-audit.md`](../research/2026-11-13-retention-audit.md),
+section "Limits, quotas, caps and budgets", class C) lists the limits on
+current work that are hard-coded today.
+
 ## 2. What the rule does not cover
 
 These stay, and a spec that keeps one says why:
