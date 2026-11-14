@@ -633,6 +633,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-project-policy"
+version = "0.1.0"
+dependencies = [
+ "aq-delivery",
+ "aq-profiles",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "aq-protocol"
 version = "0.1.2"
 dependencies = [
@@ -788,6 +799,7 @@ dependencies = [
  "aq-profile-settings",
  "aq-profiled-state",
  "aq-profiles",
+ "aq-project-policy",
  "aq-protocol",
  "aq-provider-quota",
  "aq-release",

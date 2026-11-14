@@ -78,7 +78,7 @@ pub struct ProjectBinding {
     pub ceilings: ProjectCeilings,
     /// Absent on legacy records, which keeps their serialized digest unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub publication: Option<crate::delivery::PublicationPolicy>,
+    pub publication: Option<aq_delivery::PublicationPolicy>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

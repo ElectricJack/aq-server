@@ -1,5 +1,5 @@
 //! Revisioned central project policy. Graph tasks and Git bindings remain external.
-pub mod domain;
+pub use aq_project_policy as domain;
 mod external;
 use crate::{AppState, authz::RequireOwner, error::AppError};
 use aq_profiles::ValidatedCatalog;

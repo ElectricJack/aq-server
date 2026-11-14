@@ -1,0 +1,13 @@
+[package]
+name = "aq-project-policy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Pure project policy and admission snapshots (project bindings, ceilings, eligibility)"
+
+[dependencies]
+aq-delivery = { path = "../aq-delivery" }
+aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
