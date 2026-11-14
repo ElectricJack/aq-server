@@ -512,6 +512,8 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
         timeouts("statement_ms=0"),
         timeouts("statement_ms=1000\nlock_ms=1001"),
         timeouts("idle_ms=1"),
+        // The engine open deadline is configuration too, and positive (N4).
+        timeouts("open_ms=0"),
         // Keeping no finished rows would delete what idempotent replay reads.
         retention("keep_finished=0"),
         retention("delete_batch=0"),
@@ -523,6 +525,7 @@ async fn config_refuses_disabled_tcp_unsafe_files_unknown_fields_and_changed_soc
     assert!(toml::from_str::<Config>(&timeouts("statement_ms=2000\nlock_ms=100")).is_ok());
     // No upper bound: a long drain may need more than 30 s per statement.
     assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000")).is_ok());
+    assert!(toml::from_str::<Config>(&timeouts("statement_ms=120000\nopen_ms=600000")).is_ok());
     // Rolling deletion is configuration (defaults keep 10,000, delete 500).
     assert!(toml::from_str::<Config>(&retention("keep_finished=3\ndelete_batch=1")).is_ok());
     assert!(toml::from_str::<Config>(&retention("keep_finished=100000000")).is_ok());
@@ -583,13 +586,17 @@ async fn startup_missing_registered_schema_refuses_before_engine_creation() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(
-        aq_server::playbooks::runtime::Runtime::start(
-            &state,
-            state.config.playbooks.clone().unwrap()
-        )
-        .await
-        .is_err()
+    let refused = aq_server::playbooks::runtime::Runtime::start(
+        &state,
+        state.config.playbooks.clone().unwrap(),
+    )
+    .await
+    .err()
+    .expect("refused");
+    // The refusal says which step failed (N3).
+    assert_eq!(
+        refused.to_string(),
+        "playbook owner startup refused: applied migrations differ"
     );
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM playbook_namespaces")
         .fetch_one(&pool)
@@ -639,13 +646,11 @@ async fn a_failed_engine_open_starts_the_server_unavailable_and_retries() {
     }
     let (code, body) = unavailable.expect("server never answered");
     assert_eq!(code, 503, "{body}");
-    assert!(
-        body["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("playbooks unavailable: "),
-        "{body}"
-    );
+    // The message carries the step that failed and the engine's own reason.
+    let message = body["message"].as_str().unwrap();
+    let step = "playbooks unavailable: playbook owner startup refused: opening the engine: ";
+    assert!(message.starts_with(step), "{body}");
+    assert!(message.len() > step.len(), "{body}");
     holder.driver.stop().await.unwrap();
     holder.shutdown().await.unwrap();
     for _ in 0..400 {

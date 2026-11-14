@@ -27,9 +27,11 @@ impl Service {
     }
     /// A held outbox event goes back to the queue: a new delivery, unless
     /// the engine accepted it: then it resumes its fan-out, never a new event.
-    pub(crate) async fn retry_event(&self, actor: Uuid, id: Uuid) -> Result<()> {
+    /// `hold` is the reverse, for a queued event the owner names (one that
+    /// cannot be decrypted): held `invalid`, listed, and delivery goes on.
+    pub(crate) async fn retry_event(&self, actor: Uuid, id: Uuid, hold: bool) -> Result<()> {
         self.authorize_inspection(actor).await?;
-        let retried = sqlx::query("UPDATE playbook_outbox SET status=CASE WHEN engine_receipt IS NULL THEN 'pending' ELSE 'engine_accepted' END,held_reason=NULL WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='unknown'").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).execute(&self.pool).await?;
+        let retried = sqlx::query("UPDATE playbook_outbox SET status=CASE WHEN $4 THEN 'unknown' WHEN engine_receipt IS NULL THEN 'pending' ELSE 'engine_accepted' END,held_reason=CASE WHEN $4 THEN 'invalid' END WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND CASE WHEN $4 THEN status='pending' OR (status='engine_accepted' AND NOT fanout_complete) ELSE status='unknown' END").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(hold).execute(&self.pool).await?;
         (retried.rows_affected() == 1)
             .then_some(())
             .ok_or(Error::Conflict)

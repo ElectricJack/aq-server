@@ -1856,27 +1856,89 @@ async fn retrying_a_held_accepted_event_resumes_its_fanout_without_a_second_run(
     driver.stop().await.unwrap();
 }
 
-/// A queued event that cannot be decrypted is a keyring problem, not a bad
-/// row: the quantum fails with that reason and the row stays queued, so
-/// fixing the keyring recovers it without a retry.
+/// The request for one run of the pure playbook, which only a tick advances.
+async fn pure_run(e: &Env, driver: &aq_server::playbooks::driver::Driver) -> Uuid {
+    let a = pure_artifact();
+    let hash = a.digest.clone();
+    driver.install(a).await.unwrap();
+    let activation = driver
+        .activate("pure".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    let id = Uuid::new_v4();
+    let request = PrepareRequest {
+        request_id: id,
+        grant_id: e.grant,
+        grant_revision: 1,
+        binding: "pure".into(),
+        expected_activation_revision: activation["revision"].as_u64().unwrap(),
+        entry: "main".into(),
+        input: serde_json::Value::Null,
+    };
+    e.service.prepare(e.f.actor, request).await.unwrap();
+    id
+}
+async fn status_read(
+    e: &Env,
+    driver: &Arc<aq_server::playbooks::driver::Driver>,
+) -> serde_json::Value {
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    api(app, "GET", "/api/playbooks/status", false, json!(null))
+        .await
+        .1
+}
+/// A queued event that cannot be decrypted does not stop the namespace (N1):
+/// the quantum fails with a reason naming the row and its key id, the row
+/// stays queued, and runs still tick. Fixing the keyring recovers it without
+/// a retry; or the owner holds the named row and delivery goes on past it.
 #[tokio::test]
-async fn an_undecryptable_queued_event_fails_the_quantum_with_its_reason() {
+async fn an_undecryptable_queued_event_is_named_and_runs_still_tick() {
     let e = setup_with(true).await;
     let driver = consumers(&e).await;
     let event = graph_event(&e).await;
     assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
     set_outbox(&e, event, "key_id", "missing").await;
-    assert!(driver.quantum().await.is_err());
-    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
-    let (_, status) = api(app, "GET", "/api/playbooks/status", false, json!(null)).await;
+    let id = pure_run(&e, &driver).await;
+    for _ in 0..3 {
+        assert!(driver.quantum().await.is_err());
+    }
+    let admission = e.service.admission(e.f.actor, id).await.unwrap().status;
+    let run = admission.receipt.expect("admitted").run_id;
+    let view = driver.inspect_run(run).await.unwrap();
+    assert_eq!(view["items"][0]["status"], "completed", "{view}");
+    let status = status_read(&e, &driver).await;
     let reason = status["automatic_driver_reason"]
         .as_str()
         .unwrap_or_default();
-    assert!(reason.contains("cannot decrypt queued events"), "{status}");
+    let named = format!("cannot decrypt queued event {event} (key id missing)");
+    assert!(reason.contains(&named), "{status}");
     assert_eq!(outbox_status(&e, event).await, ("pending".into(), false));
     set_outbox(&e, event, "key_id", "test").await;
     driver.quantum().await.unwrap();
     assert_eq!(outbox_status(&e, event).await.0, "engine_accepted");
+    // A row that stays undecryptable: the owner holds it by its id.
+    let bad = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    set_outbox(&e, bad, "key_id", "missing").await;
+    let later = graph_event(&e).await;
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    for _ in 0..3 {
+        assert!(driver.quantum().await.is_err());
+    }
+    assert_eq!(outbox_status(&e, later).await.0, "pending");
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let hold = format!("/api/playbooks/events/{bad}/hold");
+    let (code, body) = api(app, "POST", &hold, true, json!({})).await;
+    assert_eq!((code.as_u16(), &body["disposition"]), (200, &json!("held")));
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(outbox_status(&e, bad).await.0, "unknown");
+    assert_eq!(outbox_status(&e, later).await.0, "engine_accepted");
+    let status = status_read(&e, &driver).await;
+    assert_eq!(status["held_events"][0]["event_id"], json!(bad), "{status}");
+    assert_eq!(status["held_events"][0]["held_reason"], "invalid");
+    assert_eq!(status["automatic_driver_reason"], json!(null), "{status}");
     driver.stop().await.unwrap();
 }
 
@@ -1921,6 +1983,10 @@ async fn a_storage_failure_leaves_new_work_pending_and_it_is_delivered_after() {
     let _ = driver.quantum().await;
     let held = e.service.admission(e.f.actor, id).await.unwrap().status;
     assert_eq!(held.status, "pending");
+    // Its unknown outcome is recorded on the row while it waits.
+    let reason = "SELECT held_reason FROM playbook_admissions WHERE request_id=$1";
+    let why: Option<String> = (sqlx::query_scalar(reason).bind(id).fetch_one(&pool).await).unwrap();
+    assert_eq!(why.as_deref(), Some("uncertain"));
     assert_eq!(outbox_status(&e, event).await, ("pending".into(), false));
     lock.rollback().await.unwrap();
     for _ in 0..2 {
@@ -1928,63 +1994,66 @@ async fn a_storage_failure_leaves_new_work_pending_and_it_is_delivered_after() {
     }
     let admitted = e.service.admission(e.f.actor, id).await.unwrap().status;
     assert_eq!(admitted.status, "engine_accepted");
+    let why: Option<String> = (sqlx::query_scalar(reason).bind(id).fetch_one(&pool).await).unwrap();
+    assert_eq!(why, None);
     assert_eq!(outbox_status(&e, event).await.0, "engine_accepted");
     driver.stop().await.unwrap();
 }
 
-/// A collector that fails on a bad source item (here: a graph operation whose
-/// binding has no task id) does not stop the quantum: queued events are
-/// delivered, admissions admitted and runs advance; the reason is shown.
+/// A bad source item (here: a graph operation whose binding has no task id)
+/// blocks nothing (N2): it is queued held `invalid` and listed on the status
+/// read, later graph events are collected and delivered, and admissions and
+/// runs go on.
 #[tokio::test]
-async fn a_failing_collector_does_not_stop_delivery_admission_or_runs() {
+async fn a_bad_graph_item_is_held_and_later_graph_events_are_collected() {
     let e = setup_with(true).await;
     let driver = consumers(&e).await;
     let good = graph_event(&e).await;
     assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
     let pool = e.f.db.pool().await;
-    sqlx::query("UPDATE agent_launch_bindings SET binding=jsonb_set(binding,'{task_id}','\"bad\"') WHERE attempt_id=$1")
-        .bind(e.attempt)
-        .execute(&pool)
-        .await
-        .unwrap();
-    graph_event(&e).await;
-    let a = pure_artifact();
-    let hash = a.digest.clone();
-    driver.install(a).await.unwrap();
-    let activation = driver
-        .activate("pure".into(), hash, e.grant, 1)
-        .await
-        .unwrap();
-    let id = Uuid::new_v4();
-    e.service
-        .prepare(
-            e.f.actor,
-            PrepareRequest {
-                request_id: id,
-                grant_id: e.grant,
-                grant_revision: 1,
-                binding: "pure".into(),
-                expected_activation_revision: activation["revision"].as_u64().unwrap(),
-                entry: "main".into(),
-                input: serde_json::Value::Null,
-            },
-        )
-        .await
-        .unwrap();
+    let task = |value: &'static str| {
+        sqlx::query("UPDATE agent_launch_bindings SET binding=jsonb_set(binding,'{task_id}',to_jsonb($2::text)) WHERE attempt_id=$1")
+            .bind(e.attempt)
+            .bind(value)
+            .execute(&pool)
+    };
+    let original: String = sqlx::query_scalar(
+        "SELECT binding->>'task_id' FROM agent_launch_bindings WHERE attempt_id=$1",
+    )
+    .bind(e.attempt)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    task("bad").await.unwrap();
+    let bad = graph_event(&e).await;
+    let id = pure_run(&e, &driver).await;
     for _ in 0..3 {
         driver.quantum().await.unwrap();
     }
     assert_eq!(outbox_status(&e, good).await.0, "engine_accepted");
+    assert_eq!(outbox_status(&e, bad).await.0, "unknown");
+    let original: &'static str = original.leak();
+    task(original).await.unwrap();
+    let later = graph_event(&e).await;
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(outbox_status(&e, later).await.0, "engine_accepted");
     let admission = e.service.admission(e.f.actor, id).await.unwrap().status;
     let run = admission.receipt.expect("admitted").run_id;
     let view = driver.inspect_run(run).await.unwrap();
     assert_eq!(view["items"][0]["status"], "completed", "{view}");
+    let status = status_read(&e, &driver).await;
+    assert_eq!(status["held_events"][0]["event_id"], json!(bad), "{status}");
+    assert_eq!(status["held_events"][0]["held_reason"], "invalid");
+    // Retrying it holds it again: it never reaches the engine.
     let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
-    let (_, status) = api(app, "GET", "/api/playbooks/status", false, json!(null)).await;
-    let reason = status["automatic_driver_reason"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(reason.contains("graph events"), "{status}");
+    let retry = format!("/api/playbooks/events/{bad}/retry");
+    assert_eq!(api(app, "POST", &retry, true, json!({})).await.0, 200);
+    for _ in 0..3 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(outbox_status(&e, bad).await.0, "unknown");
     driver.stop().await.unwrap();
 }
 

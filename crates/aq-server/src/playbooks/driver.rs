@@ -32,18 +32,18 @@ fn delivery_error(error: aq_playbook_host::Error) -> Error {
 }
 /// What a quantum deferred. Capacity defers new work without preventing
 /// retained work from reaching its drain and tick; any other failure of one
-/// source is kept as the drive's reason while the rest of the quantum runs.
+/// stage is kept, one reason per stage, while the rest of the quantum runs.
 #[derive(Default)]
 struct Partial {
     overloaded: bool,
-    reason: Option<String>,
+    reasons: Vec<String>,
 }
 impl Partial {
     fn defer<T>(&mut self, what: &str, result: Result<T>) {
         match result {
             Ok(_) => {}
             Err(Error::Overloaded) => self.overloaded = true,
-            Err(error) => self.reason = Some(format!("{what}: {error}")),
+            Err(error) => self.reasons.push(format!("{what}: {error}")),
         }
     }
 }
@@ -322,7 +322,7 @@ pub struct Driver {
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
-    deadline: Duration,
+    pub(super) deadline: Duration,
     tick_deadline: Duration,
     /// Rolling deletion: one bridge table per quantum, in turn.
     retention: aq_playbook_host::retention::Retention,
@@ -353,6 +353,20 @@ impl Driver {
         S: Storage + 'static,
         F: FnOnce() -> std::result::Result<S, aq_playbook_host::Error> + Send + 'static,
     {
+        let opened = Self::open(service, limits, factory).await;
+        opened.map_err(|(error, _)| error)
+    }
+    /// [`Self::start`]; a failure comes with its cause in words (no secrets).
+    pub(super) async fn open<S, F>(
+        service: Service,
+        limits: Limits,
+        factory: F,
+    ) -> std::result::Result<Self, (Error, String)>
+    where
+        S: Storage + 'static,
+        F: FnOnce() -> std::result::Result<S, aq_playbook_host::Error> + Send + 'static,
+    {
+        let lost = |error: Error| (error, "the acquired runtime owner was lost".to_string());
         #[cfg(feature = "test-support")]
         let lose_decision_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(feature = "test-support")]
@@ -361,7 +375,8 @@ impl Driver {
         let lose_host_reply: Arc<Mutex<Option<String>>> = Arc::default();
         #[cfg(feature = "test-support")]
         let host_command_fault = lose_host_reply.clone();
-        let expected = service.runtime_revision().await?;
+        let expected = (service.runtime_revision().await)
+            .map_err(|e| (e, "reading the runtime revision".into()))?;
         let deadline = limits.timeouts.call_deadline(1);
         let tick_deadline = (limits.timeouts).call_deadline(limits.transitions as u32);
         let retention = limits.retention;
@@ -410,12 +425,11 @@ impl Driver {
             },
         )
         .await
-        .map_err(host_error)?;
-        let runtime = proof
-            .lock()
-            .map_err(|_| Error::Unknown)?
-            .take()
-            .ok_or(Error::Unknown)?;
+        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|(why, error)| (error, why))?;
+        let taken = proof.lock().map_err(|_| Error::Unknown);
+        let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
+        let runtime = runtime.map_err(lost)?;
         Ok(Self {
             owner,
             service,
@@ -655,10 +669,12 @@ impl Driver {
         let result = self.quantum_with(&mut partial).await;
         if let Err(error) = &result
             && *error != Error::Overloaded
+            && partial.reasons.is_empty()
         {
-            (partial.reason).get_or_insert_with(|| format!("quantum failed: {error}"));
+            partial.reasons.push(format!("quantum failed: {error}"));
         }
-        *self.reason.lock().map_err(|_| Error::Unknown)? = partial.reason;
+        let reasons = partial.reasons.join("; ");
+        *self.reason.lock().map_err(|_| Error::Unknown)? = (!reasons.is_empty()).then_some(reasons);
         result
     }
     /// The drive's reason for its last failed or partial quantum.
@@ -677,14 +693,14 @@ impl Driver {
                 continue;
             }
             // A refused admission is held visibly, so a poison or expired first
-            // page cannot starve later ones. An unknown outcome stays pending:
-            // the next quantum delivers it again (the engine answers duplicate).
-            if let Err(error) = result
-                && error != Error::Unknown
-            {
-                self.service
-                    .hold(&self.runtime, false, *id, "refused")
-                    .await?;
+            // page cannot starve later ones. An unknown outcome stays pending
+            // with the reason `uncertain`, behind the other pending ones: the
+            // engine answers duplicate when it is delivered again.
+            if let Err(error) = result {
+                let reason = (error == Error::Unknown).then_some("uncertain");
+                let hold =
+                    (self.service).hold(&self.runtime, false, *id, reason.unwrap_or("refused"));
+                hold.await?;
             }
         }
         partial.defer(
@@ -732,14 +748,11 @@ impl Driver {
                 self.service.collect_schedule_events(&self.runtime, 2).await,
             );
         }
-        let page = match self.service.outbox_page(&self.runtime, *cursor, 2).await? {
-            Ok(page) => page,
-            Err(failure) => {
-                partial.reason = Some(failure.into());
-                return Err(Error::Unknown);
-            }
-        };
-        if page.is_empty() {
+        // A row that cannot be decrypted ends the page before it: event
+        // delivery waits there (until the keyring is fixed or the owner holds
+        // the row) while effects are still cancelled and runs still tick.
+        let (page, undecryptable) = self.service.outbox_page(&self.runtime, *cursor, 2).await?;
+        if page.is_empty() && undecryptable.is_none() {
             *cursor = 0;
         }
         for (sequence, id, event, accepted) in &page {
@@ -783,25 +796,16 @@ impl Driver {
             }
             *cursor = *sequence;
         }
-        self.owner
-            .call(
-                Request::CancelEffects {
-                    now_ms: self.service_clock(),
-                },
-                self.deadline,
-            )
-            .await
-            .map_err(host_error)?;
-        let tick = self
-            .owner
-            .call(
-                Request::Tick {
-                    now_ms: self.service_clock(),
-                },
-                self.tick_deadline,
-            )
-            .await
-            .map_err(host_error)?;
+        let now_ms = self.service_clock();
+        let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
+        let cancelled = cancel.await.map_err(host_error);
+        partial.defer("cancelling effects", cancelled.clone());
+        cancelled?;
+        let now_ms = self.service_clock();
+        let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
+        let tick = ticked.await.map_err(host_error);
+        partial.defer("ticking runs", tick.clone());
+        let tick = tick?;
         if matches!(
             self.service.profile,
             super::review_domain::CatalogProfile::Monitoring6
@@ -822,6 +826,10 @@ impl Driver {
         partial.defer("deleting finished rows", pruned.await);
         if partial.overloaded {
             return Err(Error::Overloaded);
+        }
+        if let Some(reason) = undecryptable {
+            partial.reasons.push(reason);
+            return Err(Error::Unknown);
         }
         Ok(
             serde_json::json!({"admissions_checked":pending.len(),"events_checked":page.len(),"tick":tick}),
@@ -1006,7 +1014,9 @@ impl Driver {
     pub(crate) async fn shutdown(&self) -> Result<()> {
         let fence = self.service.retire_for_shutdown(&self.runtime).await;
         let stop = self.owner.call(Request::Stop, self.deadline).await;
-        stop_acknowledged(&self.stopped_ack, stop)?;
+        if !aq_playbook_host::drive::stop_acknowledged(&self.stopped_ack, stop) {
+            return Err(Error::Unknown);
+        }
         fence
     }
     pub async fn stop(&self) -> Result<()> {
@@ -1070,43 +1080,5 @@ impl Driver {
             .await
             .map_err(host_error)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
-    }
-}
-
-// A closed channel is not engine release evidence. Only an exact successful
-// Stop response, retained for this Driver, permits idempotent closed replay.
-fn stop_acknowledged(
-    known: &std::sync::atomic::AtomicBool,
-    response: std::result::Result<serde_json::Value, aq_playbook_host::Error>,
-) -> Result<()> {
-    match response {
-        Ok(_) => {
-            known.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-        Err(aq_playbook_host::Error::Stopped)
-            if known.load(std::sync::atomic::Ordering::SeqCst) =>
-        {
-            Ok(())
-        }
-        Err(_) => Err(Error::Unknown),
-    }
-}
-#[cfg(test)]
-mod shutdown_tests {
-    use super::*;
-    #[test]
-    fn closed_queue_is_unknown_until_exact_stop_ack_for_this_driver() {
-        let known = std::sync::atomic::AtomicBool::new(false);
-        assert_eq!(
-            stop_acknowledged(&known, Err(aq_playbook_host::Error::Stopped)),
-            Err(Error::Unknown)
-        );
-        stop_acknowledged(&known, Ok(serde_json::Value::Null)).unwrap();
-        stop_acknowledged(&known, Err(aq_playbook_host::Error::Stopped)).unwrap();
-        assert_eq!(
-            stop_acknowledged(&known, Err(aq_playbook_host::Error::Unknown)),
-            Err(Error::Unknown)
-        );
     }
 }

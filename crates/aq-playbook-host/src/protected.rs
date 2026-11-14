@@ -74,18 +74,23 @@ pub fn read_keyring(path: &Path) -> Result<ProtectionKeyring, Error> {
     load().ok_or(Error::Invalid)
 }
 /// Engine session deadlines, from `[playbooks.engine_timeouts]`: one engine
-/// statement and one lock wait, in milliseconds. Defaults 30 s and 500 ms.
+/// statement, one lock wait and the whole engine open, in milliseconds.
+/// Defaults 30 s, 500 ms and 30 s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Timeouts {
     pub statement_ms: u64,
     pub lock_ms: u64,
+    /// How long one attempt to open the engine (its first load and owner
+    /// probe) may take before it is abandoned and retried.
+    pub open_ms: u64,
 }
 impl Default for Timeouts {
     fn default() -> Self {
         Self {
             statement_ms: 30_000,
             lock_ms: 500,
+            open_ms: 30_000,
         }
     }
 }
@@ -96,14 +101,23 @@ impl Timeouts {
     pub fn lock(&self) -> Duration {
         Duration::from_millis(self.lock_ms)
     }
-    /// What [`storage`] accepts: positive, the lock wait at most the statement.
+    pub fn open(&self) -> Duration {
+        Duration::from_millis(self.open_ms)
+    }
+    /// What [`storage`] accepts: positive, the lock wait at most the
+    /// statement; and a positive open deadline. No upper bound.
     pub fn valid(&self) -> bool {
-        self.statement_ms > 0 && (1..=self.statement_ms).contains(&self.lock_ms)
+        self.statement_ms > 0 && (1..=self.statement_ms).contains(&self.lock_ms) && self.open_ms > 0
     }
     /// How long a caller waits for an owner call that makes `commits`
     /// commits: each may take the whole statement timeout, plus one request
     /// queued ahead of it and one lock wait. Never below the statement
     /// timeout, so a slow commit fails in PostgreSQL before the caller gives up.
+    ///
+    /// A HTTP route that makes one owner call can therefore wait this long on
+    /// a stalled engine (60.5 s with the defaults), and the admission retry
+    /// route makes two calls (lookup, then admit): up to twice that (121 s).
+    /// A reverse proxy with a shorter idle timeout answers 504 first.
     pub fn call_deadline(&self, commits: u32) -> Duration {
         self.statement()
             .saturating_mul(commits.max(1).saturating_add(1))
@@ -155,6 +169,7 @@ mod tests {
         let long = Timeouts {
             statement_ms: 120_000,
             lock_ms: 500,
+            ..Timeouts::default()
         };
         assert!(long.valid());
         // A call waits for its own commits plus one queued request ahead.
@@ -167,8 +182,17 @@ mod tests {
             let t = Timeouts {
                 statement_ms: statement,
                 lock_ms: lock,
+                ..Timeouts::default()
             };
             assert!(!t.valid(), "{statement} {lock}");
         }
+    }
+    #[test]
+    fn the_engine_open_deadline_is_configuration_with_a_30_s_default() {
+        assert_eq!(Timeouts::default().open().as_millis(), 30_000);
+        let set: Timeouts = serde_json::from_str(r#"{"open_ms":300000}"#).unwrap();
+        assert!(set.valid() && set.open().as_millis() == 300_000);
+        let zero: Timeouts = serde_json::from_str(r#"{"open_ms":0}"#).unwrap();
+        assert!(!zero.valid());
     }
 }

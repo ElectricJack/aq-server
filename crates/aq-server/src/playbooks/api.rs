@@ -51,6 +51,7 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
             post(retry_admission),
         )
         .route("/api/playbooks/events/{id}/retry", post(retry_event))
+        .route("/api/playbooks/events/{id}/hold", post(retry_event))
         .route("/api/playbooks/drive", post(drive))
         .route("/api/playbooks/recover", post(recover))
         .route("/api/playbooks/runs/{id}/cancel", post(cancel))
@@ -173,11 +174,15 @@ async fn retry_event(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
     Path(id): Path<Uuid>,
+    uri: axum::http::Uri,
     Json(_): Json<Empty>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
-    d.service.retry_event(user.id, id).await?;
-    Ok(Json(json!({"event_id":id,"disposition":"pending"})))
+    let hold = uri.path().ends_with("/hold");
+    d.service.retry_event(user.id, id, hold).await?;
+    Ok(Json(
+        json!({"event_id":id,"disposition":if hold {"held"} else {"pending"}}),
+    ))
 }
 async fn drive(
     RequireOwner(user): RequireOwner,

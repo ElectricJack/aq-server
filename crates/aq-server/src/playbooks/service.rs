@@ -957,7 +957,7 @@ impl Service {
         {
             return Err(Error::Conflict);
         }
-        sqlx::query("UPDATE playbook_admissions SET status='engine_accepted',receipt=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(json!(receipt)).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_admissions SET status='engine_accepted',held_reason=NULL,receipt=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(json!(receipt)).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(AdmissionStatus {
             request_id: id,
@@ -974,7 +974,7 @@ impl Service {
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
-        let rows=sqlx::query_scalar("SELECT request_id FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND status='pending' ORDER BY created_at_ms,request_id LIMIT $3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(limit as i64).fetch_all(&mut *tx).await?;
+        let rows=sqlx::query_scalar("SELECT request_id FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND status='pending' ORDER BY held_reason IS NOT NULL,created_at_ms,request_id LIMIT $3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(limit as i64).fetch_all(&mut *tx).await?;
         tx.commit().await?;
         Ok(rows)
     }
@@ -984,19 +984,22 @@ impl Service {
         after: i64,
         limit: u32,
     ) -> Result<Vec<(i64, Uuid, EventEnvelope)>> {
-        let page = self.outbox_page(owner, after, limit).await?;
-        let page = page.map_err(|_| Error::Unknown)?;
+        let (page, undecryptable) = self.outbox_page(owner, after, limit).await?;
+        if undecryptable.is_some() {
+            return Err(Error::Unknown);
+        }
         Ok(page.into_iter().map(|(s, id, e, _)| (s, id, e)).collect())
     }
     /// [`Self::outbox`], each row with whether the engine accepted it (its
-    /// receipt is recorded). A queued event that cannot be decrypted is the
-    /// keyring's problem, not the row's: the page fails with that reason.
+    /// receipt is recorded). A queued event that cannot be decrypted is not
+    /// held (fixing the keyring recovers it): the page ends before it, with
+    /// the reason naming the row and its key id.
     pub(super) async fn outbox_page(
         &self,
         owner: &RuntimeOwner,
         after: i64,
         limit: u32,
-    ) -> Result<std::result::Result<Vec<(i64, Uuid, EventEnvelope, bool)>, &'static str>> {
+    ) -> Result<(Vec<(i64, Uuid, EventEnvelope, bool)>, Option<String>)> {
         if after < 0 || !(1..=16).contains(&limit) {
             return Err(Error::Invalid);
         }
@@ -1005,7 +1008,7 @@ impl Service {
         self.runtime(&ns, owner)?;
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
         let rows=sqlx::query("SELECT * FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND sequence>$3 AND (status='pending' OR (status='engine_accepted' AND NOT fanout_complete)) ORDER BY sequence LIMIT $4").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(after).bind(limit as i64).fetch_all(&mut *tx).await?;
-        let mut result = Vec::new();
+        let (mut result, mut undecryptable) = (Vec::new(), None);
         for row in rows {
             let id: Uuid = row.get("event_id");
             let digest: String = row.get("event_digest");
@@ -1017,14 +1020,12 @@ impl Service {
             };
             let aad = self.aad("aq.playbooks.outbox", id, &digest)?;
             let producer: String = row.get("producer");
-            let bytes = match self.keys.open(&aad, &sealed) {
-                Ok(bytes) => bytes,
-                Err(crate::protected_storage::Error::MissingKey) => {
-                    return Ok(Err(
-                        "cannot decrypt queued events: keyring has no key for one",
-                    ));
-                }
-                Err(_) => return Ok(Err("cannot decrypt queued events: keyring or stored event")),
+            let Ok(bytes) = self.keys.open(&aad, &sealed) else {
+                let key = &sealed.key_id;
+                undecryptable = Some(format!(
+                    "cannot decrypt queued event {id} (key id {key}): fix the keyring, or hold the event"
+                ));
+                break;
             };
             let event = (serde_json::from_slice::<EventEnvelope>(&bytes).ok()).filter(|event| {
                 super::domain::digest(event).is_ok_and(|d| d == digest)
@@ -1043,7 +1044,7 @@ impl Service {
             result.push((row.get("sequence"), id, event, accepted));
         }
         tx.commit().await?;
-        Ok(Ok(result))
+        Ok((result, undecryptable))
     }
     pub async fn acknowledge_event(
         &self,
@@ -1133,7 +1134,8 @@ impl Service {
 impl Service {
     /// Hold pending work with its reason (an outbox event, else an
     /// admission): it is kept, listed with the reason, no longer delivered,
-    /// and can be retried.
+    /// and can be retried. An admission whose reason is `uncertain` (its
+    /// outcome is unknown) stays pending, delivered after the others.
     pub(super) async fn hold(
         &self,
         owner: &RuntimeOwner,
@@ -1147,7 +1149,7 @@ impl Service {
         let sql = if event {
             "UPDATE playbook_outbox SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND status='pending'"
         } else {
-            "UPDATE playbook_admissions SET status='unknown',held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'"
+            "UPDATE playbook_admissions SET status=CASE WHEN $4='uncertain' THEN 'pending' ELSE 'unknown' END,held_reason=$4 WHERE namespace_id=$1 AND generation=$2 AND request_id=$3 AND receipt IS NULL AND status='pending'"
         };
         sqlx::query(sql)
             .bind(self.namespace.namespace_id)
@@ -1697,10 +1699,8 @@ impl Service {
             let id: Uuid = row.get("event_id");
             let operation: Uuid = row.get("operation_id");
             let attempt: Uuid = row.get("attempt_id");
-            let task: Uuid = row
-                .get::<Option<String>, _>("task_id")
-                .and_then(|t| t.parse().ok())
-                .ok_or(Error::Conflict)?;
+            let task = row.get::<Option<String>, _>("task_id");
+            let task: Option<Uuid> = task.and_then(|t| t.parse().ok());
             let at = self.now()?;
             let event = EventEnvelope {
                 producer: producer.into(),
@@ -1718,15 +1718,19 @@ impl Service {
                 observed_at_ms: Some(at),
                 payload: json!({"operation_id":operation,"task_id":task,"attempt_id":attempt}),
             };
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
-                .map_err(|_| Error::Invalid)?;
+            // A bad source item (no task id, or not this contract) is queued
+            // held `invalid`, so it is listed and later items are collected.
+            let registry = self.profile.registry();
+            let valid = aq_playbook_host::model::validate_event(&event, &registry).is_ok();
+            let held = (task.is_none() || !valid).then_some("invalid");
+            let status = if held.is_some() { "unknown" } else { "pending" };
             let digest = digest(&event)?;
             let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
             let sealed = self
                 .keys
                 .seal(&self.aad("aq.playbooks.outbox", id, &digest)?, &bytes)
                 .map_err(|_| Error::Unknown)?;
-            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending')").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,held_reason) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(producer).bind(id).bind(digest).bind(sealed.version as i32).bind(sealed.key_id).bind(sealed.nonce).bind(sealed.ciphertext).bind(at).bind(status).bind(held).execute(&mut *tx).await?;
         }
         Self::owner(&mut tx, self.namespace.owner_user_id).await?;
         tx.commit().await?;

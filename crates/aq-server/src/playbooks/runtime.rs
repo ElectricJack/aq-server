@@ -1,11 +1,11 @@
 //! Explicit optional owner startup; uncertainty never starts a replacement.
 use super::{config::Loaded, driver::Driver, service::Service};
 use crate::{AppState, reviews};
-use aq_playbook_host::{Limits, protected};
+use aq_playbook_host::{Limits, drive::Refused, drive::Step, protected};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
-fn refused() -> anyhow::Error {
-    anyhow::anyhow!("configured playbook owner startup refused")
+fn refused(why: &str) -> anyhow::Error {
+    Refused(why.into()).into()
 }
 /// The owner as serving sees it: none until its engine has opened.
 pub(crate) type Slot = Arc<tokio::sync::Mutex<Option<Runtime>>>;
@@ -53,6 +53,10 @@ pub(crate) fn open_later(
         };
         let opened = aq_playbook_host::drive::retry(stop.clone(), backoff, attempt, failed).await;
         if let Some(mut runtime) = opened {
+            if *stop.borrow() {
+                // Opened after shutdown began: nobody will take it from the slot.
+                return drop(runtime.shutdown().await);
+            }
             runtime.watch_shutdown(stop);
             if let Ok(mut current) = current.write() {
                 *current = build(Some(&runtime));
@@ -84,28 +88,29 @@ pub struct Runtime {
 impl Runtime {
     /// Configuration is authenticated local operator input, never a HTTP payload.
     pub async fn start(state: &AppState, config: Arc<Loaded>) -> anyhow::Result<Self> {
-        tokio::time::timeout(Duration::from_secs(30), Self::start_inner(state, config))
+        let open = config.timeouts.open();
+        tokio::time::timeout(open, Self::start_inner(state, config))
             .await
-            .map_err(|_| refused())?
+            .step("the open passed engine_timeouts.open_ms")?
     }
     async fn start_inner(state: &AppState, config: Arc<Loaded>) -> anyhow::Result<Self> {
         let version: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
                 .fetch_optional(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the schema version")?;
         if crate::STATE_FORMAT_VERSION < 26
             || version.as_deref() != Some(&crate::STATE_FORMAT_VERSION.to_string())
         {
-            return Err(refused());
+            return Err(refused("schema version mismatch"));
         }
         let migrations: Vec<i32> =
             sqlx::query_scalar("SELECT version FROM schema_migrations ORDER BY version")
                 .fetch_all(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the applied migrations")?;
         if migrations != (1..=crate::STATE_FORMAT_VERSION as i32).collect::<Vec<_>>() {
-            return Err(refused());
+            return Err(refused("applied migrations differ"));
         }
         for table in [
             "review_owner_budget",
@@ -122,28 +127,28 @@ impl Runtime {
                 .bind(format!("public.{table}"))
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("checking the bridge tables")?;
             if !present {
-                return Err(refused());
+                return Err(refused("a bridge table is missing"));
             }
         }
         let installed: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=26)")
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
-        let column:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='playbook_namespaces' AND column_name='catalog_profile')").fetch_one(&state.store.pool).await.map_err(|_|refused())?;
+                .step("checking migration 26")?;
+        let column:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='playbook_namespaces' AND column_name='catalog_profile')").fetch_one(&state.store.pool).await.step("checking the namespace columns")?;
         if !installed
             || !column
             || config.connection.get_dbname() != state.store.pool.connect_options().get_database()
         {
-            return Err(refused());
+            return Err(refused("playbook schema or database mismatch"));
         }
         let budget: i64 =
             sqlx::query_scalar("SELECT count(*) FROM review_owner_budget WHERE singleton")
                 .fetch_one(&state.store.pool)
                 .await
-                .map_err(|_| refused())?;
+                .step("reading the review budget")?;
         if budget != 1
             || (state.source_retention.is_none()
                 && config.deployments.iter().any(|d| {
@@ -154,11 +159,12 @@ impl Runtime {
                         .contains("decision.request")
                 }))
         {
-            return Err(refused());
+            return Err(refused("review budget or source retention missing"));
         }
-        config.check_socket().map_err(|_| refused())?;
+        config.check_socket().step("checking the engine socket")?;
         let service = if config.profile == super::review_domain::CatalogProfile::Monitoring6 {
-            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            let graph = state.agent_access.clone();
+            let graph = graph.ok_or_else(|| refused("no graph access"))?;
             Service::new_monitoring6(
                 state,
                 config.namespace.clone(),
@@ -167,7 +173,8 @@ impl Runtime {
             )
             .await
         } else if config.profile.is_host2() {
-            let graph = state.agent_access.clone().ok_or_else(refused)?;
+            let graph = state.agent_access.clone();
+            let graph = graph.ok_or_else(|| refused("no graph access"))?;
             // No production sandbox check executor (server->node check-attempt
             // execution with profiled check evidence) exists yet, so
             // check.request refuses `unavailable`. judgment.request is served
@@ -187,7 +194,7 @@ impl Runtime {
                     ))
                         as Arc<dyn super::host_adapters::Integration>)
                 }
-                (Some(_), None) => return Err(refused()),
+                (Some(_), None) => return Err(refused("integration needs source retention")),
                 (None, _) => None,
             };
             Service::new_host2(
@@ -213,11 +220,11 @@ impl Runtime {
             )
             .await
         }
-        .map_err(|_| refused())?;
+        .step("opening the bridge service")?;
         service
             .initialize(config.namespace.owner_user_id)
             .await
-            .map_err(|_| refused())?;
+            .step("initializing the namespace")?;
         let factory_config = config.clone();
         let limits = Limits {
             work_queue: 8,
@@ -234,7 +241,7 @@ impl Runtime {
             },
             ..Limits::default()
         };
-        let started = Driver::start(service.clone(), limits, move || {
+        let started = Driver::open(service.clone(), limits, move || {
             factory_config
                 .check_socket()
                 .map_err(|_| aq_playbook_host::Error::Invalid)?;
@@ -252,10 +259,10 @@ impl Runtime {
             )
         });
         let driver = Arc::new(
-            tokio::time::timeout(Duration::from_secs(30), started)
+            tokio::time::timeout(config.timeouts.open(), started)
                 .await
-                .map_err(|_| refused())?
-                .map_err(|_| refused())?,
+                .step("opening the engine (open_ms)")?
+                .map_err(|(_, why)| refused(&format!("opening the engine: {why}")))?,
         );
         let bootstrap = async {
             for deployment in &config.deployments {
@@ -267,11 +274,11 @@ impl Runtime {
                         deployment.expires_at_ms,
                     )
                     .await
-                    .map_err(|_| refused())?;
+                    .step("writing a deployment grant")?;
                 driver
                     .install(deployment.artifact.clone())
                     .await
-                    .map_err(|_| refused())?;
+                    .step("installing a deployment artifact")?;
                 driver
                     .ensure_binding(
                         deployment.binding.clone(),
@@ -280,7 +287,7 @@ impl Runtime {
                         &deployment.scope,
                     )
                     .await
-                    .map_err(|_| refused())?;
+                    .step("activating a deployment binding")?;
             }
             // The frozen startup-metadata profile represents 1..4 configured
             // artifacts. An explicit empty deployment list mounts no historical
@@ -294,9 +301,9 @@ impl Runtime {
                             .iter()
                             .map(|deployment| &deployment.artifact),
                     )
-                    .map_err(|_| refused())?;
+                    .step("recording the loaded definitions")?;
             }
-            driver.recover().await.map_err(|_| refused())?;
+            driver.recover().await.step("recovering the engine")?;
             Ok::<_, anyhow::Error>(())
         }
         .await;
@@ -355,8 +362,9 @@ impl Runtime {
     }
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.stop.send(true);
-        let mut drain = self.drain.take().ok_or_else(refused)?;
-        let result = tokio::time::timeout(Duration::from_secs(10), &mut drain).await;
+        let mut drain = (self.drain.take()).ok_or_else(|| refused("already shut down"))?;
+        let wait = self.driver.deadline.saturating_mul(2);
+        let result = tokio::time::timeout(wait, &mut drain).await;
         if let Some(mut task) = self.task.take()
             && tokio::time::timeout(Duration::from_secs(2), &mut task)
                 .await

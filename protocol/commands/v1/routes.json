@@ -50,6 +50,7 @@
     {"path": "/api/playbooks/bindings/{id}/rollback", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/coding/default", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/drive", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
+    {"path": "/api/playbooks/events/{id}/hold", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/events/{id}/retry", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/grants", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/playbooks/grants/{id}/revoke", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},

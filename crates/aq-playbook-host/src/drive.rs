@@ -34,6 +34,45 @@ impl Backoff {
     }
 }
 
+/// Why a startup step refused: the step and its cause, as text. Callers keep
+/// secrets (connection strings, keys) out of both.
+#[derive(Debug)]
+pub struct Refused(pub String);
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "playbook owner startup refused: {}", self.0)
+    }
+}
+impl std::error::Error for Refused {}
+/// Names the startup step a failure belongs to: `result.step("what")?`.
+pub trait Step<T> {
+    fn step(self, what: &str) -> Result<T, Refused>;
+}
+impl<T, E: std::fmt::Display> Step<T> for Result<T, E> {
+    fn step(self, what: &str) -> Result<T, Refused> {
+        self.map_err(|cause| Refused(format!("{what}: {cause}")))
+    }
+}
+
+/// Whether an owner's answer to `Stop` proves the engine released its
+/// namespace. A closed channel is not release evidence: only an exact
+/// successful Stop response, remembered in `known` for this owner, permits a
+/// later closed (`Stopped`) answer to count as the same release.
+pub fn stop_acknowledged(
+    known: &std::sync::atomic::AtomicBool,
+    response: Result<serde_json::Value, crate::Error>,
+) -> bool {
+    let ordering = std::sync::atomic::Ordering::SeqCst;
+    match response {
+        Ok(_) => {
+            known.store(true, ordering);
+            true
+        }
+        Err(crate::Error::Stopped) => known.load(ordering),
+        Err(_) => false,
+    }
+}
+
 /// Waits `delay`; `false` when a stop was requested first.
 async fn pause(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
     tokio::select! {
@@ -111,6 +150,25 @@ mod tests {
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn closed_queue_is_unknown_until_exact_stop_ack_for_this_owner() {
+        let known = std::sync::atomic::AtomicBool::new(false);
+        assert!(!stop_acknowledged(&known, Err(crate::Error::Stopped)));
+        assert!(stop_acknowledged(&known, Ok(serde_json::Value::Null)));
+        assert!(stop_acknowledged(&known, Err(crate::Error::Stopped)));
+        assert!(!stop_acknowledged(&known, Err(crate::Error::Unknown)));
+    }
+
+    #[test]
+    fn a_refused_step_names_the_step_and_its_cause() {
+        let failed: Result<(), &str> = Err("relation missing");
+        let refused = failed.step("reading the schema version").unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "playbook owner startup refused: reading the schema version: relation missing"
+        );
+    }
 
     #[test]
     fn backoff_doubles_from_first_and_stops_at_max() {
