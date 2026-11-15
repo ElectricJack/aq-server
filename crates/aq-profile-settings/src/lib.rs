@@ -284,6 +284,14 @@ pub fn prepare(
     } else {
         req.candidates.clone()
     };
+    // A level profile launches routed work, and a launch pins its profile's selection policy
+    // (attempts, lineage time, budget): without one every routed grant was refused. It takes
+    // the automatic router's, the profile routed work would otherwise have run under.
+    if profile.selection_policy.is_none() {
+        let routers = (current.artifact().catalog.intelligence.iter())
+            .filter(|p| p.automatic_routing == Some(true));
+        profile.selection_policy = { routers }.find_map(|p| p.selection_policy.clone());
+    }
     if !creating && value(&profile)? == value(old)? {
         return Ok(Prepared {
             catalog: current.clone(),
