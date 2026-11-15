@@ -555,3 +555,31 @@ mod tests {
         );
     }
 }
+
+/// The native registration history, `profiled_native_registration_history`
+/// (architecture 0006; one row per node boot): keeps each node's newest `keep`
+/// rows and deletes at most `delete_batch` older ones. Never deleted: a row a
+/// launch registration, a launch closure or a phase execution grant names. A
+/// registration whose row was deleted is recorded again when the node repeats it.
+pub async fn registration_history(
+    pool: &PgPool,
+    now: i64,
+    log: &HeartbeatLog,
+) -> anyhow::Result<u64> {
+    let (keep, batch) = log
+        .bounds()
+        .filter(|_| now > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid registration history bounds"))?;
+    // $2 = keep per node, $3 = batch size.
+    let query = r#"DELETE FROM profiled_native_registration_history WHERE registration_id IN (
+      SELECT r.registration_id FROM (
+        SELECT h.registration_id,row_number() OVER (PARTITION BY h.node_id
+          ORDER BY h.recorded_at_ms DESC,h.registration_id DESC) AS newest
+        FROM profiled_native_registration_history h) r
+      WHERE r.newest>$2
+      AND NOT EXISTS(SELECT 1 FROM profiled_launch_registrations x WHERE x.registration_id=r.registration_id)
+      AND NOT EXISTS(SELECT 1 FROM profiled_launch_closures x WHERE x.registration_id=r.registration_id)
+      AND NOT EXISTS(SELECT 1 FROM profiled_phase_execution_grants x WHERE x.registration_id=r.registration_id)
+      ORDER BY r.newest DESC LIMIT $3)"#;
+    statement(pool, query, now, keep, batch).await
+}

@@ -105,22 +105,7 @@ pub(crate) async fn capture_locked(
     if bytes.len() > 65536 {
         return Err(conflict());
     }
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('aq-native-registration-history-v1',0))",
-    )
-    .execute(&mut **tx)
-    .await
-    .map_err(database)?;
-    let quota:(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(metadata_bytes)),0),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(metadata_bytes)) FILTER(WHERE node_id=$1),0) FROM profiled_native_registration_history").bind(metadata.request.identity.node_id).fetch_one(&mut **tx).await.map_err(database)?;
-    if quota.0 >= 4096
-        || quota.1 + bytes.len() as i64 > 67108864
-        || quota.2 >= 1024
-        || quota.3 + bytes.len() as i64 > 16777216
-    {
-        return Err(AppError::Conflict(
-            "native registration history capacity exhausted".into(),
-        ));
-    }
+    // No quota (architecture 0006): row retention keeps each node's newest rows.
     sqlx::query("INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,identity_digest,semantic_digest,metadata_bytes) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(metadata.request.identity.node_id).bind(metadata.request.identity.boot_id).bind(key.as_str()).bind(metadata.semantic_digest.as_str()).bind(bytes).execute(&mut **tx).await.map_err(database)?;
     load_locked(tx, id).await
 }

@@ -104,65 +104,36 @@ async fn actual27_upgrades_to28_and_collision_rolls_back_before_explicit_retry()
 }
 
 #[tokio::test]
-async fn read_committed_history_quota_resamples_after_global_lock_wait_across_nodes() {
-    // Exercise the SQL protection boundary with tiny synthetic history payloads.
-    // These are quota fixtures, not decoder-valid runtime registration claims.
+async fn registration_history_has_no_quota_and_row_retention_keeps_each_nodes_newest() {
+    // Architecture 0006. Tiny synthetic history payloads, not decoder-valid
+    // runtime registration claims.
     let db = TestDb::create().await;
     let _store = db.store().await;
-    // Barrier + two simultaneous mutators + independent observer. The generic
-    // fixture pool has only two connections and cannot exercise this race.
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(db.options())
+    let pool = db.pool().await;
+    let node = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'history-fixture',$2,'0.3.3',2,now())").bind(node).bind(format!("{:064x}", 1)).execute(&pool).await.unwrap();
+    // More boots than the old per-node (1,024) and whole-table (4,096) quotas.
+    sqlx::query("INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,identity_digest,semantic_digest,metadata_bytes,recorded_at_ms) SELECT md5('seed-'||g)::UUID,$1,md5('boot-'||g)::UUID,md5(g::TEXT)||md5(g::TEXT),repeat('c',64),convert_to('{}','UTF8'),g FROM generate_series(1,4200) g").bind(node).execute(&pool).await.unwrap();
+    // An ordinary DELETE is still refused.
+    assert!(
+        sqlx::query("DELETE FROM profiled_native_registration_history")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    let log = aq_server::row_retention::HeartbeatLog {
+        keep: 3,
+        delete_batch: 10_000,
+    };
+    let deleted = aq_server::row_retention::registration_history(&pool, 1, &log)
         .await
         .unwrap();
-    let nodes = (0..7).map(|_| uuid::Uuid::new_v4()).collect::<Vec<_>>();
-    for (i, node) in nodes.iter().enumerate() {
-        sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'quota-fixture',$2,'0.3.3',2,now())").bind(node).bind(format!("{i:064x}")).execute(&pool).await.unwrap();
-    }
-    sqlx::query("INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,identity_digest,semantic_digest,metadata_bytes) SELECT md5('quota-seed-'||g)::UUID,($1::UUID[])[1+(g%5)],md5('boot-'||g)::UUID,md5(g::TEXT)||md5(g::TEXT),repeat('a',64),convert_to('{}','UTF8') FROM generate_series(1,4095) g").bind(&nodes[..5]).execute(&pool).await.unwrap();
-    let mut barrier = pool.begin().await.unwrap();
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('aq-native-registration-history-v1',0))",
+    assert_eq!(deleted, 4197);
+    let kept: Vec<i64> = sqlx::query_scalar(
+        "SELECT recorded_at_ms FROM profiled_native_registration_history ORDER BY 1",
     )
-    .execute(&mut *barrier)
+    .fetch_all(&pool)
     .await
     .unwrap();
-    let mut tasks = vec![];
-    for node in &nodes[5..] {
-        let pool = pool.clone();
-        let node = *node;
-        tasks.push(tokio::spawn(async move {
-            sqlx::query("/* closure28-history-race */ INSERT INTO profiled_native_registration_history(registration_id,node_id,boot_id,identity_digest,semantic_digest,metadata_bytes) VALUES($1,$2,$3,repeat('b',64),repeat('c',64),convert_to('{}','UTF8'))").bind(uuid::Uuid::new_v4()).bind(node).bind(uuid::Uuid::new_v4()).execute(&pool).await
-        }));
-    }
-    tokio::time::timeout(std::time::Duration::from_secs(5),async {
-        loop {
-            let waiters:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory' AND query LIKE '/* closure28-history-race */%'").fetch_one(&pool).await.unwrap();
-            if waiters==2{break}tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    }).await.expect("both independent nodes must wait before releasing quota barrier");
-    barrier.commit().await.unwrap();
-    let mut passed = 0;
-    let mut refused = 0;
-    for task in tasks {
-        match task.await.unwrap() {
-            Ok(_) => passed += 1,
-            Err(error) => {
-                assert!(
-                    error.to_string().contains("registration history quota"),
-                    "{error}"
-                );
-                refused += 1
-            }
-        }
-    }
-    assert_eq!((passed, refused), (1, 1));
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_native_registration_history")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        4096
-    );
+    assert_eq!(kept, [4198, 4199, 4200]);
 }

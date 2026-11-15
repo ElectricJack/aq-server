@@ -1063,3 +1063,5 @@ mod tests {
         assert_eq!(super::cap_exempt([false; 3]), [false; 3]);
     }
 }
+
+pub mod install;

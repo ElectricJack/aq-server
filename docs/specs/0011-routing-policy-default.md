@@ -25,13 +25,22 @@ Start from what kind of work it is, then adjust for risk.
   task is not a Deep task, and neither is a risky one. Whether a task needs
   that is your judgement of the task itself, not of how it was labelled.
 - Analysis that doesn't need Deep is Standard, high effort.
+- Art is Standard, high effort. Visual design is a design, so it is Complex,
+  high effort.
 
-If whoever filed the task asked for a level, respect it, but don't go above
-Standard for tests, docs, chores and syncs, or above Complex for ordinary
-implementation work. Asking for Deep is not enough to get it: the task still
-has to need it by the rule above, and otherwise it gets Complex, high effort.
-If the level asked for isn't available, use the nearest available level below
-it. The risk and failure rules still apply to it, as to any level asked for.
+If whoever filed the task asked for a level, respect it, within these limits.
+Tests, docs, chores and syncs never go above Standard, whatever was asked.
+Features, bug fixes and refactors never go above Complex. Asking for Deep is
+not enough to get it: the task still has to need it by the rule above, and
+otherwise it gets Complex, high effort, or its limit when that is lower. When
+a request is cut back to a limit, use high effort at that level. If the level
+asked for isn't available, use the same level at the next lower effort that
+is available, and if there is none, the level below at high effort. The risk
+and failure rules still apply to it, as to any level asked for.
+
+Where these rules leave a choice open, or two of them point different ways,
+use your judgement of the task itself, and prefer the cheaper level that is
+adequate.
 
 A bug fix that has already failed once for a real reason moves up to Complex,
 high effort.
@@ -56,24 +65,31 @@ When a task touches several areas, go by the riskiest. When you can't tell,
 call it medium.
 
 Medium and high risk work is at least Standard, high effort. Very high risk
-work is at least Complex, medium effort, unless it is narrow and covered by a test, in which
-case Standard, high effort is enough.
+work is at least Complex, high effort, unless it is narrow and covered by a
+test, in which case Standard, high effort is enough.
 
 Never raise the level because providers are busy, and never use a task's
 priority to choose anything. Priority only orders the queue.
 
 ## Who may take it
 
+A local model means the OpenCode agent. It may or may not be available when a
+task is routed. When a rule sends work to a local model and it isn't
+available, use your judgement and send the work to the next agent these rules
+allow.
+
 - High and very high risk work goes only to Claude or Codex.
 - Medium risk work goes to Claude or Codex. It may go to a local model only
   when the task is narrow, covered by a test, and Standard.
 - Low risk work that is narrow and covered by a test should go to a local
   model first, to save Claude and Codex usage.
-- Anything not mentioned here, takes only low risk work.
+- Any agent other than Claude, Codex and the local model takes only low risk
+  work.
 - Design and planning go to Claude first, and to Codex only when Claude can't
-  take them.
+  take them, even when the work is low risk and narrow.
 - Art and visual design go to Codex, and wait for it rather than going
-  elsewhere.
+  elsewhere. For visual design this rule decides who takes it, not the design
+  rule above.
 - Never spend Deep on bug fixes, escalated or not.
 - Repairs to a failed integration or build never go to a local model.
 

@@ -136,6 +136,9 @@ pub struct WorkersConfig {
     pub offline_after_secs: u64,
     /// `[workers.heartbeat_log]`: rolling deletion of the heartbeat log.
     pub heartbeat_log: aq_row_retention::HeartbeatLog,
+    /// `[workers.registration_history]`: the same for the native registration history.
+    pub registration_history: aq_row_retention::HeartbeatLog,
+    pub install: aq_machine_control::install::WorkerInstall,
 }
 
 impl Default for WorkersConfig {
@@ -144,6 +147,8 @@ impl Default for WorkersConfig {
             heartbeat_interval_secs: 15,
             offline_after_secs: 60,
             heartbeat_log: Default::default(),
+            registration_history: Default::default(),
+            install: Default::default(),
         }
     }
 }
@@ -234,7 +239,8 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             return invalid(key, "must be at least 1".into());
         }
     }
-    if c.workers.heartbeat_log.bounds().is_none() {
+    let w = &c.workers;
+    if w.heartbeat_log.bounds().is_none() || w.registration_history.bounds().is_none() {
         return invalid("workers.heartbeat_log", "must be at least 1".into());
     }
     if c.workers.offline_after_secs <= c.workers.heartbeat_interval_secs {
