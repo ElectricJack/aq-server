@@ -154,7 +154,7 @@ pub(super) fn confirmation(
             p.input.material.credential_revision,
             o.file_started_at_ms,
             o.file_started_at_ms
-                .checked_add(2000)
+                .checked_add(10_000)
                 .ok_or_else(|| refused())?,
             FactValue::PrivateMaterialBacking {
                 lease_id: p.input.material.lease_id,
