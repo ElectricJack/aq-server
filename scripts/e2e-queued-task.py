@@ -111,7 +111,7 @@ def main():
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     name = f"notes/{args.note}-{args.machine}-{stamp}.md"
     body = args.body or (f"In the repository, create the file {name} containing exactly one line: "
-                         f"Queued work check on {args.machine}, {stamp}. Do not change any other file. Run cargo test.")
+                         f"Queued work check on {args.machine}, {stamp}. Do not change any other file and do not build anything.")
     task, failed, step = None, None, "setup"
 
     def say(text):
@@ -125,7 +125,7 @@ def main():
         revision = stack.get(f"/api/human/projects/{args.project}/tasks")["project"]["revision"]
         created = stack.action("task.create", {"type": "project", "id": args.project, "revision": revision}, {
             "expected_project_revision": revision, "title": f"Queued work check ({args.note}) on {args.machine}",
-            "body": body, "acceptance_criteria": f"{name} exists with that one line; cargo test passes.",
+            "body": body, "acceptance_criteria": f"{name} exists with that one line and nothing else changed.",
             "labels": ["e2e"], "task_state": "active"}, {"project": revision})
         task = next(e["id"] for e in created["affected_entities"] if e["type"] == "task")
         say(f"task {task}")
