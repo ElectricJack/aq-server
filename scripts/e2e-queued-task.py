@@ -41,7 +41,12 @@ class Stack:
                 return error.code, {"raw": raw[:300].decode("utf-8", "replace")}
 
     def get(self, path):
-        status, value = self.call("GET", path)
+        # A read that is briefly unavailable (503) is retried; anything else is the answer.
+        for attempt in range(6):
+            status, value = self.call("GET", path)
+            if status != 503:
+                break
+            time.sleep(2 + attempt)
         if status != 200:
             raise RuntimeError(f"GET {path}: {status} {json.dumps(value)[:300]}")
         return value
