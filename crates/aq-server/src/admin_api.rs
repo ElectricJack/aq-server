@@ -96,6 +96,8 @@ struct StatusResponse {
     version: VersionInfo,
     health: &'static str,
     update: serde_json::Value,
+    /// `[workers.install]`: the hosted worker installer as published now.
+    worker_install: Option<serde_json::Value>,
 }
 
 async fn status(State(state): State<AppState>, _user: CurrentUser) -> Json<StatusResponse> {
@@ -103,6 +105,7 @@ async fn status(State(state): State<AppState>, _user: CurrentUser) -> Json<Statu
         version: version_info(),
         health: "ok",
         update: crate::updates::status_summary(&state),
+        worker_install: state.config.workers.install.published(),
     })
 }
 
