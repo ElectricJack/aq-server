@@ -142,6 +142,28 @@ candidates (provider, model, reasoning effort, harness) and a selection policy
   uses the project's default intelligence profile (§5.4).
 - A candidate that cannot launch (unknown model, no access) fails its attempt
   with the harness's own error, and the selection policy's fallback applies.
+- A profile document is its candidates and nothing else by default:
+
+  ```markdown
+  ---
+  id: standard-high
+  name: Standard, high
+  description: Ordinary work that touches several parts or needs careful checking.
+  ---
+  ## Candidates
+  | provider | model | reasoning | harnesses |
+  |---|---|---|---|
+  | anthropic | claude-sonnet-5-5 | high | claude |
+  ```
+
+  The selection policy (attempts, fallback reasons, lineage time, cost rules)
+  has one set of defaults for all profiles, held in Settings. A profile may
+  override single values under an optional `## Selection` heading. **(call)**
+- Two values leave the selection policy because the execution profile already
+  owns them: the output token limit, and the capabilities a worker must have
+  (they follow from the harness and confinement). **(call)**
+- Every harness accepts the reasoning value `default`, meaning the harness's
+  own setting, so a profile can name a model on any of the four harnesses.
 
 ### 5.3 Execution profile
 
@@ -217,7 +239,8 @@ offer is refused with that reason.
 The effective permission set of an attempt is each operation in the role's
 `operations`, scoped to the task's project (for `task.*`, `knowledge.*`) or the
 project's repository (for `source.*`), intersected with the project's ceilings
-and the caller's authority. The composer already derives these ids from the
+and the caller's authority. `wait.*` operations keep the scope they have today,
+the attempt itself. The composer already derives these ids from the
 binding for its installation ceiling; this makes that the only source.
 
 ### 6.3 What the agent is not told
