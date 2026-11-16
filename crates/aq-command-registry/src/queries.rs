@@ -374,6 +374,20 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         // agent_access/waits/routes.rs::owner_list (`ListQuery`), ::owner_show
         "/api/waits" => const { &[PROJECT] },
         "/api/waits/{wait_id}" => NONE,
+        // project_bindings.rs::inspect, ::history
+        "/api/projects/{id}" | "/api/projects/{id}/revisions/{revision}" => NONE,
+        // agent_access/messaging/global/reads.rs::project_discovery
+        "/api/human/conversations/projects/{project}" => NONE,
+        // admin_api.rs::workers, ::status; execution/api.rs::inspect
+        "/api/workers" | "/api/status" | "/api/execution/attempts/{id}" => NONE,
+        // aq-supervisor-control api.rs::list
+        "/api/supervisors" => NONE,
+        // aq-manual-sessions api.rs::list (`Scope`)
+        "/api/manual-agents" => const { &[PROJECT] },
+        // profile_catalog/settings.rs::read; intelligence.rs::inspect
+        "/api/settings/intelligence" | "/api/intelligence/registry" => NONE,
+        // profile_catalog.rs::inspect, ::artifact
+        "/api/profiles/catalogs" | "/api/profiles/catalogs/{digest}" => NONE,
         _ => return None,
     })
 }

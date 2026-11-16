@@ -819,6 +819,87 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Provider accounts",
             "/api/human/provider-accounts",
         ),
+        read(
+            "project.show",
+            "dashboard.read",
+            P,
+            "One project: its current binding, repository and execution settings",
+            Some(Route::get("/api/projects/{id}", &[("id", "project_id")])),
+        ),
+        read(
+            "project.revision.show",
+            "dashboard.read",
+            P,
+            "A project's binding as it was at an earlier revision",
+            Some(Route::get(
+                "/api/projects/{id}/revisions/{revision}",
+                &[("id", "project_id")],
+            )),
+        ),
+        owner(
+            "conversation.project",
+            op::MESSAGE_READ,
+            "A project's supervisor conversation",
+            "/api/human/conversations/projects/{project}",
+        ),
+        owner(
+            "worker.list",
+            "dashboard.read",
+            "Worker nodes: version, last seen, status and storage",
+            "/api/workers",
+        ),
+        read(
+            "attempt.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "One execution attempt's state",
+            Some(Route::get(
+                "/api/execution/attempts/{id}",
+                &[("id", "attempt_id")],
+            )),
+        ),
+        owner(
+            "server.status",
+            "dashboard.read",
+            "The server's version, health and update state",
+            "/api/status",
+        ),
+        owner(
+            "supervisor.list",
+            "dashboard.read",
+            "Supervisors, with the profiles a supervisor can run on",
+            "/api/supervisors",
+        ),
+        owner(
+            "session.manual.list",
+            "dashboard.read",
+            "Sessions the owner started by hand, with the workers, slots and projects to start one on",
+            "/api/manual-agents",
+        ),
+        owner(
+            "intelligence.list",
+            "dashboard.read",
+            "Intelligence settings: profiles, the projects using each, and model choices",
+            "/api/settings/intelligence",
+        ),
+        owner(
+            "intelligence.registry.show",
+            "dashboard.read",
+            "The intelligence registry: credentials and recent observations",
+            "/api/intelligence/registry",
+        ),
+        owner(
+            "profile.catalog.active",
+            "dashboard.read",
+            "The active profile catalog's digest and revision",
+            "/api/profiles/catalogs",
+        ),
+        owner(
+            "profile.catalog.show",
+            "dashboard.read",
+            "One profile catalog by digest",
+            "/api/profiles/catalogs/{digest}",
+        ),
     ];
     for command in &mut commands {
         let path = match command.name {
