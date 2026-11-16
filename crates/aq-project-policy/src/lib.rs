@@ -50,6 +50,22 @@ fn enrolled_by_default() -> bool {
 fn is_true(v: &bool) -> bool {
     *v
 }
+/// The role of a task that names none (spec 0014 §5.4).
+pub const DEFAULT_ROLE: &str = "developer";
+/// The intelligence profile of a task that was not routed to a level.
+pub const DEFAULT_INTELLIGENCE: &str = "standard-high";
+fn default_role() -> String {
+    DEFAULT_ROLE.into()
+}
+fn is_default_role(v: &String) -> bool {
+    v == DEFAULT_ROLE
+}
+fn default_intelligence() -> String {
+    DEFAULT_INTELLIGENCE.into()
+}
+fn is_default_intelligence(v: &String) -> bool {
+    v == DEFAULT_INTELLIGENCE
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBinding {
@@ -63,10 +79,28 @@ pub struct ProjectBinding {
     pub repository_adapter_reference: String,
     pub graph_adapter_reference: String,
     pub graph_workspace_id: Uuid,
+    // Spec 0014 §5.4: `catalog_digest` and the three `allowed_*_profiles`
+    // lists are removed in step 3c; until then the offer path reads them.
     pub catalog_digest: String,
     pub allowed_agent_profiles: Vec<String>,
     pub allowed_intelligence_profiles: Vec<String>,
     pub allowed_execution_profiles: Vec<String>,
+    /// The role of a task that names none. Absent on records written before
+    /// spec 0014, and not serialized at its default, like the fields below,
+    /// so those records load and keep their serialized digest.
+    #[serde(default = "default_role", skip_serializing_if = "is_default_role")]
+    pub default_role: String,
+    /// The intelligence profile used when a task was not routed to a level.
+    #[serde(
+        default = "default_intelligence",
+        skip_serializing_if = "is_default_intelligence"
+    )]
+    pub default_intelligence: String,
+    /// Markdown per role id, added after the role's prompt; it never replaces
+    /// it. Each note is bounded by the role store's document byte limit,
+    /// which the server checks when the binding is saved.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_notes: BTreeMap<String, String>,
     pub allowed_node_ids: Vec<Uuid>,
     /// Spec 0007 Q3: on by default; `false` restricts the binding to its listed nodes and groups.
     #[serde(default = "enrolled_by_default", skip_serializing_if = "is_true")]
@@ -231,6 +265,12 @@ impl ProjectBinding {
                     "profile version",
                 )?;
             }
+        }
+        label(&self.default_role).map_err(|_| "default role")?;
+        label(&self.default_intelligence).map_err(|_| "default intelligence profile")?;
+        for (role, note) in &self.role_notes {
+            label(role).map_err(|_| "role notes role")?;
+            require(!note.contains('\0'), "role notes text")?;
         }
         ids(&self.allowed_node_ids, 256)?;
         labels(&self.allowed_worker_groups, 32)?;
@@ -440,6 +480,9 @@ pub(crate) mod tests {
             allowed_agent_profiles: vec!["implementer@1".into()],
             allowed_intelligence_profiles: vec!["engineering@1".into()],
             allowed_execution_profiles: vec!["confined-development@1".into()],
+            default_role: DEFAULT_ROLE.into(),
+            default_intelligence: DEFAULT_INTELLIGENCE.into(),
+            role_notes: BTreeMap::new(),
             allowed_node_ids: vec![Uuid::from_u128(4)],
             allow_enrolled_nodes: false,
             allowed_worker_groups: vec![],
@@ -685,6 +728,54 @@ pub(crate) mod tests {
         assert!(b.validate(&config).is_ok());
         b.allow_enrolled_nodes = false;
         assert!(b.validate(&config).is_err());
+    }
+    #[test]
+    fn role_defaults_are_absent_on_old_records_and_not_written_at_their_default() {
+        let config = ProjectConfig::default();
+        let old = serde_json::to_value(binding()).unwrap();
+        for key in ["default_role", "default_intelligence", "role_notes"] {
+            assert!(old.get(key).is_none(), "{key}");
+        }
+        // A record written before spec 0014 loads with the defaults.
+        let loaded: ProjectBinding = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(
+            (
+                loaded.default_role.as_str(),
+                loaded.default_intelligence.as_str()
+            ),
+            ("developer", "standard-high")
+        );
+        assert!(loaded.role_notes.is_empty() && loaded.validate(&config).is_ok());
+        let mut b = binding();
+        b.default_role = "reviewer".into();
+        b.default_intelligence = "deep-high".into();
+        b.role_notes
+            .insert("reviewer".into(), "Review the migration first.".into());
+        let value = serde_json::to_value(&b).unwrap();
+        assert_eq!(value["default_role"], "reviewer");
+        assert_eq!(value["default_intelligence"], "deep-high");
+        assert_eq!(
+            value["role_notes"]["reviewer"],
+            "Review the migration first."
+        );
+        assert!(b.validate(&config).is_ok());
+        let again: ProjectBinding = serde_json::from_value(value).unwrap();
+        assert_eq!(again.role_notes, b.role_notes);
+        for (role, intelligence, note_role, note) in [
+            ("", "deep-high", "reviewer", "x"),
+            ("reviewer", "two words", "reviewer", "x"),
+            ("reviewer", "deep-high", "bad role", "x"),
+            ("reviewer", "deep-high", "reviewer", "nul\0"),
+        ] {
+            let mut b = binding();
+            b.default_role = role.into();
+            b.default_intelligence = intelligence.into();
+            b.role_notes.insert(note_role.into(), note.into());
+            assert!(
+                b.validate(&config).is_err(),
+                "{role} {intelligence} {note_role}"
+            );
+        }
     }
     #[test]
     fn binding_without_flag_serializes_unchanged() {
