@@ -126,12 +126,45 @@ pub enum Tasks {
         project: Uuid,
     },
     Create(CreateTask),
-    Cancel {
-        id: Uuid,
-    },
-    Retry {
-        id: Uuid,
-    },
+    /// Cancel a task and stop any attempt holding it (`task.cancel`).
+    Cancel(TaskChange),
+    /// Release a task whose attempt has settled for a replacement attempt (`task.retry`).
+    Retry(TaskChange),
+}
+#[derive(Args)]
+pub struct TaskChange {
+    pub id: Uuid,
+    #[arg(long)]
+    pub project: Uuid,
+    /// The task version the change expects; the current one is read when omitted.
+    #[arg(long, value_parser = revision)]
+    pub revision: Option<String>,
+}
+fn revision(value: &str) -> Result<String, String> {
+    let ok = !value.is_empty()
+        && value.len() <= 19
+        && !value.starts_with('0')
+        && value.bytes().all(|b| b.is_ascii_digit())
+        && value.parse::<i64>().is_ok();
+    ok.then(|| value.to_string())
+        .ok_or_else(|| "a revision is a positive decimal number".into())
+}
+/// A machine key, or a node ID (hyphenated, with or without `node:`) for a
+/// single legacy node. Anything else that fits a key is a key.
+fn machine(value: &str) -> Result<String, String> {
+    let id = value.strip_prefix("node:").unwrap_or(value);
+    if id.len() == 36
+        && let Ok(node) = id.parse::<Uuid>()
+    {
+        return Ok(format!("node:{node}"));
+    }
+    let key = value.len() <= 63
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && value.bytes().next().is_some_and(|b| b != b'-');
+    key.then(|| value.to_string())
+        .ok_or_else(|| "a machine is its key or a node ID".into())
 }
 #[derive(Args)]
 pub struct CreateTask {
@@ -207,7 +240,13 @@ pub struct Chat {
 #[derive(Subcommand)]
 pub enum Workers {
     List,
-    Revoke { id: Uuid },
+    /// Revoke every node of a machine (`worker.revoke`).
+    Revoke {
+        /// The machine's key (`id` of a machine in `run dashboard.swarm`), or the
+        /// node ID of a legacy node that belongs to no service machine.
+        #[arg(value_parser = machine)]
+        machine: String,
+    },
     Enroll,
 }
 #[derive(Subcommand)]
@@ -300,9 +339,6 @@ impl Command {
     }
     pub fn unsupported(&self) -> Option<&'static str> {
         match self {
-            Self::Tasks(Tasks::Cancel { .. }) => Some("task cancellation"),
-            Self::Tasks(Tasks::Retry { .. }) => Some("task retry"),
-            Self::Workers(Workers::Revoke { .. }) => Some("worker revocation"),
             Self::Workers(Workers::Enroll) => Some("worker enrollment"),
             Self::Projects(Projects::Onboard) => Some("project onboarding"),
             _ => None,

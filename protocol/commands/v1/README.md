@@ -52,7 +52,7 @@ Body mappings:
 | --- | --- |
 | `params` | `params` |
 | `params_with_api_version` | `params` plus `"api_version": 1` |
-| `query` | a GET; path segments from the named params, every other param as a query string value |
+| `query` | a GET; path segments from the named params, the other params as query string values. The route's `params_schema` lists the query params its handler accepts; a param it does not list is refused with `invalid_request` (`unknown param`) and nothing is forwarded. The lists are declared in `crates/aq-command-registry/src/queries.rs` |
 | `graph_read` | an agent-access-1 `ReadRequest` with the attempt's binding. The principal entry's `graph_query` names the query `kind`, the `defaults` for omitted fields (`knowledge.search`: `kind_filter` null, `limit` 20, `cursor` null) and the params sent under another field (`rename`: `task_id` is the query's `node_id`) |
 | `graph_command` | an agent-access-1 `CommandRequest`: `params` plus the binding (and `operation_id`/`reason` from the request when absent) |
 | `action_request` | an `ActionRequest` with `kind` = the command name and `payload` = `params` |
