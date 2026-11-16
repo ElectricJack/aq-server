@@ -2,7 +2,7 @@
 //! configured qualification for 24 h from `EFFECTIVE_DELAY_MS` later; offer
 //! budgeting and the swarm read use the merged facts. Validation is pure
 //! (`aq-context-renewal`); only renewals of a currently configured fact count.
-use super::context_budget::{self, CountedStartup, Qualification};
+use super::context_budget::{self, CountedStartup, Qualification, Renderer};
 use crate::{AppState, error::AppError, worker_api::AuthenticatedNode};
 use aq_context_renewal::{effective, merged, pending, renew_all};
 use aq_protocol::{ArtifactPin, MeasurementSubmission, QualificationPin};
@@ -74,13 +74,14 @@ fn pin(f: &Qualification) -> Result<QualificationPin, AppError> {
     })
 }
 /// Startup counting over the current facts. A refusal logs its reason at warn.
+#[cfg(not(feature = "any-model"))]
 pub(super) async fn evaluate(
     state: &AppState,
     runtime: &super::registration::RegisteredRuntime,
     selected: &aq_selection::ResolvedSelection,
     composition: &aq_profiles::FrozenComposition,
     now_ms: u64,
-) -> Result<(CountedStartup, Qualification), AppError> {
+) -> Result<(CountedStartup, Renderer), AppError> {
     let facts = current_facts(state, now_ms).await?;
     let counted = context_budget::evaluate(&facts, runtime, selected, composition, now_ms)
         .map_err(|e| {
@@ -89,8 +90,30 @@ pub(super) async fn evaluate(
         })?;
     let fact = facts
         .into_iter()
-        .find(|f| f.artifact().ok().as_ref() == Some(&counted.proof.qualification));
-    Ok((counted, fact.ok_or_else(|| super::producer::refused())?))
+        .find(|f| f.artifact().ok().as_ref() == Some(&counted.proof.qualification))
+        .ok_or_else(|| super::producer::refused())?;
+    let renderer = Renderer {
+        definition: counted.proof.qualification.clone(),
+        body: super::producer::canonical(&fact)?,
+        implicit_tokens: fact.fixed_overhead_tokens,
+        evidence: vec![fact.counting_evidence, fact.capacity_evidence],
+        expires_at_ms: Some(counted.proof.expires_at_ms),
+    };
+    Ok((counted, renderer))
+}
+/// Startup rendering under the byte limits; no fact is read (`any-model`).
+#[cfg(feature = "any-model")]
+pub(super) async fn evaluate(
+    _: &AppState,
+    runtime: &super::registration::RegisteredRuntime,
+    selected: &aq_selection::ResolvedSelection,
+    composition: &aq_profiles::FrozenComposition,
+    now_ms: u64,
+) -> Result<(CountedStartup, Renderer), AppError> {
+    context_budget::evaluate(runtime, selected, composition, now_ms).map_err(|e| {
+        tracing::warn!(reason = %e, "no native offer: the startup byte limit refused");
+        super::producer::refused()
+    })
 }
 /// Renews every configured fact whose credential allows the node and whose
 /// counting evidence the submission satisfies; returns the first renewed pin.
@@ -103,6 +126,10 @@ pub async fn record(
         return Err(AppError::BadRequest("schema_version".into()));
     }
     let none = || AppError::Conflict("no configured qualification this node may renew".into());
+    // `any-model`: nothing is measured, so no fact can be renewed and nothing is stored.
+    if cfg!(feature = "any-model") {
+        return Err(none());
+    }
     let (Some(config), Some(registry)) = (
         state.config.profiled_execution.as_ref(),
         state.config.intelligence.as_deref(),

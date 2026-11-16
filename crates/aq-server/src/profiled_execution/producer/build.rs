@@ -258,7 +258,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
-    let (counted, fact) = super::super::context_renewal::evaluate(
+    let (counted, renderer) = super::super::context_renewal::evaluate(
         state,
         runtime,
         selected,
@@ -266,7 +266,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         now(state)?,
     )
     .await?;
-    let fact = &fact;
     let until = (now(state)? / 86_400_000)
         .checked_add(8)
         .and_then(|n| n.checked_mul(86_400_000))
@@ -291,9 +290,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         selected.choice.adapter.clone(),
         selected.choice.environment.clone(),
         selected.choice.credential_profile.clone(),
-        fact.counting_evidence.clone(),
-        fact.capacity_evidence.clone(),
     ];
+    needed.extend(renderer.evidence.iter().cloned());
     let project = &compiled.frozen.project.binding;
     let validation = ArtifactRef {
         id: Text::new(&project.policy.identity).map_err(|_| refused())?,
@@ -352,7 +350,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             &composition,
             &counted,
             &compiled.projection,
-            fact,
+            &renderer,
+            &selected.choice.adapter,
         )
     })
     .await?;
@@ -669,9 +668,9 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         selected.expires_at_ms,
         ready.stamp.expires_at_ms,
         context.stamp.expires_at_ms,
-        counted.proof.expires_at_ms,
     ]
     .into_iter()
+    .chain(renderer.expires_at_ms)
     .min()
     .ok_or_else(|| refused())?;
     let native = NativeOffer {

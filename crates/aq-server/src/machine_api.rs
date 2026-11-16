@@ -131,11 +131,16 @@ async fn control(
         .await
         .map_err(mapped)?;
     drop(conn);
-    let qualification = crate::profiled_execution::context_renewal::current_pin(
-        &state,
-        u64::try_from(now.timestamp_millis()).map_err(|_| AppError::Internal)?,
-    )
-    .await?;
+    // `any-model`: no node is pinned to a measured fact.
+    let qualification = if cfg!(feature = "any-model") {
+        None
+    } else {
+        crate::profiled_execution::context_renewal::current_pin(
+            &state,
+            u64::try_from(now.timestamp_millis()).map_err(|_| AppError::Internal)?,
+        )
+        .await?
+    };
     // The control poll counts as liveness.
     state
         .store

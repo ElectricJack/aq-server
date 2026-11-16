@@ -10,6 +10,9 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(feature = "any-model")]
+#[path = "native_offers/any_model.rs"]
+mod any_model;
 #[path = "native_offers/handoff.rs"]
 mod handoff;
 #[path = "native_offers/history_caps.rs"]
@@ -173,6 +176,7 @@ async fn task_cas_and_same_cas_content_mismatch_never_publish_an_offer() {
         0
     );
 }
+#[cfg(not(feature = "any-model"))]
 #[tokio::test]
 async fn missing_qualified_capacity_never_invents_zero_or_exports_source() {
     let mut c = setup().await;

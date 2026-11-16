@@ -141,6 +141,7 @@ impl Qualification {
             digest,
         })
     }
+    #[cfg(not(feature = "any-model"))]
     fn matches(&self, runtime: &RegisteredRuntime, selection: &ResolvedSelection) -> bool {
         let s = &self.subject;
         let c = &selection.choice;
@@ -184,6 +185,7 @@ pub struct InstructionBound {
     pub instruction_index: usize,
     pub tokens_upper_bound: u64,
 }
+#[cfg(not(feature = "any-model"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proof {
@@ -204,21 +206,87 @@ pub struct Proof {
     pub observed_at_ms: u64,
     pub expires_at_ms: u64,
 }
+/// The byte proof: no measured fact, no model window. Every token number is
+/// the rendered byte count it stands beside, so the budget holds by construction.
+#[cfg(feature = "any-model")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Proof {
+    pub schema_version: u32,
+    pub renderer: ArtifactRef,
+    pub selection_digest: Digest,
+    pub composition_digest: Digest,
+    pub rendering: Rendering,
+    pub rendered_digest: Digest,
+    pub rendered_bytes: u64,
+    pub input_tokens_upper_bound: u64,
+    pub reserved_output_tokens: u64,
+    pub instructions: Vec<InstructionBound>,
+}
+impl Proof {
+    /// The renderer qualification this proof was counted under.
+    pub fn renderer(&self) -> &ArtifactRef {
+        #[cfg(not(feature = "any-model"))]
+        return &self.qualification;
+        #[cfg(feature = "any-model")]
+        return &self.renderer;
+    }
+    /// The context plan's window: the fact's capacity, or with `any-model`
+    /// exactly the counted input plus the reserved output.
+    pub fn window_tokens(&self) -> Option<u64> {
+        #[cfg(not(feature = "any-model"))]
+        return Some(self.capacity_tokens);
+        #[cfg(feature = "any-model")]
+        return (self.input_tokens_upper_bound).checked_add(self.reserved_output_tokens);
+    }
+}
+/// What a startup descriptor names as its renderer qualification: a measured
+/// fact, or with `any-model` the one constant rendering rule.
+pub struct Renderer {
+    pub definition: ArtifactRef,
+    pub body: Vec<u8>,
+    /// Tokens the renderer adds beyond the rendered bytes.
+    pub implicit_tokens: u64,
+    /// Definitions the offer retains with it (a fact's evidence).
+    pub evidence: Vec<ArtifactRef>,
+    /// When a measured fact expires; the rendering rule never does.
+    pub expires_at_ms: Option<u64>,
+}
+#[cfg(feature = "any-model")]
+impl Renderer {
+    /// The same Definition for every model: its body states only the rendering rule.
+    pub fn rule() -> Result<Self, Error> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "rendering": Rendering::Utf8DoubleNewlineV1,
+            "schema_version": 1,
+        }))
+        .map_err(|_| Error::InvalidFacts)?;
+        let digest = Digest::of(&body);
+        Ok(Self {
+            definition: ArtifactRef {
+                id: Text::new(format!("aq.startup-renderer/{}", digest.as_str()))
+                    .map_err(|_| Error::InvalidFacts)?,
+                version: Text::new("1").map_err(|_| Error::InvalidFacts)?,
+                digest,
+            },
+            body,
+            implicit_tokens: 0,
+            evidence: vec![],
+            expires_at_ms: None,
+        })
+    }
+}
 pub struct CountedStartup {
     pub bytes: Vec<u8>,
     pub proof: Proof,
 }
-/// Consumes only daemon-owned configured facts plus already selected values.
-/// Callers must separately authenticate/fence runtime, configuration, registry,
-/// project and original facts after waits. This result is never a grant.
-pub fn evaluate(
-    facts: &[Qualification],
+/// The selection names this runtime boot and this exact composition.
+fn checked(
     runtime: &RegisteredRuntime,
     selection: &ResolvedSelection,
     composition: &FrozenComposition,
     now_ms: u64,
-) -> Result<CountedStartup, Error> {
-    validate_catalog(facts)?;
+) -> Result<(), Error> {
     let ExecutionTarget::Worker { node_id, boot_id } = selection.target else {
         return Err(Error::Subject);
     };
@@ -239,14 +307,15 @@ pub fn evaluate(
     {
         return Err(Error::Subject);
     }
-    let fact = facts
-        .iter()
-        .find(|fact| {
-            fact.matches(runtime, selection)
-                && fact.observed_at_ms <= now_ms
-                && now_ms < fact.expires_at_ms
-        })
-        .ok_or(Error::Unavailable)?;
+    Ok(())
+}
+/// The startup instructions joined by a blank line, within the byte limits,
+/// and each one's token bound at `tokens_per_byte`.
+fn rendered(
+    selection: &ResolvedSelection,
+    composition: &FrozenComposition,
+    tokens_per_byte: u64,
+) -> Result<(Vec<u8>, Vec<InstructionBound>), Error> {
     let mut bytes = Vec::new();
     let mut bounds = Vec::new();
     for (index, instruction) in composition.instruction_order.iter().enumerate() {
@@ -275,13 +344,41 @@ pub fn evaluate(
         bytes.extend_from_slice(instruction.text.as_bytes());
         let tokens = (instruction.text.len() as u64)
             .checked_add(separator as u64)
-            .and_then(|n| n.checked_mul(fact.maximum_tokens_per_utf8_byte as u64))
+            .and_then(|n| n.checked_mul(tokens_per_byte))
             .ok_or(Error::Capacity)?;
         bounds.push(InstructionBound {
             instruction_index: index,
             tokens_upper_bound: tokens,
         });
     }
+    Ok((bytes, bounds))
+}
+/// Consumes only daemon-owned configured facts plus already selected values.
+/// Callers must separately authenticate/fence runtime, configuration, registry,
+/// project and original facts after waits. This result is never a grant.
+#[cfg(not(feature = "any-model"))]
+pub fn evaluate(
+    facts: &[Qualification],
+    runtime: &RegisteredRuntime,
+    selection: &ResolvedSelection,
+    composition: &FrozenComposition,
+    now_ms: u64,
+) -> Result<CountedStartup, Error> {
+    validate_catalog(facts)?;
+    checked(runtime, selection, composition, now_ms)?;
+    let fact = facts
+        .iter()
+        .find(|fact| {
+            fact.matches(runtime, selection)
+                && fact.observed_at_ms <= now_ms
+                && now_ms < fact.expires_at_ms
+        })
+        .ok_or(Error::Unavailable)?;
+    let (bytes, mut bounds) = rendered(
+        selection,
+        composition,
+        fact.maximum_tokens_per_utf8_byte as u64,
+    )?;
     let first = bounds.first_mut().ok_or(Error::Input)?;
     first.tokens_upper_bound = first
         .tokens_upper_bound
@@ -319,8 +416,40 @@ pub fn evaluate(
     };
     Ok(CountedStartup { bytes, proof })
 }
+/// The startup render under the byte limits alone. No fact is consulted and no
+/// model window compared: each instruction's token bound is its byte count, so
+/// the bounds sum to the rendered size and the window is that plus the output.
+#[cfg(feature = "any-model")]
+pub fn evaluate(
+    runtime: &RegisteredRuntime,
+    selection: &ResolvedSelection,
+    composition: &FrozenComposition,
+    now_ms: u64,
+) -> Result<(CountedStartup, Renderer), Error> {
+    checked(runtime, selection, composition, now_ms)?;
+    let (bytes, bounds) = rendered(selection, composition, 1)?;
+    let output = selection.choice.max_output_tokens;
+    if bounds.is_empty() || output == 0 {
+        return Err(Error::Input);
+    }
+    let renderer = Renderer::rule()?;
+    let proof = Proof {
+        schema_version: 2,
+        renderer: renderer.definition.clone(),
+        selection_digest: aq_selection::digest(selection).map_err(|_| Error::Input)?,
+        composition_digest: selection.choice.composition_digest.clone(),
+        rendering: Rendering::Utf8DoubleNewlineV1,
+        rendered_digest: Digest::of(&bytes),
+        rendered_bytes: bytes.len() as u64,
+        input_tokens_upper_bound: bytes.len() as u64,
+        reserved_output_tokens: output,
+        instructions: bounds,
+    };
+    proof.window_tokens().ok_or(Error::Input)?;
+    Ok((CountedStartup { bytes, proof }, renderer))
+}
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "any-model")))]
 mod tests {
     use super::super::config::{ProfiledConfig, QualifiedRuntime};
     use super::*;

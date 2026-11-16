@@ -456,7 +456,13 @@ async fn renewed_node_has_no_measurement_hold() {
     let app = aq_server::build_admin_router(f.state.clone());
     let (status, body) = read(&app, "/api/v1/swarm").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(measurement_holds(&body), ["measurement_expired"], "{body}");
+    // `any-model`: placement needs no measurement, so an expired one is no hold.
+    let expired: &[&str] = if cfg!(feature = "any-model") {
+        &[]
+    } else {
+        &["measurement_expired"]
+    };
+    assert_eq!(measurement_holds(&body), expired, "{body}");
     let mut renewed = configured.clone();
     renewed.observed_at_ms = now - 60_000;
     renewed.expires_at_ms = now - 60_000 + 86_400_000;

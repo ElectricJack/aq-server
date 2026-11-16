@@ -31,7 +31,9 @@ pub(super) async fn swarm(
     let ids: Vec<Uuid> = cap.data.nodes.iter().map(|n| n.node.id).collect();
     let now = stamp(state)?;
     // Renewed facts count: a renewed node does not show measurement_expired.
-    let windows: Vec<MeasuredWindow> =
+    let windows: Vec<MeasuredWindow> = if cfg!(feature = "any-model") {
+        vec![]
+    } else {
         crate::profiled_execution::context_renewal::current_facts(state, now)
             .await?
             .into_iter()
@@ -41,9 +43,14 @@ pub(super) async fn swarm(
                 observed_at_ms: q.observed_at_ms,
                 expires_at_ms: q.expires_at_ms,
             })
-            .collect();
+            .collect()
+    };
     let mut tx = tx(runtime).await?;
-    let extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
+    let mut extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
+    // `any-model`: placement needs no measurement, so none is ever a hold.
+    if cfg!(feature = "any-model") {
+        extras.iter_mut().for_each(|e| e.measurement = None);
+    }
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
     let controls = aq_swarm::service::controls(&mut tx, &ids).await?;

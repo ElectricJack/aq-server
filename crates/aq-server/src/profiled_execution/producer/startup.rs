@@ -8,7 +8,7 @@ use crate::{
     error::AppError,
     profiled_execution::{
         artifacts::OwnerKind,
-        context_budget::{CountedStartup, Qualification},
+        context_budget::{CountedStartup, Renderer},
         context_projection::Projection,
     },
 };
@@ -29,7 +29,8 @@ pub async fn retain(
     composition: &FrozenComposition,
     counted: &CountedStartup,
     projection: &Projection,
-    fact: &Qualification,
+    renderer: &Renderer,
+    adapter: &ArtifactRef,
 ) -> Result<Startup, AppError> {
     if composition
         .instruction_order
@@ -37,13 +38,13 @@ pub async fn retain(
         .any(|i| i.delivery != Delivery::Startup)
         || counted.proof.composition_digest
             != aq_selection::digest(composition).map_err(|_| AppError::Internal)?
-        || counted.proof.qualification != fact.artifact().map_err(|_| refused())?
+        || counted.proof.renderer() != &renderer.definition
         || counted.proof.rendered_digest != Digest::of(&counted.bytes)
         || counted.proof.rendered_bytes != counted.bytes.len() as u64
     {
         return Err(refused());
     }
-    let reporting = super::result_startup::for_adapter(state, &fact.subject.adapter)?;
+    let reporting = super::result_startup::for_adapter(state, adapter)?;
     let mut reporting_count = 0;
     let mut reconstructed = Vec::new();
     let mut spans = Vec::new();
@@ -122,13 +123,13 @@ pub async fn retain(
         &counted.bytes,
     )
     .await?;
-    let qualification = fact.artifact().map_err(|_| refused())?;
+    let qualification = renderer.definition.clone();
     set.retain(
         state,
         OwnerKind::Startup,
         ArtifactKind::Definition,
         qualification.clone(),
-        &canonical(fact)?,
+        &renderer.body,
     )
     .await?;
     let proof_bytes = canonical(&counted.proof)?;
@@ -150,9 +151,9 @@ pub async fn retain(
         payload_tokens_upper_bound: counted
             .proof
             .input_tokens_upper_bound
-            .checked_sub(fact.fixed_overhead_tokens)
+            .checked_sub(renderer.implicit_tokens)
             .ok_or_else(|| refused())?,
-        implicit_tokens_upper_bound: fact.fixed_overhead_tokens,
+        implicit_tokens_upper_bound: renderer.implicit_tokens,
     };
     descriptor
         .verify_payload(&counted.bytes)
@@ -177,7 +178,7 @@ pub async fn retain(
             startup_token_budget: counted.proof.input_tokens_upper_bound,
             startup_byte_budget: counted.proof.rendered_bytes,
             reserved_output_tokens: counted.proof.reserved_output_tokens,
-            context_window_tokens: counted.proof.capacity_tokens,
+            context_window_tokens: counted.proof.window_tokens().ok_or_else(|| refused())?,
         },
         modules,
     })

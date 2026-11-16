@@ -21,6 +21,8 @@ mod native_material_issuance;
 mod native_offers;
 mod native_preparation;
 mod native_proposal_scope;
+// Asserts the measured-fact behaviour `any-model` removes (native_offers::any_model covers it).
+#[cfg(not(feature = "any-model"))]
 mod native_qualification_renewal;
 mod native_reconciliation;
 mod native_registration;
