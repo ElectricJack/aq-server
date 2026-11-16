@@ -381,3 +381,60 @@ fn execution_confinement_defaults_to_deny_container_and_keeps_identities() {
         .is_err()
     );
 }
+/// Spec 0014 §6.2: the permissions derived from a role's operations are the
+/// ones this compiler makes effective for the live case (a project's
+/// `task.read` and `knowledge.read`, its repository's `source.write`).
+#[test]
+fn role_permissions_match_the_composed_effective_permissions() {
+    let project = uuid::Uuid::from_u128(0x51);
+    let repository = uuid::Uuid::from_u128(0x52);
+    let scope = |p: &mut aq_session_api::Permission| {
+        p.scope_reference = if p.operation == "source.write" {
+            format!("repository:{repository}")
+        } else {
+            format!("project:{project}")
+        };
+    };
+    let c = modified(&seed(), |a, _| {
+        for module in &mut a.modules {
+            module
+                .requirements
+                .iter_mut()
+                .for_each(|r| scope(&mut r.permission));
+        }
+        a.execution[0].permissions.iter_mut().for_each(scope);
+    })
+    .unwrap();
+    let request = request(&c);
+    let composed = compile(&c, &request, &access()).unwrap();
+    let pairs = |list: &[aq_session_api::Permission]| {
+        list.iter()
+            .map(|p| (p.operation.clone(), p.scope_reference.clone()))
+            .collect::<Vec<_>>()
+    };
+    let today = pairs(&composed.explanation.effective_permissions);
+    assert_eq!(
+        today,
+        [
+            ("task.read".to_string(), format!("project:{project}")),
+            ("knowledge.read".to_string(), format!("project:{project}")),
+            (
+                "source.write".to_string(),
+                format!("repository:{repository}")
+            ),
+        ]
+    );
+    let snapshot = roles::compile(&roles::default_documents(), &Default::default()).unwrap();
+    let derived = roles::effective_permissions(
+        snapshot.role("developer").unwrap(),
+        project,
+        repository,
+        &request.ceilings.project,
+        &request.ceilings.caller,
+    );
+    assert_eq!(pairs(&derived), today);
+    assert_eq!(
+        pairs(&derived),
+        pairs(&composed.composition.unwrap().effective_permissions)
+    );
+}

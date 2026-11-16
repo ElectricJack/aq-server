@@ -637,6 +637,7 @@ name = "aq-profiles"
 version = "0.1.2"
 dependencies = [
  "aq-agent-api",
+ "aq-agent-grants",
  "aq-session-api",
  "aq-session-protocol",
  "clap",

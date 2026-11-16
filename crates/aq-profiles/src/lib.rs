@@ -9,6 +9,7 @@ pub use graph_policy::*;
 mod project;
 pub use project::validate_project_profiles;
 mod registry;
+pub mod roles;
 mod selection_policy;
 use aq_session_protocol::Digest;
 pub use catalog::*;
