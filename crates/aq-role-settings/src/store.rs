@@ -208,6 +208,18 @@ pub async fn apply(
     mutation: &Mutation,
     now_ms: i64,
 ) -> Result<Receipt> {
+    apply_referenced(pool, actor, mutation, now_ms, None).await
+}
+/// [`apply`], with the references from outside this store that a delete must
+/// respect. They are read in the change's transaction, after its lock, so a
+/// reference saved under [`check_binding`] is always seen.
+pub async fn apply_referenced(
+    pool: &PgPool,
+    actor: Uuid,
+    mutation: &Mutation,
+    now_ms: i64,
+    references: Option<References>,
+) -> Result<Receipt> {
     if mutation.operation_id.is_nil() {
         return Err(invalid("Enter a valid operation ID"));
     }
@@ -292,6 +304,17 @@ pub async fn apply(
         return Err(conflict(
             "This changed since it was read; reload before saving",
         ));
+    }
+    if let (Change::Delete { kind, id }, Some(read)) = (&mutation.change, references) {
+        for reference in read(&mut tx).await? {
+            if reference.kind == *kind && reference.id == *id {
+                problems.push(Problem {
+                    document: format!("{} `{id}`", kind.label()),
+                    field: String::new(),
+                    message: format!("is {}", reference.by),
+                });
+            }
+        }
     }
     let snapshot = match compile(&set, &state.selection_defaults, &state.limits) {
         Ok(snapshot) if problems.is_empty() => snapshot,
@@ -560,4 +583,30 @@ pub async fn unpin(conn: &mut PgConnection, attempt_id: Uuid) -> Result<()> {
         roll_snapshots(conn, active, state.limits.snapshots_kept).await?;
     }
     Ok(())
+}
+
+/// Check a project binding's defaults and role notes against the active
+/// snapshot and this store's document byte limit ([`tasks::check_binding`]),
+/// in the transaction that saves the binding. The lock it takes is held
+/// until that transaction ends, so a delete of a named document waits and
+/// then sees the binding among its [`References`].
+pub async fn check_binding(
+    conn: &mut PgConnection,
+    default_role: &str,
+    default_intelligence: &str,
+    role_notes: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let state = read_settings(&mut *conn, Lock::Share).await?;
+    let snapshot = match &state.active_digest {
+        Some(digest) => read_snapshot(conn, digest).await?,
+        None => None,
+    };
+    crate::tasks::check_binding(
+        snapshot.as_ref(),
+        default_role,
+        default_intelligence,
+        role_notes,
+        state.limits.documents.max_document_bytes,
+    )
+    .map_err(Error::Invalid)
 }

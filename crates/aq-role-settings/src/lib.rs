@@ -12,10 +12,30 @@ use uuid::Uuid;
 
 pub mod http;
 mod store;
+pub mod tasks;
 pub use store::{
-    activate_stored, active_snapshot, apply, delete, get, install_defaults, list, pin, save,
-    save_limits, save_selection_defaults, settings, snapshot, startup, unpin,
+    activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, get,
+    install_defaults, list, pin, save, save_limits, save_selection_defaults, settings, snapshot,
+    startup, unpin,
 };
+
+/// Something outside this store that names one of its documents, such as a
+/// project binding's default role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    pub kind: Kind,
+    pub id: String,
+    /// What names it, completing "is …": for example ``the default role of
+    /// project `Example` ``.
+    pub by: String,
+}
+/// Reads the current [`Reference`]s on the connection of a change. The
+/// server supplies it, so this crate does not depend on what refers to it.
+pub type References = for<'c> fn(
+    &'c mut sqlx::PgConnection,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Vec<Reference>>> + Send + 'c>,
+>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -192,12 +192,34 @@ pub fn readiness(
     blockers: Vec<Value>,
     complete: bool,
 ) -> Value {
+    readiness_with(
+        task_state,
+        hold,
+        held.into_iter().collect(),
+        blockers,
+        complete,
+    )
+}
+/// [`readiness`] for a task that may be held for more than one reason: its
+/// recorded hold ([`task_hold`]) and its role (spec 0014 §5.5: `role_disabled`
+/// or `role_missing`, as `{code, role, message}`). Each is listed, in order.
+pub fn readiness_with(
+    task_state: Option<&str>,
+    hold: Option<&Hold>,
+    held: Vec<Value>,
+    blockers: Vec<Value>,
+    complete: bool,
+) -> Value {
     let open = blockers.iter().any(|b| b["satisfied"] != true);
-    let held = held.filter(|_| task_state == Some("active"));
+    let held = if task_state == Some("active") {
+        held
+    } else {
+        Vec::new()
+    };
     let state = match task_state {
         Some(s @ ("completed" | "canceled" | "draft")) => s,
         _ if hold.is_some_and(Hold::running) => "running",
-        _ if hold.is_some() || held.is_some() => "held",
+        _ if hold.is_some() || !held.is_empty() => "held",
         _ if open => "waiting",
         _ if !complete => "unknown",
         _ => "ready",
@@ -211,13 +233,15 @@ pub fn readiness(
 }
 
 /// Revision fields a history diff names, in display order. `priority` is the
-/// `aq:priority` metadata key; `metadata` stands for any other metadata key.
-const FIELDS: [&str; 16] = [
+/// `aq:priority` metadata key and `role` the `aq:role` key (spec 0014 §5.5);
+/// `metadata` stands for any other metadata key.
+const FIELDS: [&str; 17] = [
     "title",
     "body",
     "acceptance_criteria",
     "labels",
     "priority",
+    "role",
     "metadata",
     "task_state",
     "provenance",
@@ -262,7 +286,7 @@ pub fn predecessor(items: &[Value], task: Uuid) -> Option<u64> {
 ///
 /// A change is `{summary, fields, edge, complete}`. `fields` lists changed
 /// fields as `{field, from, to}`; values are given only for task state,
-/// priority, content type, retired and deleted, and are null otherwise.
+/// priority, role, content type, retired and deleted, and are null otherwise.
 /// `edge` is `{edge_type, direction, node_id}` for a dependency or link
 /// change. `complete` is false when the previous revision was unavailable.
 pub fn changes(items: &[Value], task: Uuid, prior: Option<&Value>) -> Vec<Value> {
@@ -404,10 +428,24 @@ fn revision(
 /// Changed fields between two node snapshots of the same task.
 fn diff(before: &Value, after: &Value) -> Vec<Value> {
     let priority = |n: &Value| n["metadata"]["aq:priority"].clone();
+    let role = |n: &Value| n["metadata"]["aq:role"].clone();
     let other = |n: &Value| {
         let mut m = n["metadata"].as_object().cloned().unwrap_or_default();
         m.remove("aq:priority");
+        m.remove("aq:role");
         m
+    };
+    // A role id; absent (the project's default applies) is shown as none.
+    let role_text = |v: &Value| match v.as_str() {
+        Some(s)
+            if !s.is_empty()
+                && s.len() <= 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') =>
+        {
+            json!(s)
+        }
+        _ => Value::Null,
     };
     let text = |v: &Value| match v {
         Value::Bool(b) => json!(b.to_string()),
@@ -425,13 +463,16 @@ fn diff(before: &Value, after: &Value) -> Vec<Value> {
     for name in FIELDS {
         let (a, b) = match name {
             "priority" => (priority(before), priority(after)),
+            "role" => (role(before), role(after)),
             "metadata" => (Value::Object(other(before)), Value::Object(other(after))),
             _ => (before[name].clone(), after[name].clone()),
         };
         if a == b {
             continue;
         }
-        if matches!(
+        if name == "role" {
+            out.push(field(name, role_text(&a), role_text(&b)));
+        } else if matches!(
             name,
             "task_state" | "priority" | "content_type" | "retired" | "deleted"
         ) {
@@ -636,6 +677,50 @@ mod tests {
                 .unwrap()
                 .starts_with("removed blocks to ")
         );
+    }
+
+    #[test]
+    fn a_role_change_is_named_in_the_history_with_its_values() {
+        let t = Uuid::new_v4();
+        let mut named = node(t, 2, 0, "Task");
+        named["metadata"]["aq:role"] = json!("reviewer");
+        let mut cleared = node(t, 3, 0, "Task");
+        cleared["content_revision"] = json!(3);
+        let items = [
+            entry("revision", "created", node(t, 1, 0, "Task")),
+            entry("revision", "updated", named),
+            entry("revision", "updated", cleared),
+        ];
+        let c = changes(&items, t, None);
+        assert_eq!(
+            c[1]["fields"],
+            json!([{"field":"role","from":null,"to":"reviewer"}])
+        );
+        assert_eq!(c[1]["summary"], "role none → reviewer");
+        assert_eq!(c[2]["summary"], "role reviewer → none");
+    }
+
+    #[test]
+    fn a_role_hold_makes_an_active_task_held_and_is_listed_after_its_other_hold() {
+        let role = json!({"code":"role_disabled","role":"reviewer","message":"m"});
+        let r = readiness_with(Some("active"), None, vec![role.clone()], vec![], true);
+        assert_eq!(
+            (r["state"].as_str(), &r["reasons"]),
+            (Some("held"), &json!([role]))
+        );
+        let a = Uuid::new_v4();
+        let recorded = task_hold(a, "finished", "lineage_retry_budget_exhausted", "x");
+        let both = vec![recorded.clone(), role.clone()];
+        let r = readiness_with(Some("active"), None, both.clone(), vec![], true);
+        assert_eq!(r["reasons"], json!([recorded, role]));
+        // Only an active task is held; a draft or closed task keeps its state.
+        for state in ["draft", "completed", "canceled"] {
+            let r = readiness_with(Some(state), None, both.clone(), vec![], true);
+            assert_eq!(
+                (r["state"].as_str(), &r["reasons"]),
+                (Some(state), &json!([]))
+            );
+        }
     }
 
     #[test]
