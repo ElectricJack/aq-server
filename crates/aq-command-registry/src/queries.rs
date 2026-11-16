@@ -394,6 +394,40 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         | "/api/execution/attempts/{id}/disposition"
         | "/api/supervisors/{id}/operations/{operation}"
         | "/api/settings/intelligence/operations/{id}" => NONE,
+        // aq-playbook-authoring http.rs::list, ::read; aq-internal-work http.rs::read,
+        // ::operation, ::run; routing/http.rs::policy, ::routes
+        "/api/playbooks/sources"
+        | "/api/playbooks/sources/{id}"
+        | "/api/settings/internal-work"
+        | "/api/settings/internal-work/operations/{id}"
+        | "/api/internal-work/runs/{id}"
+        | "/api/settings/intelligence/routing"
+        | "/api/tasks/{id}/routes" => NONE,
+        // aq-internal-work runs.rs::Query
+        "/api/internal-work/runs" => {
+            const {
+                &[
+                    opt(
+                        "affected_kind",
+                        r#"{"type":"string","minLength":1,"description":"The kind of thing the run is for, for example task"}"#,
+                    ),
+                    opt(
+                        "affected_id",
+                        r#"{"type":"string","minLength":1,"description":"The ID of the thing the run is for"}"#,
+                    ),
+                    opt(
+                        "purpose",
+                        r#"{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]}"#,
+                    ),
+                    opt(
+                        "status",
+                        r#"{"enum":["queued","running","answered","failed"]}"#,
+                    ),
+                    opt("cursor", CURSOR),
+                    opt("limit", r#"{"type":"integer","minimum":1,"maximum":100}"#),
+                ]
+            }
+        }
         _ => return None,
     })
 }

@@ -11,6 +11,30 @@ use std::sync::{
 };
 use uuid::Uuid;
 
+/// Any method, and a body that need not be JSON.
+async fn send_as(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (StatusCode, String) {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("X-AQ-Request", "1")
+        .body(axum::body::Body::from(
+            body.map(|v| v.to_string()).unwrap_or_default(),
+        ))
+        .unwrap();
+    let r = app.clone().oneshot(request).await.unwrap();
+    let status = r.status();
+    let bytes = r.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn grants() -> Value {
     json!([
         {"operation":"comment.write","scope":"task:subtree"},
@@ -491,6 +515,169 @@ async fn owner_commands_reach_the_same_handlers() {
             "{name}: {status} {via}"
         );
     }
+    // Playbook sources, internal work and routing: each command answers as
+    // its route does for the same method and body, whatever that is here.
+    let run = Uuid::from_u128(90);
+    for (name, method, path, params, path_param) in [
+        (
+            "playbook.source.list",
+            "GET",
+            "/api/playbooks/sources".to_string(),
+            json!({}),
+            None,
+        ),
+        (
+            "playbook.source.show",
+            "GET",
+            "/api/playbooks/sources/absent".to_string(),
+            json!({"source_id":"absent"}),
+            Some("source_id"),
+        ),
+        (
+            "playbook.source.register",
+            "POST",
+            "/api/playbooks/sources".to_string(),
+            json!({"id":"bad/id","binding":"b","purpose":"p","markdown":"m","commands":["x"],"events":[]}),
+            None,
+        ),
+        (
+            "playbook.source.edit",
+            "PUT",
+            "/api/playbooks/sources/absent/markdown".to_string(),
+            json!({"source_id":"absent","markdown":"m","expected_revision":1}),
+            Some("source_id"),
+        ),
+        (
+            "playbook.source.author",
+            "POST",
+            "/api/playbooks/sources/absent/runs".to_string(),
+            json!({"source_id":"absent"}),
+            Some("source_id"),
+        ),
+        (
+            "playbook.source.rollback",
+            "POST",
+            "/api/playbooks/sources/absent/rollback".to_string(),
+            json!({"source_id":"absent"}),
+            Some("source_id"),
+        ),
+        (
+            "playbook.source.remove",
+            "DELETE",
+            "/api/playbooks/sources/absent".to_string(),
+            json!({"source_id":"absent"}),
+            Some("source_id"),
+        ),
+        (
+            "internal.settings.show",
+            "GET",
+            "/api/settings/internal-work".to_string(),
+            json!({}),
+            None,
+        ),
+        (
+            "internal.settings.set",
+            "POST",
+            "/api/settings/internal-work".to_string(),
+            json!({"operation_id":Uuid::nil(),"expected_revision":"0","expected_catalog_revision":"0","overrides":{}}),
+            None,
+        ),
+        (
+            "internal.settings.operation.show",
+            "GET",
+            format!("/api/settings/internal-work/operations/{run}"),
+            json!({"operation_id":run}),
+            Some("operation_id"),
+        ),
+        (
+            "internal.run.list",
+            "GET",
+            "/api/internal-work/runs?status=failed&limit=5".to_string(),
+            json!({"status":"failed","limit":5}),
+            None,
+        ),
+        (
+            "internal.run.show",
+            "GET",
+            format!("/api/internal-work/runs/{run}"),
+            json!({"run_id":run}),
+            Some("run_id"),
+        ),
+        (
+            "internal.run.retry",
+            "POST",
+            format!("/api/internal-work/runs/{run}/retry"),
+            json!({"run_id":run}),
+            Some("run_id"),
+        ),
+        (
+            "internal.run.escalate",
+            "POST",
+            format!("/api/internal-work/runs/{run}/escalate"),
+            json!({"run_id":run,"diagnosis":"d"}),
+            Some("run_id"),
+        ),
+        (
+            "internal.run.resolve",
+            "POST",
+            format!("/api/internal-work/runs/{run}/resolve"),
+            json!({"run_id":run}),
+            Some("run_id"),
+        ),
+        (
+            "routing.show",
+            "GET",
+            "/api/settings/intelligence/routing".to_string(),
+            json!({}),
+            None,
+        ),
+        (
+            "routing.set",
+            "POST",
+            "/api/settings/intelligence/routing".to_string(),
+            json!({"enabled":false}),
+            None,
+        ),
+        (
+            "task.route.history",
+            "GET",
+            format!("/api/tasks/{run}/routes"),
+            json!({"task_id":run}),
+            Some("task_id"),
+        ),
+    ] {
+        let mut body = params.clone();
+        if let Some(key) = path_param {
+            body.as_object_mut().unwrap().remove(key);
+        }
+        let direct = send_as(&e.admin, method, &path, (method != "GET").then_some(body)).await;
+        let via = send_as(
+            &e.admin,
+            "POST",
+            &format!("/api/v1/commands/{name}"),
+            Some(json!({"params":params})),
+        )
+        .await;
+        assert_eq!(via.0, direct.0, "{name}: {} / {}", via.1, direct.1);
+        assert!(
+            !matches!(
+                via.0,
+                StatusCode::METHOD_NOT_ALLOWED | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ) && !via.1.contains("unknown param"),
+            "{name}: {} {}",
+            via.0,
+            via.1
+        );
+    }
+    // A filter the run list does not declare is refused before the route.
+    let (status, refused) = send(
+        &e.admin,
+        "/api/v1/commands/internal.run.list",
+        None,
+        Some(json!({"params":{"state":"failed"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     // With the task named, the command builds the subject itself and answers
     // exactly as the action union does for the same request.
     let (op, task) = (Uuid::new_v4(), Uuid::new_v4());
