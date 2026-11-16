@@ -37,16 +37,15 @@ pub const SOURCE_WRITE: &str = "source.write";
 pub fn operation_known(operation: &str) -> bool {
     aq_agent_grants::grantable(operation) || operation == SOURCE_WRITE
 }
-/// Whether `harness` accepts the reasoning `effort` of a candidate. Every
-/// harness accepts `default`, its own setting; `gemini` and `opencode` accept
-/// nothing else yet.
+/// Whether `harness` accepts the reasoning `effort` of a candidate. This is
+/// exactly the table the worker launches with (aq-worker `reasoning.rs`): a
+/// value outside it is refused by the worker by name, so a document naming it
+/// is refused here. Every harness accepts `default`, its own setting.
 pub fn harness_supports(harness: &str, effort: &str) -> bool {
     let supported: &[&str] = match harness {
-        "codex" => &[
-            "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-        ],
         "claude" => &["default", "off", "low", "medium", "high", "xhigh", "max"],
-        "gemini" | "opencode" => &["default"],
+        "codex" | "opencode" => &["default", "low", "medium", "high"],
+        "gemini" => &["default"],
         _ => return false,
     };
     supported.contains(&effort)

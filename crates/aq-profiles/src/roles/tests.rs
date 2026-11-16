@@ -29,7 +29,7 @@ name: Standard, high
 | provider | model | reasoning | harnesses |
 |---|---|---|---|
 | anthropic | claude-sonnet-5-5 | high | claude |
-| openai | gpt-6 | xhigh | codex |
+| openai | gpt-6 | medium | codex |
 | openai | gpt-6 | default | codex, opencode |
 
 ## Selection
@@ -222,7 +222,7 @@ fn intelligence_document_parses() {
             Candidate {
                 provider: "openai".into(),
                 model: "gpt-6".into(),
-                reasoning: "xhigh".into(),
+                reasoning: "medium".into(),
                 harnesses: vec!["codex".into()],
             },
             Candidate {
@@ -615,7 +615,7 @@ fn candidates_are_checked_against_their_harness() {
             .map(|_| Vec::new())
             .unwrap_or_else(|p| p.iter().map(Problem::to_string).collect::<Vec<_>>())
     };
-    assert!(check(vec![candidate("openai", "minimal", &["codex"])]).is_empty());
+    assert!(check(vec![candidate("openai", "medium", &["codex"])]).is_empty());
     assert!(check(vec![candidate("anthropic", "off", &["claude"])]).is_empty());
     let p = "intelligence profile `fast-low`: ";
     assert_eq!(
@@ -640,14 +640,42 @@ fn candidates_are_checked_against_their_harness() {
             "{p}candidate 1: harness `claude` does not accept reasoning `minimal`"
         )]
     );
-    // gemini and opencode take only their own setting for now.
+    // gemini takes only its own setting; opencode takes what codex does.
     assert_eq!(
         check(vec![candidate("google", "high", &["gemini", "opencode"])]),
+        [format!(
+            "{p}candidate 1: harness `gemini` does not accept reasoning `high`"
+        )]
+    );
+    assert_eq!(
+        check(vec![candidate("openai", "xhigh", &["codex", "opencode"])]),
         [
-            format!("{p}candidate 1: harness `gemini` does not accept reasoning `high`"),
-            format!("{p}candidate 1: harness `opencode` does not accept reasoning `high`"),
+            format!("{p}candidate 1: harness `codex` does not accept reasoning `xhigh`"),
+            format!("{p}candidate 1: harness `opencode` does not accept reasoning `xhigh`"),
         ]
     );
+    // The whole table, which mirrors the worker's: every other value is refused.
+    let all = [
+        "default", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        "Default", "",
+    ];
+    for (harness, accepted) in [
+        (
+            "claude",
+            &["default", "off", "low", "medium", "high", "xhigh", "max"][..],
+        ),
+        ("codex", &["default", "low", "medium", "high"][..]),
+        ("opencode", &["default", "low", "medium", "high"][..]),
+        ("gemini", &["default"][..]),
+    ] {
+        for value in all {
+            assert_eq!(
+                harness_supports(harness, value),
+                accepted.contains(&value),
+                "{harness} {value}"
+            );
+        }
+    }
     assert!(
         check(vec![candidate(
             "google",

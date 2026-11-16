@@ -237,8 +237,10 @@ row per candidate in preference order. `harnesses` is a comma-separated list.
 | Harness | Reasoning values |
 |---|---|
 | `claude` | `default`, `off`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `codex` | `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
-| `gemini`, `opencode` | `default` |
+| `codex`, `opencode` | `default`, `low`, `medium`, `high` |
+| `gemini` | `default` |
+
+The table is the worker's: it refuses any other value by name.
 
 `default` is the harness's own setting, so a profile can name a model on any
 of the four harnesses. The `claude` harness takes provider `anthropic` and

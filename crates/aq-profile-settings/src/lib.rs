@@ -51,9 +51,20 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
 }
-/// Whether a logged-in harness accepts a reasoning effort. The rule lives in
-/// `aq-profiles`, which validates profile documents with it.
-pub use aq_profiles::roles::harness_supports;
+/// Whether a logged-in `harness` (`codex` or `claude`) accepts the reasoning
+/// `effort` of a model choice. Other harnesses accept none. This is the old
+/// catalog's rule; profile documents are validated by
+/// `aq_profiles::roles::harness_supports` instead.
+pub fn harness_supports(harness: &str, effort: &str) -> bool {
+    let supported: &[&str] = match harness {
+        "codex" => &[
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ],
+        "claude" => &["default", "off", "low", "medium", "high", "xhigh", "max"],
+        _ => return false,
+    };
+    supported.contains(&effort)
+}
 /// The model choice a profile candidate names by `(provider, model,
 /// reasoning_configuration_reference)` on `harness`.
 pub fn find_choice<'a>(
@@ -413,4 +424,31 @@ pub fn update_binding(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::harness_supports;
+
+    /// The old catalog's rule, as before spec 0014: only a logged-in codex or
+    /// claude accepts an effort, and codex has no `default`.
+    #[test]
+    fn the_old_reasoning_rule_is_unchanged() {
+        for effort in [
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ] {
+            assert!(harness_supports("codex", effort), "{effort}");
+        }
+        for effort in ["default", "off", "low", "medium", "high", "xhigh", "max"] {
+            assert!(harness_supports("claude", effort), "{effort}");
+        }
+        assert!(!harness_supports("codex", "default"));
+        assert!(!harness_supports("codex", "off"));
+        assert!(!harness_supports("claude", "minimal"));
+        assert!(!harness_supports("claude", "ultra"));
+        for harness in ["gemini", "opencode", "pi"] {
+            assert!(!harness_supports(harness, "default"), "{harness}");
+            assert!(!harness_supports(harness, "high"), "{harness}");
+        }
+    }
 }
