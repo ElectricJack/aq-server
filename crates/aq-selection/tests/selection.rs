@@ -312,8 +312,7 @@ fn routed_level_and_router_without_selection_policy_report_missing() {
 }
 #[test]
 fn unrouted_profile_without_selection_policy_ignores_router_and_reports_missing() {
-    // The agent's own profile is a router that has a policy, yet an unrouted selection
-    // whose profile lacks one gets no fallback.
+    // An unrouted selection whose own profile has no policy gets no fallback.
     let (catalog, mut input) = fixture();
     let mut definitions = catalog.artifact().catalog.clone();
     definitions.intelligence[0].selection_policy = None;
