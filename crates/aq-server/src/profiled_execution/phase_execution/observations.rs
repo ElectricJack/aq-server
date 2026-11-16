@@ -155,7 +155,7 @@ impl Observed {
             || time
                 >= self
                     .file_started_at_ms
-                    .checked_add(2000)
+                    .checked_add(10_000)
                     .ok_or_else(unavailable)?
             || time >= self.ceiling()?
         {
@@ -343,7 +343,7 @@ async fn collect_with_lane(
             .await?
         };
         let received = now(state)?;
-        if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
+        if received < started || received >= started.checked_add(10_000).ok_or_else(unavailable)? {
             return Err(unavailable());
         }
         Ok::<_, AppError>((file, started, received))
@@ -361,7 +361,7 @@ async fn collect_with_lane(
         profiled_base::inspect_retained(state, input.source.token(), input.source.fact()).await
     };
     let (binding, graph, source, (file, file_started_at_ms, file_received_at_ms)) =
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             tokio::try_join!(binding(state, input), graph(state, input), source, file)
         })
         .await

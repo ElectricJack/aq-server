@@ -1065,3 +1065,15 @@ mod tests {
 }
 
 pub mod install;
+
+/// Whether the attempt no longer holds its task for this node: cancelled, abandoned or already
+/// settled. A result for it can never be recorded, so the worker must stop offering it.
+pub async fn attempt_released(pool: &sqlx::PgPool, attempt: uuid::Uuid, node: uuid::Uuid) -> bool {
+    let query = "SELECT NOT holds_task FROM execution_attempts WHERE attempt_id=$1 AND node_id=$2";
+    let released: Result<Option<bool>, _> = sqlx::query_scalar(query)
+        .bind(attempt)
+        .bind(node)
+        .fetch_optional(pool)
+        .await;
+    released.ok().flatten().unwrap_or(false)
+}

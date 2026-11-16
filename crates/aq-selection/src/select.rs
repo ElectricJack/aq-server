@@ -185,7 +185,18 @@ fn select_internal(
         .iter()
         .find(|e| aq_profiles::key(&e.id, e.version) == agent.execution)
         .unwrap();
-    let Some(policy) = &intelligence.selection_policy else {
+    // A level profile saved in Settings carries no selection policy of its own: a routed
+    // task then runs under the policy of the automatic router the level stands in for.
+    let router_policy = || {
+        let router = (definitions.intelligence.iter())
+            .find(|i| aq_profiles::key(&i.id, i.version) == agent.intelligence)?;
+        routed.and(router.selection_policy.as_ref())
+    };
+    let Some(policy) = intelligence
+        .selection_policy
+        .as_ref()
+        .or_else(router_policy)
+    else {
         return Ok(SelectionOutcome {
             resolved: None,
             traces: vec![],

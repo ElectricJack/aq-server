@@ -254,8 +254,13 @@ async fn refused_successor(
     successor: Option<holds::Successor>,
     skipped: &mut std::collections::BTreeSet<Uuid>,
 ) -> bool {
-    // Spec 0011 §4: a route this node cannot serve now skips a first attempt for the poll.
-    let unservable = successor.is_none() && unservable_route(decision).is_some();
+    // Spec 0011 §4: a route this node cannot serve skips a first attempt for the poll; so does
+    // a routed task no candidate resolves for (a refused poll took the node out of service).
+    let unresolved = decision.inputs.route.is_some() && decision.outcome.resolved.is_none();
+    let unservable = successor.is_none() && (unservable_route(decision).is_some() || unresolved);
+    if unservable {
+        tracing::warn!(task_id = %decision.inputs.project.lineage.task_id, reasons = ?decision.outcome.reason_codes, "no candidate serves this routed task on the polling node; skipped");
+    }
     if aq_swarm_settings::admission::is_wait(&decision.outcome.reason_codes) || unservable {
         skipped.insert(decision.inputs.project.lineage.task_id);
         return true;

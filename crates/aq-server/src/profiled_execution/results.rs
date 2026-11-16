@@ -67,7 +67,16 @@ pub async fn record(
     node: &AuthenticatedNode,
     report: &ResultReport,
 ) -> Result<Receipt, AppError> {
-    let receipt = record_only(state, node, report).await?;
+    let (pool, attempt) = (&state.store.pool, report.binding.attempt_id);
+    let receipt = match record_only(state, node, report).await {
+        // The attempt was released (its task cancelled): tell the worker, which retried forever.
+        Err(AppError::Conflict(_))
+            if aq_machine_control::attempt_released(pool, attempt, node.id()).await =>
+        {
+            return Err(AppError::ExecutionCancelled);
+        }
+        recorded => recorded?,
+    };
     match super::settlement::settle_after_record(state, report.report_id).await {
         // D1: an accepted result waiting only on required delivery is published
         // detached from this request, so a dropped client cannot cancel a
