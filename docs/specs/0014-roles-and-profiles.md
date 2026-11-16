@@ -142,6 +142,22 @@ candidates (provider, model, reasoning effort, harness) and a selection policy
   uses the project's default intelligence profile (§5.4).
 - A candidate that cannot launch (unknown model, no access) fails its attempt
   with the harness's own error, and the selection policy's fallback applies.
+- **A level's id is the name the router uses for it.** Today the router picks
+  a class such as `standard-high` (one of simple, standard, complex or deep,
+  with an effort), and a separate table in Settings maps each class to a
+  profile with some other id (`simple-low` maps to `fast-low`; the two complex
+  classes map to generated ids). That table is removed: the level document
+  `standard-high` is what a task routed to `standard-high` runs on. The shipped
+  levels are `simple-low`, `simple-high`, `standard-low`, `standard-medium`,
+  `standard-high`, `complex-low`, `complex-high`, `deep-low`, `deep-high`.
+  **(call)**
+- **Each level's `description` is what the router reads to choose it.** The
+  four descriptions the owner wrote for simple, standard, complex and deep are
+  carried into the descriptions of their levels at the switch. **(call)**
+- The routing document keeps its own place in Settings and no longer depends
+  on the catalog.
+- How many agents may run at one level at a time stays a swarm limit, edited
+  on the level's page.
 - A profile document is its candidates and nothing else by default:
 
   ```markdown
