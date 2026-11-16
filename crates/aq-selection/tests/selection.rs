@@ -262,6 +262,76 @@ fn missing_policy_old_catalog_is_explicitly_ineligible_and_snapshots_are_bound()
             .contains(&"selection_policy_missing".into())
     );
 }
+/// A routed fixture: the agent's `engineering@2` becomes an automatic router (with the
+/// fixture policy when `router_policy`) and a copy `level@1` is the routed level profile
+/// (with the fixture policy when `level_policy`).
+fn routed_fixture(
+    level_policy: bool,
+    router_policy: bool,
+) -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
+    let (catalog, mut input) = fixture();
+    let mut definitions = catalog.artifact().catalog.clone();
+    let mut level = definitions.intelligence[0].clone();
+    level.id = "level".into();
+    level.version = 1;
+    level.automatic_routing = None;
+    level.selection_policy = level_policy.then(policy);
+    let router = &mut definitions.intelligence[0];
+    router.automatic_routing = Some(true);
+    router.selection_policy = router_policy.then(policy);
+    definitions.intelligence.push(level);
+    let updated =
+        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest =
+        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
+    input.intelligence_override = Some("level@1".into());
+    for composition in &mut input.compositions {
+        composition.composition.catalog_digest = updated.digest().into();
+        composition.composition.intelligence_profile =
+            updated.source("intelligence", "level@1").unwrap();
+        composition.digest = aq_selection::digest(&composition.composition).unwrap();
+    }
+    (updated, input)
+}
+#[test]
+fn routed_level_without_selection_policy_uses_the_routers_policy() {
+    let (catalog, input) = routed_fixture(false, true);
+    let out = select(&catalog, &input).unwrap();
+    assert!(
+        !out.reason_codes
+            .contains(&"selection_policy_missing".into())
+    );
+    assert!(out.resolved.is_some());
+}
+#[test]
+fn routed_level_and_router_without_selection_policy_report_missing() {
+    let (catalog, input) = routed_fixture(false, false);
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none());
+    assert_eq!(out.reason_codes, ["selection_policy_missing"]);
+}
+#[test]
+fn unrouted_profile_without_selection_policy_ignores_router_and_reports_missing() {
+    // The agent's own profile is a router that has a policy, yet an unrouted selection
+    // whose profile lacks one gets no fallback.
+    let (catalog, mut input) = fixture();
+    let mut definitions = catalog.artifact().catalog.clone();
+    definitions.intelligence[0].selection_policy = None;
+    let old = aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
+    input.project.catalog_digest = serde_json::from_value(serde_json::json!(old.digest())).unwrap();
+    for c in &mut input.compositions {
+        c.composition.catalog_digest = old.digest().into();
+        c.composition.intelligence_profile = old
+            .source("intelligence", &input.project.intelligence_profile)
+            .unwrap();
+        c.digest = aq_selection::digest(&c.composition).unwrap();
+    }
+    assert!(input.intelligence_override.is_none());
+    assert_eq!(
+        select(&old, &input).unwrap().reason_codes,
+        ["selection_policy_missing"]
+    );
+}
 #[test]
 fn fallback_unsupported_is_explicit_and_provider_specific_reasoning_remains_native() {
     let (catalog, mut input) = fixture();
