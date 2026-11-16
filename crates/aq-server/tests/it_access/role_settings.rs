@@ -1,0 +1,820 @@
+//! aq-role-settings (spec 0014 §7, §7.1): the stored role and profile
+//! documents, whole-set validation, the active snapshot, rolling snapshots
+//! and the owner routes.
+use aq_profiles::roles::{self, Kind, SelectionDefaults};
+use aq_role_settings::{self as settings, Error, Receipt, StoreLimits};
+use aq_server::{AppState, config::Config, identity::verifier_from_config, test_support::TestDb};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
+use chrono::{TimeZone, Utc};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use std::sync::Arc;
+use tower::ServiceExt;
+use uuid::Uuid;
+
+const NOW: i64 = 1_000_000;
+
+struct Fixture {
+    _db: TestDb,
+    pool: PgPool,
+    owner: Uuid,
+    app: Router,
+}
+/// A migrated database with an owner, a viewer and the shipped defaults
+/// installed and active, as after server start.
+async fn started() -> Fixture {
+    let db = TestDb::create().await;
+    let store = db.store().await;
+    let time = Utc.timestamp_millis_opt(NOW).unwrap();
+    store
+        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", time)
+        .await
+        .unwrap();
+    store
+        .invite_user("viewer@localhost", aq_server::store::Role::Viewer, time)
+        .await
+        .unwrap();
+    let config: Config = toml::from_str(
+        r#"format_version=1
+environment="development"
+[server]
+admin_bind="127.0.0.1:0"
+worker_bind="127.0.0.1:0"
+public_origin="http://127.0.0.1:8080"
+[auth]
+mode="dev"
+dev_email="owner@localhost"
+[bootstrap]
+owner_email="owner@localhost"
+enabled=true
+"#,
+    )
+    .unwrap();
+    let pool = db.pool().await;
+    let owner = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let state = AppState {
+        internal_work: Default::default(),
+        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
+        config: Arc::new(config),
+        store,
+        clock: Arc::new(|| Utc.timestamp_millis_opt(NOW).unwrap()),
+        agent_access: None,
+        source_retention: None,
+    };
+    let start = settings::startup(&pool, NOW).await.unwrap();
+    assert_eq!(start.installed.len(), roles::default_documents().len());
+    assert!(start.problems.is_empty(), "{:?}", start.problems);
+    Fixture {
+        _db: db,
+        pool,
+        owner,
+        app: aq_server::build_admin_router(state),
+    }
+}
+fn shipped(kind: Kind, id: &str) -> String {
+    let label = format!("/{id}.md");
+    roles::default_documents()
+        .into_iter()
+        .find(|d| d.kind == kind && d.label.ends_with(&label))
+        .unwrap()
+        .text
+}
+/// The developer role with `text` appended to its rules: a valid edit.
+fn developer(text: &str) -> String {
+    format!("{}- {text}\n", shipped(Kind::Role, "developer"))
+}
+impl Fixture {
+    async fn revision_of(&self, kind: Kind, id: &str) -> i64 {
+        settings::get(&self.pool, kind, id)
+            .await
+            .unwrap()
+            .map_or(0, |d| d.revision)
+    }
+    /// Save at the document's current revision with a fresh operation id.
+    async fn save(&self, kind: Kind, id: &str, markdown: &str) -> Result<Receipt, Error> {
+        let expected = self.revision_of(kind, id).await;
+        settings::save(
+            &self.pool,
+            self.owner,
+            kind,
+            id,
+            markdown,
+            expected,
+            Uuid::new_v4(),
+            NOW,
+        )
+        .await
+    }
+    async fn limits(&self, snapshots_kept: u32, operations_kept: u32) {
+        let current = settings::settings(&self.pool).await.unwrap();
+        let limits = StoreLimits {
+            snapshots_kept,
+            operations_kept,
+            ..current.limits
+        };
+        settings::save_limits(
+            &self.pool,
+            self.owner,
+            &limits,
+            current.limits_revision,
+            Uuid::new_v4(),
+            NOW,
+        )
+        .await
+        .unwrap();
+    }
+    async fn active(&self) -> (i64, String) {
+        let active = settings::active_snapshot(&self.pool)
+            .await
+            .unwrap()
+            .unwrap();
+        (active.revision, active.snapshot.digest().to_string())
+    }
+    async fn stored_digests(&self) -> Vec<String> {
+        sqlx::query_scalar("SELECT digest FROM role_snapshots ORDER BY activated_revision")
+            .fetch_all(&self.pool)
+            .await
+            .unwrap()
+    }
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        owner: bool,
+        csrf: bool,
+    ) -> (StatusCode, Value) {
+        let email = if owner {
+            "owner@localhost"
+        } else {
+            "viewer@localhost"
+        };
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("x-aq-dev-email", email);
+        if csrf {
+            request = request.header("X-AQ-Request", "1");
+        }
+        let body = Body::from(body.map(|v| v.to_string()).unwrap_or_default());
+        let response = self
+            .app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+}
+fn problems(error: Error) -> Vec<String> {
+    match error {
+        Error::Problems(problems) => problems.iter().map(ToString::to_string).collect(),
+        other => panic!("expected problems, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
+    let f = started().await;
+    let shipped_set = roles::compile(
+        &roles::default_documents(),
+        &SelectionDefaults::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    let (revision, digest) = f.active().await;
+    assert_eq!(digest, shipped_set.digest());
+    assert_eq!(settings::list(&f.pool, Kind::Role).await.unwrap().len(), 2);
+    assert_eq!(
+        settings::list(&f.pool, Kind::Intelligence)
+            .await
+            .unwrap()
+            .len(),
+        9
+    );
+    assert_eq!(
+        settings::get(&f.pool, Kind::Execution, "sandbox")
+            .await
+            .unwrap()
+            .unwrap()
+            .markdown,
+        shipped(Kind::Execution, "sandbox")
+    );
+    // A second start changes nothing.
+    let again = settings::startup(&f.pool, NOW + 1).await.unwrap();
+    assert!(again.installed.is_empty() && again.problems.is_empty());
+    assert_eq!(f.active().await, (revision, digest.clone()));
+
+    let edited = developer("Ask before deleting files.");
+    let saved = f.save(Kind::Role, "developer", &edited).await.unwrap();
+    assert_ne!(saved.digest, digest);
+    let again = settings::startup(&f.pool, NOW + 2).await.unwrap();
+    assert!(again.installed.is_empty());
+    assert_eq!(again.active_digest.as_deref(), Some(saved.digest.as_str()));
+    let stored = settings::get(&f.pool, Kind::Role, "developer")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((stored.markdown, stored.revision), (edited, saved.revision));
+    assert_eq!(f.active().await, (saved.revision, saved.digest));
+
+    // Spec 0014 §7 as written: a default that was deleted is installed again.
+    let revision = f.revision_of(Kind::Role, "reviewer").await;
+    settings::delete(
+        &f.pool,
+        f.owner,
+        Kind::Role,
+        "reviewer",
+        revision,
+        Uuid::new_v4(),
+        NOW,
+    )
+    .await
+    .unwrap();
+    let again = settings::startup(&f.pool, NOW + 3).await.unwrap();
+    assert_eq!(again.installed, [(Kind::Role, "reviewer".to_string())]);
+}
+
+#[tokio::test]
+async fn a_valid_save_activates_a_new_snapshot_and_an_invalid_one_changes_nothing() {
+    let f = started().await;
+    let (revision, digest) = f.active().await;
+    let tester = shipped(Kind::Role, "reviewer")
+        .replace("id: reviewer", "id: tester")
+        .replace("name: Reviewer", "name: Tester");
+    let saved = f.save(Kind::Role, "tester", &tester).await.unwrap();
+    assert_eq!(saved.revision, revision + 1);
+    assert_ne!(saved.digest, digest);
+    assert_eq!(f.active().await, (saved.revision, saved.digest.clone()));
+    let snapshot = settings::snapshot(&f.pool, &saved.digest)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.role("tester").is_some());
+    snapshot.resolve("tester", "standard-high").unwrap();
+    // The earlier snapshot is still stored, as one of the recent others.
+    let earlier = settings::snapshot(&f.pool, &digest).await.unwrap().unwrap();
+    assert!(earlier.role("tester").is_none());
+
+    // Every problem of the resulting set is reported, and nothing changes.
+    let broken = developer("x")
+        .replace("execution: sandbox", "execution: nowhere")
+        .replace("task.read", "task.fly");
+    let found = problems(f.save(Kind::Role, "developer", &broken).await.unwrap_err());
+    assert_eq!(
+        found,
+        [
+            "role `developer`: execution: no execution profile `nowhere` exists",
+            "role `developer`: operations: `task.fly` is not an AQ operation a role can hold",
+        ]
+    );
+    let unreadable = problems(
+        f.save(Kind::Role, "developer", "not a document")
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(
+        unreadable,
+        ["role document `developer`: line 1: a document starts with a `---` line"]
+    );
+    // A document is saved under the id it states.
+    let misnamed = problems(f.save(Kind::Role, "qa", &tester).await.unwrap_err());
+    assert_eq!(
+        misnamed[0],
+        "role document `qa`: id: is `tester`; a document saved as `qa` must have that id"
+    );
+    assert_eq!(f.active().await, (saved.revision, saved.digest));
+    assert_eq!(
+        settings::get(&f.pool, Kind::Role, "developer")
+            .await
+            .unwrap()
+            .unwrap()
+            .markdown,
+        shipped(Kind::Role, "developer")
+    );
+    assert!(
+        settings::get(&f.pool, Kind::Role, "qa")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_referenced_execution_profile_is_refused() {
+    let f = started().await;
+    let before = f.active().await;
+    let revision = f.revision_of(Kind::Execution, "sandbox").await;
+    let delete = |kind, id: &'static str, revision| {
+        settings::delete(&f.pool, f.owner, kind, id, revision, Uuid::new_v4(), NOW)
+    };
+    let refused = problems(
+        delete(Kind::Execution, "sandbox", revision)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(
+        refused,
+        [
+            "role `developer`: execution: no execution profile `sandbox` exists",
+            "role `reviewer`: execution: no execution profile `sandbox` exists",
+        ]
+    );
+    assert_eq!(f.active().await, before);
+    assert!(
+        settings::get(&f.pool, Kind::Execution, "sandbox")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // Nothing refers to a level, so it can go; a missing document is not found.
+    let revision = f.revision_of(Kind::Intelligence, "deep-high").await;
+    let deleted = delete(Kind::Intelligence, "deep-high", revision)
+        .await
+        .unwrap();
+    assert_eq!(f.active().await, (deleted.revision, deleted.digest));
+    assert!(matches!(
+        delete(Kind::Intelligence, "deep-high", revision).await,
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_stale_revision_conflicts_and_an_operation_id_replays_once() {
+    let f = started().await;
+    let revision = f.revision_of(Kind::Role, "developer").await;
+    let operation = Uuid::new_v4();
+    let first = developer("First.");
+    let save = |markdown: String, expected, operation| {
+        let (pool, owner) = (f.pool.clone(), f.owner);
+        async move {
+            settings::save(
+                &pool,
+                owner,
+                Kind::Role,
+                "developer",
+                &markdown,
+                expected,
+                operation,
+                NOW,
+            )
+            .await
+        }
+    };
+    let saved = save(first.clone(), revision, operation).await.unwrap();
+    // The same request again: the stored receipt, and nothing moves.
+    assert_eq!(
+        save(first.clone(), revision, operation).await.unwrap(),
+        saved
+    );
+    assert_eq!(f.active().await, (saved.revision, saved.digest.clone()));
+    // The same operation id with another body or by another user is a conflict.
+    assert!(matches!(
+        save(developer("Second."), revision, operation).await,
+        Err(Error::Conflict(_))
+    ));
+    let viewer: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role<>'owner'")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let other = settings::save(
+        &f.pool,
+        viewer,
+        Kind::Role,
+        "developer",
+        &first,
+        revision,
+        operation,
+        NOW,
+    )
+    .await;
+    assert!(matches!(other, Err(Error::Conflict(_))));
+    // A new operation at the revision that was read before the save is stale.
+    assert!(matches!(
+        save(developer("Second."), revision, Uuid::new_v4()).await,
+        Err(Error::Conflict(_))
+    ));
+    // Creating over an existing document is stale too; a nil id is refused.
+    assert!(matches!(
+        save(developer("Second."), 0, Uuid::new_v4()).await,
+        Err(Error::Conflict(_))
+    ));
+    assert!(matches!(
+        save(developer("Second."), saved.revision, Uuid::nil()).await,
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(f.active().await, (saved.revision, saved.digest));
+}
+
+#[tokio::test]
+async fn snapshots_and_receipts_roll_and_a_pinned_snapshot_stays_until_unpinned() {
+    let f = started().await;
+    let (_, shipped_digest) = f.active().await;
+    f.limits(1, 2).await;
+    let mut digests = Vec::new();
+    for n in 0..3 {
+        let saved = f
+            .save(Kind::Role, "developer", &developer(&format!("Rule {n}.")))
+            .await
+            .unwrap();
+        digests.push(saved.digest);
+    }
+    // The active one and the one most recent other.
+    assert_eq!(f.stored_digests().await, digests[1..]);
+    assert!(
+        settings::snapshot(&f.pool, &shipped_digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let receipts: i64 = sqlx::query_scalar("SELECT count(*) FROM role_settings_operations")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(receipts, 2);
+
+    // An attempt that launched with digests[1] keeps it through later saves.
+    let attempt = Uuid::new_v4();
+    let mut conn = f.pool.acquire().await.unwrap();
+    settings::pin(&mut conn, &digests[1], attempt)
+        .await
+        .unwrap();
+    settings::pin(&mut conn, &digests[1], attempt)
+        .await
+        .unwrap();
+    assert!(matches!(
+        settings::pin(&mut conn, &shipped_digest, Uuid::new_v4()).await,
+        Err(Error::NotFound(_))
+    ));
+    for n in 3..6 {
+        let saved = f
+            .save(Kind::Role, "developer", &developer(&format!("Rule {n}.")))
+            .await
+            .unwrap();
+        digests.push(saved.digest);
+    }
+    assert_eq!(
+        f.stored_digests().await,
+        [digests[1].clone(), digests[4].clone(), digests[5].clone()]
+    );
+    // Saving the pinned content again activates it without storing a copy.
+    let again = f
+        .save(Kind::Role, "developer", &developer("Rule 1."))
+        .await
+        .unwrap();
+    assert_eq!(again.digest, digests[1]);
+    assert_eq!(
+        f.stored_digests().await,
+        [digests[5].clone(), digests[1].clone()]
+    );
+    let last = f
+        .save(Kind::Role, "developer", &developer("Rule 7."))
+        .await
+        .unwrap();
+    let another = f
+        .save(Kind::Role, "developer", &developer("Rule 8."))
+        .await
+        .unwrap();
+    assert_eq!(
+        f.stored_digests().await,
+        [
+            digests[1].clone(),
+            last.digest.clone(),
+            another.digest.clone()
+        ]
+    );
+    // The attempt's record is removed: its snapshot goes with it.
+    settings::unpin(&mut conn, attempt).await.unwrap();
+    assert_eq!(
+        f.stored_digests().await,
+        [last.digest, another.digest.clone()]
+    );
+
+    // Keeping nothing is a valid setting, and no save is ever refused for
+    // what is stored: only the active snapshot remains and no receipt.
+    f.limits(0, 0).await;
+    for n in 9..14 {
+        f.save(Kind::Role, "developer", &developer(&format!("Rule {n}.")))
+            .await
+            .unwrap();
+    }
+    let (_, active) = f.active().await;
+    assert_eq!(f.stored_digests().await, [active]);
+    let receipts: i64 = sqlx::query_scalar("SELECT count(*) FROM role_settings_operations")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(receipts, 0);
+}
+
+#[tokio::test]
+async fn selection_defaults_and_limits_are_settings_that_recompile_the_set() {
+    let f = started().await;
+    let (_, digest) = f.active().await;
+    let read = settings::settings(&f.pool).await.unwrap();
+    assert_eq!(read.selection_defaults, SelectionDefaults::default());
+    assert_eq!(read.limits, StoreLimits::default());
+    assert_eq!(
+        (read.selection_defaults_revision, read.limits_revision),
+        (0, 0)
+    );
+    let defaults = SelectionDefaults {
+        max_attempts: 4,
+        ..SelectionDefaults::default()
+    };
+    let save = |defaults: SelectionDefaults, expected| {
+        let (pool, owner) = (f.pool.clone(), f.owner);
+        async move {
+            settings::save_selection_defaults(
+                &pool,
+                owner,
+                &defaults,
+                expected,
+                Uuid::new_v4(),
+                NOW,
+            )
+            .await
+        }
+    };
+    let saved = save(defaults.clone(), 0).await.unwrap();
+    assert_ne!(saved.digest, digest);
+    let active = settings::active_snapshot(&f.pool).await.unwrap().unwrap();
+    let launch = active.snapshot.resolve("developer", "fast-low").unwrap();
+    assert_eq!(launch.selection_policy.max_attempts, 4);
+    assert_eq!(launch.selection_policy.max_output_tokens, 32_000);
+    assert!(matches!(
+        save(defaults.clone(), 0).await,
+        Err(Error::Conflict(_))
+    ));
+    let faulty = SelectionDefaults {
+        max_attempts: 0,
+        ..defaults.clone()
+    };
+    assert_eq!(
+        problems(save(faulty, saved.revision).await.unwrap_err()),
+        ["selection defaults: selection policy bounds"]
+    );
+    assert_eq!(
+        settings::settings(&f.pool)
+            .await
+            .unwrap()
+            .selection_defaults,
+        defaults
+    );
+
+    // A limit the stored set does not fit is refused like any invalid change.
+    let mut tight = StoreLimits::default();
+    tight.documents.max_documents_per_kind = 8;
+    let refused = settings::save_limits(&f.pool, f.owner, &tight, 0, Uuid::new_v4(), NOW).await;
+    assert_eq!(
+        problems(refused.unwrap_err()),
+        ["all documents: hold 9 intelligence profile documents, over the limit of 8"]
+    );
+    assert_eq!(
+        settings::settings(&f.pool).await.unwrap().limits,
+        StoreLimits::default()
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_stored_set_at_start_keeps_the_previous_snapshot() {
+    let f = started().await;
+    let before = f.active().await;
+    sqlx::query("UPDATE role_documents SET markdown='damaged' WHERE kind='role' AND id='reviewer'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let start = settings::startup(&f.pool, NOW + 1).await.unwrap();
+    assert_eq!(start.active_digest.as_deref(), Some(before.1.as_str()));
+    assert_eq!(
+        start
+            .problems
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["role document `reviewer`: line 1: a document starts with a `---` line"]
+    );
+    assert_eq!(f.active().await, before);
+    // Repairing the document through a save activates again.
+    let repaired = f
+        .save(Kind::Role, "reviewer", &shipped(Kind::Role, "reviewer"))
+        .await
+        .unwrap();
+    assert_eq!(repaired.digest, before.1);
+}
+
+#[tokio::test]
+async fn routes_require_the_owner_and_the_request_header() {
+    let f = started().await;
+    let put = json!({"markdown": developer("x"), "expected_revision": "1", "operation_id": Uuid::new_v4()});
+    for path in [
+        "/api/settings/roles",
+        "/api/settings/roles/developer",
+        "/api/settings/intelligence-profiles",
+        "/api/settings/execution-profiles/sandbox",
+        "/api/settings/selection-defaults",
+        "/api/settings/profiles/limits",
+        "/api/settings/profiles/snapshot",
+    ] {
+        let (status, body) = f.call("GET", path, None, false, true).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path} {body}");
+        let (status, body) = f.call("GET", path, None, true, false).await;
+        assert_eq!(status, StatusCode::OK, "{path} {body}");
+    }
+    let before = f.active().await;
+    let one = "/api/settings/roles/developer";
+    let (status, body) = f.call("PUT", one, Some(put.clone()), false, true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = f.call("PUT", one, Some(put), true, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "csrf_rejected");
+    let delete = format!(
+        "/api/settings/intelligence-profiles/deep-high?expected_revision=1&operation_id={}",
+        Uuid::new_v4()
+    );
+    let (status, _) = f.call("DELETE", &delete, None, false, true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = f.call("DELETE", &delete, None, true, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(f.active().await, before);
+}
+
+#[tokio::test]
+async fn an_owner_reads_saves_and_deletes_documents_over_http() {
+    let f = started().await;
+    let (revision, digest) = f.active().await;
+    let (status, list) = f
+        .call("GET", "/api/settings/roles", None, true, false)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["revision"], revision.to_string());
+    assert_eq!(list["active_digest"], digest);
+    let documents = list["documents"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    assert_eq!(documents[0]["id"], "developer");
+    assert_eq!(documents[0]["markdown"], shipped(Kind::Role, "developer"));
+    assert_eq!(documents[0]["fields"]["execution"], "sandbox");
+    assert_eq!(
+        documents[0]["fields"]["operations"],
+        json!(["task.read", "knowledge.read", "source.write"])
+    );
+    assert_eq!(documents[0]["problem"], Value::Null);
+    let (_, level) = f
+        .call(
+            "GET",
+            "/api/settings/intelligence-profiles/standard-high",
+            None,
+            true,
+            false,
+        )
+        .await;
+    assert_eq!(
+        level["fields"]["candidates"][0]["model"],
+        "claude-sonnet-5-5"
+    );
+    let (_, sandbox) = f
+        .call(
+            "GET",
+            "/api/settings/execution-profiles/sandbox",
+            None,
+            true,
+            false,
+        )
+        .await;
+    assert_eq!(sandbox["fields"]["confinement"], "container");
+    let (status, _) = f
+        .call("GET", "/api/settings/roles/tester", None, true, false)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Create a role.
+    let tester = shipped(Kind::Role, "reviewer")
+        .replace("id: reviewer", "id: tester")
+        .replace("name: Reviewer", "name: Tester");
+    let operation = Uuid::new_v4();
+    let create = json!({"markdown": tester, "expected_revision": "0", "operation_id": operation});
+    let path = "/api/settings/roles/tester";
+    let (status, saved) = f.call("PUT", path, Some(create.clone()), true, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], (revision + 1).to_string());
+    let (_, replayed) = f.call("PUT", path, Some(create), true, true).await;
+    assert_eq!(replayed, saved);
+    let (_, snapshot) = f
+        .call("GET", "/api/settings/profiles/snapshot", None, true, false)
+        .await;
+    assert_eq!(
+        snapshot,
+        json!({"revision": saved["revision"], "active_digest": saved["digest"]})
+    );
+    let (_, read) = f.call("GET", path, None, true, false).await;
+    assert_eq!(read["revision"], saved["revision"]);
+    assert_eq!(read["fields"]["name"], "Tester");
+
+    // An invalid document: 400 with every problem; a stale revision: 409.
+    let broken = tester
+        .replace("execution: sandbox", "execution: nowhere")
+        .replace("task.read", "task.fly");
+    let body = json!({"markdown": broken, "expected_revision": saved["revision"], "operation_id": Uuid::new_v4()});
+    let (status, refused) = f.call("PUT", path, Some(body), true, true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "bad_request");
+    assert_eq!(
+        refused["problems"],
+        json!([
+            {"document": "role `tester`", "field": "execution", "message": "no execution profile `nowhere` exists"},
+            {"document": "role `tester`", "field": "operations", "message": "`task.fly` is not an AQ operation a role can hold"},
+        ])
+    );
+    let stale =
+        json!({"markdown": tester, "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", path, Some(stale), true, true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _) = f
+        .call("PUT", path, Some(json!({"markdown": tester})), true, true)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Selection defaults.
+    let (_, defaults) = f
+        .call("GET", "/api/settings/selection-defaults", None, true, false)
+        .await;
+    assert_eq!(defaults["revision"], "0");
+    assert_eq!(defaults["selection_defaults"]["max_attempts"], 2);
+    let mut changed = defaults["selection_defaults"].clone();
+    changed["max_attempts"] = json!(3);
+    let body = json!({"selection_defaults": changed, "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, moved) = f
+        .call(
+            "PUT",
+            "/api/settings/selection-defaults",
+            Some(body),
+            true,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_ne!(moved["digest"], saved["digest"]);
+    let (_, limits) = f
+        .call("GET", "/api/settings/profiles/limits", None, true, false)
+        .await;
+    assert_eq!(limits["limits"]["snapshots_kept"], 20);
+
+    // Delete: refused while referenced, done otherwise.
+    let delete = |path: &str, revision: &Value| {
+        format!(
+            "{path}?expected_revision={}&operation_id={}",
+            revision.as_str().unwrap(),
+            Uuid::new_v4()
+        )
+    };
+    let (status, refused) = f
+        .call(
+            "DELETE",
+            &delete(
+                "/api/settings/execution-profiles/sandbox",
+                &sandbox["revision"],
+            ),
+            None,
+            true,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["problems"].as_array().unwrap().len(), 3);
+    let (status, gone) = f
+        .call(
+            "DELETE",
+            &delete(path, &saved["revision"]),
+            None,
+            true,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{gone}");
+    let (status, _) = f.call("GET", path, None, true, false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = f
+        .call("DELETE", "/api/settings/roles/tester", None, true, true)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The catalog's own Intelligence settings route is still mounted.
+    let (status, _) = f
+        .call("GET", "/api/settings/intelligence", None, true, false)
+        .await;
+    assert_ne!(status, StatusCode::NOT_FOUND);
+}

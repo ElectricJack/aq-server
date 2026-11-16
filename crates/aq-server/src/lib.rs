@@ -36,6 +36,7 @@ pub mod repository_onboarding;
 pub mod result_media;
 pub mod results_feedback;
 pub mod reviews;
+mod role_settings;
 pub mod routing;
 pub mod row_retention;
 pub mod session_access;
@@ -323,6 +324,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(internal_work::admin_routes())
         .merge(playbook_authoring::admin_routes())
         .merge(swarm_settings::routes())
+        .merge(role_settings::admin_routes())
         .merge(project_bindings::admin_routes())
         .merge(repository_onboarding::admin_routes())
         .merge(intelligence::admin_routes())
@@ -462,6 +464,9 @@ async fn run_with_listeners_and_dashboard(
     profiled_execution::policies::install(&state)
         .await
         .map_err(|error| anyhow::anyhow!("profiled policy installation failed: {error:?}"))?;
+    role_settings::install(&state)
+        .await
+        .map_err(|error| anyhow::anyhow!("roles and profiles installation failed: {error:?}"))?;
     if state.config.terminals.is_some() {
         terminal::persistence::install(&state)
             .await
