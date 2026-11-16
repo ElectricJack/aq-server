@@ -565,6 +565,30 @@ fn route_backed_owner_mutations_fill_the_path_and_send_the_rest() {
         f.body.unwrap(),
         json!({"operation_id":op,"expected_revision":2,"slots":1})
     );
+    // A route that is a PUT or a DELETE is forwarded as one.
+    let f = build(
+        "playbook.source.edit",
+        json!({"source_id":"routing","markdown":"# m","expected_revision":3}),
+        Some("why"),
+    );
+    assert_eq!(
+        (f.method, f.uri.as_str()),
+        ("PUT", "/api/playbooks/sources/routing/markdown")
+    );
+    assert_eq!(
+        f.body.unwrap(),
+        json!({"markdown":"# m","expected_revision":3})
+    );
+    let f = build(
+        "playbook.source.remove",
+        json!({"source_id":"routing"}),
+        None,
+    );
+    assert_eq!(
+        (f.method, f.uri.as_str()),
+        ("DELETE", "/api/playbooks/sources/routing")
+    );
+    assert_eq!(f.body.unwrap(), json!({}));
     // Each such schema is closed, names its path params and requires them.
     for c in r.commands() {
         let inline = |o: &Route| o.body == Body::Params && matches!(o.params, Params::Inline(_));

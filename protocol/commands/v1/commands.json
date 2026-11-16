@@ -1167,6 +1167,389 @@
     },
     {
       "cli": [
+        "internal",
+        "run",
+        "escalate"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "internal.run.escalate",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:601f7f839b4a5254b08cc24f8432d001c584c57aad9539ffad802ed90cc2a0b5",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "diagnosis": {
+                "description": "What went wrong, at most 4000 bytes",
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "run_id": {
+                "description": "The internal work run's ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "diagnosis"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/internal-work/runs/{id}/escalate"
+          }
+        }
+      },
+      "summary": "Hand a failed internal work run to the owner with a diagnosis",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "run",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "internal.run.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:8ee380426cb0e6c3859c58e4bc7c934530aeca8d9b3df1710ca5aac3a44f1694",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "affected_id": {
+                "description": "The ID of the thing the run is for",
+                "minLength": 1,
+                "type": "string"
+              },
+              "affected_kind": {
+                "description": "The kind of thing the run is for, for example task",
+                "minLength": 1,
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "purpose": {
+                "enum": [
+                  "routing_classification",
+                  "playbook_compilation",
+                  "playbook_call",
+                  "decision_revision",
+                  "result_processing"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "queued",
+                  "running",
+                  "answered",
+                  "failed"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/internal-work/runs"
+          }
+        }
+      },
+      "summary": "Internal work runs, newest first, by what they affect, purpose or status",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "run",
+        "resolve"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "internal.run.resolve",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:7109a154cec8d7c13c69a6ceed901818ac7114ed3771a21ab91a019759593a18",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "run_id": {
+                "description": "The internal work run's ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/internal-work/runs/{id}/resolve"
+          }
+        }
+      },
+      "summary": "Mark an escalated internal work run, and the runs it retried, resolved",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "run",
+        "retry"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "internal.run.retry",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:7109a154cec8d7c13c69a6ceed901818ac7114ed3771a21ab91a019759593a18",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "run_id": {
+                "description": "The internal work run's ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/internal-work/runs/{id}/retry"
+          }
+        }
+      },
+      "summary": "Run a failed internal work run again as a new run (each call starts another)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "run",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "internal.run.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:5bb66e4e3c58121f76feeb5c3e1889d52df09049ce27b65a6998fc42fe3d7dc6",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "run_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/internal-work/runs/{id}"
+          }
+        }
+      },
+      "summary": "One internal work run, with what its agents did",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "settings",
+        "operation",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "internal.settings.operation.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "operation_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/internal-work/operations/{id}"
+          }
+        }
+      },
+      "summary": "The recorded result of one internal.settings.set",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "settings",
+        "set"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "internal.settings.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:76fc936670d82bc3febf286bb28667c06740261834731d3df60a3903667f0b16",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "default_profile_id": {
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expected_catalog_revision": {
+                "description": "The Intelligence catalog revision as last read",
+                "type": "string"
+              },
+              "expected_revision": {
+                "description": "The settings revision as last read",
+                "pattern": "^[0-9]{1,18}$",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "overrides": {
+                "additionalProperties": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "description": "Purpose to profile ID",
+                "propertyNames": {
+                  "enum": [
+                    "routing_classification",
+                    "playbook_compilation",
+                    "playbook_call",
+                    "decision_revision",
+                    "result_processing"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "operation_id",
+              "expected_revision",
+              "expected_catalog_revision",
+              "overrides"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/settings/internal-work"
+          }
+        }
+      },
+      "summary": "Choose the Intelligence profile internal work runs on, by default and per purpose",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "internal",
+        "settings",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "internal.settings.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/internal-work"
+          }
+        }
+      },
+      "summary": "Which Intelligence profile internal work runs on, by default and per purpose",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "knowledge",
         "author"
       ],
@@ -2526,6 +2909,326 @@
     },
     {
       "cli": [
+        "playbook",
+        "source",
+        "author"
+      ],
+      "grant": "playbook.author",
+      "kind": "mutation",
+      "name": "playbook.source.author",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d240c8f51002c96d591b272f8ea35b6d7781b95eb2bb2990e500a577f1f0bf48",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "description": "The playbook source's ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/sources/{id}/runs"
+          }
+        }
+      },
+      "summary": "Author a source again from its saved document (does nothing if nothing the agent sees has changed)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "edit"
+      ],
+      "grant": "playbook.author",
+      "kind": "mutation",
+      "name": "playbook.source.edit",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:a745bd9cddc618b94ce7db5135e15703ba43c0485b503dc52e9afbba14a445da",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "description": "The source's revision as last read",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "markdown": {
+                "type": "string"
+              },
+              "source_id": {
+                "description": "The playbook source's ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "markdown",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "PUT",
+            "path": "/api/playbooks/sources/{id}/markdown"
+          }
+        }
+      },
+      "summary": "Replace a registered source's document at an expected revision and start authoring it",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "list"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "playbook.source.list",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/playbooks/sources"
+          }
+        }
+      },
+      "summary": "Playbook sources, each with the playbook in effect and its latest authoring run",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "register"
+      ],
+      "grant": "playbook.author",
+      "kind": "mutation",
+      "name": "playbook.source.register",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:109f1a4e92768f2d246bee709eb3d8dc67fdf32a8137d32325afde5b71dbac5a",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "binding": {
+                "description": "The binding its playbook is activated under",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "commands": {
+                "description": "Host catalog commands the playbook may call; its abilities follow from these",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "events": {
+                "description": "Host catalog events the playbook may react to",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "id": {
+                "description": "The new source's ID; no '/' or control characters",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "markdown": {
+                "description": "The document the playbook is authored from",
+                "type": "string"
+              },
+              "purpose": {
+                "description": "What the playbook is for",
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "binding",
+              "purpose",
+              "markdown",
+              "commands",
+              "events"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/sources"
+          }
+        }
+      },
+      "summary": "Register a playbook source from a Markdown document and start authoring it (refused if the source exists)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "remove"
+      ],
+      "grant": "playbook.author",
+      "kind": "mutation",
+      "name": "playbook.source.remove",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d240c8f51002c96d591b272f8ea35b6d7781b95eb2bb2990e500a577f1f0bf48",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "description": "The playbook source's ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "DELETE",
+            "path": "/api/playbooks/sources/{id}"
+          }
+        }
+      },
+      "summary": "Delete a registered source: its playbook stops and its grant is revoked; run history is kept",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "rollback"
+      ],
+      "grant": "playbook.author",
+      "kind": "mutation",
+      "name": "playbook.source.rollback",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d240c8f51002c96d591b272f8ea35b6d7781b95eb2bb2990e500a577f1f0bf48",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "description": "The playbook source's ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/sources/{id}/rollback"
+          }
+        }
+      },
+      "summary": "Put a source's previous playbook back in effect and supersede a run in flight (each call goes back one more)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "source",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "playbook.source.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:e37d0d358a01726ca3f25be1eca5930aa20259752356c7120771f76e5935e93f",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "source_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/playbooks/sources/{id}"
+          }
+        }
+      },
+      "summary": "One playbook source, with the playbook in effect and its latest authoring run",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
         "profile",
         "catalog",
         "active"
@@ -3775,6 +4478,73 @@
         }
       },
       "summary": "One review decision",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "routing",
+        "set"
+      ],
+      "grant": "intelligence.admin",
+      "kind": "mutation",
+      "name": "routing.set",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:66e46c31ea0483134abe44929c2ba141b0e3fc161330d4733a9551d281d7161a",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "enabled"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/settings/intelligence/routing"
+          }
+        }
+      },
+      "summary": "Turn automatic routing on or off (on only while a routing playbook is active)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "routing",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "routing.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/intelligence/routing"
+          }
+        }
+      },
+      "summary": "Whether automatic routing is on, and the routing playbook source",
       "target": {
         "rule": "own"
       }
@@ -5940,6 +6710,46 @@
       "summary": "Remove a task's owner route so routing decides its class again",
       "target": {
         "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "route",
+        "history"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "task.route.history",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:4c561c25123c181cb7315c9b45dfb9b310f59ef2e6eb3d9bc377fc4b0dfd6253",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "task_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "task_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/tasks/{id}/routes"
+          }
+        }
+      },
+      "summary": "Every route a task has had, newest first, with reasons, and why it is unrouted if it is",
+      "target": {
+        "rule": "own"
       }
     },
     {
