@@ -1114,6 +1114,73 @@ pub fn catalog() -> Vec<CommandSpec> {
             ),
             "DELETE",
         ),
+        // The playbook engine's owner controls (playbooks/api.rs), mounted
+        // only when the server runs a playbook driver. None takes an
+        // operation ID; each summary says what repeating one does.
+        owner(
+            "playbook.status",
+            "dashboard.read",
+            "The playbook engine: its driver's state, the commands it knows and the events it holds",
+            "/api/playbooks/status",
+        ),
+        owner_post(
+            "playbook.event.retry",
+            "playbook.run",
+            "Deliver a held event again (refused unless the event is held)",
+            "/api/playbooks/events/{id}/retry",
+            &[("id", "event_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["event_id"],"properties":{"event_id":{"type":"string","format":"uuid","description":"The held event's ID, from playbook.status"}}}"#,
+        ),
+        owner_post(
+            "playbook.event.hold",
+            "playbook.run",
+            "Hold an event that is waiting for delivery (refused if it is held or delivered)",
+            "/api/playbooks/events/{id}/hold",
+            &[("id", "event_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["event_id"],"properties":{"event_id":{"type":"string","format":"uuid","description":"The waiting event's ID"}}}"#,
+        ),
+        read(
+            "playbook.admission.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "One playbook admission: a request to start a run, and what became of it",
+            Some(Route::get(
+                "/api/playbooks/admissions/{id}",
+                &[("id", "request_id")],
+            )),
+        ),
+        owner_post(
+            "playbook.admission.recover",
+            "playbook.run",
+            "Look up an admission's run in the engine and record it (never starts a run; safe to repeat)",
+            "/api/playbooks/admissions/{id}/recover",
+            &[("id", "request_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["request_id"],"properties":{"request_id":{"type":"string","format":"uuid","description":"The admission's request ID"}}}"#,
+        ),
+        owner_post(
+            "playbook.admission.retry",
+            "playbook.run",
+            "Admit a retained admission again; one whose outcome was unknown may run its work twice (repeating after it is admitted returns the same run)",
+            "/api/playbooks/admissions/{id}/retry",
+            &[("id", "request_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["request_id"],"properties":{"request_id":{"type":"string","format":"uuid","description":"The admission's request ID"}}}"#,
+        ),
+        owner_post(
+            "playbook.driver.recover",
+            "playbook.run",
+            "Have the engine recover its runs now (safe to repeat)",
+            "/api/playbooks/recover",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":[],"properties":{}}"#,
+        ),
+        owner_post(
+            "playbook.driver.stop",
+            "playbook.run",
+            "Stop the playbook driver; queued messages are kept (safe to repeat, and allowed during maintenance)",
+            "/api/playbooks/stop",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":[],"properties":{}}"#,
+        ),
         owner(
             "internal.settings.show",
             "dashboard.read",

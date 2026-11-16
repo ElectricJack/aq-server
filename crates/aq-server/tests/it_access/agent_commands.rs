@@ -645,6 +645,64 @@ async fn owner_commands_reach_the_same_handlers() {
             json!({"task_id":run}),
             Some("task_id"),
         ),
+        // The playbook engine's controls. No driver runs in this fixture, so
+        // these are unmounted here; playbook_bridge runs them against one.
+        (
+            "playbook.status",
+            "GET",
+            "/api/playbooks/status".to_string(),
+            json!({}),
+            None,
+        ),
+        (
+            "playbook.event.retry",
+            "POST",
+            format!("/api/playbooks/events/{run}/retry"),
+            json!({"event_id":run}),
+            Some("event_id"),
+        ),
+        (
+            "playbook.event.hold",
+            "POST",
+            format!("/api/playbooks/events/{run}/hold"),
+            json!({"event_id":run}),
+            Some("event_id"),
+        ),
+        (
+            "playbook.admission.show",
+            "GET",
+            format!("/api/playbooks/admissions/{run}"),
+            json!({"request_id":run}),
+            Some("request_id"),
+        ),
+        (
+            "playbook.admission.recover",
+            "POST",
+            format!("/api/playbooks/admissions/{run}/recover"),
+            json!({"request_id":run}),
+            Some("request_id"),
+        ),
+        (
+            "playbook.admission.retry",
+            "POST",
+            format!("/api/playbooks/admissions/{run}/retry"),
+            json!({"request_id":run}),
+            Some("request_id"),
+        ),
+        (
+            "playbook.driver.recover",
+            "POST",
+            "/api/playbooks/recover".to_string(),
+            json!({}),
+            None,
+        ),
+        (
+            "playbook.driver.stop",
+            "POST",
+            "/api/playbooks/stop".to_string(),
+            json!({}),
+            None,
+        ),
     ] {
         let mut body = params.clone();
         if let Some(key) = path_param {
