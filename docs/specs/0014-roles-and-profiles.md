@@ -228,9 +228,12 @@ routing document, not a list on the binding.
   role it names (or the project default, if it names none) may only list
   operations that the agent's own role lists. A person or a playbook filing a
   task is not limited this way. **(call)**
-- The router is told the task's role along with its type and content, so the
-  routing document can say, for example, that reviews get a stronger level.
-  The router never changes the role. **(call)**
+- The router never changes the role. Telling the router the task's role, so
+  the routing document can say for example that reviews get a stronger level,
+  is a follow-up: the facts a playbook may read about a task are a closed list
+  in the playbook host contract (aq-playbooks), so it needs a new contract
+  version and the routing playbook compiled again. Until then the router sees
+  the task's type and content, as today. **(call)**
 - A task keeps its existing type (feature, bug fix, docs and so on). The type
   says what the work is; the role says who does it. **(call)**
 
@@ -406,7 +409,7 @@ role; a task filed with no role, which must run as developer.
 1. `aq-profiles`: the three types, document parsing, validation, snapshot.
 2. Settings store, routes and shipped defaults for the three document kinds.
 3. Tasks carry a role; project bindings and selection: role replaces agent,
-   defaults on the binding; the router is told the role.
+   defaults on the binding.
 4. Composer and startup: the §6 order, permissions from the role.
 5. Removal of the context qualification and model lists (from `feat/any-model`,
    flag removed).
