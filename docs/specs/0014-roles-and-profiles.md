@@ -224,6 +224,10 @@ routing document, not a list on the binding.
   while the task has not started.
 - Filing a task with a role that does not exist is refused. A task whose role
   is disabled is held with that reason.
+- An agent cannot hand out more than it holds. When an agent files a task, the
+  role it names (or the project default, if it names none) may only list
+  operations that the agent's own role lists. A person or a playbook filing a
+  task is not limited this way. **(call)**
 - The router is told the task's role along with its type and content, so the
   routing document can say, for example, that reviews get a stronger level.
   The router never changes the role. **(call)**
