@@ -51,18 +51,9 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
 }
-/// Whether a logged-in `harness` (`codex` or `claude`) accepts the reasoning
-/// `effort` of a model choice. Other harnesses accept none.
-pub fn harness_supports(harness: &str, effort: &str) -> bool {
-    let supported: &[&str] = match harness {
-        "codex" => &[
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-        ],
-        "claude" => &["default", "off", "low", "medium", "high", "xhigh", "max"],
-        _ => return false,
-    };
-    supported.contains(&effort)
-}
+/// Whether a logged-in harness accepts a reasoning effort. The rule lives in
+/// `aq-profiles`, which validates profile documents with it.
+pub use aq_profiles::roles::harness_supports;
 /// The model choice a profile candidate names by `(provider, model,
 /// reasoning_configuration_reference)` on `harness`.
 pub fn find_choice<'a>(
