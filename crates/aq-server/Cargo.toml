@@ -97,6 +97,9 @@ uuid.workspace = true
 test-support = ["aq-notifications/test-support"]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]
+# Epic flag (compile time, never a Setting): no model context-window check and
+# any model on an installed harness. Removed when the epic is confirmed.
+any-model = ["aq-profile-settings/any-model"]
 
 [dev-dependencies]
 futures-util = "0.3"

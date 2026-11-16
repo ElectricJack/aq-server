@@ -77,17 +77,31 @@ fn automatic(
     choices: &[ModelChoice],
     existing: Option<&Intelligence>,
 ) -> Result<Intelligence> {
-    let mut candidates: Vec<_> = choices
-        .iter()
-        .filter(|c| !c.preference_only)
-        .map(|c| ModelCandidate {
-            id: String::new(),
-            provider: c.provider.clone(),
-            model: c.model.clone(),
-            reasoning_configuration_reference: c.reasoning_configuration_reference.clone(),
-            harnesses: vec![c.harness.clone()],
-        })
-        .collect();
+    // The level profiles left in Settings, in the order Settings lists them.
+    let levels = || -> Vec<ModelCandidate> {
+        (current.artifact().catalog.intelligence.iter())
+            .filter(|p| p.automatic_routing != Some(true) && p.id != deleted.id)
+            .flat_map(|p| p.candidates.clone())
+            .collect()
+    };
+    // `any-model`: every model choice is usable, so "not preference-only" no
+    // longer picks the router's own candidates, and the list of all choices has
+    // no order the owner chose. They come from the level profiles instead.
+    let mut candidates: Vec<_> = if cfg!(feature = "any-model") {
+        levels()
+    } else {
+        choices
+            .iter()
+            .filter(|c| !c.preference_only)
+            .map(|c| ModelCandidate {
+                id: String::new(),
+                provider: c.provider.clone(),
+                model: c.model.clone(),
+                reasoning_configuration_reference: c.reasoning_configuration_reference.clone(),
+                harnesses: vec![c.harness.clone()],
+            })
+            .collect()
+    };
     if candidates.is_empty()
         && let Some(router) = existing
     {

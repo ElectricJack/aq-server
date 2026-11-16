@@ -86,6 +86,63 @@ pub fn choice_for<'a>(
 ) -> Option<&'a ModelChoice> {
     find_choice(choices, names, harness).filter(|m| harness_supports(harness, &m.reasoning))
 }
+/// A harness id as model choices name it: a catalog or worker may spell the
+/// Claude harness `claude-code`.
+pub fn settings_harness(harness: &str) -> &str {
+    match harness {
+        "claude-code" => "claude",
+        other => other,
+    }
+}
+/// The native reasoning a choice gives its harness: its `reasoning_effort`
+/// option, else its `reasoning` label. `None` when the harness does not accept
+/// that value ([`harness_supports`]); no default is substituted.
+pub fn native_reasoning(choice: &ModelChoice) -> Option<&str> {
+    let option = choice.options.get("reasoning_effort");
+    let effort = option.and_then(Value::as_str).unwrap_or(&choice.reasoning);
+    harness_supports(settings_harness(&choice.harness), effort).then_some(effort)
+}
+/// The model choices `candidates` name on the installed `harnesses`, each
+/// resolved to the native reasoning that harness accepts, in candidate order.
+/// A candidate whose reference names no choice, or a choice the harness does
+/// not accept, gets no entry: selection then finds it unsupported.
+pub fn resolve_candidates(
+    choices: &[ModelChoice],
+    candidates: &[ModelCandidate],
+    harnesses: &[aq_selection::InstalledHarness],
+) -> Vec<aq_selection::ResolvedModelChoice> {
+    let mut resolved: Vec<aq_selection::ResolvedModelChoice> = Vec::new();
+    for c in candidates {
+        let names = (
+            c.provider.as_str(),
+            c.model.as_str(),
+            c.reasoning_configuration_reference.as_str(),
+        );
+        for harness in &c.harnesses {
+            if !harnesses.iter().any(|h| h.harness == *harness)
+                || resolved.iter().any(|r| {
+                    r.harness == *harness
+                        && (r.provider.as_str(), r.model.as_str()) == (names.0, names.1)
+                        && r.reasoning_configuration_reference == names.2
+                })
+            {
+                continue;
+            }
+            let choice = find_choice(choices, names, harness)
+                .or_else(|| find_choice(choices, names, settings_harness(harness)));
+            if let Some(native) = choice.and_then(native_reasoning) {
+                resolved.push(aq_selection::ResolvedModelChoice {
+                    harness: harness.clone(),
+                    provider: c.provider.clone(),
+                    model: c.model.clone(),
+                    reasoning_configuration_reference: c.reasoning_configuration_reference.clone(),
+                    native_reasoning: native.to_owned(),
+                });
+            }
+        }
+    }
+    resolved
+}
 /// A host refresh tool writes this metadata cache atomically. Failure leaves
 /// configured/imported preferences usable; no credentials or launch facts enter here.
 pub fn cached_choices(path: Option<&std::path::Path>) -> Vec<ModelChoice> {
