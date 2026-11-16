@@ -139,7 +139,7 @@ impl IntoResponse for AppError {
             status: self.status().as_u16(),
             code: body.error.clone(),
         };
-        tracing::warn!(status=context.status, code=%context.code, message=%body.message, "API request refused");
+        tracing::warn!(status=context.status, code=%context.code, message=[body.message.as_str(), ""][(context.status != 409) as usize], "API request refused"); // only a conflict's text: others may repeat the caller's input
         let mut response = (self.status(), Json(body)).into_response();
         if matches!(self, AppError::Busy) {
             (response.headers_mut()).insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
