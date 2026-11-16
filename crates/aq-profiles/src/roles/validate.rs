@@ -124,8 +124,26 @@ impl Snapshot {
     pub fn execution_profiles(&self) -> impl Iterator<Item = &Execution> {
         self.content.execution.values()
     }
-    /// Read a stored snapshot back. The bytes must be exactly the canonical
-    /// bytes of a set that is valid under `limits`.
+    /// Read a snapshot as it was stored. The digest is taken over `bytes` and
+    /// the content is deserialized; today's document validation is not run,
+    /// so a later tightening of a rule cannot make a snapshot an attempt pins
+    /// unreadable. The caller compares [`Snapshot::digest`] with the digest
+    /// the bytes were stored under.
+    pub fn from_stored_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let content: Content =
+            serde_json::from_slice(bytes).map_err(|e| format!("is not readable: {e}"))?;
+        if content.schema_version != 1 {
+            return Err("has an unknown schema version".into());
+        }
+        Ok(Self {
+            digest: Digest::of(bytes).as_str().into(),
+            content,
+            bytes: bytes.to_vec(),
+        })
+    }
+    /// Read canonical bytes back and validate them as today's rules would.
+    /// The bytes must be exactly the canonical bytes of a set that is valid
+    /// under `limits`. A store reads with [`Snapshot::from_stored_bytes`].
     pub fn from_canonical_bytes(
         bytes: &[u8],
         limits: &DocumentLimits,

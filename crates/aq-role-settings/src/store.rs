@@ -17,15 +17,16 @@ fn kind_of(name: &str) -> Result<Kind> {
         _ => Err(Error::Internal),
     }
 }
-/// A stored snapshot was valid under the limits of its day; reading it back
-/// applies none.
-const UNLIMITED: DocumentLimits = DocumentLimits {
-    max_document_bytes: usize::MAX,
-    max_set_bytes: usize::MAX,
-    max_documents_per_kind: usize::MAX,
-    max_name_bytes: usize::MAX,
-    max_description_bytes: usize::MAX,
-};
+/// A stored snapshot is read as stored (spec 0014 §7.1): its bytes must hash
+/// to the digest they are stored under and deserialize. Document validation
+/// belongs to compiling the current set, not to reading an old one.
+fn stored_snapshot(bytes: &[u8], digest: &str) -> Result<Snapshot> {
+    let snapshot = Snapshot::from_stored_bytes(bytes).map_err(|_| Error::Internal)?;
+    if snapshot.digest() != digest {
+        return Err(Error::Internal);
+    }
+    Ok(snapshot)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Lock {
@@ -128,12 +129,7 @@ async fn read_snapshot(conn: &mut PgConnection, digest: &str) -> Result<Option<S
     let Some(bytes) = bytes else {
         return Ok(None);
     };
-    let snapshot =
-        Snapshot::from_canonical_bytes(&bytes, &UNLIMITED).map_err(|_| Error::Internal)?;
-    if snapshot.digest() != digest {
-        return Err(Error::Internal);
-    }
-    Ok(Some(snapshot))
+    stored_snapshot(&bytes, digest).map(Some)
 }
 /// A stored snapshot: the active one, one an attempt pins, or one of the
 /// most recent others. `None` once it has rolled off.
@@ -151,11 +147,10 @@ pub async fn active_snapshot(pool: &PgPool) -> Result<Option<Active>> {
     let Some(row) = row else {
         return Ok(None);
     };
-    let snapshot = Snapshot::from_canonical_bytes(&row.get::<Vec<u8>, _>("snapshot"), &UNLIMITED)
-        .map_err(|_| Error::Internal)?;
-    if snapshot.digest() != row.get::<String, _>("digest") {
-        return Err(Error::Internal);
-    }
+    let snapshot = stored_snapshot(
+        &row.get::<Vec<u8>, _>("snapshot"),
+        &row.get::<String, _>("digest"),
+    )?;
     Ok(Some(Active {
         revision: row.get("revision"),
         snapshot,
@@ -450,8 +445,11 @@ pub async fn save_limits(
     apply(pool, actor, &mutation, now_ms).await
 }
 
-/// Install each shipped default document whose kind and id is not stored
-/// yet. An existing document is never overwritten. Returns what was added.
+/// Install each shipped default document that was never installed in this
+/// database (`role_default_installs`). It happens once per document: one the
+/// owner deletes does not come back at the next start, and a default added
+/// in a later release installs at the first start of that release. An
+/// existing document is never overwritten. Returns what was added.
 pub async fn install_defaults(pool: &PgPool, now_ms: i64) -> Result<Vec<(Kind, String)>> {
     let mut tx = pool.begin().await?;
     let state = read_settings(&mut tx, Lock::Update).await?;
@@ -459,6 +457,18 @@ pub async fn install_defaults(pool: &PgPool, now_ms: i64) -> Result<Vec<(Kind, S
     let mut installed = Vec::new();
     for document in roles::default_documents() {
         let id = stated_id(document.kind, &document.text).ok_or(Error::Internal)?;
+        let first = sqlx::query(
+            "INSERT INTO role_default_installs(kind,id,installed_at_ms) VALUES($1,$2,$3) ON CONFLICT(kind,id) DO NOTHING",
+        )
+        .bind(kind_name(document.kind))
+        .bind(&id)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if first == 0 {
+            continue;
+        }
         let added = sqlx::query(
             "INSERT INTO role_documents(kind,id,markdown,revision,updated_at_ms) VALUES($1,$2,$3,$4,$5) ON CONFLICT(kind,id) DO NOTHING",
         )
@@ -507,7 +517,7 @@ pub async fn activate_stored(pool: &PgPool, now_ms: i64) -> Result<(Option<Strin
     }
     Ok((Some(snapshot.digest().into()), Vec::new()))
 }
-/// Server start: install missing defaults, then make sure the stored set's
+/// Server start: install the defaults never installed before, then make sure the stored set's
 /// snapshot is the active one. An invalid stored set is reported, not fatal.
 pub async fn startup(pool: &PgPool, now_ms: i64) -> Result<Startup> {
     let installed = install_defaults(pool, now_ms).await?;

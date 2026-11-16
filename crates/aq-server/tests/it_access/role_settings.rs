@@ -69,8 +69,9 @@ enabled=true
         agent_access: None,
         source_retention: None,
     };
+    // `TestDb::store` has installed the shipped defaults, as server start does.
     let start = settings::startup(&pool, NOW).await.unwrap();
-    assert_eq!(start.installed.len(), roles::default_documents().len());
+    assert!(start.installed.is_empty());
     assert!(start.problems.is_empty(), "{:?}", start.problems);
     Fixture {
         _db: db,
@@ -232,7 +233,7 @@ async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
     assert_eq!((stored.markdown, stored.revision), (edited, saved.revision));
     assert_eq!(f.active().await, (saved.revision, saved.digest));
 
-    // Spec 0014 §7 as written: a default that was deleted is installed again.
+    // A shipped default the owner deletes stays deleted at the next start.
     let revision = f.revision_of(Kind::Role, "reviewer").await;
     settings::delete(
         &f.pool,
@@ -245,8 +246,77 @@ async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
     )
     .await
     .unwrap();
+    let deleted = f.active().await;
     let again = settings::startup(&f.pool, NOW + 3).await.unwrap();
+    assert!(again.installed.is_empty() && again.problems.is_empty());
+    assert!(
+        settings::get(&f.pool, Kind::Role, "reviewer")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(f.active().await, deleted);
+    // A default this database has never installed (one a later release
+    // adds) is installed at the next start, once.
+    sqlx::query("DELETE FROM role_default_installs WHERE kind='role' AND id='reviewer'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let again = settings::startup(&f.pool, NOW + 4).await.unwrap();
     assert_eq!(again.installed, [(Kind::Role, "reviewer".to_string())]);
+    let again = settings::startup(&f.pool, NOW + 5).await.unwrap();
+    assert!(again.installed.is_empty());
+}
+
+#[tokio::test]
+async fn a_stored_snapshot_is_read_as_stored_even_if_validation_would_refuse_it_today() {
+    let f = started().await;
+    let active = settings::active_snapshot(&f.pool).await.unwrap().unwrap();
+    // A snapshot of an earlier day: a reasoning value no harness accepts now.
+    let text = std::str::from_utf8(active.snapshot.canonical_bytes()).unwrap();
+    let old = text.replace(r#""reasoning":"high""#, r#""reasoning":"ultra""#);
+    assert_ne!(old, text);
+    assert!(roles::Snapshot::from_canonical_bytes(old.as_bytes(), &Default::default()).is_err());
+    let digest = roles::Snapshot::from_stored_bytes(old.as_bytes())
+        .unwrap()
+        .digest()
+        .to_string();
+    sqlx::query(
+        "INSERT INTO role_snapshots(digest,snapshot,created_at_ms,activated_revision) VALUES($1,$2,$3,0)",
+    )
+    .bind(&digest)
+    .bind(old.as_bytes())
+    .bind(NOW)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let read = settings::snapshot(&f.pool, &digest).await.unwrap().unwrap();
+    assert_eq!(read.digest(), digest);
+    assert_eq!(read.canonical_bytes(), old.as_bytes());
+    assert_eq!(
+        read.intelligence("standard-high").unwrap().candidates[0].reasoning,
+        "ultra"
+    );
+    // The bytes must still be the ones the digest names.
+    sqlx::query("UPDATE role_snapshots SET snapshot=$2 WHERE digest=$1")
+        .bind(&digest)
+        .bind(text.as_bytes())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        settings::snapshot(&f.pool, &digest).await,
+        Err(Error::Internal)
+    ));
+    // Compiling the current documents still validates fully.
+    let bad = shipped(Kind::Intelligence, "standard-high").replace("| high |", "| ultra |");
+    let refused = f.save(Kind::Intelligence, "standard-high", &bad).await;
+    assert_eq!(
+        problems(refused.unwrap_err()),
+        [
+            "intelligence profile `standard-high`: candidate 1: harness `claude` does not accept reasoning `ultra`"
+        ]
+    );
 }
 
 #[tokio::test]

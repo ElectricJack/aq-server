@@ -254,7 +254,9 @@ work) and is out of scope here.
 Roles, intelligence profiles and execution profiles are Settings documents:
 stored by the server, edited on Settings pages or through the API, each save
 revision-checked. **(call)** Shipped defaults are Markdown files in the
-aq-server repository, installed when a document of that id does not exist.
+aq-server repository. Each is installed once: a default the owner deletes does
+not come back at the next start, and a default added by a later release is
+installed at the first start of that release.
 
 On each save the server validates all documents together and, if valid,
 activates a new immutable snapshot identified by its content digest. An invalid

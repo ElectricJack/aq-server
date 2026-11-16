@@ -33,6 +33,15 @@ CREATE TABLE role_settings (
     limits_revision BIGINT NOT NULL DEFAULT 0
 );
 INSERT INTO role_settings(singleton) VALUES(TRUE);
+-- The shipped default documents this database has installed. A default is
+-- installed once: deleting its document does not bring it back at the next
+-- start, and a default added by a later release installs once.
+CREATE TABLE role_default_installs (
+    kind TEXT NOT NULL CHECK(kind IN ('role','intelligence','execution')),
+    id TEXT NOT NULL,
+    installed_at_ms BIGINT NOT NULL,
+    PRIMARY KEY(kind, id)
+);
 -- Save receipts for repeated requests; a rolling set, pruned on every save.
 CREATE TABLE role_settings_operations (
     operation_id UUID PRIMARY KEY,
