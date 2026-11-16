@@ -16,8 +16,8 @@ pub fn default_documents() -> Vec<SourceDocument> {
     documents![
         Role "roles": ["developer", "reviewer"],
         Intelligence "intelligence": [
-            "fast-low",
-            "fast-high",
+            "simple-low",
+            "simple-high",
             "standard-low",
             "standard-medium",
             "standard-high",

@@ -1,7 +1,7 @@
 ---
 id: deep-high
 name: Deep, high
-description: The hardest work, such as open-ended investigation and cross-cutting design.
+description: The hardest work: open-ended investigation, cross-cutting design, or a problem nobody has been able to state precisely.
 ---
 ## Candidates
 | provider | model | reasoning | harnesses |

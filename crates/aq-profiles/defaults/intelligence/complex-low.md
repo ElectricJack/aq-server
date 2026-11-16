@@ -1,7 +1,7 @@
 ---
 id: complex-low
 name: Complex, low
-description: Hard problems with a clear plan.
+description: Hard work with a clear plan: many parts or subtle behaviour, but what to build is already decided.
 ---
 ## Candidates
 | provider | model | reasoning | harnesses |

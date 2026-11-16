@@ -240,7 +240,7 @@ mod tests {
         );
         assert_eq!(
             check("developer", "enormous", &BTreeMap::new()).unwrap_err(),
-            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, fast-high, fast-low, standard-high, standard-low, standard-medium."
+            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, simple-high, simple-low, standard-high, standard-low, standard-medium."
         );
         assert_eq!(
             check("developer", "standard-high", &notes("tester", 1)).unwrap_err(),

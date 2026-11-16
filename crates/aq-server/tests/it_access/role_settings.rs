@@ -623,7 +623,7 @@ async fn selection_defaults_and_limits_are_settings_that_recompile_the_set() {
     let saved = save(defaults.clone(), 0).await.unwrap();
     assert_ne!(saved.digest, digest);
     let active = settings::active_snapshot(&f.pool).await.unwrap().unwrap();
-    let launch = active.snapshot.resolve("developer", "fast-low").unwrap();
+    let launch = active.snapshot.resolve("developer", "simple-low").unwrap();
     assert_eq!(launch.selection_policy.max_attempts, 4);
     assert_eq!(launch.selection_policy.max_output_tokens, 32_000);
     assert!(matches!(

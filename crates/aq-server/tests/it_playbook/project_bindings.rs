@@ -236,7 +236,7 @@ async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
         ),
         (
             json!({"default_intelligence":"enormous"}),
-            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, fast-high, fast-low, standard-high, standard-low, standard-medium.",
+            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, simple-high, simple-low, standard-high, standard-low, standard-medium.",
         ),
         (
             json!({"role_notes":{"tester":"Run the slow suite."}}),
@@ -328,7 +328,7 @@ async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
                 .is_some()
         );
     }
-    let (status, body) = remove("intelligence-profiles", Kind::Intelligence, "fast-low").await;
+    let (status, body) = remove("intelligence-profiles", Kind::Intelligence, "simple-low").await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 #[tokio::test]

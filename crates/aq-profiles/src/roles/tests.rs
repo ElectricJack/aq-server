@@ -480,8 +480,8 @@ fn defaults_compile_into_a_snapshot() {
     );
     assert!(snapshot.role("reviewer").unwrap().enabled);
     let levels = [
-        ("fast-low", "claude-haiku-5-5", "medium"),
-        ("fast-high", "claude-haiku-5-5", "high"),
+        ("simple-low", "claude-haiku-5-5", "medium"),
+        ("simple-high", "claude-haiku-5-5", "high"),
         ("standard-low", "claude-sonnet-5-5", "low"),
         ("standard-medium", "claude-sonnet-5-5", "medium"),
         ("standard-high", "claude-sonnet-5-5", "high"),
@@ -550,7 +550,7 @@ fn validation_reports_every_problem_together() {
         "role `Developer`: operations: `project.admin` is not an AQ operation a role can hold",
         "role `Developer`: operations: `task.fly` is not an AQ operation a role can hold",
         "role `Developer`: ## Role: contains a `## ` heading line; use `###` inside a section",
-        "intelligence profile `fast-low`: candidate 1: harness `claude` does not accept reasoning `ultra`",
+        "intelligence profile `simple-low`: candidate 1: harness `claude` does not accept reasoning `ultra`",
         "execution profile `sandbox`: ## Limits: `cpu_millis` must be a positive number",
     ] {
         assert_has(&found, expected);
@@ -617,7 +617,7 @@ fn candidates_are_checked_against_their_harness() {
     };
     assert!(check(vec![candidate("openai", "medium", &["codex"])]).is_empty());
     assert!(check(vec![candidate("anthropic", "off", &["claude"])]).is_empty());
-    let p = "intelligence profile `fast-low`: ";
+    let p = "intelligence profile `simple-low`: ";
     assert_eq!(
         check(vec![]),
         [format!("{p}## Candidates: lists no candidate")]
@@ -729,14 +729,14 @@ fn selection_policy_rules_still_apply() {
     s.intelligence[0].selection.max_attempts = Some(0);
     assert_eq!(
         problems(s),
-        ["intelligence profile `fast-low`: ## Selection: selection policy bounds"]
+        ["intelligence profile `simple-low`: ## Selection: selection policy bounds"]
     );
     // A cost limit and its currency go together, after the defaults apply.
     let mut s = set();
     s.intelligence[0].selection.max_cost_microunits = Some(Some(5));
     assert_eq!(
         problems(s),
-        ["intelligence profile `fast-low`: ## Selection: selection cost basis"]
+        ["intelligence profile `simple-low`: ## Selection: selection cost basis"]
     );
     // Faulty defaults are reported once, not once per profile.
     let faulty = SelectionDefaults {
@@ -1354,7 +1354,7 @@ fn a_profile_overrides_single_keys_and_the_serializer_writes_only_those() {
     // A profile with no differing key is written without the section.
     assert!(
         !snapshot
-            .intelligence("fast-low")
+            .intelligence("simple-low")
             .unwrap()
             .to_markdown()
             .contains("## Selection")
@@ -1407,7 +1407,7 @@ fn a_profile_overrides_single_keys_and_the_serializer_writes_only_those() {
         }
     );
     let p = moved
-        .resolve("developer", "fast-low")
+        .resolve("developer", "simple-low")
         .unwrap()
         .selection_policy;
     assert_eq!((p.max_attempts, p.observation_max_age_ms), (5, 60_000));
