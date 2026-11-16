@@ -707,6 +707,7 @@ fn dashboard_action_schema_lists_task_and_knowledge_kinds() {
         "task.edit",
         "task.activate",
         "task.reopen",
+        "task.complete",
         "task.cancel",
         "task.retry",
         "task.reprioritize",

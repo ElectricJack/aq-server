@@ -4931,6 +4931,43 @@
     {
       "cli": [
         "task",
+        "complete"
+      ],
+      "grant": "task.complete",
+      "kind": "mutation",
+      "name": "task.complete",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:bdb8a57601986fcfd6040b4c6522558dfa89b69c3c14df5115381c7e7f25b58d",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.complete"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Close an active task by hand, with a reason, when no attempt holds it",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "create"
       ],
       "grant": "task.create.subtask",
