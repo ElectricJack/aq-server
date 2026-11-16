@@ -88,7 +88,9 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
     let result = |id, key| rule("result", id, Some((VERSION, key)));
     Some(match kind {
         // agent_access/human/graph_actions.rs::admit; task_execution.rs
-        "task.cancel"
+        "task.activate"
+        | "task.reopen"
+        | "task.cancel"
         | "task.delete"
         | "task.retry"
         | "task.edit"

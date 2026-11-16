@@ -4588,6 +4588,43 @@
     {
       "cli": [
         "task",
+        "activate"
+      ],
+      "grant": "task.activate",
+      "kind": "mutation",
+      "name": "task.activate",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:c966796535dfd724ee2b40c4e8d37db18069e1ac23a9294c57e2626d4751ede0",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.activate"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Make a draft task schedulable",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "cancel"
       ],
       "grant": "task.cancel",
@@ -5675,6 +5712,43 @@
       "summary": "Tasks across projects",
       "target": {
         "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "reopen"
+      ],
+      "grant": "task.reopen",
+      "kind": "mutation",
+      "name": "task.reopen",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:0928200865fb7da324c3e55a524a2f81a2f39241ee6f13aeed28e80c6894dabb",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.reopen"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Make a completed or canceled task schedulable again, if it never had an attempt",
+      "target": {
+        "rule": "subject"
       }
     },
     {
