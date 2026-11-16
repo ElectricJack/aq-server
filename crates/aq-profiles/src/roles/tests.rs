@@ -29,7 +29,8 @@ name: Standard, high
 | provider | model | reasoning | harnesses |
 |---|---|---|---|
 | anthropic | claude-sonnet-5-5 | high | claude |
-| openai | gpt-6 | xhigh | codex, opencode |
+| openai | gpt-6 | xhigh | codex |
+| openai | gpt-6 | default | codex, opencode |
 
 ## Selection
 - max_attempts: 2
@@ -37,8 +38,6 @@ name: Standard, high
 - max_lineage_elapsed_ms: 3600000
 - observation_max_age_ms: 30000
 - allow_unknown_availability: false
-- max_output_tokens: 32000
-- required_capabilities: [aq.terminal]
 - unknown_cost: deny
 - require_complete_accounting: true
 - require_hard_cost_enforcement: true
@@ -72,6 +71,9 @@ fn role_error(source: &str) -> String {
 fn limits() -> DocumentLimits {
     DocumentLimits::default()
 }
+fn defaults() -> SelectionDefaults {
+    SelectionDefaults::default()
+}
 /// The shipped defaults, parsed.
 fn set() -> DocumentSet {
     let mut set = DocumentSet::default();
@@ -85,7 +87,7 @@ fn set() -> DocumentSet {
     set
 }
 fn problems(set: DocumentSet) -> Vec<String> {
-    validate(set, &limits())
+    validate(set, &defaults(), &limits())
         .unwrap_err()
         .iter()
         .map(Problem::to_string)
@@ -221,6 +223,12 @@ fn intelligence_document_parses() {
                 provider: "openai".into(),
                 model: "gpt-6".into(),
                 reasoning: "xhigh".into(),
+                harnesses: vec!["codex".into()],
+            },
+            Candidate {
+                provider: "openai".into(),
+                model: "gpt-6".into(),
+                reasoning: "default".into(),
                 harnesses: vec!["codex".into(), "opencode".into()],
             },
         ]
@@ -229,29 +237,66 @@ fn intelligence_document_parses() {
         profile.candidates[0].derived_id(),
         "anthropic:claude-sonnet-5-5:high"
     );
-    let p = &profile.selection_policy;
-    assert_eq!((p.schema_version, p.max_attempts), (1, 2));
     assert_eq!(
-        p.fallback_on,
-        vec![FallbackReason::Unavailable, FallbackReason::Unsupported]
+        profile.selection,
+        SelectionOverrides {
+            max_attempts: Some(2),
+            fallback_on: Some(vec![
+                FallbackReason::Unavailable,
+                FallbackReason::Unsupported
+            ]),
+            max_lineage_elapsed_ms: Some(3_600_000),
+            observation_max_age_ms: Some(30_000),
+            allow_unknown_availability: Some(false),
+            unknown_cost: Some(UnknownCostPolicy::Deny),
+            require_complete_accounting: Some(true),
+            require_hard_cost_enforcement: Some(true),
+            max_cost_microunits: Some(Some(5_000_000)),
+            currency: Some(Some("USD".into())),
+        }
     );
+    defaults().with(&profile.selection).check().unwrap();
+}
+#[test]
+fn a_profile_is_its_candidates_and_selection_is_optional() {
+    let source = &INTELLIGENCE[..INTELLIGENCE.find("\n## Selection").unwrap()];
+    let profile = parse_intelligence(source).unwrap();
+    assert_eq!(profile.candidates.len(), 3);
+    assert!(profile.selection.is_empty());
+    // An empty section and single keys are both fine.
+    let empty = parse_intelligence(&format!("{source}\n## Selection\n")).unwrap();
+    assert_eq!(empty, profile);
+    let one = parse_intelligence(&format!("{source}\n## Selection\n- max_attempts: 5\n")).unwrap();
     assert_eq!(
-        (
-            p.max_lineage_elapsed_ms,
-            p.observation_max_age_ms,
-            p.max_output_tokens
-        ),
-        (3_600_000, 30_000, 32_000)
+        one.selection,
+        SelectionOverrides {
+            max_attempts: Some(5),
+            ..Default::default()
+        }
     );
-    assert!(!p.allow_unknown_availability);
-    assert_eq!(p.required_capabilities.len(), 1);
-    assert_eq!(p.required_capabilities[0].id.as_str(), "aq.terminal");
-    assert_eq!(p.required_capabilities[0].version, 1);
-    assert_eq!(p.budget.unknown_cost, UnknownCostPolicy::Deny);
-    assert!(p.budget.require_complete_accounting && p.budget.require_hard_cost_enforcement);
-    assert_eq!(p.budget.max_cost_microunits, Some(5_000_000));
-    assert_eq!(p.budget.currency.as_deref(), Some("USD"));
-    p.validate().unwrap();
+    let none = parse_intelligence(&format!(
+        "{source}\n## Selection\n- max_cost_microunits: none\n- currency: none\n"
+    ))
+    .unwrap();
+    assert_eq!(none.selection.max_cost_microunits, Some(None));
+    assert_eq!(none.selection.currency, Some(None));
+    assert_eq!(parse_intelligence(&none.to_markdown()).unwrap(), none);
+    // The execution profile owns these two; a profile cannot state them.
+    for key in [
+        "max_output_tokens: 32000",
+        "required_capabilities: [aq.terminal]",
+    ] {
+        let error = parse_intelligence(&format!("{source}\n## Selection\n- {key}\n"))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!(
+                "line 13: unknown `## Selection` key `{}`",
+                key.split(':').next().unwrap()
+            )
+        );
+    }
 }
 #[test]
 fn intelligence_document_refusals_name_the_fault() {
@@ -279,37 +324,27 @@ fn intelligence_document_refusals_name_the_fault() {
     );
     assert_eq!(
         edit("- max_attempts: 2", "- attempts: 2"),
-        "line 12: unknown `## Selection` key `attempts`"
-    );
-    assert_eq!(
-        edit("- max_attempts: 2\n", ""),
-        "line 11: `## Selection` is missing `max_attempts`"
+        "line 13: unknown `## Selection` key `attempts`"
     );
     assert_eq!(
         edit("- max_attempts: 2", "- max_attempts: two"),
-        "line 12: `max_attempts` expects a whole number"
+        "line 13: `max_attempts` expects a whole number"
     );
     assert_eq!(
         edit("[unavailable, unsupported]", "[tired]"),
-        "line 13: `fallback_on` has an unknown value `tired`"
+        "line 14: `fallback_on` has an unknown value `tired`"
     );
     assert_eq!(
         edit("- unknown_cost: deny", "unknown_cost: deny"),
-        "line 19: `## Selection` expects `- key: value` items, found `unknown_cost: deny`"
+        "line 18: `## Selection` expects `- key: value` items, found `unknown_cost: deny`"
     );
     assert_eq!(
         edit("## Selection", "## Policy").split(';').next().unwrap(),
-        "line 11: unknown heading `## Policy`"
+        "line 12: unknown heading `## Policy`"
     );
     assert_eq!(
         edit("name: Standard, high", "automatic_routing: true"),
         "line 3: unknown frontmatter key `automatic_routing`"
-    );
-    assert_eq!(
-        parse_intelligence(&INTELLIGENCE[..INTELLIGENCE.find("## Selection").unwrap()])
-            .unwrap_err()
-            .to_string(),
-        "`## Selection` is missing"
     );
 }
 #[test]
@@ -408,10 +443,9 @@ fn documents_round_trip() {
     let profile = parse_intelligence(INTELLIGENCE).unwrap();
     assert_eq!(parse_intelligence(&profile.to_markdown()).unwrap(), profile);
     let mut plain = profile.clone();
-    plain.selection_policy.required_capabilities.clear();
-    plain.selection_policy.fallback_on.clear();
-    plain.selection_policy.budget.max_cost_microunits = None;
-    plain.selection_policy.budget.currency = None;
+    plain.selection.fallback_on = Some(Vec::new());
+    plain.selection.max_cost_microunits = None;
+    plain.selection.currency = None;
     assert_eq!(parse_intelligence(&plain.to_markdown()).unwrap(), plain);
 
     let execution = parse_execution(EXECUTION).unwrap();
@@ -433,7 +467,7 @@ fn documents_round_trip() {
 
 #[test]
 fn defaults_compile_into_a_snapshot() {
-    let snapshot = compile(&default_documents(), &limits()).unwrap();
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
     assert_eq!(
         snapshot.roles().map(|r| r.id.as_str()).collect::<Vec<_>>(),
         ["developer", "reviewer"]
@@ -539,7 +573,7 @@ fn ids_follow_the_pattern() {
     ] {
         let mut s = set();
         s.intelligence[0].id = id.to_string();
-        assert_eq!(validate(s, &limits()).is_ok(), ok, "{id}");
+        assert_eq!(validate(s, &defaults(), &limits()).is_ok(), ok, "{id}");
     }
 }
 #[test]
@@ -555,7 +589,7 @@ fn duplicate_ids_are_refused_within_a_kind_only() {
     let mut s = set();
     s.intelligence[0].id = "sandbox".into();
     s.roles[1].id = "sandbox".into();
-    validate(s, &limits()).unwrap();
+    validate(s, &defaults(), &limits()).unwrap();
 }
 #[test]
 fn an_enabled_role_is_required() {
@@ -564,7 +598,7 @@ fn an_enabled_role_is_required() {
     assert_eq!(problems(s), ["all documents: hold no enabled role"]);
     let mut s = set();
     s.roles[0].enabled = false;
-    validate(s, &limits()).unwrap();
+    validate(s, &defaults(), &limits()).unwrap();
 }
 #[test]
 fn candidates_are_checked_against_their_harness() {
@@ -577,7 +611,7 @@ fn candidates_are_checked_against_their_harness() {
     let check = |candidates: Vec<Candidate>| {
         let mut s = set();
         s.intelligence[0].candidates = candidates;
-        validate(s, &limits())
+        validate(s, &defaults(), &limits())
             .map(|_| Vec::new())
             .unwrap_or_else(|p| p.iter().map(Problem::to_string).collect::<Vec<_>>())
     };
@@ -606,13 +640,27 @@ fn candidates_are_checked_against_their_harness() {
             "{p}candidate 1: harness `claude` does not accept reasoning `minimal`"
         )]
     );
-    // No reasoning effort is known for a harness other than claude and codex.
+    // gemini and opencode take only their own setting for now.
     assert_eq!(
-        check(vec![candidate("google", "high", &["gemini"])]),
-        [format!(
-            "{p}candidate 1: harness `gemini` does not accept reasoning `high`"
-        )]
+        check(vec![candidate("google", "high", &["gemini", "opencode"])]),
+        [
+            format!("{p}candidate 1: harness `gemini` does not accept reasoning `high`"),
+            format!("{p}candidate 1: harness `opencode` does not accept reasoning `high`"),
+        ]
     );
+    assert!(
+        check(vec![candidate(
+            "google",
+            "default",
+            &["gemini", "opencode"]
+        )])
+        .is_empty()
+    );
+    assert!(check(vec![candidate("openai", "default", &["codex"])]).is_empty());
+    for harness in HARNESSES {
+        assert!(harness_supports(harness, "default"), "{harness}");
+    }
+    assert!(!harness_supports("pi", "default"));
     assert_eq!(
         check(vec![candidate(
             "anthropic",
@@ -650,17 +698,29 @@ fn candidates_are_checked_against_their_harness() {
 #[test]
 fn selection_policy_rules_still_apply() {
     let mut s = set();
-    s.intelligence[0].selection_policy.max_attempts = 0;
+    s.intelligence[0].selection.max_attempts = Some(0);
     assert_eq!(
         problems(s),
         ["intelligence profile `fast-low`: ## Selection: selection policy bounds"]
     );
+    // A cost limit and its currency go together, after the defaults apply.
     let mut s = set();
-    s.intelligence[0].selection_policy.required_capabilities[0].version = 2;
+    s.intelligence[0].selection.max_cost_microunits = Some(Some(5));
     assert_eq!(
         problems(s),
-        ["intelligence profile `fast-low`: ## Selection: a required capability is not version 1"]
+        ["intelligence profile `fast-low`: ## Selection: selection cost basis"]
     );
+    // Faulty defaults are reported once, not once per profile.
+    let faulty = SelectionDefaults {
+        max_attempts: 0,
+        ..defaults()
+    };
+    let found: Vec<_> = validate(set(), &faulty, &limits())
+        .unwrap_err()
+        .iter()
+        .map(Problem::to_string)
+        .collect();
+    assert_eq!(found, ["selection defaults: selection policy bounds"]);
 }
 #[test]
 fn execution_profile_rules() {
@@ -716,8 +776,8 @@ fn byte_limits_come_from_the_caller() {
         max_documents_per_kind: 9,
         ..limits()
     };
-    compile(&documents, &exact).unwrap();
-    validate(set(), &exact).unwrap();
+    compile(&documents, &defaults(), &exact).unwrap();
+    validate(set(), &defaults(), &exact).unwrap();
 
     let tight = DocumentLimits {
         max_document_bytes: longest - 1,
@@ -726,7 +786,7 @@ fn byte_limits_come_from_the_caller() {
         max_name_bytes: 3,
         max_description_bytes: 3,
     };
-    let from_source: Vec<_> = compile(&documents, &tight)
+    let from_source: Vec<_> = compile(&documents, &defaults(), &tight)
         .unwrap_err()
         .iter()
         .map(Problem::to_string)
@@ -766,7 +826,7 @@ fn byte_limits_come_from_the_caller() {
     ))));
 }
 fn problems_with(set: DocumentSet, limits: &DocumentLimits) -> Vec<String> {
-    validate(set, limits)
+    validate(set, &defaults(), limits)
         .unwrap_err()
         .iter()
         .map(Problem::to_string)
@@ -779,7 +839,7 @@ fn compile_collects_parse_and_validation_problems() {
     documents[1].text = documents[1]
         .text
         .replace("execution: sandbox", "execution: nowhere");
-    let found: Vec<_> = compile(&documents, &limits())
+    let found: Vec<_> = compile(&documents, &defaults(), &limits())
         .unwrap_err()
         .iter()
         .map(Problem::to_string)
@@ -800,7 +860,7 @@ fn compile_collects_parse_and_validation_problems() {
 #[test]
 fn snapshot_digest_ignores_order_and_insignificant_whitespace() {
     let documents = default_documents();
-    let snapshot = compile(&documents, &limits()).unwrap();
+    let snapshot = compile(&documents, &defaults(), &limits()).unwrap();
     assert_eq!(snapshot.digest().len(), 64);
     assert_eq!(
         snapshot.digest(),
@@ -808,7 +868,10 @@ fn snapshot_digest_ignores_order_and_insignificant_whitespace() {
     );
     let mut reordered = documents.clone();
     reordered.reverse();
-    assert_eq!(compile(&reordered, &limits()).unwrap(), snapshot);
+    assert_eq!(
+        compile(&reordered, &defaults(), &limits()).unwrap(),
+        snapshot
+    );
 
     let spaced: Vec<_> = documents
         .iter()
@@ -828,8 +891,12 @@ fn snapshot_digest_ignores_order_and_insignificant_whitespace() {
         })
         .collect();
     // Indenting list items also touched the role's `## Rules` prose, which is content.
-    let digest_of =
-        |sources: &[SourceDocument]| compile(sources, &limits()).unwrap().digest().to_string();
+    let digest_of = |sources: &[SourceDocument]| {
+        compile(sources, &defaults(), &limits())
+            .unwrap()
+            .digest()
+            .to_string()
+    };
     let profiles_only = |sources: &[SourceDocument]| -> Vec<SourceDocument> {
         sources
             .iter()
@@ -860,8 +927,11 @@ fn snapshot_digest_ignores_order_and_insignificant_whitespace() {
 }
 #[test]
 fn snapshot_digest_changes_with_any_content() {
-    let base = validate(set(), &limits()).unwrap();
-    assert_eq!(base, compile(&default_documents(), &limits()).unwrap());
+    let base = validate(set(), &defaults(), &limits()).unwrap();
+    assert_eq!(
+        base,
+        compile(&default_documents(), &defaults(), &limits()).unwrap()
+    );
     let edits: Vec<fn(&mut DocumentSet)> = vec![
         |s| s.roles[0].role_md.push('.'),
         |s| s.roles[0].rules_md.push('.'),
@@ -872,7 +942,7 @@ fn snapshot_digest_changes_with_any_content() {
         |s| s.roles[1].operations.push("wait.register".into()),
         |s| s.intelligence[3].candidates[0].reasoning = "max".into(),
         |s| s.intelligence[3].candidates[0].model.push('x'),
-        |s| s.intelligence[3].selection_policy.max_attempts = 3,
+        |s| s.intelligence[3].selection.max_attempts = Some(3),
         |s| s.intelligence[3].id.push('x'),
         |s| s.execution[0].limits.wall_time_ms += 1,
         |s| s.execution[0].confinement = Confinement::ContainerPermitted,
@@ -887,17 +957,20 @@ fn snapshot_digest_changes_with_any_content() {
     for (index, edit) in edits.iter().enumerate() {
         let mut s = set();
         edit(&mut s);
-        let changed = validate(s, &limits()).unwrap();
+        let changed = validate(s, &defaults(), &limits()).unwrap();
         assert!(seen.insert(changed.digest().to_string()), "edit {index}");
     }
     // Outer whitespace of a prompt is not content.
     let mut s = set();
     s.roles[0].role_md = format!("\r\n{}\n\n", s.roles[0].role_md);
-    assert_eq!(validate(s, &limits()).unwrap().digest(), base.digest());
+    assert_eq!(
+        validate(s, &defaults(), &limits()).unwrap().digest(),
+        base.digest()
+    );
 }
 #[test]
 fn snapshot_reads_back_only_from_its_canonical_bytes() {
-    let snapshot = compile(&default_documents(), &limits()).unwrap();
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
     let bytes = snapshot.canonical_bytes();
     assert_eq!(
         Snapshot::from_canonical_bytes(bytes, &limits()).unwrap(),
@@ -953,7 +1026,7 @@ fn permissions_take_the_scope_of_the_project_or_its_repository() {
         "source.write",
         format!("repository:{repository}"),
     ));
-    let snapshot = compile(&default_documents(), &limits()).unwrap();
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
     let developer = snapshot.role("developer").unwrap();
     let effective = effective_permissions(developer, project, repository, &live, &live);
     assert_eq!(pairs(&effective), pairs(&live));
@@ -1001,17 +1074,20 @@ fn permissions_take_the_scope_of_the_project_or_its_repository() {
         "wait.register".into(),
         "task.read".into(),
         "wait.register".into(),
+        "wait.show".into(),
     ];
     let ceiling = vec![
         permission("task.read", format!("project:{project}")),
-        permission("wait.register", format!("project:{project}")),
+        permission("wait.register", "attempt:self".into()),
+        // A project-scoped wait is not what a role's wait operation means.
+        permission("wait.show", format!("project:{project}")),
     ];
     assert_eq!(
         pairs(&effective_permissions(
             &waiter, project, repository, &ceiling, &ceiling
         )),
         [
-            ("wait.register".to_string(), format!("project:{project}")),
+            ("wait.register".to_string(), "attempt:self".to_string()),
             ("task.read".to_string(), format!("project:{project}")),
         ]
     );
@@ -1145,5 +1221,200 @@ fn startup_text_over_the_limit_is_refused_not_trimmed() {
     assert_eq!(
         StartupError::Empty(StartupPart::Task).to_string(),
         "the task is empty"
+    );
+}
+
+fn compiled(defaults: &SelectionDefaults, extra: &[(Kind, &str)]) -> Snapshot {
+    let mut documents = default_documents();
+    for (kind, text) in extra {
+        documents.push(SourceDocument {
+            kind: *kind,
+            label: "extra".into(),
+            text: text.to_string(),
+        });
+    }
+    compile(&documents, defaults, &limits()).unwrap()
+}
+#[test]
+fn a_launch_resolves_defaults_overrides_and_the_execution_profile() {
+    let snapshot = compiled(&defaults(), &[]);
+    assert_eq!(snapshot.selection_defaults(), &defaults());
+    let launch = snapshot.resolve("developer", "standard-high").unwrap();
+    assert_eq!(
+        (launch.role.id.as_str(), launch.execution.id.as_str()),
+        ("developer", "sandbox")
+    );
+    assert_eq!(launch.candidates, launch.intelligence.candidates);
+    let p = &launch.selection_policy;
+    p.validate().unwrap();
+    // What the nine level documents each said before they became candidates-only.
+    assert_eq!((p.schema_version, p.max_attempts), (1, 2));
+    assert_eq!(p.fallback_on.len(), 5);
+    assert_eq!(
+        (p.max_lineage_elapsed_ms, p.observation_max_age_ms),
+        (3_600_000, 30_000)
+    );
+    assert!(!p.allow_unknown_availability);
+    assert_eq!(p.budget.unknown_cost, UnknownCostPolicy::AllowBounded);
+    assert!(!p.budget.require_complete_accounting && !p.budget.require_hard_cost_enforcement);
+    assert_eq!(
+        (p.budget.max_cost_microunits, &p.budget.currency),
+        (None, &None)
+    );
+    // From the execution profile: its output limit and, for a container, five capabilities.
+    assert_eq!(p.max_output_tokens, 32_000);
+    let ids: Vec<_> = p
+        .required_capabilities
+        .iter()
+        .map(|c| (c.id.as_str(), c.version))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            ("aq.profiled-launch", 1),
+            ("aq.terminal", 1),
+            ("aq.harness.startup-context", 1),
+            ("aq.harness.container-confinement", 1),
+            ("aq.harness.stop", 1),
+        ]
+    );
+
+    assert_eq!(
+        snapshot
+            .resolve("tester", "standard-high")
+            .unwrap_err()
+            .to_string(),
+        "no role `tester` exists"
+    );
+    assert_eq!(
+        snapshot
+            .resolve("developer", "router")
+            .unwrap_err()
+            .to_string(),
+        "no intelligence profile `router` exists"
+    );
+}
+#[test]
+fn a_profile_overrides_single_keys_and_the_serializer_writes_only_those() {
+    let custom = "---\nid: custom\nname: Custom\n---\n## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n| anthropic | m | high | claude |\n| openai | n | high | codex |\n\n## Selection\n- max_attempts: 5\n- observation_max_age_ms: 30000\n- fallback_on: [unavailable]\n";
+    let native = EXECUTION
+        .replace("id: sandbox", "id: native")
+        .replace("confinement: container", "confinement: native")
+        .replace("max_output_tokens: 32000", "max_output_tokens: 9000");
+    let role = ROLE
+        .replace("id: developer", "id: local")
+        .replace("execution: sandbox", "execution: native");
+    let extra = [
+        (Kind::Intelligence, custom),
+        (Kind::Execution, native.as_str()),
+        (Kind::Role, role.as_str()),
+    ];
+    let snapshot = compiled(&defaults(), &extra);
+    let profile = snapshot.intelligence("custom").unwrap();
+    // `observation_max_age_ms: 30000` states the default, so it is not kept.
+    assert_eq!(
+        profile.selection,
+        SelectionOverrides {
+            max_attempts: Some(5),
+            fallback_on: Some(vec![FallbackReason::Unavailable]),
+            ..Default::default()
+        }
+    );
+    let written = profile.to_markdown();
+    assert!(written.ends_with("\n## Selection\n- max_attempts: 5\n- fallback_on: [unavailable]\n"));
+    assert_eq!(parse_intelligence(&written).unwrap(), *profile);
+    // A profile with no differing key is written without the section.
+    assert!(
+        !snapshot
+            .intelligence("fast-low")
+            .unwrap()
+            .to_markdown()
+            .contains("## Selection")
+    );
+
+    let launch = snapshot.resolve("local", "custom").unwrap();
+    let p = &launch.selection_policy;
+    assert_eq!((p.max_attempts, p.observation_max_age_ms), (5, 30_000));
+    assert_eq!(p.fallback_on, [FallbackReason::Unavailable]);
+    assert_eq!(p.max_lineage_elapsed_ms, 3_600_000);
+    // The native profile: its own output limit and no container capability.
+    assert_eq!(p.max_output_tokens, 9000);
+    let ids: Vec<_> = p
+        .required_capabilities
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "aq.profiled-launch",
+            "aq.terminal",
+            "aq.harness.startup-context",
+            "aq.harness.stop"
+        ]
+    );
+    // Both harnesses are the native profile's; under `sandbox` only claude is.
+    assert_eq!(launch.candidates.len(), 2);
+    let sandboxed = snapshot.resolve("developer", "custom").unwrap();
+    assert_eq!(sandboxed.candidates.len(), 1);
+    assert_eq!(sandboxed.candidates[0].harnesses, ["claude"]);
+
+    // Other defaults: the same documents resolve differently and get another digest.
+    let other = SelectionDefaults {
+        max_attempts: 5,
+        observation_max_age_ms: 60_000,
+        max_cost_microunits: Some(7),
+        currency: Some("USD".into()),
+        ..defaults()
+    };
+    let moved = compiled(&other, &extra);
+    assert_ne!(moved.digest(), snapshot.digest());
+    let profile = moved.intelligence("custom").unwrap();
+    assert_eq!(
+        profile.selection,
+        SelectionOverrides {
+            observation_max_age_ms: Some(30_000),
+            fallback_on: Some(vec![FallbackReason::Unavailable]),
+            ..Default::default()
+        }
+    );
+    let p = moved
+        .resolve("developer", "fast-low")
+        .unwrap()
+        .selection_policy;
+    assert_eq!((p.max_attempts, p.observation_max_age_ms), (5, 60_000));
+    assert_eq!(p.budget.max_cost_microunits, Some(7));
+    assert_eq!(
+        Snapshot::from_canonical_bytes(moved.canonical_bytes(), &limits()).unwrap(),
+        moved
+    );
+    // A profile can state "no cost limit" against defaults that have one.
+    let free = custom.replace(
+        "- max_attempts: 5",
+        "- max_cost_microunits: none\n- currency: none",
+    );
+    let moved = compiled(&other, &[(Kind::Intelligence, free.as_str())]);
+    let p = moved
+        .resolve("developer", "custom")
+        .unwrap()
+        .selection_policy;
+    assert_eq!(
+        (p.budget.max_cost_microunits, p.budget.currency),
+        (None, None)
+    );
+    assert_eq!(
+        Snapshot::from_canonical_bytes(moved.canonical_bytes(), &limits()).unwrap(),
+        moved
+    );
+}
+#[test]
+fn an_execution_profile_bounds_its_output_tokens() {
+    let mut s = set();
+    s.execution[0].limits.max_output_tokens = 1_048_577;
+    assert_eq!(
+        problems(s),
+        [
+            "execution profile `sandbox`: ## Limits: `max_output_tokens` is over the selection policy's bound of 1048576"
+        ]
     );
 }

@@ -3,8 +3,8 @@
 //! document and field.
 use super::markdown::{has_heading, is_token};
 use super::{
-    Execution, HARNESSES, Intelligence, Kind, Role, harness_supports, operation_known,
-    parse_execution, parse_intelligence, parse_role, provider_fits_harness,
+    Execution, HARNESSES, Intelligence, Kind, Role, SelectionDefaults, harness_supports,
+    operation_known, parse_execution, parse_intelligence, parse_role, provider_fits_harness,
 };
 use aq_session_protocol::Digest;
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,7 @@ pub struct DocumentSet {
 #[serde(deny_unknown_fields)]
 struct Content {
     schema_version: u32,
+    selection_defaults: SelectionDefaults,
     roles: BTreeMap<String, Role>,
     intelligence: BTreeMap<String, Intelligence>,
     execution: BTreeMap<String, Execution>,
@@ -106,6 +107,10 @@ impl Snapshot {
     }
     pub fn execution(&self, id: &str) -> Option<&Execution> {
         self.content.execution.get(id)
+    }
+    /// The selection defaults this set was compiled with.
+    pub fn selection_defaults(&self) -> &SelectionDefaults {
+        &self.content.selection_defaults
     }
     /// Roles in id order.
     pub fn roles(&self) -> impl Iterator<Item = &Role> {
@@ -143,6 +148,7 @@ impl Snapshot {
                 intelligence: content.intelligence.into_values().collect(),
                 execution: content.execution.into_values().collect(),
             },
+            &content.selection_defaults,
             limits,
         )?;
         if snapshot.bytes != bytes {
@@ -152,10 +158,12 @@ impl Snapshot {
     }
 }
 
-/// Parse and validate all documents together (spec 0014 §7). Returns the
-/// snapshot, or every problem found.
+/// Parse and validate all documents together (spec 0014 §7) under the
+/// selection `defaults` Settings holds. Returns the snapshot, or every
+/// problem found.
 pub fn compile(
     sources: &[SourceDocument],
+    defaults: &SelectionDefaults,
     limits: &DocumentLimits,
 ) -> Result<Snapshot, Vec<Problem>> {
     let mut problems = Vec::new();
@@ -194,7 +202,7 @@ pub fn compile(
     if total > limits.max_set_bytes {
         problems.push(set_too_large(total, limits));
     }
-    match check(set, limits, false) {
+    match check(set, defaults, limits, false) {
         Ok(snapshot) if problems.is_empty() => Ok(snapshot),
         Ok(_) => Err(problems),
         Err(more) => {
@@ -205,8 +213,12 @@ pub fn compile(
 }
 /// Validate parsed documents together. Returns the snapshot, or every problem
 /// found.
-pub fn validate(set: DocumentSet, limits: &DocumentLimits) -> Result<Snapshot, Vec<Problem>> {
-    check(set, limits, true)
+pub fn validate(
+    set: DocumentSet,
+    defaults: &SelectionDefaults,
+    limits: &DocumentLimits,
+) -> Result<Snapshot, Vec<Problem>> {
+    check(set, defaults, limits, true)
 }
 
 fn set_too_large(total: usize, limits: &DocumentLimits) -> Problem {
@@ -302,6 +314,10 @@ impl Report<'_> {
     }
 }
 
+/// The bound `SelectionPolicy::validate` puts on a policy's output tokens,
+/// which a launch takes from its execution profile.
+const MAX_OUTPUT_TOKENS: u64 = 1_048_576;
+
 fn check_role(r: &mut Report<'_>, role: &Role, execution: &BTreeSet<&str>) {
     if !execution.contains(role.execution.as_str()) {
         r.add(
@@ -332,7 +348,7 @@ fn check_role(r: &mut Report<'_>, role: &Role, execution: &BTreeSet<&str>) {
         }
     }
 }
-fn check_intelligence(r: &mut Report<'_>, profile: &Intelligence) {
+fn check_intelligence(r: &mut Report<'_>, profile: &Intelligence, defaults: &SelectionDefaults) {
     if profile.candidates.is_empty() {
         r.add("## Candidates", "lists no candidate");
     }
@@ -377,10 +393,10 @@ fn check_intelligence(r: &mut Report<'_>, profile: &Intelligence) {
             );
         }
     }
-    let policy = &profile.selection_policy;
-    if policy.required_capabilities.iter().any(|c| c.version != 1) {
-        r.add("## Selection", "a required capability is not version 1");
-    } else if let Err(crate::Error::Invalid(message)) = policy.validate() {
+    // The defaults alone are reported once, for the whole set.
+    if !profile.selection.is_empty()
+        && let Err(message) = defaults.with(&profile.selection).check()
+    {
         r.add("## Selection", message);
     }
 }
@@ -424,6 +440,14 @@ fn check_execution(r: &mut Report<'_>, profile: &Execution) {
             r.add("## Limits", format!("`{name}` must be a positive number"));
         }
     }
+    if l.max_output_tokens > MAX_OUTPUT_TOKENS {
+        r.add(
+            "## Limits",
+            format!(
+                "`max_output_tokens` is over the selection policy's bound of {MAX_OUTPUT_TOKENS}"
+            ),
+        );
+    }
     if l.startup_context_bytes > crate::central::MAX_STARTUP_BYTES as u64 {
         r.add(
             "## Limits",
@@ -437,10 +461,22 @@ fn check_execution(r: &mut Report<'_>, profile: &Execution) {
 
 fn check(
     mut set: DocumentSet,
+    defaults: &SelectionDefaults,
     limits: &DocumentLimits,
     sizes: bool,
 ) -> Result<Snapshot, Vec<Problem>> {
     let mut problems = Vec::new();
+    if let Err(message) = defaults.check() {
+        problems.push(Problem {
+            document: "selection defaults".into(),
+            field: String::new(),
+            message,
+        });
+    }
+    // A profile is stored with only the keys that differ from the defaults.
+    for profile in &mut set.intelligence {
+        profile.selection = std::mem::take(&mut profile.selection).differing(defaults);
+    }
     // Prompt text is stored as the parser reads it: LF lines, no outer blank lines.
     for role in &mut set.roles {
         for text in [&mut role.role_md, &mut role.rules_md] {
@@ -468,6 +504,7 @@ fn check(
     let mut total = 0usize;
     let mut content = Content {
         schema_version: 1,
+        selection_defaults: defaults.clone(),
         roles: BTreeMap::new(),
         intelligence: BTreeMap::new(),
         execution: BTreeMap::new(),
@@ -501,7 +538,7 @@ fn check(
         set.intelligence,
         Kind::Intelligence,
         intelligence,
-        |r, d| check_intelligence(&mut r, d)
+        |r, d| check_intelligence(&mut r, d, defaults)
     );
     each!(set.execution, Kind::Execution, execution, |r, d| {
         check_execution(&mut r, d)

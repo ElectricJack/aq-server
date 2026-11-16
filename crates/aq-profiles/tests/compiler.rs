@@ -424,7 +424,12 @@ fn role_permissions_match_the_composed_effective_permissions() {
             ),
         ]
     );
-    let snapshot = roles::compile(&roles::default_documents(), &Default::default()).unwrap();
+    let snapshot = roles::compile(
+        &roles::default_documents(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
     let derived = roles::effective_permissions(
         snapshot.role("developer").unwrap(),
         project,

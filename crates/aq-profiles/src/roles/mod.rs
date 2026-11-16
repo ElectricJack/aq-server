@@ -4,13 +4,13 @@
 //!
 //! This module is built alongside the catalog it replaces. The document
 //! grammar is specified in the crate README.
-use crate::SelectionPolicy;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod defaults;
 mod markdown;
 mod permissions;
+mod selection;
 mod startup;
 #[cfg(test)]
 mod tests;
@@ -19,6 +19,7 @@ mod validate;
 pub use defaults::default_documents;
 pub use markdown::{ParseError, parse_execution, parse_intelligence, parse_role};
 pub use permissions::effective_permissions;
+pub use selection::{Launch, ResolveError, SelectionDefaults, SelectionOverrides};
 pub use startup::{StartupError, StartupInput, StartupPart, StartupText, assemble_startup};
 pub use validate::{
     DocumentLimits, DocumentSet, Problem, Snapshot, SourceDocument, compile, validate,
@@ -36,14 +37,16 @@ pub const SOURCE_WRITE: &str = "source.write";
 pub fn operation_known(operation: &str) -> bool {
     aq_agent_grants::grantable(operation) || operation == SOURCE_WRITE
 }
-/// Whether a logged-in `harness` (`codex` or `claude`) accepts the reasoning
-/// `effort` of a model choice. Other harnesses accept none.
+/// Whether `harness` accepts the reasoning `effort` of a candidate. Every
+/// harness accepts `default`, its own setting; `gemini` and `opencode` accept
+/// nothing else yet.
 pub fn harness_supports(harness: &str, effort: &str) -> bool {
     let supported: &[&str] = match harness {
         "codex" => &[
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+            "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
         ],
         "claude" => &["default", "off", "low", "medium", "high", "xhigh", "max"],
+        "gemini" | "opencode" => &["default"],
         _ => return false,
     };
     supported.contains(&effort)
@@ -123,7 +126,9 @@ pub struct Intelligence {
     pub description: String,
     /// In preference order.
     pub candidates: Vec<Candidate>,
-    pub selection_policy: SelectionPolicy,
+    /// The keys stated under `## Selection`; the rest are the defaults.
+    #[serde(default, skip_serializing_if = "SelectionOverrides::is_empty")]
+    pub selection: SelectionOverrides,
 }
 
 /// The four consistent settings of [`crate::ExecutionConfinement`].

@@ -145,7 +145,7 @@ An agent is described by three documents, each one Markdown file:
 | Document | Says | Parsed by |
 |---|---|---|
 | Role | What kind of work the agent does: its prompt, its AQ operations and the execution profile it runs under. | `roles::parse_role` |
-| Intelligence profile | How capable a model the work needs: ordered candidates and the selection policy. | `roles::parse_intelligence` |
+| Intelligence profile | How capable a model the work needs: ordered candidates, and optionally its own values for the selection policy. | `roles::parse_intelligence` |
 | Execution profile | Where and how the harness runs: harnesses, environment, confinement, credentials and limits. | `roles::parse_execution` |
 
 `roles::compile` parses and validates all documents together. It returns a
@@ -205,7 +205,7 @@ You implement the change your task describes, in the workspace you are given.
 | Part | Rule |
 |---|---|
 | `execution` | Required. The id of an execution profile in the same set. |
-| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::effective_permissions` gives each the task's project (`project:<id>`), or for `source.*` the project's repository (`repository:<id>`), and keeps it only when the project's ceilings and the caller both hold it. |
+| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::effective_permissions` gives each the task's project (`project:<id>`), for `source.*` the project's repository (`repository:<id>`), or for `wait.*` the attempt itself (`attempt:self`), and keeps it only when the project's ceilings and the caller both hold it. |
 | `enabled` | Optional, `true` when absent. At least one role in a set must be enabled. |
 | `## Role` | Required and not empty. |
 | `## Rules` | Optional. |
@@ -225,35 +225,72 @@ description: Ordinary work that touches several parts or needs careful checking.
 |---|---|---|---|
 | anthropic | claude-sonnet-5-5 | high | claude |
 | openai | gpt-6 | high | codex |
-
-## Selection
-- max_attempts: 2
-- fallback_on: [missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]
-- max_lineage_elapsed_ms: 3600000
-- observation_max_age_ms: 30000
-- allow_unknown_availability: false
-- max_output_tokens: 32000
-- required_capabilities: [aq.profiled-launch, aq.terminal]
-- unknown_cost: allow_bounded
-- require_complete_accounting: false
-- require_hard_cost_enforcement: false
 ```
+
+A profile is its candidates and nothing else by default.
 
 `## Candidates` is a table with exactly this header row, a rule row, and one
 row per candidate in preference order. `harnesses` is a comma-separated list.
 `reasoning` is the effort itself and must be one the named harness accepts
-(`roles::harness_supports`): `default`, `off`, `low`, `medium`, `high`,
-`xhigh`, `max` for `claude`; `none`, `minimal`, `low`, `medium`, `high`,
-`xhigh`, `max`, `ultra` for `codex`. No effort is defined yet for `gemini` or
-`opencode`, so a candidate cannot name them. The `claude` harness takes
-provider `anthropic` and `codex` takes `openai`. A profile cannot list the
-same provider, model and reasoning twice. A candidate has no id to write;
-`Candidate::derived_id` is `provider:model:reasoning`.
+(`roles::harness_supports`):
 
-`## Selection` is a list of `- key: value` items holding the existing
-`SelectionPolicy`. Every key in the example is required except
-`required_capabilities`. `max_cost_microunits` and `currency` are optional and
-go together. `SelectionPolicy::validate` still applies.
+| Harness | Reasoning values |
+|---|---|
+| `claude` | `default`, `off`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `codex` | `default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gemini`, `opencode` | `default` |
+
+`default` is the harness's own setting, so a profile can name a model on any
+of the four harnesses. The `claude` harness takes provider `anthropic` and
+`codex` takes `openai`. A profile cannot list the same provider, model and
+reasoning twice. A candidate has no id to write; `Candidate::derived_id` is
+`provider:model:reasoning`.
+
+#### Selection policy
+
+The selection policy has one set of defaults for all profiles
+(`roles::SelectionDefaults`). Settings holds it and the caller passes it to
+`roles::compile` and `roles::validate`; it is part of the snapshot.
+`SelectionDefaults::default()` is what a new installation starts with:
+
+| Key | Default |
+|---|---|
+| `max_attempts` | `2` |
+| `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` |
+| `max_lineage_elapsed_ms` | `3600000` |
+| `observation_max_age_ms` | `30000` |
+| `allow_unknown_availability` | `false` |
+| `unknown_cost` | `allow_bounded` (or `deny`) |
+| `require_complete_accounting` | `false` |
+| `require_hard_cost_enforcement` | `false` |
+| `max_cost_microunits`, `currency` | none; they go together |
+
+A profile overrides single keys under an optional `## Selection` heading, a
+list of `- key: value` items:
+
+```markdown
+## Selection
+- max_attempts: 3
+- fallback_on: [unavailable]
+```
+
+Every key is optional, and a key the table does not list is refused.
+`max_cost_microunits: none` and `currency: none` state "no cost limit" where
+the defaults have one. A compiled profile keeps only the keys whose value
+differs from the defaults, and `to_markdown` writes only those; with none, it
+writes no `## Selection` section. The rules of `SelectionPolicy::validate`
+apply to the defaults and to each profile's defaults-plus-overrides.
+
+A profile does not state the output token limit or the capabilities a worker
+must have. Both come from the role's execution profile: its
+`max_output_tokens` limit, and `Execution::required_capabilities`, which is
+`aq.profiled-launch`, `aq.terminal`, `aq.harness.startup-context`,
+`aq.harness.stop`, and `aq.harness.container-confinement` when `confinement`
+is `container` or `container-permitted`.
+
+`Snapshot::resolve(role, intelligence)` returns what that pair launches with:
+the role, its execution profile, the profile's candidates limited to the
+harnesses the execution profile may use, and the effective `SelectionPolicy`.
 
 ### Execution profile
 
@@ -284,7 +321,7 @@ confinement: container
 | `environment` | Required. The sandbox environment. |
 | `confinement` | `container` (always in a container), `container-permitted`, `native` (a container is denied) or `native-required`. `Confinement::execution_confinement` gives the worker's `ExecutionConfinement`. |
 | `## Credentials` | One `- harness: credential profile` item for each harness listed, and for no other. |
-| `## Limits` | All six keys are required and positive. `startup_context_bytes` is at most 1,048,576. |
+| `## Limits` | All six keys are required and positive. `startup_context_bytes` and `max_output_tokens` are each at most 1,048,576. |
 
 An execution profile has no permissions and names no project.
 

@@ -2,9 +2,7 @@
 //! and the serializer Settings writes a document back with. The grammar is in
 //! the crate README. A parser refuses what it does not recognise, so a typo
 //! cannot silently drop text or a field.
-use super::{Candidate, Execution, Intelligence, Limits, Role};
-use crate::{IntelligenceBudgetPolicy, SelectionPolicy};
-use aq_session_protocol::{Capability, Text};
+use super::{Candidate, Execution, Intelligence, Limits, Role, SelectionOverrides};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -373,21 +371,21 @@ fn candidates(section: &Section<'_>) -> Parsed<Vec<Candidate>> {
     }
     Ok(out)
 }
-const SELECTION_KEYS: [&str; 12] = [
+const SELECTION_KEYS: [&str; 10] = [
     "max_attempts",
     "fallback_on",
     "max_lineage_elapsed_ms",
     "observation_max_age_ms",
     "allow_unknown_availability",
-    "max_output_tokens",
-    "required_capabilities",
     "unknown_cost",
     "require_complete_accounting",
     "require_hard_cost_enforcement",
     "max_cost_microunits",
     "currency",
 ];
-fn selection(section: &Section<'_>) -> Parsed<SelectionPolicy> {
+/// The word that states "no cost limit" for the two cost keys.
+const NONE: &str = "none";
+fn selection(section: &Section<'_>) -> Parsed<SelectionOverrides> {
     let fields = section.fields("Selection", Some(&SELECTION_KEYS))?;
     let names = |line: usize, key: &str, value: &str| {
         list(line, key, value)?
@@ -395,36 +393,29 @@ fn selection(section: &Section<'_>) -> Parsed<SelectionPolicy> {
             .map(|item| named(line, key, item))
             .collect::<Parsed<Vec<_>>>()
     };
-    let capabilities = |line: usize, key: &str, value: &str| {
-        list(line, key, value)?
-            .into_iter()
-            .map(|id| match Text::new(id) {
-                Ok(id) => Ok(Capability { id, version: 1 }),
-                Err(_) => refuse(line, format!("`{key}` has a malformed capability")),
-            })
-            .collect::<Parsed<Vec<_>>>()
+    let attempts = |line: usize, key: &str, value: &str| {
+        u32::try_from(number(line, key, value)?)
+            .or_else(|_| refuse(line, format!("`{key}` is too large")))
     };
-    let attempts = fields.required("max_attempts", number)?;
-    Ok(SelectionPolicy {
-        schema_version: 1,
-        fallback_on: fields.required("fallback_on", names)?,
-        allow_unknown_availability: fields.required("allow_unknown_availability", flag)?,
-        observation_max_age_ms: fields.required("observation_max_age_ms", number)?,
-        max_output_tokens: fields.required("max_output_tokens", number)?,
-        max_attempts: u32::try_from(attempts)
-            .or_else(|_| refuse(section.line, "`max_attempts` is too large"))?,
-        max_lineage_elapsed_ms: fields.required("max_lineage_elapsed_ms", number)?,
-        required_capabilities: fields
-            .optional("required_capabilities", capabilities)?
-            .unwrap_or_default(),
-        budget: IntelligenceBudgetPolicy {
-            max_cost_microunits: fields.optional("max_cost_microunits", number)?,
-            currency: fields.optional("currency", text)?,
-            require_complete_accounting: fields.required("require_complete_accounting", flag)?,
-            require_hard_cost_enforcement: fields
-                .required("require_hard_cost_enforcement", flag)?,
-            unknown_cost: fields.required("unknown_cost", named)?,
-        },
+    let cost = |line: usize, key: &str, value: &str| match value {
+        NONE => Ok(None),
+        _ => number(line, key, value).map(Some),
+    };
+    let currency = |line: usize, key: &str, value: &str| match value {
+        NONE => Ok(None),
+        _ => text(line, key, value).map(Some),
+    };
+    Ok(SelectionOverrides {
+        max_attempts: fields.optional("max_attempts", attempts)?,
+        fallback_on: fields.optional("fallback_on", names)?,
+        max_lineage_elapsed_ms: fields.optional("max_lineage_elapsed_ms", number)?,
+        observation_max_age_ms: fields.optional("observation_max_age_ms", number)?,
+        allow_unknown_availability: fields.optional("allow_unknown_availability", flag)?,
+        unknown_cost: fields.optional("unknown_cost", named)?,
+        require_complete_accounting: fields.optional("require_complete_accounting", flag)?,
+        require_hard_cost_enforcement: fields.optional("require_hard_cost_enforcement", flag)?,
+        max_cost_microunits: fields.optional("max_cost_microunits", cost)?,
+        currency: fields.optional("currency", currency)?,
     })
 }
 /// Parse an intelligence profile document (spec 0014 §5.2).
@@ -440,7 +431,10 @@ pub fn parse_intelligence(source: &str) -> Parsed<Intelligence> {
         name,
         description,
         candidates: candidates(document.section("Candidates")?)?,
-        selection_policy: selection(document.section("Selection")?)?,
+        selection: match document.sections.get("Selection") {
+            Some(section) => selection(section)?,
+            None => SelectionOverrides::default(),
+        },
     })
 }
 
@@ -553,39 +547,52 @@ impl Intelligence {
                 c.harnesses.join(", ")
             );
         }
-        let p = &self.selection_policy;
-        let reasons: Vec<_> = p.fallback_on.iter().map(name_of).collect();
-        let _ = write!(
-            out,
-            "\n## Selection\n- max_attempts: {}\n- fallback_on: [{}]\n- max_lineage_elapsed_ms: {}\n- observation_max_age_ms: {}\n- allow_unknown_availability: {}\n- max_output_tokens: {}\n",
-            p.max_attempts,
-            reasons.join(", "),
-            p.max_lineage_elapsed_ms,
-            p.observation_max_age_ms,
-            p.allow_unknown_availability,
-            p.max_output_tokens
+        let s = &self.selection;
+        if s.is_empty() {
+            return out;
+        }
+        out.push_str("\n## Selection\n");
+        let mut item = |key: &str, value: Option<String>| {
+            if let Some(value) = value {
+                let _ = writeln!(out, "- {key}: {value}");
+            }
+        };
+        let number = |n: &Option<u64>| n.map(|n| n.to_string());
+        let flag = |b: &Option<bool>| b.map(|b| b.to_string());
+        item("max_attempts", s.max_attempts.map(|n| n.to_string()));
+        item(
+            "fallback_on",
+            s.fallback_on.as_ref().map(|reasons| {
+                let names: Vec<_> = reasons.iter().map(name_of).collect();
+                format!("[{}]", names.join(", "))
+            }),
         );
-        if !p.required_capabilities.is_empty() {
-            let ids: Vec<_> = p
-                .required_capabilities
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect();
-            let _ = writeln!(out, "- required_capabilities: [{}]", ids.join(", "));
-        }
-        let _ = write!(
-            out,
-            "- unknown_cost: {}\n- require_complete_accounting: {}\n- require_hard_cost_enforcement: {}\n",
-            name_of(&p.budget.unknown_cost),
-            p.budget.require_complete_accounting,
-            p.budget.require_hard_cost_enforcement
+        item("max_lineage_elapsed_ms", number(&s.max_lineage_elapsed_ms));
+        item("observation_max_age_ms", number(&s.observation_max_age_ms));
+        item(
+            "allow_unknown_availability",
+            flag(&s.allow_unknown_availability),
         );
-        if let Some(cost) = p.budget.max_cost_microunits {
-            let _ = writeln!(out, "- max_cost_microunits: {cost}");
-        }
-        if let Some(currency) = &p.budget.currency {
-            let _ = writeln!(out, "- currency: {}", scalar(currency));
-        }
+        item("unknown_cost", s.unknown_cost.as_ref().map(name_of));
+        item(
+            "require_complete_accounting",
+            flag(&s.require_complete_accounting),
+        );
+        item(
+            "require_hard_cost_enforcement",
+            flag(&s.require_hard_cost_enforcement),
+        );
+        item(
+            "max_cost_microunits",
+            s.max_cost_microunits
+                .map(|cost| cost.map_or(NONE.into(), |cost| cost.to_string())),
+        );
+        item(
+            "currency",
+            s.currency
+                .as_ref()
+                .map(|c| c.as_deref().map_or(NONE.into(), scalar)),
+        );
         out
     }
 }
