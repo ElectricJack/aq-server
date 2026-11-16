@@ -831,13 +831,36 @@ async fn agent_task_creation_is_scoped_limited_and_cannot_escalate() {
         (StatusCode::FORBIDDEN, "scope_denied".into()),
         "{body}"
     );
-    // A hint that could launch the child under another profile.
-    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","profile_hint":"admin"})).await;
+    // A hint that could launch the child on another level.
+    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","intelligence_hint":"deep-high"})).await;
     assert_eq!(
         (status, code(&body)),
         (StatusCode::FORBIDDEN, "scope_denied".into()),
         "{body}"
     );
+    // `profile_hint` no longer exists: it is an unknown field.
+    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","profile_hint":"admin"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // An agent names the role, and it must exist (spec 0014 §5.5). The
+    // refusal comes before the quota is reserved.
+    let (status, body) = create(
+        json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","role":"tester"}),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::BAD_REQUEST, "invalid_request".into()),
+        "{body}"
+    );
+    assert_eq!(
+        body["message"],
+        "Role `tester` does not exist. The roles are: developer, reviewer."
+    );
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0);
     // Depth: a grandchild (depth 2) is allowed, a great-grandchild is not.
     let (child, grandchild) = (Uuid::new_v4(), Uuid::new_v4());
     for (task, parent, depth) in [(child, own, 1), (grandchild, child, 2)] {
@@ -1128,7 +1151,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     };
     let op = Uuid::new_v4();
     let (status, body) = create(json!({"operation_id":op,"title":"Verify changelog links",
-        "body":"Created by the agent.","parent_id":"self"}))
+        "body":"Created by the agent.","parent_id":"self","role":"reviewer"}))
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
@@ -1152,6 +1175,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     assert_eq!(created["task_state"], "active");
     assert_eq!(created["metadata"]["aq:agent_attempt_id"], json!(attempt));
     assert_eq!(created["metadata"]["aq:project_id"], project);
+    assert_eq!(created["metadata"]["aq:role"], "reviewer");
     assert!(
         ops.iter().any(|o| o["op"] == "add_edge"
             && o["edge_type"] == "parent-child"

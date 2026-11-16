@@ -210,13 +210,15 @@ pub async fn write(
     };
     apply(pool, actor, mutation, now_ms).await
 }
-/// `DELETE …/{id}?expected_revision=<n>&operation_id=<uuid>`.
+/// `DELETE …/{id}?expected_revision=<n>&operation_id=<uuid>`. Refused with
+/// the problems while another document or one of `references` names it.
 pub async fn remove(
     pool: &PgPool,
     actor: Uuid,
     path: &str,
     query: Option<&str>,
     now_ms: i64,
+    references: crate::References,
 ) -> Result<Value> {
     let bad = || invalid("Give expected_revision and operation_id in the query");
     let Target::Document(kind, id) = target(path)? else {
@@ -236,7 +238,8 @@ pub async fn remove(
         expected_revision: revision(parameter("expected_revision")?)?,
         operation_id: parameter("operation_id")?.parse().map_err(|_| bad())?,
     };
-    apply(pool, actor, mutation, now_ms).await
+    let receipt = store::apply_referenced(pool, actor, &mutation, now_ms, Some(references)).await?;
+    Ok(json!({"revision": receipt.revision.to_string(), "digest": receipt.digest}))
 }
 
 /// The response of a route: the value, or 400 with every problem of an

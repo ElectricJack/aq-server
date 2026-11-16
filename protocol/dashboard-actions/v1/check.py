@@ -17,7 +17,7 @@ def load(name):
     return json.loads((root / 'fixtures' / (name + '.json')).read_text())
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-TYPED = ('task.graph.create', 'task.edit', 'task.activate', 'task.complete', 'task.reopen', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.route.set', 'task.route.clear', 'task.dependency.add',
+TYPED = ('task.graph.create', 'task.edit', 'task.activate', 'task.complete', 'task.reopen', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.role.set', 'task.route.set', 'task.route.clear', 'task.dependency.add',
          'task.dependency.remove', 'knowledge.author', 'knowledge.correct', 'knowledge.verify',
          'knowledge.retire', 'knowledge.restore')
 def validate_task(task):
@@ -29,7 +29,7 @@ def validate_task(task):
     assert all(s.strip() and len(s.encode()) <= 128 for s in labels)
     if task.get('priority') is not None:
         assert 1 <= task['priority'] <= 300
-    for field in ('profile_hint', 'intelligence_hint', 'task_type'):
+    for field in ('role', 'intelligence_hint', 'task_type'):
         if task.get(field) is not None:
             assert task[field].strip() and len(task[field].encode()) <= 128
             assert not any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in task[field])
@@ -128,6 +128,8 @@ def validate_request(value):
             assert value['reason'].strip()
         if kind == 'task.reprioritize':
             assert -1_000_000 <= payload['priority'] <= 1_000_000
+        if kind == 'task.role.set' and payload.get('role') is not None:
+            assert payload['role'].strip() and len(payload['role'].encode()) <= 128
         if kind == 'task.route.set':
             assert payload['class'].split('-')[0] in ('simple', 'standard', 'complex', 'deep')
             assert payload['class'].split('-')[1] in ('low', 'medium', 'high', 'max')

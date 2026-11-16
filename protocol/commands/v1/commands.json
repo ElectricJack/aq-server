@@ -6036,7 +6036,7 @@
       "principals": {
         "agent": {
           "body": "params_with_api_version",
-          "params_digest": "sha256:ac8158a6171e45060ec887cc1c74657cefefe024b73e9106816905e0087c2015",
+          "params_digest": "sha256:719a5af8b52145ac7bca0f2310b69cd6d6e71699c9222091e55b10ee3cf92a49",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -6088,9 +6088,11 @@
                 "minimum": 1,
                 "type": "integer"
               },
-              "profile_hint": {
-                "description": "An agent cannot choose the profile of a task it creates",
-                "type": "null"
+              "role": {
+                "description": "The role the task expects; it must exist. Absent: the project's default role",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
               },
               "task_state": {
                 "enum": [
@@ -6122,7 +6124,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:44c0fc21cdd94ec3cec0afddab9b76cf8a23f1c5f582ea2ddb8357157f651701",
+          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6143,7 +6145,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:44c0fc21cdd94ec3cec0afddab9b76cf8a23f1c5f582ea2ddb8357157f651701",
+          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6396,7 +6398,7 @@
       "principals": {
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:e457bbff928e6264507cd72ae53f32a02523a6d4c1cbb40d9093274a5a33035a",
+          "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.graph.create"
           },
@@ -6413,7 +6415,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:e457bbff928e6264507cd72ae53f32a02523a6d4c1cbb40d9093274a5a33035a",
+          "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.graph.create"
           },
@@ -6938,6 +6940,65 @@
         }
       },
       "summary": "Release a task whose attempt has settled for a replacement attempt",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "role",
+        "set"
+      ],
+      "grant": "task.edit",
+      "kind": "mutation",
+      "name": "task.role.set",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:8016e241820e4fcbcdd857a51903ba8039919e8e11991ca9cffbc21c229dde49",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.role.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:8016e241820e4fcbcdd857a51903ba8039919e8e11991ca9cffbc21c229dde49",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.role.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Set or clear the role a task names, before any attempt of it has been granted",
       "target": {
         "rule": "subject"
       }

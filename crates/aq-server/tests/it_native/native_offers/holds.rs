@@ -219,6 +219,64 @@ async fn a_task_past_its_policy_max_attempts_is_held_visibly_once_and_other_work
     );
 }
 
+/// Spec 0014 §5.5 (step 3a): a task whose effective role is disabled gets no
+/// offer and its work view says why; other work is offered, and the task is
+/// offered once the role is enabled. No hold is recorded: it is read live.
+#[tokio::test]
+async fn a_task_whose_role_is_disabled_gets_no_offer_and_other_work_is_offered() {
+    use crate::common::save_role;
+    let c = setup().await;
+    let (task, second) = (c.env.lineage.task_id, c.second_task);
+    let (pool, owner) = (c.env.env.pool.clone(), c.env.actor);
+    *c.metadata.lock().unwrap() = serde_json::json!({"aq:role":"reviewer"});
+    save_role(&pool, owner, "reviewer", "reviewer", false).await;
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(offered_tasks(&body).is_empty(), "{body}");
+    }
+    let readiness = work(&c, task).await;
+    assert_eq!(readiness["state"], "held", "{readiness}");
+    assert_eq!(readiness["reasons"][0]["code"], "role_disabled");
+    assert_eq!(readiness["reasons"][0]["role"], "reviewer");
+    assert!(
+        hold_rows(&c, task).await.is_empty(),
+        "read live, not recorded"
+    );
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0, "no offer was made");
+    // The node takes the other ready task, which runs as the default role.
+    c.mode.store(7, Ordering::SeqCst);
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [second], "{body}");
+}
+/// The same task is offered when its role is enabled, and a role that does
+/// not exist holds it as a disabled one does.
+#[tokio::test]
+async fn a_task_is_offered_once_its_role_is_enabled_and_a_missing_role_holds_it() {
+    use crate::common::save_role;
+    let c = setup().await;
+    let task = c.env.lineage.task_id;
+    let (pool, owner) = (c.env.env.pool.clone(), c.env.actor);
+    *c.metadata.lock().unwrap() = serde_json::json!({"aq:role":"tester"});
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(offered_tasks(&body).is_empty(), "{body}");
+    assert_eq!(work(&c, task).await["reasons"][0]["code"], "role_missing");
+    save_role(&pool, owner, "developer", "tester", false).await;
+    let (_, body) = poll(&c).await;
+    assert!(offered_tasks(&body).is_empty(), "{body}");
+    assert_eq!(work(&c, task).await["reasons"][0]["code"], "role_disabled");
+    save_role(&pool, owner, "developer", "tester", true).await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
+}
+
 /// Owner ruling 4b (2026-11-13): a task the default policy completed with no file change
 /// reads as such in its work view, from the server's `no_change` settlement evidence.
 #[tokio::test]

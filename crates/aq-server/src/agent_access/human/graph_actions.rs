@@ -55,8 +55,17 @@ pub(crate) trait GraphPayload:
     fn not_held() -> bool {
         false
     }
+    /// Whether no attempt of the task may ever have been granted. An offer
+    /// that was declined or never granted does not count.
+    fn never_granted() -> bool {
+        false
+    }
     /// Additional task references that must belong to the subject's project.
     fn tasks(&self) -> Vec<Uuid> {
+        vec![]
+    }
+    /// The roles the payload names; each must exist (spec 0014 §5.5).
+    fn roles(&self) -> Vec<&str> {
         vec![]
     }
     fn operations(&self, current: &Current<'_>) -> ApiResult<Vec<Value>>;
@@ -351,6 +360,48 @@ impl GraphPayload for TaskReprioritize {
             .cloned()
             .ok_or_else(ApiError::unavailable)?;
         metadata.insert("aq:priority".into(), json!(self.priority));
+        let mut patch = serde_json::Map::new();
+        patch.insert("metadata".into(), Value::Object(metadata));
+        Ok(update(c, patch))
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskRoleSet {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// The role the task names, stored as Graph metadata `aq:role`; it must
+    /// exist. Null or absent clears it: the project's default role applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub role: Option<String>,
+}
+impl GraphPayload for TaskRoleSet {
+    common!("task.role.set", "task", aq_agent_grants::op::TASK_EDIT);
+    fn valid(&self) -> bool {
+        super::enqueue::hints_valid(None, [&self.role, &None, &None])
+    }
+    fn never_granted() -> bool {
+        true
+    }
+    fn roles(&self) -> Vec<&str> {
+        self.role.as_deref().into_iter().collect()
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        // A Graph metadata patch replaces the object; keep every other key.
+        let mut metadata = c
+            .node
+            .get("metadata")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(ApiError::unavailable)?;
+        match &self.role {
+            Some(role) => metadata.insert(aq_role_settings::tasks::ROLE_KEY.into(), json!(role)),
+            None => metadata.remove(aq_role_settings::tasks::ROLE_KEY),
+        };
         let mut patch = serde_json::Map::new();
         patch.insert("metadata".into(), Value::Object(metadata));
         Ok(update(c, patch))
@@ -755,6 +806,8 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task edit adapter");
     r.register(GraphAction::<TaskReprioritize>::new(state))
         .expect("task reprioritize adapter");
+    r.register(GraphAction::<TaskRoleSet>::new(state))
+        .expect("task role set adapter");
     r.register(GraphAction::<TaskRouteSet>::new(state))
         .expect("task route set adapter");
     r.register(GraphAction::<TaskRouteClear>::new(state))
@@ -791,6 +844,8 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task edit schema");
     r.register_schema::<GraphAction<TaskReprioritize>>()
         .expect("task reprioritize schema");
+    r.register_schema::<GraphAction<TaskRoleSet>>()
+        .expect("task role set schema");
     r.register_schema::<GraphAction<TaskRouteSet>>()
         .expect("task route set schema");
     r.register_schema::<GraphAction<TaskRouteClear>>()
@@ -970,6 +1025,7 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
         {
             return Err(ApiError::invalid());
         }
+        crate::role_settings::named_api(state, &payload.roles()).await?;
         if let Some(RouteChange::Set(route)) = payload.route_change()
             && !crate::routing::class_assigned(state, route.class)
                 .await
@@ -1169,6 +1225,9 @@ impl<P: GraphPayload> GraphAction<P> {
             if attempted {
                 return Ok(existing::disposition(Disposition::Rejected));
             }
+        }
+        if P::never_granted() && crate::role_settings::granted(&state.store.pool, subject).await? {
+            return Ok(existing::disposition(Disposition::Rejected));
         }
         let id = payload.operation_id();
         let reason = request

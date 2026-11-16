@@ -345,7 +345,7 @@ The block has a byte budget, explicit truncation and "use `aq comment list` / `a
 - **Prompt-injected agents.** Assume repository files, knowledge or comments can steer the agent. The defences are least-privilege defaults, subtree confinement, owner-only decisions, quotas and attributed, audited effects. Nothing an agent writes can approve its own work: answers, decisions, verification and waivers are owner-only.
 - **Privilege escalation through task creation:**
   - Tasks an agent creates inherit its grant ceiling (§6.3, step 4).
-  - The agent cannot set `profile_hint` or `intelligence_hint` to a profile whose grants exceed its own; such a request is refused with `scope_denied`.
+  - The agent cannot set `intelligence_hint`; such a request is refused with `scope_denied`. It may name the task's `role` (spec 0014 §5.5), which must exist.
   - Creation limits per attempt and a depth limit stop recursive fan-out.
 - **Lateral movement.** `project:self` is pinned from the binding, and a project in the body that differs from it is refused. Cross-project access exists only through an explicit owner override.
 - **Exfiltration.** The sandbox has internet egress for its provider, so any data the agent can read can leave. `knowledge.read @ project:self` widens what the agent can read compared with today's 256-record set. The owner can narrow it (Q2). Responses stay bounded, and reads are audited.

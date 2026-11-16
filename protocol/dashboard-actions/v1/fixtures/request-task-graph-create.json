@@ -18,7 +18,7 @@
         "id": "00000000-0000-4000-8000-000000000031",
         "title": "Implement",
         "priority": 300,
-        "profile_hint": "coding",
+        "role": "developer",
         "intelligence_hint": "standard-high",
         "task_type": "feature"
       },

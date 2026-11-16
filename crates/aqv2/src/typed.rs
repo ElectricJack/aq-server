@@ -76,6 +76,9 @@ pub struct TaskCreate {
     pub priority: Option<u16>,
     #[arg(long)]
     pub task_type: Option<String>,
+    /// The role the task expects (an existing role; default: the project's).
+    #[arg(long)]
+    pub role: Option<String>,
     /// The project (owner mode; in a sandbox it is the attempt's project).
     #[arg(long)]
     pub project: Option<Uuid>,
@@ -148,6 +151,7 @@ pub fn task_invocation(mode: Mode, c: &Task) -> Result<Option<Invocation>> {
                     }
                     put(&mut p, "priority", a.priority);
                     put(&mut p, "task_type", a.task_type.as_ref());
+                    put(&mut p, "role", a.role.as_ref());
                     put(
                         &mut p,
                         "expected_project_revision",
@@ -166,6 +170,7 @@ pub fn task_invocation(mode: Mode, c: &Task) -> Result<Option<Invocation>> {
                     put(&mut p, "parent_id", parent);
                     put(&mut p, "priority", a.priority);
                     put(&mut p, "task_type", a.task_type.as_ref());
+                    put(&mut p, "role", a.role.as_ref());
                     Invocation::mutation("task.create", p, true).subject(
                         "project",
                         project,

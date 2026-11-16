@@ -14,10 +14,11 @@ pub(super) fn hints_valid(priority: Option<u16>, hints: [&Option<String>; 3]) ->
             })
         })
 }
+/// `role` is the role the task names (spec 0014 §5.5), stored as `aq:role`.
 pub(super) fn metadata(
     value: &mut Value,
     priority: Option<u16>,
-    profile: &Option<String>,
+    role: &Option<String>,
     intelligence: &Option<String>,
     task_type: &Option<String>,
 ) {
@@ -25,7 +26,7 @@ pub(super) fn metadata(
         value["aq:priority"] = json!(n);
     }
     for (key, hint) in [
-        ("aq:profile_hint", profile),
+        (aq_role_settings::tasks::ROLE_KEY, role),
         ("aq:intelligence_hint", intelligence),
         ("aq:task_type", task_type),
     ] {
@@ -57,9 +58,11 @@ pub(crate) struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 300))]
     pub priority: Option<u16>,
+    /// The role the task expects; it must exist. Absent: the project's
+    /// default role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
-    pub profile_hint: Option<String>,
+    pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
     pub intelligence_hint: Option<String>,
@@ -93,7 +96,7 @@ impl Task {
             && self.parent_id.is_none_or(|p| !p.is_nil() && p != self.id)
             && hints_valid(
                 self.priority,
-                [&self.profile_hint, &self.intelligence_hint, &self.task_type],
+                [&self.role, &self.intelligence_hint, &self.task_type],
             )
     }
     fn operation(&self, c: &Current<'_>) -> Value {
@@ -110,7 +113,7 @@ impl Task {
         metadata(
             &mut m,
             self.priority,
-            &self.profile_hint,
+            &self.role,
             &self.intelligence_hint,
             &self.task_type,
         );
@@ -196,6 +199,12 @@ impl GraphPayload for GraphCreate {
                 .iter()
                 .filter(|t| t.parent_id.is_some())
                 .all(|t| ids.insert(parent_edge(self.operation_id, t.id)))
+    }
+    fn roles(&self) -> Vec<&str> {
+        self.tasks
+            .iter()
+            .filter_map(|t| t.role.as_deref())
+            .collect()
     }
     fn tasks(&self) -> Vec<Uuid> {
         let new: BTreeSet<_> = self.tasks.iter().map(|t| t.id).collect();

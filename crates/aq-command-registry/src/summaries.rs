@@ -51,6 +51,9 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         }
         "task.reprioritize" => "Set a task's priority (higher runs first)",
         "task.retry" => "Release a task whose attempt has settled for a replacement attempt",
+        "task.role.set" => {
+            "Set or clear the role a task names, before any attempt of it has been granted"
+        }
         "task.route.clear" => "Remove a task's owner route so routing decides its class again",
         "task.route.set" => {
             "Route a task to a class, optionally limited to harnesses and providers"

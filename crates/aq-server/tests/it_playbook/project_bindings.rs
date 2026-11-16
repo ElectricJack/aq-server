@@ -193,6 +193,144 @@ async fn revisioned_binding_replay_history_and_retained_snapshot_survive_updates
         "Missing worker policy is explicit rather than inferred from enabled binding"
     );
 }
+/// Spec 0014 §5.4: a binding names its default role, its default intelligence
+/// profile and optional notes per role; each must exist, and what a binding
+/// names cannot be deleted.
+#[tokio::test]
+async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
+    use aq_profiles::roles::Kind;
+    let env = setup(false).await;
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    // A binding written without the new fields (every existing row) is
+    // stored as it was and loads with the defaults.
+    let bound = bind(&env).await;
+    let stored = &bound["record"]["binding"];
+    for key in ["default_role", "default_intelligence", "role_notes"] {
+        assert!(stored.get(key).is_none(), "{key}: {stored}");
+    }
+    let row: Value = sqlx::query_scalar("SELECT binding FROM project_execution_bindings")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert!(row.get("default_role").is_none());
+    assert_eq!(
+        call(&env.app, &path(), None, "owner@localhost").await.0,
+        200
+    );
+
+    let put = |revision: u64, change: Value| {
+        let mut binding = env.body.clone();
+        (binding.as_object_mut().unwrap()).extend(change.as_object().unwrap().clone());
+        let request =
+            json!({"operation_id":Uuid::new_v4(),"expected_revision":revision,"binding":binding});
+        let app = env.app.clone();
+        async move { call(&app, &path(), Some(request), "owner@localhost").await }
+    };
+    for (change, message) in [
+        (
+            json!({"default_role":"tester"}),
+            "default_role: Role `tester` does not exist. The roles are: developer, reviewer.",
+        ),
+        (
+            json!({"default_intelligence":"enormous"}),
+            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, fast-high, fast-low, standard-high, standard-low, standard-medium.",
+        ),
+        (
+            json!({"role_notes":{"tester":"Run the slow suite."}}),
+            "role_notes: Role `tester` does not exist. The roles are: developer, reviewer.",
+        ),
+    ] {
+        let (status, body) = put(1, change).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["message"], message);
+    }
+    // A note is bounded by the role store's document byte limit, a Setting.
+    let mut limits = aq_role_settings::StoreLimits::default();
+    limits.documents.max_document_bytes = 4096;
+    aq_role_settings::save_limits(&env.pool, owner, &limits, 0, Uuid::new_v4(), 1)
+        .await
+        .unwrap();
+    let (status, body) = put(1, json!({"role_notes":{"reviewer":"n".repeat(4097)}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["message"],
+        "role_notes: the note for role `reviewer` is 4097 bytes, over the limit of 4096 bytes"
+    );
+    let named = json!({"default_role":"reviewer","default_intelligence":"deep-high",
+        "role_notes":{"developer":"n".repeat(4096)}});
+    let (status, body) = put(1, named.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = &body["record"]["binding"];
+    assert_eq!(saved["default_role"], "reviewer");
+    assert_eq!(saved["default_intelligence"], "deep-high");
+    assert_eq!(saved["role_notes"], named["role_notes"]);
+    let (_, read) = call(&env.app, &path(), None, "owner@localhost").await;
+    assert_eq!(read["binding"]["default_role"], "reviewer", "{read}");
+
+    // The document store refuses to delete what the binding names, naming
+    // the project; a document nothing names is deleted.
+    let remove = |segment: &'static str, kind: Kind, id: &'static str| {
+        let (app, pool) = (env.app.clone(), env.pool.clone());
+        async move {
+            use http_body_util::BodyExt;
+            use tower::ServiceExt;
+            let stored = aq_role_settings::get(&pool, kind, id).await.unwrap();
+            let uri = format!(
+                "/api/settings/{segment}/{id}?expected_revision={}&operation_id={}",
+                stored.unwrap().revision,
+                Uuid::new_v4()
+            );
+            let request = axum::http::Request::delete(uri)
+                .header("X-AQ-Request", "1")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    let name = env.body["name"].as_str().unwrap();
+    for (segment, kind, id, problem) in [
+        (
+            "roles",
+            Kind::Role,
+            "reviewer",
+            format!("role `reviewer`: is the default role of project `{name}`"),
+        ),
+        (
+            "roles",
+            Kind::Role,
+            "developer",
+            format!("role `developer`: is given notes by project `{name}`"),
+        ),
+        (
+            "intelligence-profiles",
+            Kind::Intelligence,
+            "deep-high",
+            format!(
+                "intelligence profile `deep-high`: is the default intelligence profile of project `{name}`"
+            ),
+        ),
+    ] {
+        let (status, body) = remove(segment, kind, id).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let message = body["message"].as_str().unwrap();
+        assert!(message.contains(&problem), "{message}");
+        assert!(
+            aq_role_settings::get(&env.pool, kind, id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    let (status, body) = remove("intelligence-profiles", Kind::Intelligence, "fast-low").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
 #[tokio::test]
 async fn absent_stale_forbidden_and_offline_components_refuse_and_disable_stays_available() {
     let env = setup(false).await;

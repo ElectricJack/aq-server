@@ -175,3 +175,45 @@ where
         std::panic::resume_unwind(panic);
     }
 }
+
+/// Save the shipped role `shipped` under the id `id`, enabled or not, as the
+/// owner `actor` would in Settings (spec 0014).
+pub async fn save_role(
+    pool: &sqlx::PgPool,
+    actor: uuid::Uuid,
+    shipped: &str,
+    id: &str,
+    enabled: bool,
+) {
+    use aq_profiles::roles::Kind;
+    let label = format!("roles/{shipped}.md");
+    let document = aq_profiles::roles::default_documents()
+        .into_iter()
+        .find(|d| d.label == label)
+        .expect("shipped role");
+    let markdown = document
+        .text
+        .replace(&format!("id: {shipped}"), &format!("id: {id}"))
+        .replace("enabled: true", &format!("enabled: {enabled}"));
+    let revision = aq_role_settings::get(pool, Kind::Role, id)
+        .await
+        .unwrap()
+        .map_or(0, |d| d.revision);
+    let op = uuid::Uuid::new_v4();
+    aq_role_settings::save(pool, actor, Kind::Role, id, &markdown, revision, op, 1)
+        .await
+        .unwrap();
+}
+/// Delete the role `id` as the owner `actor` would in Settings.
+pub async fn delete_role(pool: &sqlx::PgPool, actor: uuid::Uuid, id: &str) {
+    use aq_profiles::roles::Kind;
+    let revision = aq_role_settings::get(pool, Kind::Role, id)
+        .await
+        .unwrap()
+        .expect("stored role")
+        .revision;
+    let op = uuid::Uuid::new_v4();
+    aq_role_settings::delete(pool, actor, Kind::Role, id, revision, op, 1)
+        .await
+        .unwrap();
+}

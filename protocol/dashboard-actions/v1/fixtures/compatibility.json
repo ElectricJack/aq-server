@@ -100,7 +100,7 @@
         {
           "name": "dashboard-actions",
           "version": "dashboard-actions-1",
-          "digest": "sha256:0cc27199b685cf71930b762cd6950a2cd44aa74e9f4a7ae8647edbfec1b6e130"
+          "digest": "sha256:4c850a63a6bd4ca5a28799056b13880a736561873179391e1713f536f1d8bc29"
         }
       ],
       "default_scope": {

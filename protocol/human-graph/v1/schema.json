@@ -475,6 +475,10 @@
                 "type": "null"
               }
             ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/HumanRole",
+            "description": "Present on every task node; absent on knowledge."
           }
         },
         "required": [
@@ -970,6 +974,9 @@
             "type": "string",
             "pattern": "^[1-9][0-9]{0,18}$"
           },
+          "role": {
+            "$ref": "#/components/schemas/HumanRole"
+          },
           "readiness": {
             "type": "object",
             "properties": {
@@ -1039,7 +1046,14 @@
                 "type": "array",
                 "maxItems": 4,
                 "items": {
-                  "$ref": "#/components/schemas/HumanHoldReason"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HumanHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanRoleHoldReason"
+                    }
+                  ]
                 }
               }
             },
@@ -1076,6 +1090,7 @@
           "task_id",
           "task_state",
           "version",
+          "role",
           "readiness",
           "parent",
           "execution"
@@ -1463,7 +1478,7 @@
       },
       "HumanHistoryChange": {
         "type": "object",
-        "description": "What one history entry changed. Values are given only for task state, priority, content type, retired and deleted.",
+        "description": "What one history entry changed. Values are given only for task state, priority, role, content type, retired and deleted.",
         "properties": {
           "summary": {
             "type": "string",
@@ -1471,7 +1486,7 @@
           },
           "fields": {
             "type": "array",
-            "maxItems": 16,
+            "maxItems": 17,
             "items": {
               "type": "object",
               "properties": {
@@ -1482,6 +1497,7 @@
                     "acceptance_criteria",
                     "labels",
                     "priority",
+                    "role",
                     "metadata",
                     "task_state",
                     "provenance",
@@ -1698,6 +1714,55 @@
             "additionalProperties": false
           }
         ]
+      },
+      "HumanRole": {
+        "type": "object",
+        "description": "A task's effective role (spec 0014 §5.5): the role the task names (source task), otherwise the project binding's default_role (source project_default).",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "source": {
+            "enum": [
+              "task",
+              "project_default"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "HumanRoleHoldReason": {
+        "type": "object",
+        "description": "Why AQ does not offer an active task because of its role (spec 0014 §5.5): the effective role is disabled, or the active roles no longer hold it.",
+        "properties": {
+          "code": {
+            "enum": [
+              "role_disabled",
+              "role_missing"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "code",
+          "role",
+          "message"
+        ],
+        "additionalProperties": false
       }
     }
   }

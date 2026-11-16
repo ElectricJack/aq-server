@@ -324,6 +324,104 @@ async fn work_explains_readiness_blockers_and_attached_execution() {
     assert_eq!(unsure["readiness"]["complete"], false);
 }
 
+/// Spec 0014 §5.5: every task read shows the effective role and where it
+/// comes from, and the work read holds a task whose role is disabled or gone.
+#[tokio::test]
+async fn task_reads_show_the_effective_role_and_hold_a_disabled_or_missing_one() {
+    let x = setup().await;
+    let (w, pool) = (x.w(), x.f.db.pool().await);
+    let role = |id: &str, source: &str| json!({"id":id,"source":source});
+    let named = |id: Uuid, title: &str, role: &str| {
+        let mut t = task(id, w, title, "active");
+        t["metadata"] = json!({"aq:role":role,"aq:task_type":"feature"});
+        t
+    };
+    let (plain, review, gone, draft) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    common::save_role(&pool, x.f.actor, "developer", "tester", true).await;
+    let mut drafted = named(draft, "Draft", "reviewer");
+    drafted["task_state"] = json!("draft");
+    let nodes = [
+        (plain, task(plain, w, "Plain", "active")),
+        (review, named(review, "Review", "reviewer")),
+        (gone, named(gone, "Gone", "tester")),
+        (draft, drafted),
+    ];
+    x.graph.nodes.lock().unwrap().extend(nodes.clone());
+    for (id, node) in &nodes {
+        let others = nodes.iter().filter(|(other, _)| other != id);
+        let others: Vec<Value> = others.map(|(_, n)| n.clone()).collect();
+        let c = context(node, others, vec![], false);
+        x.graph.contexts.lock().unwrap().insert(*id, c);
+    }
+    let expected = [
+        (plain, role("developer", "project_default")),
+        (review, role("reviewer", "task")),
+        (gone, role("tester", "task")),
+        (draft, role("reviewer", "task")),
+    ];
+    // Task detail, the task page, the graph and the work read agree.
+    let page = x.get("/tasks?limit=10").await;
+    let graph = x.get(&format!("/tasks/{plain}/graph")).await;
+    for (id, role) in &expected {
+        assert_eq!(&x.get(&format!("/tasks/{id}")).await["role"], role);
+        for listed in [&page["items"], &graph["nodes"]] {
+            let found = listed.as_array().unwrap().iter();
+            let found = found.clone().find(|n| n["id"] == json!(id)).unwrap();
+            assert_eq!(&found["role"], role, "{found}");
+        }
+        let work = x.get(&format!("/tasks/{id}/work")).await;
+        assert_eq!(&work["role"], role);
+        assert_eq!(work["readiness"]["reasons"], json!([]), "{work}");
+    }
+    assert_eq!(
+        x.get(&format!("/tasks/{review}/work")).await["readiness"]["state"],
+        "ready"
+    );
+
+    // A disabled role and a role that no longer exists hold their tasks.
+    common::save_role(&pool, x.f.actor, "reviewer", "reviewer", false).await;
+    common::delete_role(&pool, x.f.actor, "tester").await;
+    let held = x.get(&format!("/tasks/{review}/work")).await;
+    assert_eq!(held["readiness"]["state"], "held", "{held}");
+    let reason = &held["readiness"]["reasons"][0];
+    assert_eq!(reason["code"], "role_disabled");
+    assert_eq!(reason["role"], "reviewer");
+    assert_eq!(
+        reason["message"],
+        "AQ does not offer this task: its role `reviewer` is disabled. Enable the role in Settings or change the task's role."
+    );
+    let missing = x.get(&format!("/tasks/{gone}/work")).await;
+    assert_eq!(missing["readiness"]["state"], "held", "{missing}");
+    assert_eq!(missing["role"], role("tester", "task"));
+    let reason = &missing["readiness"]["reasons"][0];
+    assert_eq!(
+        (&reason["code"], &reason["role"]),
+        (&json!("role_missing"), &json!("tester"))
+    );
+    assert!(
+        reason["message"]
+            .as_str()
+            .unwrap()
+            .contains("its role `tester` does not exist")
+    );
+    // A task on the default role is not affected, and a draft is not held.
+    let free = x.get(&format!("/tasks/{plain}/work")).await;
+    assert_eq!(free["readiness"]["state"], "ready");
+    assert_eq!(free["readiness"]["reasons"], json!([]));
+    let idle = x.get(&format!("/tasks/{draft}/work")).await;
+    assert_eq!(idle["readiness"]["state"], "draft");
+    assert_eq!(idle["readiness"]["reasons"], json!([]));
+    // Enabling the role again releases the task.
+    common::save_role(&pool, x.f.actor, "reviewer", "reviewer", true).await;
+    let released = x.get(&format!("/tasks/{review}/work")).await;
+    assert_eq!(released["readiness"]["state"], "ready");
+}
+
 #[tokio::test]
 async fn task_pages_carry_attached_executions() {
     let x = setup().await;

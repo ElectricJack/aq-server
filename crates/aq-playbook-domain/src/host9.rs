@@ -544,7 +544,7 @@ mod tests {
         let node = json!({"title": "T", "body": "B", "version": 4, "task_state": "active",
             "labels": ["x"], "created_by": "someone",
             "metadata": {"aq:priority": 7, "aq:task_type": "bugfix", "aq:intelligence_hint": "Complex-High",
-                "aq:project_id": "p", "aq:profile_hint": "h"}});
+                "aq:project_id": "p", "aq:role": "reviewer"}});
         let task = Uuid::from_u128(9);
         let out = read_output(task, 4, &WorkFacts::of(&node, false, 2, 3));
         let mut keys: Vec<&String> = out["facts"].as_object().unwrap().keys().collect();

@@ -711,6 +711,7 @@ fn dashboard_action_schema_lists_task_and_knowledge_kinds() {
         "task.cancel",
         "task.retry",
         "task.reprioritize",
+        "task.role.set",
         "task.route.set",
         "task.route.clear",
         "task.dependency.add",

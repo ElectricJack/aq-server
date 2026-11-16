@@ -89,16 +89,24 @@ pub(super) async fn work(
         let phrase = aq_machine_control::holds::phrase(&h.reason);
         aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
     });
-    let readiness = aq_human_work::readiness(
+    // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
+    let role = aq_role_settings::tasks::effective_role(
+        &raw["node"]["metadata"],
+        &a.record.binding.default_role,
+    );
+    let snapshot = crate::role_settings::active(&r.pool).await?;
+    let role_hold = aq_role_settings::tasks::role_hold(snapshot.as_ref(), &role.id);
+    let held = held.into_iter().chain(role_hold.map(|h| h.shown()));
+    let readiness = aq_human_work::readiness_with(
         root["task_state"].as_str(),
         hold.as_ref(),
-        held,
+        held.collect(),
         blockers,
         complete,
     );
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
-        "readiness":readiness,
+        "role":role.shown(),"readiness":readiness,
         "parent":parent,"execution":execution});
     // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
     if root["task_state"] == "completed" {

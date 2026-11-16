@@ -71,12 +71,24 @@ async fn admit(
     if b.sets_hint() {
         let r = Refusal::scope_denied(spec.name, grant, a.grants.related(grant));
         let r = Refusal {
-            message: "An agent cannot set profile_hint or intelligence_hint on a task it creates."
-                .into(),
+            message: "An agent cannot set intelligence_hint on a task it creates.".into(),
             ..r
         };
         audit(state, &entry(&Decision::Deny(r.clone()))).await;
         return Err(r);
+    }
+    // Before the quota is reserved: a role that does not exist is refused
+    // with the roles that do (spec 0014 §5.5).
+    if let Err(unknown) = crate::role_settings::named(state, b.role.as_slice())
+        .await
+        .map_err(internal)?
+    {
+        let message = unknown.to_string();
+        return Err(Refusal::error(
+            RefusalCode::InvalidRequest,
+            spec.name,
+            &message,
+        ));
     }
     let (project, own) = (a.ids.project_id, a.ids.task_id);
     let parent = b.parent(own);

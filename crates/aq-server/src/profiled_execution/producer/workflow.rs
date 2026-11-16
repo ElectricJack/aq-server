@@ -546,14 +546,25 @@ async fn offers(
                         skipped.insert(candidate.revision.task_id);
                     }
                 }
+                // Spec 0014 §5.5, step 3a ONLY: a task whose effective role is
+                // disabled or missing gets no offer. The offer itself is still
+                // composed from the old catalog; step 3b replaces this check
+                // with role selection.
+                let roles = ready.items.iter().map(|c| (c.revision.task_id, &c.node));
+                let default_role = &record.binding.default_role;
+                let role_held =
+                    crate::role_settings::held(&state.store.pool, default_role, roles).await?;
                 // Spec 0011 §4, before any context read: a task's route, or its wait for one.
                 let placements =
                     on_heap(|| crate::routing::placements(state, &record, &ready.items));
                 let placements = placements.await?;
                 let (revision, project) = (record.revision, policy.project_id);
-                let (placed, items) = (&placements, &ready.items);
+                let (placed, items, role_held) = (&placements, &ready.items, &role_held);
                 if let Some((task, assessment)) = on_heap(|| {
                     first_eligible_task(&ready, &skipped, |task| async move {
+                        if let Some(code) = role_held.get(&task) {
+                            return Ok(Assessment::Blocked(code));
+                        }
                         let placement = placed.get(&task);
                         if placement == Some(&Placement::Wait) {
                             return Ok(Assessment::Blocked("route_missing"));

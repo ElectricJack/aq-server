@@ -376,6 +376,13 @@ async fn mutate(
                 "catalog activation changed during project validation",
             ));
         }
+        // Spec 0014 §5.4: the defaults and the role notes name documents of
+        // the active role snapshot. The lock is held to commit, so a delete
+        // of one of them waits and then sees this binding.
+        let (role, level) = (&binding.default_role, &binding.default_intelligence);
+        aq_role_settings::check_binding(&mut tx, role, level, &binding.role_notes)
+            .await
+            .map_err(crate::role_settings::error)?;
         binding
     } else {
         let mut binding: ProjectBinding = serde_json::from_value(
@@ -436,6 +443,48 @@ async fn mutate(
     }
     tx.commit().await.map_err(db)?;
     Ok(response)
+}
+/// What the bindings name in the role store; it refuses to delete these.
+pub(crate) fn role_references(
+    conn: &mut sqlx::PgConnection,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = aq_role_settings::Result<Vec<aq_role_settings::Reference>>>
+            + Send
+            + '_,
+    >,
+> {
+    use aq_profiles::roles::Kind;
+    Box::pin(async move {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "SELECT binding FROM project_execution_bindings ORDER BY project_id",
+        )
+        .fetch_all(conn)
+        .await?;
+        let mut out = Vec::new();
+        for row in rows {
+            let b: ProjectBinding =
+                serde_json::from_value(row).map_err(|_| aq_role_settings::Error::Internal)?;
+            let mut add = |kind, id: &String, what: &str| {
+                out.push(aq_role_settings::Reference {
+                    kind,
+                    id: id.clone(),
+                    by: format!("{what} project `{}`", b.name),
+                })
+            };
+            add(Kind::Role, &b.default_role, "the default role of");
+            let level = &b.default_intelligence;
+            add(
+                Kind::Intelligence,
+                level,
+                "the default intelligence profile of",
+            );
+            for role in b.role_notes.keys() {
+                add(Kind::Role, role, "given notes by");
+            }
+        }
+        Ok(out)
+    })
 }
 async fn eligibility(
     State(state): State<AppState>,

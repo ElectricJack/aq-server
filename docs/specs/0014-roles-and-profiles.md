@@ -230,6 +230,21 @@ routing document, not a list on the binding.
 - A task keeps its existing type (feature, bug fix, docs and so on). The type
   says what the work is; the role says who does it. **(call)**
 
+As built (step 3a):
+
+- The role a task names is task metadata `aq:role`, given as `role` on
+  `task.create` and on each task of `task.graph.create`. `profile_hint` is
+  gone. One rule gives the effective role everywhere: the task's `aq:role`,
+  otherwise the binding's `default_role`. Task reads show it as
+  `role: {id, source}` with `source` `task` or `project_default`.
+- The owner sets or clears it with `task.role.set` until an attempt of the
+  task has been granted.
+- A task whose effective role is disabled or no longer exists is held: the
+  work read lists `role_disabled` or `role_missing`, and it gets no offer.
+- Telling the router the role needs a new host contract version: the
+  `work.read` facts are a closed object in `aq-host` 2.2.0 (aq-playbooks), so
+  a `role` fact cannot be added from this repository alone.
+
 ## 6. What the agent is told
 
 ### 6.1 Order

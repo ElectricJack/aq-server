@@ -11,6 +11,10 @@
     "task_id": "00000000-0000-0000-0000-000000000003",
     "task_state": "active",
     "version": "4",
+    "role": {
+      "id": "developer",
+      "source": "project_default"
+    },
     "readiness": {
       "state": "held",
       "blockers": [],
