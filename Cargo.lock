@@ -746,6 +746,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-role-settings"
+version = "0.1.0"
+dependencies = [
+ "aq-profiles",
+ "axum",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "aq-routing"
 version = "0.1.0"
 dependencies = [
@@ -825,6 +839,7 @@ dependencies = [
  "aq-release",
  "aq-result-media",
  "aq-review-protocol",
+ "aq-role-settings",
  "aq-routing",
  "aq-row-retention",
  "aq-selection",
