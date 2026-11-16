@@ -30,14 +30,22 @@ pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'sta
     }
     Ok(guards)
 }
-pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
+    // Format 133 widens the owner's disposition to a launch closed before it started.
+    let closed = include_str!("../../migrations/0133_abandon_closed_launch.sql");
     for name in [
         "profiled_stopped_disposition_guard",
         "profiled_stopped_disposition_committed",
     ] {
         let body: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname='plpgsql' AND p.prorettype=to_regtype('trigger')")
             .bind(format!("{name}()")).fetch_optional(&mut **tx).await?;
-        if body.as_deref() != Some(function_body(name)?) {
+        let widened =
+            (supported >= 133).then(|| aq_profiled_state::sql_function_body(closed, name));
+        let expected = match widened.flatten() {
+            Some(body) => body,
+            None => function_body(name)?,
+        };
+        if body.as_deref() != Some(expected) {
             return Err(corrupt());
         }
         let guarded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('profiled_stopped_dispositions') AND tgname=$1 AND NOT tgisinternal AND tgenabled='O' AND tgtype=$2 AND tgdeferrable=$3 AND tginitdeferred=$3 AND tgnargs=0 AND tgqual IS NULL AND tgfoid=to_regprocedure($4))")

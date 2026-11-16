@@ -606,3 +606,64 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
         .unwrap()
     );
 }
+
+/// The owner's abandon covers a granted launch closed before the agent started. Such an
+/// attempt has no stopped receipt; its stop proof is the launch closure's receipt.
+#[tokio::test]
+async fn owner_abandons_a_launch_closed_before_it_started() {
+    let c = closure::setup().await;
+    let r = request(&c).await;
+    let p = policy(&c, &r, 1).await;
+    let (status, bytes) = post(&c, p, &r).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let attempt = r.binding.attempt_id;
+    let pool = &c.case.env.env.pool;
+    let held = || async {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    assert!(held().await, "a closed launch keeps its claim");
+    let state = &c.case.env.env.state;
+    let abandon = |email: &'static str, body: serde_json::Value| async move {
+        let response = aq_server::build_admin_router(state.clone())
+            .oneshot(
+                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                    .header("content-type", "application/json")
+                    .header("x-aq-dev-email", email)
+                    .header("X-AQ-Request", "1")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        )
+    };
+    let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "launch failed before the agent started"});
+    let (status, receipt) = abandon("owner@localhost", body.clone()).await;
+    assert_eq!(status, 200, "{receipt}");
+    assert_eq!(receipt["disposition"], "abandoned");
+    let closure: String = sqlx::query_scalar(
+        "SELECT receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        receipt["stop_receipt_digest"], closure,
+        "the stop proof is the closure receipt"
+    );
+    assert!(!held().await, "the claim is released");
+    let (status, replay) = abandon("owner@localhost", body).await;
+    assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
+}
