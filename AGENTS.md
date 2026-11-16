@@ -140,6 +140,7 @@ fails when a number goes above its recorded value:
 | Job | Budget |
 | --- | --- |
 | `tests` | 10 min |
+| `tests (any-model)` (the epic flag's affected modules; removed with the flag) | 10 min |
 | `fmt and clippy` | 10 min |
 | Each image or smoke job (`smoke`, `execution-smoke`, `recovery-smoke`, `update-lifecycle`) | 15 min |
 | Whole workflow (critical path, push to last green job) | 20 min |

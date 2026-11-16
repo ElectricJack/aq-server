@@ -64,6 +64,13 @@ jobs:
       # with the feature), not every test binary again.
       - name: cargo clippy (recovery fixture)
         run: cargo clippy -p aq-server --locked --features recovery-test-support --lib --test it_server -- -D warnings
+      # Epic flag `any-model` (compile time): it changes aq-profile-settings and
+      # aq-server's lib; lint those and the three test binaries the any-model
+      # test job builds, not every test binary again.
+      - name: cargo clippy (any-model epic flag)
+        run: |
+          cargo clippy -p aq-profile-settings --locked --features any-model --all-targets -- -D warnings
+          cargo clippy -p aq-server --locked --features any-model --lib --test it_native --test it_profiled --test it_dashboard -- -D warnings
 
   agent-contract:
     name: scoped agent contract conformance
@@ -130,6 +137,48 @@ jobs:
         run: cargo nextest run -p aq-updater --locked --no-fail-fast --profile ci --features test-verifier
       - name: Recovery authority and reserved control capacity regressions
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features recovery-test-support --test it_server -E 'test(/^execution::/) | test(/^readiness::/)'
+
+  # The `any-model` epic flag is a second build of aq-server, so it has its own
+  # job instead of lengthening `tests`. It runs only the modules the flag
+  # changes: offers and their startup descriptor (native_offers,
+  # native_result_startup), Settings and the byte limit (profile_catalog,
+  # profiled_context) and the swarm read (dashboard_swarm). Selection's part
+  # (aq-selection) has no flag and runs in `tests`.
+  test-any-model:
+    name: tests (any-model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$toolchain" --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: cargo nextest run -p aq-server --features any-model (affected modules)
+        run: >-
+          cargo nextest run -p aq-server --locked --no-fail-fast --profile ci
+          --features any-model --test it_native --test it_profiled --test it_dashboard
+          -E 'test(/^native_offers::/) | test(/^native_result_startup::/) | test(/^profile_catalog::/) | test(/^profiled_context::/) | test(/^dashboard_swarm::/)'
 
   # The static updater and v2 CLI that release.yml ships, built the same way,
   # so musl breakage shows up here rather than at tag time.
