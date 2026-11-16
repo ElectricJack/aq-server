@@ -55,7 +55,7 @@ Body mappings:
 | `query` | a GET; path segments from the named params, the other params as query string values. The route's `params_schema` lists the query params its handler accepts; a param it does not list is refused with `invalid_request` (`unknown param`) and nothing is forwarded. The lists are declared in `crates/aq-command-registry/src/queries.rs` |
 | `graph_read` | an agent-access-1 `ReadRequest` with the attempt's binding. The principal entry's `graph_query` names the query `kind`, the `defaults` for omitted fields (`knowledge.search`: `kind_filter` null, `limit` 20, `cursor` null) and the params sent under another field (`rename`: `task_id` is the query's `node_id`) |
 | `graph_command` | an agent-access-1 `CommandRequest`: `params` plus the binding (and `operation_id`/`reason` from the request when absent) |
-| `action_request` | an `ActionRequest` with `kind` = the command name and `payload` = `params` |
+| `action_request` | an `ActionRequest` with `kind` = the command name and `payload` = `params` (the operation ID is added when `params` omits it). The request's `subject` and `expected_versions` are sent as given. When `subject` is omitted they follow from `params` by the principal entry's `subject` rule: `type`; the id from `id_param` (a param with an `id_param_schema` is not a payload field and is taken out of the payload) or the fixed `id`; and, when the rule has a `revision_param`, that param's value as the subject revision and as `expected_versions[version_key]`. The rules are declared in `crates/aq-command-registry/src/subjects.rs` |
 | `local` | answered by the command surface (`whoami`) |
 
 For an agent, an omitted `project_id` is the attempt's project; a

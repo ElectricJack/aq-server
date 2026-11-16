@@ -402,6 +402,35 @@ async fn owner_commands_reach_the_same_handlers() {
         (StatusCode::BAD_REQUEST, json!("invalid_request")),
         "subject is required: {body}"
     );
+    // With the task named, the command builds the subject itself and answers
+    // exactly as the action union does for the same request.
+    let (op, task) = (Uuid::new_v4(), Uuid::new_v4());
+    let payload = json!({"operation_id":op,"project_id":e.binding["project_id"],"body":"x"});
+    let (direct_status, direct) = send(
+        &e.admin,
+        "/api/v1/actions",
+        None,
+        Some(
+            json!({"operation_id":op,"kind":"task.comment.add","subject":{"type":"task","id":task},
+            "expected_versions":{},"payload":payload}),
+        ),
+    )
+    .await;
+    let mut params = payload.clone();
+    params["task_id"] = json!(task);
+    let (status, via) = send(
+        &e.admin,
+        "/api/v1/commands/task.comment.add",
+        None,
+        Some(json!({"operation_id":op,"params":params})),
+    )
+    .await;
+    assert_ne!(via["message"], "an action needs a subject", "{via}");
+    assert_eq!(
+        (status, via["code"].clone()),
+        (direct_status, direct["code"].clone()),
+        "{via} / {direct}"
+    );
     let owner_rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM command_audit WHERE caller_kind='owner'")
             .fetch_one(&e.pool)
