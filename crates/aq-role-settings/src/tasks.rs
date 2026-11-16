@@ -133,7 +133,7 @@ pub fn check_binding(
     max_note_bytes: usize,
 ) -> Result<(), String> {
     named_role(snapshot, default_role).map_err(|unknown| format!("default_role: {unknown}"))?;
-    if !snapshot.is_some_and(|s| s.intelligence(default_intelligence).is_some()) {
+    if snapshot.is_none_or(|s| s.intelligence(default_intelligence).is_none()) {
         let profiles = snapshot
             .into_iter()
             .flat_map(Snapshot::intelligence_profiles);
