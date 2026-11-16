@@ -254,6 +254,7 @@ fn select_internal(
             allowed_environments: &input.project.allowed_environments,
             placement: input.placement.as_ref(),
             route: input.route.as_ref(),
+            model_choices: &input.model_choices,
             now_ms: input.now_ms,
             global: global_budget(input, policy),
             environment_denied: "project_environment_denied",

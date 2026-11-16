@@ -181,6 +181,29 @@ pub(crate) fn validate(
     bounds(&input.observations, 128)?;
     bounds(&input.estimates, 128)?;
     bounds(&input.compositions, 16)?;
+    // At most what the harness rows themselves may list (16 harnesses of 64 models).
+    bounds(&input.model_choices, 16 * 64)?;
+    let mut choices = BTreeSet::new();
+    for m in &input.model_choices {
+        for value in [
+            &m.harness,
+            &m.provider,
+            &m.model,
+            &m.reasoning_configuration_reference,
+            &m.native_reasoning,
+        ] {
+            text(value)?;
+        }
+        ensure(
+            choices.insert((
+                &m.harness,
+                &m.provider,
+                &m.model,
+                &m.reasoning_configuration_reference,
+            )),
+            "conflicting model choice",
+        )?;
+    }
     validate_installation(
         &input.credentials,
         &input.node.credential_bindings,

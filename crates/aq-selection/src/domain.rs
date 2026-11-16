@@ -54,6 +54,18 @@ pub struct NativeModelSupport {
     pub reasoning_configuration_reference: String,
     pub native_reasoning: String,
 }
+/// A Settings model choice resolved to the native reasoning one harness
+/// accepts. The owner adapter resolves it before selection; selection only
+/// reads it, so the chosen value is part of the digested inputs.
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedModelChoice {
+    pub harness: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_configuration_reference: String,
+    pub native_reasoning: String,
+}
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeLimits {
@@ -254,6 +266,11 @@ pub struct SelectionInputs {
     /// A routed task's harness and provider limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteLimits>,
+    /// Settings model choices a candidate may name on an installed harness
+    /// that does not list the model itself. Empty is omitted, so every
+    /// earlier decision keeps its bytes and digest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_choices: Vec<ResolvedModelChoice>,
 }
 impl SelectionInputs {
     /// The intelligence profile this selection uses.

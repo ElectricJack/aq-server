@@ -40,6 +40,7 @@ pub(crate) struct CoreInputs<'a> {
     pub allowed_environments: &'a [String],
     pub placement: Option<&'a Placement>,
     pub route: Option<&'a RouteLimits>,
+    pub model_choices: &'a [ResolvedModelChoice],
     pub now_ms: u64,
     pub global: Option<&'static str>,
     pub environment_denied: &'static str,
@@ -361,19 +362,38 @@ pub(crate) fn evaluate(
                                     "required_capability_unsupported",
                                 )
                             })?;
-                            let model = harness
-                                .models
-                                .iter()
+                            // The harness's own listed model, else the Settings
+                            // choice resolved for this harness; never a default.
+                            let names = |p: &str, m: &str, r: &str| {
+                                p == candidate.provider
+                                    && m == candidate.model
+                                    && r == candidate.reasoning_configuration_reference
+                            };
+                            let listed = (harness.models.iter())
                                 .find(|m| {
-                                    m.provider == candidate.provider
-                                        && m.model == candidate.model
-                                        && m.reasoning_configuration_reference
-                                            == candidate.reasoning_configuration_reference
+                                    names(
+                                        &m.provider,
+                                        &m.model,
+                                        &m.reasoning_configuration_reference,
+                                    )
                                 })
-                                .ok_or((
-                                    CandidateState::Unsupported,
-                                    "model_or_reasoning_unsupported",
-                                ))?;
+                                .map(|m| &m.native_reasoning);
+                            let chosen = || {
+                                (input.model_choices.iter())
+                                    .find(|m| {
+                                        m.harness == harness.harness
+                                            && names(
+                                                &m.provider,
+                                                &m.model,
+                                                &m.reasoning_configuration_reference,
+                                            )
+                                    })
+                                    .map(|m| &m.native_reasoning)
+                            };
+                            let native_reasoning = listed.or_else(chosen).ok_or((
+                                CandidateState::Unsupported,
+                                "model_or_reasoning_unsupported",
+                            ))?;
                             let limits = &harness.limits;
                             if limits.context_bytes == 0
                                 || limits.wall_time_ms == 0
@@ -431,7 +451,7 @@ pub(crate) fn evaluate(
                                 profile_candidate_id: candidate.id.clone(),
                                 provider: candidate.provider.clone(),
                                 model: candidate.model.clone(),
-                                native_reasoning: model.native_reasoning.clone(),
+                                native_reasoning: native_reasoning.clone(),
                                 reasoning_configuration_reference: candidate
                                     .reasoning_configuration_reference
                                     .clone(),

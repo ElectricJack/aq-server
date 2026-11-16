@@ -111,6 +111,7 @@ pub fn select_central(
             allowed_environments: &allowed,
             placement: None,
             route: None,
+            model_choices: &[],
             now_ms: input.now_ms,
             global,
             environment_denied: "central_environment_denied",
