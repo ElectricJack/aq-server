@@ -32,6 +32,13 @@ otherwise stay.
 > I don't want a bunch of old code and tables referencing the old way of doing
 > things.
 
+On who chooses the role (2026-11-16, on reading this draft):
+
+> I think the tasks should probably define the role they expect but not the
+> intelligence profile. And maybe by default the tasks go to developer roles,
+> but we might define review or testing roles as well. We still want the router
+> to dynamically assign these to intelligence profiles.
+
 Rollout (owner, 2026-11-16): build it on one branch, verify it on the live
 stack, then merge it as a single replacement. No compile-time flag and no
 backwards compatibility for this epic.
@@ -92,8 +99,8 @@ What kind of work the agent does. One Markdown document:
 
 ```markdown
 ---
-id: implementer
-name: Implementer
+id: developer
+name: Developer
 description: Makes the change a task asks for and reports evidence.
 execution: sandbox
 operations: [task.read, knowledge.read, source.write]
@@ -115,8 +122,10 @@ You implement the change your task describes, in the workspace you are given …
 | `enabled` | `false` hands this role no new work. |
 | `## Role`, `## Rules` | The prompt. Any other heading is refused, so a typo cannot silently drop text. **(call)** |
 
-A role has no model, no harness and no version number. Shipped roles:
-`implementer`, `reviewer`, `researcher`, `supervisor`. **(call)**
+A role has no model, no intelligence profile, no harness and no version
+number. The router assigns the intelligence profile for each task (§5.5).
+Shipped roles: `developer` and `reviewer`. **(call)** Others, such as a tester,
+are added by writing a document.
 
 ### 5.2 Intelligence profile
 
@@ -155,7 +164,7 @@ A project names, for its tasks:
 
 | Field | Meaning |
 |---|---|
-| `default_role` | The role used when the route names none. |
+| `default_role` | The role of a task that names none. `developer` unless the project says otherwise. |
 | `default_intelligence` | The profile used when the task was not routed to a level. |
 | `role_notes` | Optional Markdown per role, added after the role's prompt. It adds; it never replaces (v1's project supplement). |
 | `ceilings` | Upper bounds on the execution profile's limits, as today. |
@@ -165,11 +174,23 @@ The `allowed_agent_profiles`, `allowed_intelligence_profiles`,
 A project that must not use some role or level is a policy matter for its
 routing document, not a list on the binding.
 
-### 5.5 Who chooses the role
+### 5.5 Who chooses what
 
-A route may name a role (`role: reviewer`), alongside the level it already
-names. The routing document decides; the server has no rule of its own. With no
-role on the route, the project's `default_role` is used. **(call)**
+| Choice | Made by | When |
+|---|---|---|
+| Role | The task. Whoever files it (a person, a playbook, another agent) names the role it expects. A task that names none gets the project's `default_role`. | At filing |
+| Intelligence profile | The router, from the routing document. Nobody files a task on a level; a filer may give a hint, as today. | Before the task is offered |
+| Execution profile | The role. | Fixed by the role document |
+
+- A task's role is a field of the task, shown on it and changeable by the owner
+  while the task has not started.
+- Filing a task with a role that does not exist is refused. A task whose role
+  is disabled is held with that reason.
+- The router is told the task's role along with its type and content, so the
+  routing document can say, for example, that reviews get a stronger level.
+  The router never changes the role. **(call)**
+- A task keeps its existing type (feature, bug fix, docs and so on). The type
+  says what the work is; the role says who does it. **(call)**
 
 ## 6. What the agent is told
 
@@ -260,7 +281,7 @@ old records over.
   **(call)** A database backup is taken first.
 - The switch happens with no task running. The server and every worker are
   replaced together, because the launch format changes.
-- The six AQ projects are bound again with `default_role: implementer`, a
+- The six AQ projects are bound again with `default_role: developer`, a
   default intelligence profile and their ceilings. Nothing per project is added
   to the catalog.
 - The level profiles are entered again from the current Settings content, with
@@ -268,15 +289,15 @@ old records over.
 
 Verification on the live stack before merge: one task per level on the scratch
 project showing the model and effort it ran with; one task on aq-server; one
-task on a project that could not run before; a reviewer-role task.
+task on a project that could not run before; a task filed with the reviewer
+role; a task filed with no role, which must run as developer.
 
 ## 11. Questions for the owner
 
 1. **Role file contents.** Is "prompt, operations, default execution profile,
    enabled" right, or should a role carry anything else from v1's profile?
-2. **Role choice.** Is "the route may name a role, else the project's default"
-   right? The alternative is a fixed mapping from task type to role in
-   Settings.
+2. **Role choice.** Answered 2026-11-16: the task names its role, default
+   developer; the router assigns the intelligence profile (§5.5).
 3. **Repository notes.** Options: (a) the platform text tells the agent to read
    `AGENTS.md` and `.aq/PRIME.md` if they exist, which is what happens today by
    prose; (b) the server reads `.aq/PRIME.md` from the task's source and
@@ -297,7 +318,8 @@ task on a project that could not run before; a reviewer-role task.
 
 1. `aq-profiles`: the three types, document parsing, validation, snapshot.
 2. Settings store, routes and shipped defaults for the three document kinds.
-3. Project bindings and selection: role replaces agent, defaults on the binding.
+3. Tasks carry a role; project bindings and selection: role replaces agent,
+   defaults on the binding; the router is told the role.
 4. Composer and startup: the §6 order, permissions from the role.
 5. Removal of the context qualification and model lists (from `feat/any-model`,
    flag removed).
