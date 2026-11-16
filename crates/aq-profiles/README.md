@@ -132,3 +132,174 @@ These owner tools are separate from the future CON-02 `/api/v1/profiles/...`
 context-resolving handlers that will obtain current AQ-19/AQ-20 policy themselves.
 Both use existing owner authentication and CSRF rules. Inspection is bounded to
 8 MiB HTTP bodies, 2 MiB artifact strings and 2 MiB serialized composition inputs.
+
+## Roles and profiles (spec 0014)
+
+The `roles` module is the replacement for the catalog above
+([spec 0014](../../docs/specs/0014-roles-and-profiles.md)). It is built
+alongside the catalog until its consumers have moved over. It is pure: no
+database, HTTP or file access.
+
+An agent is described by three documents, each one Markdown file:
+
+| Document | Says | Parsed by |
+|---|---|---|
+| Role | What kind of work the agent does: its prompt, its AQ operations and the execution profile it runs under. | `roles::parse_role` |
+| Intelligence profile | How capable a model the work needs: ordered candidates and the selection policy. | `roles::parse_intelligence` |
+| Execution profile | Where and how the harness runs: harnesses, environment, confinement, credentials and limits. | `roles::parse_execution` |
+
+`roles::compile` parses and validates all documents together. It returns a
+`Snapshot`, or every problem it found, each naming its document and field. A
+snapshot is immutable and is identified by the SHA-256 digest of its canonical
+JSON bytes. Entries have no version numbers; an attempt records the snapshot
+digest it launched with. The shipped defaults are the files under
+[`defaults/`](defaults), returned by `roles::default_documents`.
+
+`to_markdown` on each type writes the document back, and the parser reads that
+text as the same value.
+
+### Grammar common to the three documents
+
+A document is frontmatter followed by sections.
+
+- **Frontmatter.** The first line is `---`. Each following line is
+  `key: value` until a closing `---` line. Blank lines are ignored. A key that
+  the document kind does not define, or a key given twice, is refused.
+- **Values.** Text runs to the end of the line, with outer spaces removed.
+  Text that is empty, has outer spaces or starts with `"` or `[` is written as
+  a JSON string (`name: "[draft] role"`). A list is `[a, b, c]`; its items are
+  bare words of letters, digits and `. _ @ / : + -`. A flag is `true` or
+  `false`. A number is decimal digits.
+- **Sections.** A line that starts with `## ` opens a section. Each kind
+  defines its headings. Any other `## ` heading, a heading given twice, or
+  text before the first heading is refused. A `## ` line inside a fenced code
+  block (```` ``` ```` or `~~~`) is content, not a heading.
+- **Whitespace.** Lines may end in LF or CRLF. Spaces around values, list
+  items and table cells, and blank lines around and between sections and list
+  items, do not change the parsed value or the snapshot digest. Inside a
+  role's prompt text, everything except leading and trailing blank space is
+  content.
+
+`id` is a lowercase letter followed by up to 62 lowercase letters, digits or
+`-`. Ids are unique within a kind. `description` is optional in every kind.
+
+### Role
+
+```markdown
+---
+id: developer
+name: Developer
+description: Makes the change a task asks for and reports evidence.
+execution: sandbox
+operations: [task.read, knowledge.read, source.write]
+enabled: true
+---
+## Role
+You implement the change your task describes, in the workspace you are given.
+
+## Rules
+- Change only what the task asks for.
+- Run focused checks and report the exact commands and their outcomes.
+```
+
+| Part | Rule |
+|---|---|
+| `execution` | Required. The id of an execution profile in the same set. |
+| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::effective_permissions` gives each the task's project (`project:<id>`), or for `source.*` the project's repository (`repository:<id>`), and keeps it only when the project's ceilings and the caller both hold it. |
+| `enabled` | Optional, `true` when absent. At least one role in a set must be enabled. |
+| `## Role` | Required and not empty. |
+| `## Rules` | Optional. |
+
+Use `###` for headings inside a section.
+
+### Intelligence profile
+
+```markdown
+---
+id: standard-high
+name: Standard, high
+description: Ordinary work that touches several parts or needs careful checking.
+---
+## Candidates
+| provider | model | reasoning | harnesses |
+|---|---|---|---|
+| anthropic | claude-sonnet-5-5 | high | claude |
+| openai | gpt-6 | high | codex |
+
+## Selection
+- max_attempts: 2
+- fallback_on: [missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]
+- max_lineage_elapsed_ms: 3600000
+- observation_max_age_ms: 30000
+- allow_unknown_availability: false
+- max_output_tokens: 32000
+- required_capabilities: [aq.profiled-launch, aq.terminal]
+- unknown_cost: allow_bounded
+- require_complete_accounting: false
+- require_hard_cost_enforcement: false
+```
+
+`## Candidates` is a table with exactly this header row, a rule row, and one
+row per candidate in preference order. `harnesses` is a comma-separated list.
+`reasoning` is the effort itself and must be one the named harness accepts
+(`roles::harness_supports`): `default`, `off`, `low`, `medium`, `high`,
+`xhigh`, `max` for `claude`; `none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max`, `ultra` for `codex`. No effort is defined yet for `gemini` or
+`opencode`, so a candidate cannot name them. The `claude` harness takes
+provider `anthropic` and `codex` takes `openai`. A profile cannot list the
+same provider, model and reasoning twice. A candidate has no id to write;
+`Candidate::derived_id` is `provider:model:reasoning`.
+
+`## Selection` is a list of `- key: value` items holding the existing
+`SelectionPolicy`. Every key in the example is required except
+`required_capabilities`. `max_cost_microunits` and `currency` are optional and
+go together. `SelectionPolicy::validate` still applies.
+
+### Execution profile
+
+```markdown
+---
+id: sandbox
+name: Sandbox
+description: A node-owned container running the Claude harness, 15 minutes per attempt.
+harnesses: [claude]
+environment: aq-ms1-docker-local-claude
+confinement: container
+---
+## Credentials
+- claude: owner-claude-subscription
+
+## Limits
+- wall_time_ms: 900000
+- memory_bytes: 4294967296
+- cpu_millis: 2000
+- process_limit: 512
+- startup_context_bytes: 65536
+- max_output_tokens: 32000
+```
+
+| Part | Rule |
+|---|---|
+| `harnesses` | Required, not empty. Each is `claude`, `codex`, `gemini` or `opencode`. |
+| `environment` | Required. The sandbox environment. |
+| `confinement` | `container` (always in a container), `container-permitted`, `native` (a container is denied) or `native-required`. `Confinement::execution_confinement` gives the worker's `ExecutionConfinement`. |
+| `## Credentials` | One `- harness: credential profile` item for each harness listed, and for no other. |
+| `## Limits` | All six keys are required and positive. `startup_context_bytes` is at most 1,048,576. |
+
+An execution profile has no permissions and names no project.
+
+### Size limits
+
+`roles::compile` and `roles::validate` take a `DocumentLimits` from the
+caller: bytes per document, bytes for the whole set, documents per kind, and
+bytes for a name and a description. `DocumentLimits::default()` holds the
+catalog's values (65,536; 1,048,576; 128; 128; 2,000).
+
+### Startup text
+
+`roles::assemble_startup` builds what the agent is told, in the order of
+spec 0014 §6.1: platform text, the role's `## Role`, its `## Rules`, the
+project's notes for the role, the repository's notes, the task, the reporting
+contract. Absent or blank notes and absent rules are left out. The parts are
+joined by one blank line (`utf8_double_newline_v1`). Text over the byte limit
+the caller passes is refused; nothing is dropped to make it fit.
