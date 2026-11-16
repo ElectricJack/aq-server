@@ -235,10 +235,35 @@ aq-server repository, installed when a document of that id does not exist.
 
 On each save the server validates all documents together and, if valid,
 activates a new immutable snapshot identified by its content digest. An invalid
-save changes nothing and says why. An attempt records the snapshot digest it
-launched with, and that snapshot is kept while any kept attempt names it. Older
-snapshots are a rolling set (architecture 0006). There are no per-entry version
-numbers and no `id@version` references.
+save changes nothing and says why. There are no per-entry version numbers and
+no `id@version` references.
+
+The documents are plain Markdown with nothing server-specific in them, and can
+be exported and imported as files. Owner, 2026-11-16: "We may want to implement
+a vault later, but I'm not sure." Nothing here prevents that.
+
+### 7.1 What an attempt ran with
+
+Owner, 2026-11-16: "Can we keep track of past attempt profiles without blowing
+up the db and blocking work in the future, like with our various rolling
+logs/records?"
+
+Two things are kept, both bounded:
+
+- **A summary on every attempt**: role, intelligence profile, model, reasoning
+  effort, harness, execution profile and the snapshot digest. It is a few
+  hundred bytes, is part of the attempt record, and lasts exactly as long as
+  the attempt does. This is what the task page shows.
+- **The full text of each snapshot, stored once per digest.** Many attempts
+  share one snapshot, because a snapshot only changes when a document is saved.
+  Snapshots are a rolling set (architecture 0006): the active one, every one a
+  kept attempt names, and the most recent N others. Activation deletes what
+  falls outside that in the same transaction. N is a Setting.
+
+Storage never refuses a save or a launch. When an attempt record rolls off, its
+summary goes with it, and a snapshot nothing names any more is deleted. If the
+full text of an old attempt's snapshot is gone, the summary still says what it
+ran with.
 
 This keeps what the current catalog does well (pinned launches, atomic
 activation, rollback) without a separate catalog file format or activation API.
@@ -276,8 +301,10 @@ the startup text, and runs them. It holds no model list and no measurement.
 One migration creates the new tables and drops the old ones. It does not carry
 old records over.
 
-- Past attempts keep their results and history but lose the link to the exact
-  profile they ran with. The live database holds test tasks and one real task.
+- Past attempts keep their results and history. The migration fills each one's
+  summary (§7.1) from what its launch record already holds: the model, the
+  harness and the old agent name as its role. The old catalog bodies are not
+  carried over, so the full prompt text of those attempts is not kept.
   **(call)** A database backup is taken first.
 - The switch happens with no task running. The server and every worker are
   replaced together, because the launch format changes.
@@ -304,15 +331,15 @@ role; a task filed with no role, which must run as developer.
    includes it in the startup text, which needs the server to read a file from
    the retained source and has not been checked for feasibility. Recommended:
    (a) now, (b) as a follow-up.
-4. **Documents in Settings or files in the vault.** This draft stores them as
-   Settings documents, like the routing document. v1 kept them as files that
-   took effect on save. Files would need the server to watch and write the
-   vault.
+4. **Documents in Settings or files in the vault.** Answered 2026-11-16:
+   Settings documents now; a vault may come later (§7).
 5. **Wire rename.** Removing `agent_profile` and `modules` from the launch
    manifest touches about 110 worker files, mostly fixtures. It is the largest
    mechanical step. It is in scope here because of "no old references"; say so
    if you would rather defer it.
-6. **History.** Is losing the profile link on past attempts acceptable?
+6. **History.** Answered 2026-11-16: keep it, bounded (§7.1). Remaining
+   point: attempts from before the switch get a summary but not their full
+   prompt text. Is that acceptable?
 
 ## 12. Work order
 
