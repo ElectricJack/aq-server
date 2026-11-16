@@ -230,6 +230,17 @@ async fn resolve_with_principal(
             .map(|budget| budget.snapshot()),
         Err(_) => None,
     };
+    // `any-model`: the Settings model choices this selection's candidates name,
+    // resolved here so the chosen native reasoning is part of the digested inputs.
+    let routed = request.intelligence_override.as_deref();
+    let agent = &request.project.intelligence_profile;
+    let model_choices = routed_intelligence(&catalog.artifact().catalog, agent, routed)
+        .filter(|_| cfg!(feature = "any-model"))
+        .map(|profile| {
+            let choices = crate::profile_catalog::settings::choices(state);
+            aq_profile_settings::resolve_candidates(&choices, &profile.candidates, &node.harnesses)
+        })
+        .unwrap_or_default();
     let input = SelectionInputs {
         project: ProjectSnapshot {
             lineage: request.lineage.clone(),
@@ -307,6 +318,7 @@ async fn resolve_with_principal(
         placement,
         intelligence_override: request.intelligence_override,
         route: request.route,
+        model_choices,
     };
     let mut outcome =
         select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;

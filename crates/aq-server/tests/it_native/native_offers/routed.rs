@@ -23,6 +23,17 @@ const CLASS_MODEL: &str = "model-c";
 /// availability allowed, assigns that profile to the standard parent at high effort, and
 /// binds the project to the router.
 async fn on_the_router(c: &mut Case) {
+    class_on_the_router(c, ("standard-high", "high"), |_| {}, true).await;
+}
+/// [`on_the_router`] for the class profile `level` (its id and the effort it is assigned at
+/// under the standard parent), after `edit` changed it. Unless `installed`, the node does
+/// not list the class model and no context fact covers it.
+async fn class_on_the_router(
+    c: &mut Case,
+    level: (&str, &str),
+    edit: impl FnOnce(&mut aq_profiles::Intelligence),
+    installed: bool,
+) {
     let env = &mut c.env.env;
     let original: Vec<u8> =
         sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
@@ -41,7 +52,7 @@ async fn on_the_router(c: &mut Case) {
     let mut class = profiles[0].clone();
     profiles[0].version = 3;
     profiles[0].automatic_routing = Some(true);
-    (class.id, class.version, class.automatic_routing) = ("standard-high".into(), 1, None);
+    (class.id, class.version, class.automatic_routing) = (level.0.into(), 1, None);
     assert_eq!(class.candidates[0].provider, "fixture-a");
     class.candidates[0].model = CLASS_MODEL.into();
     class
@@ -49,6 +60,7 @@ async fn on_the_router(c: &mut Case) {
         .as_mut()
         .unwrap()
         .allow_unknown_availability = true;
+    edit(&mut class);
     profiles.push(class);
     for agent in &mut artifact.catalog.agents {
         agent.version = 3;
@@ -74,9 +86,9 @@ async fn on_the_router(c: &mut Case) {
         .await
         .unwrap();
     document.assignments = vec![aq_profile_settings::structure::Assignment {
-        profile_id: "standard-high".into(),
+        profile_id: level.0.into(),
         parent_id: "standard".into(),
-        effort: "high".into(),
+        effort: level.1.into(),
     }];
     sqlx::query(
         "UPDATE intelligence_structure SET revision=revision+1,document=$1 WHERE singleton",
@@ -85,6 +97,9 @@ async fn on_the_router(c: &mut Case) {
     .execute(&env.pool)
     .await
     .unwrap();
+    if !installed {
+        return;
+    }
     let model = json!([{"provider":"fixture-a","model":CLASS_MODEL,
         "reasoning_configuration_reference":"reasoning-a@1","native_reasoning":"high"}]);
     sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses,0,models}',(snapshot#>'{harnesses,0,models}')||$1::jsonb)")
@@ -520,4 +535,175 @@ async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
         "the route is valid, so it is kept"
     );
     assert_eq!(holds(&c).await, 0);
+}
+
+/// Epic `any-model`: a worker runs any model on an installed harness, and no
+/// measured context fact is needed for an offer.
+#[cfg(feature = "any-model")]
+mod any_model {
+    use super::*;
+    use aq_admission::startup::NativeOffer;
+
+    /// Settings' cached model choices (`intelligence_preferences_file`).
+    fn settings(c: &mut Case, choices: Value) {
+        let path = c.env.env._dir.path().join("model-choices.json");
+        std::fs::write(&path, serde_json::to_vec(&choices).unwrap()).unwrap();
+        let mut config = (*c.env.env.state.config).clone();
+        config.intelligence_preferences_file = Some(path);
+        c.env.env.state.config = Arc::new(config);
+    }
+    fn choice(model: &str, reference: &str, reasoning: &str, options: Value) -> Value {
+        json!({"provider":"fixture-a","model":model,"harness":"codex",
+            "reasoning_configuration_reference":reference,"reasoning":reasoning,"options":options})
+    }
+    /// The one offer of a successful poll, checked by the worker's own validators.
+    async fn offer(c: &Case) -> NativeOffer {
+        let (status, body) = poll_offered(c).await;
+        assert_eq!(status, 200, "{body}");
+        let ControlReply::Poll(mut page) =
+            decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+        else {
+            panic!("{body}")
+        };
+        page.validate_for(&c.request).unwrap();
+        assert_eq!(page.offers.len(), 1, "{body}");
+        let native = page.offers.remove(0);
+        native.validate().unwrap();
+        aq_session_protocol::Validate::validate(&native.offered.offer.manifest).unwrap();
+        native
+    }
+    /// The latest decision's candidate traces: `(model, reason codes)`.
+    async fn traces(c: &Case) -> Vec<(String, Vec<String>)> {
+        let traces: Value = sqlx::query_scalar(
+            "SELECT decision#>'{outcome,traces}' FROM intelligence_decisions \
+             WHERE decision#>>'{inputs,project,lineage,task_id}'=$1::TEXT \
+             ORDER BY decision#>'{inputs,now_ms}' DESC LIMIT 1",
+        )
+        .bind(c.env.lineage.task_id)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap();
+        serde_json::from_value::<Vec<Value>>(traces)
+            .unwrap()
+            .iter()
+            .map(|t| {
+                let model = t["model"].as_str().unwrap().to_owned();
+                (
+                    model,
+                    serde_json::from_value(t["reason_codes"].clone()).unwrap(),
+                )
+            })
+            .collect()
+    }
+    /// The class level `level` runs `model`, which the node's harness does not list and no
+    /// context fact covers; Settings holds `choices`. The routed task's offer.
+    async fn level_offer(level: (&str, &str), model: &str, choices: Value) -> NativeOffer {
+        let mut c = setup().await;
+        let model = model.to_owned();
+        class_on_the_router(&mut c, level, |p| p.candidates[0].model = model, false).await;
+        settings(&mut c, choices);
+        routing(&c, true).await;
+        route(&c, level.0, &[]);
+        offer(&c).await
+    }
+
+    #[tokio::test]
+    async fn a_model_the_harness_does_not_list_is_offered_with_the_settings_reasoning() {
+        let choices = json!([choice(CLASS_MODEL, "reasoning-a@1", "high", json!({}))]);
+        let native = level_offer(("standard-high", "high"), CLASS_MODEL, choices).await;
+        let manifest = &native.offered.offer.manifest;
+        assert_eq!(manifest.model.model.as_str(), CLASS_MODEL);
+        assert_eq!(manifest.model.reasoning.as_str(), "high");
+        assert_eq!(
+            manifest.intelligence_profile.id.as_str(),
+            format!("intelligence:{CLASS_PROFILE}")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_reasoning_effort_option_of_the_choice_is_the_native_reasoning() {
+        let choices = json!([choice(
+            CLASS_MODEL,
+            "reasoning-a@1",
+            "extra high (fast service)",
+            json!({"reasoning_effort":"xhigh","service_tier":"fast"})
+        )]);
+        let native = level_offer(("standard-high", "high"), CLASS_MODEL, choices).await;
+        let manifest = &native.offered.offer.manifest;
+        assert_eq!(manifest.model.model.as_str(), CLASS_MODEL);
+        assert_eq!(manifest.model.reasoning.as_str(), "xhigh");
+    }
+
+    #[tokio::test]
+    async fn an_unresolvable_reference_falls_through_to_the_next_candidate() {
+        let mut c = setup().await;
+        // First a reference no Settings choice has, then one whose choice the harness
+        // does not accept; neither is given a default.
+        let edit = |p: &mut aq_profiles::Intelligence| {
+            let base = p.candidates[0].clone();
+            let candidate = |id: &str, model: &str, reference: &str| aq_profiles::ModelCandidate {
+                id: id.into(),
+                model: model.into(),
+                reasoning_configuration_reference: reference.into(),
+                ..base.clone()
+            };
+            p.candidates = vec![
+                candidate("unknown-reference", "model-x", "absent@1"),
+                candidate("refused-reasoning", "model-y", "label-only@1"),
+                candidate("resolvable", CLASS_MODEL, "reasoning-a@1"),
+            ];
+        };
+        class_on_the_router(&mut c, ("standard-high", "high"), edit, false).await;
+        settings(
+            &mut c,
+            json!([
+                choice("model-y", "label-only@1", "deliberate", json!({})),
+                choice(CLASS_MODEL, "reasoning-a@1", "high", json!({})),
+            ]),
+        );
+        routing(&c, true).await;
+        route(&c, "standard-high", &[]);
+        let native = offer(&c).await;
+        assert_eq!(
+            native.offered.offer.manifest.model.model.as_str(),
+            CLASS_MODEL
+        );
+        let unsupported = vec!["model_or_reasoning_unsupported".to_owned()];
+        let traces = traces(&c).await;
+        assert_eq!(
+            traces[0],
+            ("model-x".into(), unsupported.clone()),
+            "{traces:?}"
+        );
+        assert_eq!(traces[1], ("model-y".into(), unsupported), "{traces:?}");
+        assert_eq!(traces[2].0, CLASS_MODEL, "{traces:?}");
+    }
+
+    #[tokio::test]
+    async fn two_models_in_two_levels_share_one_renderer_qualification() {
+        let high = json!([choice(CLASS_MODEL, "reasoning-a@1", "high", json!({}))]);
+        let first = level_offer(("standard-high", "high"), CLASS_MODEL, high).await;
+        let low = json!([choice("model-d", "reasoning-a@1", "low", json!({}))]);
+        let second = level_offer(("standard-low", "low"), "model-d", low).await;
+        let (a, b) = (
+            &first.offered.offer.manifest,
+            &second.offered.offer.manifest,
+        );
+        assert_eq!(
+            (a.model.model.as_str(), a.model.reasoning.as_str()),
+            (CLASS_MODEL, "high")
+        );
+        assert_eq!(
+            (b.model.model.as_str(), b.model.reasoning.as_str()),
+            ("model-d", "low")
+        );
+        assert_ne!(a.intelligence_profile, b.intelligence_profile);
+        assert_eq!(
+            first.startup.renderer_qualification,
+            second.startup.renderer_qualification
+        );
+        assert!(
+            (first.startup.renderer_qualification.id.as_str()).starts_with("aq.startup-renderer/")
+        );
+    }
 }
