@@ -589,6 +589,19 @@ fn route_backed_owner_mutations_fill_the_path_and_send_the_rest() {
         ("DELETE", "/api/playbooks/sources/routing")
     );
     assert_eq!(f.body.unwrap(), json!({}));
+    // Two commands on one handler keep their own paths: it reads the path.
+    let event = Uuid::from_u128(7);
+    for (name, tail) in [
+        ("playbook.event.retry", "retry"),
+        ("playbook.event.hold", "hold"),
+    ] {
+        let f = build(name, json!({"event_id":event}), None);
+        assert_eq!(
+            (f.method, f.uri),
+            ("POST", format!("/api/playbooks/events/{event}/{tail}"))
+        );
+        assert_eq!(f.body.unwrap(), json!({}));
+    }
     // Each such schema is closed, names its path params and requires them.
     for c in r.commands() {
         let inline = |o: &Route| o.body == Body::Params && matches!(o.params, Params::Inline(_));

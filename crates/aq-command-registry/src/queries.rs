@@ -403,6 +403,8 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         | "/api/internal-work/runs/{id}"
         | "/api/settings/intelligence/routing"
         | "/api/tasks/{id}/routes" => NONE,
+        // playbooks/api.rs::status, ::admission
+        "/api/playbooks/status" | "/api/playbooks/admissions/{id}" => NONE,
         // aq-internal-work runs.rs::Query
         "/api/internal-work/runs" => {
             const {

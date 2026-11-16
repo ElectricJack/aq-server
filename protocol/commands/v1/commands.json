@@ -2526,6 +2526,124 @@
     {
       "cli": [
         "playbook",
+        "admission",
+        "recover"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.admission.recover",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:a94034a8b446b266a52dacbe160be2888742333a7e8d03fa77efd1301b9b85c5",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "request_id": {
+                "description": "The admission's request ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/admissions/{id}/recover"
+          }
+        }
+      },
+      "summary": "Look up an admission's run in the engine and record it (never starts a run; safe to repeat)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "admission",
+        "retry"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.admission.retry",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:a94034a8b446b266a52dacbe160be2888742333a7e8d03fa77efd1301b9b85c5",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "request_id": {
+                "description": "The admission's request ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/admissions/{id}/retry"
+          }
+        }
+      },
+      "summary": "Admit a retained admission again; one whose outcome was unknown may run its work twice (repeating after it is admitted returns the same run)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "admission",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "playbook.admission.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:be52d4b663531f9be4efcb38afd9834887ca751e6041c198b38b97dc8400d67d",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "request_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/playbooks/admissions/{id}"
+          }
+        }
+      },
+      "summary": "One playbook admission: a request to start a run, and what became of it",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
         "catalog",
         "activations"
       ],
@@ -2637,6 +2755,146 @@
         }
       },
       "summary": "Playbook catalog definitions",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "driver",
+        "recover"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.driver.recover",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/recover"
+          }
+        }
+      },
+      "summary": "Have the engine recover its runs now (safe to repeat)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "driver",
+        "stop"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.driver.stop",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/stop"
+          }
+        }
+      },
+      "summary": "Stop the playbook driver; queued messages are kept (safe to repeat, and allowed during maintenance)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "event",
+        "hold"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.event.hold",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:216f64f8435cbfa40a56c7bacca17dd5fbacbbf0906a05ee7f613305034ccb7b",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "event_id": {
+                "description": "The waiting event's ID",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/events/{id}/hold"
+          }
+        }
+      },
+      "summary": "Hold an event that is waiting for delivery (refused if it is held or delivered)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "event",
+        "retry"
+      ],
+      "grant": "playbook.run",
+      "kind": "mutation",
+      "name": "playbook.event.retry",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:b33b94e3a0619e6f09060676e408b64b9929fba2622b354c53c19942623fccda",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "event_id": {
+                "description": "The held event's ID, from playbook.status",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "event_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/playbooks/events/{id}/retry"
+          }
+        }
+      },
+      "summary": "Deliver a held event again (refused unless the event is held)",
       "target": {
         "rule": "own"
       }
@@ -3223,6 +3481,37 @@
         }
       },
       "summary": "One playbook source, with the playbook in effect and its latest authoring run",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "playbook",
+        "status"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "playbook.status",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/playbooks/status"
+          }
+        }
+      },
+      "summary": "The playbook engine: its driver's state, the commands it knows and the events it holds",
       "target": {
         "rule": "own"
       }

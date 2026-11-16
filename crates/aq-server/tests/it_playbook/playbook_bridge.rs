@@ -700,7 +700,9 @@ async fn api(
         .unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned().into());
+    (status, body)
 }
 #[tokio::test]
 async fn optional_http_mount_requires_owner_csrf_and_only_finite_controls_survive_maintenance() {
@@ -1650,6 +1652,201 @@ async fn held_work_shows_its_reason_and_retries_as_a_new_delivery() {
     assert_eq!(again["receipt"], first["receipt"]);
     assert!(again.get("warning").is_none(), "{again}");
     driver.stop().await.unwrap();
+}
+
+/// A command as the owner sends it: its params under `params`.
+async fn command(
+    app: &axum::Router,
+    name: &str,
+    params: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    api(
+        app.clone(),
+        "POST",
+        &format!("/api/v1/commands/{name}"),
+        true,
+        json!({"params":params}),
+    )
+    .await
+}
+
+/// The engine's owner controls answer through the command registry as their
+/// routes do, against a running driver: status, a held event's retry and
+/// hold, an admission's show, recover and retry, and the driver's recover
+/// and stop. Stop is still allowed during maintenance; a retry is not.
+#[tokio::test]
+async fn engine_controls_answer_through_commands_as_their_routes_do() {
+    let e = setup_with(true).await;
+    let pool = e.f.db.pool().await;
+    let event = graph_event(&e).await;
+    let driver = Arc::new(
+        aq_server::playbooks::driver::Driver::start(
+            e.service.clone(),
+            aq_playbook_host::Limits::default(),
+            protected_factory(source_url(&e)),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut a = pure_artifact();
+    a.content.registry =
+        aq_server::playbooks::review_domain::CatalogProfile::GraphEvents3.registry();
+    let a = aq_playbook_host::model::Artifact::seal(a.content).unwrap();
+    let hash = a.digest.clone();
+    driver.install(a).await.unwrap();
+    let binding = driver
+        .activate("held".into(), hash, e.grant, 1)
+        .await
+        .unwrap();
+    assert_eq!(driver.test_collect_graph_events().await.unwrap(), 1);
+    let producer: String =
+        sqlx::query_scalar("SELECT producer FROM playbook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    mismatch(&e, event).await;
+    driver.quantum().await.unwrap();
+    let app = aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+
+    let direct = api(
+        app.clone(),
+        "GET",
+        "/api/playbooks/status",
+        false,
+        json!(null),
+    )
+    .await;
+    let via = command(&app, "playbook.status", json!({})).await;
+    assert_eq!(via.0, 200, "{}", via.1);
+    assert_eq!(via, direct);
+    assert_eq!(
+        via.1["held_events"][0]["event_id"],
+        event.to_string(),
+        "{}",
+        via.1
+    );
+
+    // Retry and hold share a handler that reads the path it was called on.
+    set_outbox(&e, event, "producer", &producer).await;
+    let (code, body) = command(&app, "playbook.event.retry", json!({"event_id":event})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body, json!({"event_id":event,"disposition":"pending"}));
+    let (code, body) = command(&app, "playbook.event.hold", json!({"event_id":event})).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body, json!({"event_id":event,"disposition":"held"}));
+    let (code, body) = command(&app, "playbook.event.hold", json!({"event_id":event})).await;
+    assert_eq!(code, 409, "a held event cannot be held again: {body}");
+    let (code, body) = command(&app, "playbook.event.retry", json!({"event_id":event})).await;
+    assert_eq!(code, 200, "{body}");
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        outbox_status(&e, event).await,
+        ("engine_accepted".into(), true)
+    );
+    let (code, body) = command(&app, "playbook.event.retry", json!({"event_id":event})).await;
+    assert_eq!(code, 409, "only a held event can be retried: {body}");
+    let (code, body) = command(&app, "playbook.event.retry", json!({"event_id":"nope"})).await;
+    assert_eq!(code, 400, "{body}");
+
+    let id = Uuid::new_v4();
+    e.service
+        .prepare(
+            e.f.actor,
+            PrepareRequest {
+                request_id: id,
+                grant_id: e.grant,
+                grant_revision: 1,
+                binding: "held".into(),
+                expected_activation_revision: binding["revision"].as_u64().unwrap(),
+                entry: "main".into(),
+                input: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE playbook_admissions SET status='unknown',held_reason='uncertain' WHERE request_id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let direct = api(
+        app.clone(),
+        "GET",
+        &format!("/api/playbooks/admissions/{id}"),
+        false,
+        json!(null),
+    )
+    .await;
+    let via = command(&app, "playbook.admission.show", json!({"request_id":id})).await;
+    assert_eq!(via.0, 200, "{}", via.1);
+    assert_eq!(via, direct);
+    assert_eq!(via.1["status"], "unknown", "{}", via.1);
+    // Recover only looks the run up: the engine has none, and none is made.
+    let direct = api(
+        app.clone(),
+        "POST",
+        &format!("/api/playbooks/admissions/{id}/recover"),
+        true,
+        json!({}),
+    )
+    .await;
+    let via = command(&app, "playbook.admission.recover", json!({"request_id":id})).await;
+    assert_eq!(via, direct);
+    assert!(!via.0.is_success(), "{}", via.1);
+    let (code, first) = command(&app, "playbook.admission.retry", json!({"request_id":id})).await;
+    assert_eq!(code, 200, "{first}");
+    assert_eq!(first["status"], "engine_accepted", "{first}");
+    assert!(
+        first["warning"]
+            .as_str()
+            .unwrap()
+            .contains("may run the work again"),
+        "{first}"
+    );
+    let (code, again) = command(&app, "playbook.admission.retry", json!({"request_id":id})).await;
+    assert_eq!(code, 200, "{again}");
+    assert_eq!(again["receipt"], first["receipt"]);
+    let (code, found) = command(&app, "playbook.admission.recover", json!({"request_id":id})).await;
+    assert_eq!(code, 200, "{found}");
+    assert_eq!(found["receipt"], first["receipt"]);
+
+    let direct = api(
+        app.clone(),
+        "POST",
+        "/api/playbooks/recover",
+        true,
+        json!({}),
+    )
+    .await;
+    let via = command(&app, "playbook.driver.recover", json!({})).await;
+    assert_eq!(via.0, 200, "{}", via.1);
+    assert_eq!(via, direct);
+
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("status")).unwrap();
+    std::fs::write(
+        directory.path().join("status/maintenance"),
+        "synthetic maintenance",
+    )
+    .unwrap();
+    let mut config = (*e.f.state.config).clone();
+    config.updates = Some(aq_server::config::UpdatesConfig {
+        spool_dir: directory.path().to_path_buf(),
+    });
+    let mut state = e.f.state.clone();
+    state.config = Arc::new(config);
+    let app = aq_server::build_admin_router_with_playbooks(state, Some(driver.clone()));
+    let (code, body) = command(&app, "playbook.driver.recover", json!({})).await;
+    assert_eq!(code, 503, "{body}");
+    for _ in 0..2 {
+        let (code, body) = command(&app, "playbook.driver.stop", json!({})).await;
+        assert_eq!(code, 200, "{body}");
+        assert_eq!(
+            body,
+            json!({"disposition":"driver_stopped","queued_messages":"retained"})
+        );
+    }
 }
 
 /// A retained admission created long before now is admitted on its first
