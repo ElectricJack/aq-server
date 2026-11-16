@@ -6,11 +6,10 @@ async fn main() -> std::process::ExitCode {
     let json_output = std::env::args()
         .take_while(|a| a != "--")
         .any(|a| a == "--json");
-    let parsed = aqv2::cli::Cli::command()
-        .name(program)
-        .bin_name(program)
-        .try_get_matches()
-        .and_then(|m| aqv2::cli::Cli::from_arg_matches(&m));
+    let parsed =
+        aqv2::with_registry_help(aqv2::cli::Cli::command().name(program).bin_name(program))
+            .try_get_matches()
+            .and_then(|m| aqv2::cli::Cli::from_arg_matches(&m));
     let cli = match parsed {
         Ok(cli) => cli,
         Err(error)
