@@ -42,6 +42,27 @@ const fn mutation(
         agent: None,
     }
 }
+/// An owner mutation served by its own REST route (not an action kind):
+/// the params fill the path and the rest is the JSON body. The route keeps
+/// its own idempotency, keyed by the `operation_id` in its body.
+const fn owner_post(
+    name: &'static str,
+    grant: &'static str,
+    summary: &'static str,
+    path: &'static str,
+    rename: &'static [(&'static str, &'static str)],
+    params: &'static str,
+) -> CommandSpec {
+    let mut c = mutation(name, grant, TargetRule::Own, summary);
+    c.owner = Some(Route {
+        method: "POST",
+        path,
+        body: Body::Params,
+        params: Params::Inline(params),
+        rename,
+    });
+    c
+}
 const fn get(path: &'static str) -> Option<Route> {
     Some(Route::get(path, &[]))
 }
@@ -899,6 +920,163 @@ pub fn catalog() -> Vec<CommandSpec> {
             "dashboard.read",
             "One profile catalog by digest",
             "/api/profiles/catalogs/{digest}",
+        ),
+        owner_post(
+            "project.set",
+            "project.admin",
+            "Create a project or replace its binding (repository, profiles, limits, publication)",
+            "/api/projects/{id}",
+            &[("id", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","operation_id","expected_revision","binding"],"properties":{"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0,"description":"The project's current revision; 0 creates it"},"binding":{"type":"object","description":"The whole binding, as project.show returns it; its project_id must be this project"}}}"#,
+        ),
+        owner_post(
+            "project.disable",
+            "project.admin",
+            "Disable a project so no new work starts in it",
+            "/api/projects/{id}/disable",
+            &[("id", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","operation_id","expected_revision"],"properties":{"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":1}}}"#,
+        ),
+        owner_post(
+            "project.onboard",
+            "project.admin",
+            "Onboard a GitHub repository as a project (resumes when repeated with the same operation ID)",
+            "/api/repositories/onboard",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["operation_id","project_id","repository_id","github","transport","publication","template"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"project_id":{"type":"string","format":"uuid"},"repository_id":{"type":"string","format":"uuid"},"github":{"type":"object","additionalProperties":false,"required":["owner","name"],"properties":{"owner":{"type":"string","minLength":1,"maxLength":100},"name":{"type":"string","minLength":1,"maxLength":100}}},"transport":{"enum":["ssh","https"]},"credential_profile":{"type":"string","description":"A configured credential profile of the transport's kind"},"default_branch":{"type":"string"},"publication":{"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"enum":["pull_request","fast_forward"]},"wait_for_checks":{"type":"object","additionalProperties":false,"required":["timeout_secs"],"properties":{"timeout_secs":{"type":"integer","minimum":0}}}}},"template":{"type":"object","description":"The project binding without its project, repository and publication fields"}}}"#,
+        ),
+        owner_post(
+            "attempt.cancel",
+            "attempt.control",
+            "Ask a running attempt to stop",
+            "/api/execution/attempts/{id}/cancel",
+            &[("id", "attempt_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["attempt_id","operation_id","reason"],"properties":{"attempt_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"reason":{"type":"string","minLength":1,"maxLength":4096}}}"#,
+        ),
+        owner_post(
+            "attempt.abandon",
+            "attempt.control",
+            "Abandon a stopped, unsettled attempt and release its hold on the task (cannot be undone)",
+            "/api/execution/attempts/{id}/disposition",
+            &[("id", "attempt_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["attempt_id","operation_id","reason"],"properties":{"attempt_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"reason":{"type":"string","minLength":1,"maxLength":4096}}}"#,
+        ),
+        owner_post(
+            "supervisor.set",
+            "supervisor.control",
+            "Turn a supervisor on or off and choose the profile it runs on",
+            "/api/supervisors/{id}/control",
+            &[("id", "conversation_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
+        ),
+        owner_post(
+            "intelligence.set",
+            "intelligence.admin",
+            "Create, change or delete one intelligence profile",
+            "/api/settings/intelligence",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","profile_id","profile_version","name","description","candidates"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$","description":"The settings revision intelligence.list returned"},"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0,"description":"The profile's current version; 0 creates it"},"name":{"type":"string","minLength":1,"maxLength":128},"description":{"type":"string","maxLength":2000},"candidates":{"type":"array","maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["id","provider","model","reasoning_configuration_reference","harnesses"],"properties":{"id":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"reasoning_configuration_reference":{"type":"string"},"harnesses":{"type":"array","items":{"type":"string"}}}}},"delete":{"type":"boolean"}}}"#,
+        ),
+        owner_post(
+            "notification.retry",
+            "notification.admin",
+            "Retry a notification delivery whose outcome is unknown, accepting a possible duplicate",
+            "/api/notifications/retry",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["operation_id","delivery_id","expected_revision","accept_duplicate_risk"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"delivery_id":{"type":"string","format":"uuid"},"expected_revision":{"type":"integer","minimum":0},"accept_duplicate_risk":{"const":true}}}"#,
+        ),
+        owner_post(
+            "session.manual.start",
+            "worker.admin",
+            "Start a session by hand on a worker for a project",
+            "/api/manual-agents/workers/{node}/projects/{project}",
+            &[("node", "node_id"), ("project", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Becomes the session's ID; repeat it to retry safely"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
+        ),
+        owner_post(
+            "session.manual.stop",
+            "worker.admin",
+            "Stop a session started by hand, keeping its workspace",
+            "/api/manual-agents/{id}/stop",
+            &[("id", "session_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["session_id","operation_id"],"properties":{"session_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"}}}"#,
+        ),
+        owner_post(
+            "session.manual.slots.set",
+            "worker.admin",
+            "Set how many hand-started sessions a worker offers a project",
+            "/api/manual-agents/workers/{node}/projects/{project}/slots",
+            &[("node", "node_id"), ("project", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id","expected_revision","slots"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"slots":{"type":"integer","minimum":0,"maximum":8}}}"#,
+        ),
+        owner_post(
+            "wait.suspend",
+            "attempt.control",
+            "Suspend the attempt behind a wait (repeating returns the same directive)",
+            "/api/waits/{wait_id}/suspend",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["wait_id"],"properties":{"wait_id":{"type":"string","format":"uuid"}}}"#,
+        ),
+        owner_post(
+            "sandbox.release",
+            "attempt.control",
+            "Release the protected disk of a suspended attempt",
+            "/api/hibernation/{continuation_id}/disk-release",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["continuation_id"],"properties":{"continuation_id":{"type":"string","format":"uuid"}}}"#,
+        ),
+        owner_post(
+            "operation.recover",
+            "operation.recover",
+            "Retry the dispatch of a task create whose outcome was uncertain",
+            "/api/human/operations/{operation}/recover",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"type":"string","format":"uuid","description":"The operation ID of the original create"}}}"#,
+        ),
+        owner_post(
+            "worker.enroll",
+            "worker.admin",
+            "Create a one-time enrollment code for a new worker (each call makes a new code)",
+            "/api/enrollments",
+            &[],
+            r#"{"type":"object","additionalProperties":false,"required":[],"properties":{}}"#,
+        ),
+        read(
+            "project.onboard.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "The state of one repository onboarding",
+            Some(Route::get("/api/repositories/onboard/{operation_id}", &[])),
+        ),
+        read(
+            "attempt.disposition.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "The record of an attempt's abandonment",
+            Some(Route::get(
+                "/api/execution/attempts/{id}/disposition",
+                &[("id", "attempt_id")],
+            )),
+        ),
+        read(
+            "supervisor.operation.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "The receipt of one supervisor.set",
+            Some(Route::get(
+                "/api/supervisors/{id}/operations/{operation}",
+                &[("id", "conversation_id"), ("operation", "operation_id")],
+            )),
+        ),
+        read(
+            "intelligence.operation.show",
+            "dashboard.read",
+            TargetRule::Own,
+            "The recorded result of one intelligence.set",
+            Some(Route::get(
+                "/api/settings/intelligence/operations/{id}",
+                &[("id", "operation_id")],
+            )),
         ),
     ];
     for command in &mut commands {

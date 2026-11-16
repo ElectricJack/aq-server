@@ -303,6 +303,14 @@ pub fn help(name: &str, principal: &str) -> Option<String> {
     if action && !derived {
         usage.push_str(" --subject TYPE:ID[:REVISION]");
     }
+    let needs = |field: &str| {
+        schema(name, principal)
+            .and_then(|s| s["required"].as_array())
+            .is_some_and(|r| r.iter().any(|v| v == field))
+    };
+    if !action && needs("reason") {
+        usage.push_str(" --reason <text>");
+    }
     if flags.iter().any(|f| !f.required) {
         usage.push_str(" [flags]");
     }
@@ -335,7 +343,9 @@ pub fn help(name: &str, principal: &str) -> Option<String> {
         .and_then(|s| s["properties"].as_object())
         .into_iter()
         .flat_map(|p| p.keys())
+        // A route-backed command's body takes `--reason` itself.
         .filter(|p| RESERVED.contains(&p.as_str()) && *p != "operation_id")
+        .filter(|p| action || *p != "reason")
         .map(|p| format!("--param {p}=…"))
         .collect();
     if !shadowed.is_empty() {
