@@ -96,6 +96,22 @@ async fn owner_command_requires_configured_mutation_service_and_bounded_closed_i
             .0,
         StatusCode::PAYLOAD_TOO_LARGE
     );
+    // Spec 0014 §5.5: an unknown role is refused by name with the roles that
+    // exist, and `profile_hint` is an unknown field.
+    let with = |field: &str| {
+        let extra = format!("{field},\"task_state\"");
+        request(Uuid::new_v4(), "1").replace("\"task_state\"", &extra)
+    };
+    let unknown = with("\"role\":\"tester\"");
+    let (status, body) = send(&app, &path, Some(&unknown), "owner@localhost").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["message"],
+        "Role `tester` does not exist. The roles are: developer, reviewer."
+    );
+    let old = with("\"profile_hint\":\"coding\"");
+    let (status, _) = send(&app, &path, Some(&old), "owner@localhost").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM human_graph_operations")
         .fetch_one(&f.db.pool().await)
         .await

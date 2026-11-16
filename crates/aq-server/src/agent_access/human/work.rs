@@ -94,9 +94,8 @@ pub(super) async fn work(
         &raw["node"]["metadata"],
         &a.record.binding.default_role,
     );
-    let snapshot = crate::role_settings::active(&r.pool).await?;
-    let role_hold = aq_role_settings::tasks::role_hold(snapshot.as_ref(), &role.id);
-    let held = held.into_iter().chain(role_hold.map(|h| h.shown()));
+    let role_hold = crate::role_settings::hold(&s, &r.pool, &role).await?;
+    let held = held.into_iter().chain(role_hold);
     let readiness = aq_human_work::readiness_with(
         root["task_state"].as_str(),
         hold.as_ref(),

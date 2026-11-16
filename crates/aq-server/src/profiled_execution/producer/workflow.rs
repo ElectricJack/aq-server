@@ -552,8 +552,7 @@ async fn offers(
                 // with role selection.
                 let roles = ready.items.iter().map(|c| (c.revision.task_id, &c.node));
                 let default_role = &record.binding.default_role;
-                let role_held =
-                    crate::role_settings::held(&state.store.pool, default_role, roles).await?;
+                let role_held = crate::role_settings::held(state, default_role, roles).await?;
                 // Spec 0011 §4, before any context read: a task's route, or its wait for one.
                 let placements =
                     on_heap(|| crate::routing::placements(state, &record, &ready.items));

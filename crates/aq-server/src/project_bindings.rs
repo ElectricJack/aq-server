@@ -380,9 +380,11 @@ async fn mutate(
         // the active role snapshot. The lock is held to commit, so a delete
         // of one of them waits and then sees this binding.
         let (role, level) = (&binding.default_role, &binding.default_intelligence);
-        aq_role_settings::check_binding(&mut tx, role, level, &binding.role_notes)
-            .await
-            .map_err(crate::role_settings::error)?;
+        if crate::role_settings::tables(state) {
+            aq_role_settings::check_binding(&mut tx, role, level, &binding.role_notes)
+                .await
+                .map_err(crate::role_settings::error)?;
+        }
         binding
     } else {
         let mut binding: ProjectBinding = serde_json::from_value(

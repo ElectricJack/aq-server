@@ -189,6 +189,8 @@ async fn overview_ready_owner_preserves_samples_failures_and_binding_fence() {
     ))
     .unwrap()["data"]
         .clone();
+    // `role` is AQ's projection (spec 0014 §5.5), not a Graph field.
+    node.as_object_mut().unwrap().remove("role");
     node["workspace_id"] = json!(workspace);
     node["metadata"] = json!({});
     node["version"] = json!(1);

@@ -295,6 +295,8 @@ mod tests {
         )))
         .unwrap()["data"]
             .clone();
+        // `role` is AQ's projection (spec 0014 §5.5), not a Graph field.
+        node.as_object_mut().unwrap().remove("role");
         node["workspace_id"] = json!(Uuid::from_u128(2));
         node["metadata"] = json!({"aq:private-canary":"not-a-summary-field"});
         node["version"] = json!(1);

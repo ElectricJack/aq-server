@@ -77,6 +77,15 @@ pub(crate) async fn install(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
+/// False only for a historical test store older than migration 0134 (no
+/// role tables); its tasks are then not checked against roles.
+#[allow(clippy::needless_return)]
+pub(crate) fn tables(_state: &AppState) -> bool {
+    #[cfg(feature = "test-support")]
+    return _state.store.fixture_profile.is_none_or(|v| v >= 134);
+    #[cfg(not(feature = "test-support"))]
+    true
+}
 /// The snapshot new work is checked against; `None` until one is active.
 pub(crate) async fn active(pool: &PgPool) -> Result<Option<Snapshot>, AppError> {
     let active = aq_role_settings::active_snapshot(pool).await;
@@ -87,7 +96,7 @@ pub(crate) async fn named(
     state: &AppState,
     roles: &[impl AsRef<str>],
 ) -> Result<Result<(), tasks::UnknownRole>, AppError> {
-    if roles.is_empty() {
+    if roles.is_empty() || !tables(state) {
         return Ok(Ok(()));
     }
     let snapshot = active(&state.store.pool).await?;
@@ -101,6 +110,19 @@ pub(crate) async fn named_api(state: &AppState, roles: &[impl AsRef<str>]) -> Re
         let status = axum::http::StatusCode::UNPROCESSABLE_ENTITY;
         ApiError::new(status, "unknown_role", "Unknown role").with_message(&unknown.to_string())
     })
+}
+/// The hold of a task whose effective role is `role`, as the work read
+/// lists it, read from `pool`.
+pub(crate) async fn hold(
+    state: &AppState,
+    pool: &PgPool,
+    role: &tasks::EffectiveRole,
+) -> Result<Option<Value>, AppError> {
+    if !tables(state) {
+        return Ok(None);
+    }
+    let snapshot = active(pool).await?;
+    Ok(tasks::role_hold(snapshot.as_ref(), &role.id).map(|hold| hold.shown()))
 }
 /// A task's effective role as every task read shows it: `{id, source}`.
 pub(crate) fn shown(node: &Value, default_role: &str) -> Value {
@@ -121,11 +143,14 @@ pub(crate) async fn granted(pool: &PgPool, task: Uuid) -> Result<bool, AppError>
 /// The ready tasks whose effective role is disabled or missing, with the
 /// hold code: the producer offers none of them.
 pub(crate) async fn held(
-    pool: &PgPool,
+    state: &AppState,
     default_role: &str,
     nodes: impl Iterator<Item = (Uuid, &Value)>,
 ) -> Result<std::collections::BTreeMap<Uuid, &'static str>, AppError> {
-    let snapshot = active(pool).await?;
+    if !tables(state) {
+        return Ok(Default::default());
+    }
+    let snapshot = active(&state.store.pool).await?;
     Ok(nodes
         .filter_map(|(task, node)| {
             let role = tasks::effective_role(&node["metadata"], default_role);
