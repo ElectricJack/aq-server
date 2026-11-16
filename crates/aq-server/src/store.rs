@@ -413,7 +413,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         auto56::validate(&mut tx).await?;
     }
     if supported >= 66 {
-        stopped66::validate(&mut tx).await?;
+        stopped66::validate(&mut tx, supported).await?;
     }
     tx.commit().await?;
     Ok(())

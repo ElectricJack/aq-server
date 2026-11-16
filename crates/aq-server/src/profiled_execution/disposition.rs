@@ -65,7 +65,7 @@ fn db(error: sqlx::Error) -> AppError {
 }
 fn conflict() -> AppError {
     AppError::Conflict(
-        "disposition requires an unsettled held attempt with verified stop proof".into(),
+        "disposition requires an unsettled held attempt with verified stop proof or a launch closure".into(),
     )
 }
 
@@ -143,17 +143,28 @@ pub async fn abandon(
         return Ok(receipt);
     }
     let hot: Value = row.get("state");
-    let unsettled: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition='accepted') AND NOT EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1) AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE attempt_id=$1 AND disposition IN ('prepared','possible','confirmed')) AND NOT EXISTS(SELECT 1 FROM profiled_delivery_evidence WHERE attempt_id=$1 AND state IN ('indeterminate','published'))")
+    let unsettled: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition='accepted') AND NOT EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1) AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE attempt_id=$1 AND disposition IN ('prepared','possible','confirmed')) AND NOT EXISTS(SELECT 1 FROM profiled_delivery_evidence WHERE attempt_id=$1 AND state='indeterminate')")
         .bind(attempt).fetch_one(&mut *tx).await.map_err(db)?;
+    // A published delivery no longer blocks: a result delivered while its settlement was
+    // still held is never settled again, and the owner had no way to release its claim.
     let stop: Option<String> = sqlx::query_scalar("SELECT encode(sha256(receipt_bytes),'hex') FROM profiled_stopped_receipts WHERE attempt_id=$1")
         .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?;
-    if !row.get::<bool, _>("holds_task")
-        || !unsettled
-        || hot["status"] != "finished"
-        || hot["stop"]["kind"] != "stopped"
-        || stop.is_none()
-        || hot["stop"]["receipt"]["digest"].as_str() != stop.as_deref()
-    {
+    let stopped = hot["status"] == "finished"
+        && hot["stop"]["kind"] == "stopped"
+        && stop.is_some()
+        && hot["stop"]["receipt"]["digest"].as_str() == stop.as_deref();
+    // A granted launch its worker closed before the agent started: its stop proof is the
+    // launch closure's receipt. The server keeps such an attempt for an operator when the
+    // closure does not prove that nothing ran, and this is that operator's action.
+    let closed =
+        hot["status"] == "cancelling" && hot["revoked"] == true && hot["stop"]["kind"] == "unknown";
+    let stop = if stopped || !closed {
+        stop
+    } else {
+        sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1 AND encode(sha256(receipt_bytes),'hex')=receipt_digest")
+            .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?
+    };
+    if !row.get::<bool, _>("holds_task") || !unsettled || !(stopped || closed) || stop.is_none() {
         return Err(conflict());
     }
     let recorded_at_ms = (state.clock)().timestamp_millis();
