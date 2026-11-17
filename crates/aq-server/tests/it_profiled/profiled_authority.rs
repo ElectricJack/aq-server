@@ -367,6 +367,36 @@ async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuse
         }
     };
     assert_eq!(call(body.clone()).await.0, StatusCode::FORBIDDEN);
+    // Without an issued grant the attempt can neither push work nor admit it.
+    let pushed = json!({"identity":f.node,"operation_id":Uuid::new_v4(),"transfer_id":Uuid::new_v4(),"attempt":manifest.attempt,"resolved_spec_digest":manifest.resolved_spec_digest,"source":manifest.source,"checkpoint":manifest.checkpoint});
+    for (method, path, body) in [
+        (
+            "GET",
+            format!("/v1/execution/git/{attempt}/info/refs?service=git-receive-pack"),
+            String::new(),
+        ),
+        (
+            "POST",
+            format!("/v1/execution/git/{attempt}/git-receive-pack"),
+            "0000".into(),
+        ),
+        (
+            "POST",
+            "/v1/execution/sources/pushed".into(),
+            pushed.to_string(),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(&path)
+            .header("authorization", format!("Bearer {}", f.credential))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    assert!(!dir.path().join("staging/pushed").exists());
     f.profiled.status = Status::Granted;
     f.profiled.execution_deadline_ms = Some(NOW + 60000);
     f.profiled.grant = Some(ProfiledGrant {

@@ -265,6 +265,11 @@ pub async fn gate(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
+    // Work arriving by `git push`, and its admission, wait for a configured
+    // source-retention slot and take as long as the pack: no slot or deadline here.
+    if path.starts_with("/v1/execution/git/") || path == "/v1/execution/sources/pushed" {
+        return next.run(request).await;
+    }
     let (slots, timeout) = match classify(&path) {
         Class::Control => (&admission.control, Duration::from_secs(5)),
         Class::Renewal => (&admission.renewal, Duration::from_secs(8)),

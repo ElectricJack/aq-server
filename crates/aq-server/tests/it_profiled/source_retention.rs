@@ -34,10 +34,20 @@ struct Harness {
     bytes: Vec<u8>,
     dir: tempfile::TempDir,
     pool: sqlx::PgPool,
+    owner: Uuid,
     _db: TestDb,
 }
 impl Harness {
     async fn new() -> Self {
+        Self::with("a".repeat(40), 2 * 1024 * 1024, 4096, 1).await
+    }
+    /// `base` is the frozen base commit; the rest are the retention limits.
+    async fn with(
+        base: String,
+        max_staging_bytes: u64,
+        max_bundle_bytes: u64,
+        incomplete_ttl_secs: u64,
+    ) -> Self {
         let db = TestDb::create().await;
         let store = db.store().await;
         let pool = db.pool().await;
@@ -86,7 +96,7 @@ impl Harness {
             logical_identity: "example/repository".into(),
             base: ObjectId {
                 algorithm: ObjectAlgorithm::Sha1,
-                hex: "a".repeat(40),
+                hex: base,
             },
         };
         let spec = ExecutionSpec {
@@ -147,10 +157,10 @@ impl Harness {
             staging_root: dir.path().join("staging"),
             git_root: dir.path().join("git"),
             git_socket: dir.path().join("git.sock"),
-            max_staging_bytes: 2 * 1024 * 1024,
-            max_bundle_bytes: 4096,
+            max_staging_bytes,
+            max_bundle_bytes,
             bulk_concurrency: 2,
-            incomplete_ttl_secs: 1,
+            incomplete_ttl_secs,
         };
         let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
         let state = AppState {
@@ -172,6 +182,7 @@ impl Harness {
             bytes,
             dir,
             pool,
+            owner: owner.id,
             _db: db,
         }
     }
@@ -1097,3 +1108,5 @@ async fn credential_rotation_during_import_keeps_uncertain_intent_and_current_ke
 mod delivery;
 #[path = "source_retention/publication.rs"]
 mod publication;
+#[path = "source_retention/push.rs"]
+mod push;
