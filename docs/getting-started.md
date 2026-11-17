@@ -5,21 +5,21 @@ source: the server, PostgreSQL, aq-git, aq-graph, the current dashboard, the
 internal work host (routing) and a local worker that runs real tasks on Claude
 models in sandboxes. One tool does every step: [`scripts/local-stack`](../scripts/local-stack).
 
-## Status of this guide (2026-11-17, work in progress)
+## Status of this guide (2026-11-17)
 
-The sequence is being proven from fresh clones on Ubuntu 24.04 under WSL2,
-as a second stack beside a running one. This block is updated as the run
-progresses; treat every step not marked "passed" as untested.
+The sequence was proven from fresh clones on Ubuntu 24.04 under WSL2, as a
+second stack (other project name and ports) beside a running one.
 
 | Step | State |
 | --- | --- |
-| `doctor` | Passed. |
-| `build` (all seven parts) | Passed from fresh clones: about 24 minutes for the images, dashboard and worker programs with 8 cargo jobs, plus about 25 minutes for the sandbox template (after a fix to `scripts/package-sandbox.py` in aq-worker). |
-| `up`, `seed`, `pins`, `internal-work`, `worker` | Passed, each after fixes that are now in the scripts. They ran one at a time while being fixed. |
-| `task` | Passed: four tasks ran Claude in sandboxes on the local worker, ended `success` and published commits to the scratch remote; two ran at the same time on the node's two slots. |
-| `routing` | **In progress.** The authoring run works (Claude Opus on the internal work host); its first run stopped with a question because the routing document named agents this install does not have. The shipped document was rewritten and is being authored now. |
-| One uninterrupted `all` from an empty state | **Not run yet.** |
-| `reload …`, `down` | `down -v` passed. `reload` not run yet. |
+| `all` through `task`, one uninterrupted run from an empty state | **Passed**: `doctor`, `build`, `up`, `seed`, `pins`, `internal-work`, `worker`, then a real task that ended `PASSED`. 25 minutes with warm Docker and cargo caches; the first cold build took about 50 minutes. |
+| `task` | Passed repeatedly. Each task ran Claude in a sandbox on the local worker, ended `success` and published a commit to the scratch remote. Two tasks ran at the same time on the node's two slots. |
+| `routing` | **Passed once, and stopped once with a question.** On the first stack the playbook was authored in 18 minutes, routing switched on, and a task was routed (`simple-high`) and passed. In the uninterrupted run the authoring agent stopped with a question about a contradiction in the routing document; the document was clarified and authored again (ROUTING_RESULT). Expect that an authoring run can end with a question: see Troubleshooting. |
+| `reload worker` (rebuild and re-pin the sandbox driver) | Passed: new driver digest, revision raised by itself, task passed afterwards. |
+| `check` | Passed both ways: accepts a matching pair, refuses a changed program and names the stale side. |
+| `down -v` | Passed. |
+| `reload server`, `dashboard`, `graph`, `git`, `supervisor`, `template` | **Not run.** They call the same build and restart functions the steps above use. |
+| Installing the sandbox daemon on a machine without one | **Not run** (the proof machine already had it). |
 
 What is known not to be covered is listed under [Not done](#not-done).
 
@@ -203,6 +203,12 @@ These are the failures hit while this sequence was written.
   `packaging/sandbox/pins.json` in aq-worker pins the aq-server commit the
   in-sandbox `aq` CLI is built from. Your aq-server clone must contain that
   commit (a full clone does; a shallow one may not).
+- **`pins` fails with `409 … operation ID reused with changed content`.**
+  Fixed in `scripts/ms1-profiled.py` (an unchanged binding was saved again);
+  update the checkout.
+- **`local-stack task` printed `FAILED … attempts so far: 2` although the
+  task succeeded, or waited forever on a task that was already completed.**
+  Both were faults of `scripts/e2e-queued-task.py` and are fixed.
 - **A step says `nothing is pinned yet` or `worker and server pins do not
   match`.** Run `scripts/local-stack pins`. It lists which side is stale.
 - **The server refuses to start after `pins` with a message about a changed
@@ -236,11 +242,15 @@ These are the failures hit while this sequence was written.
   tools is set up for writing playbooks" or "intelligence registry is not
   configured".** Authoring started before `pins` had registered the login.
   Run `routing` again: it starts another run.
-- **`routing` says the authoring agent asks a question.** Read it under
-  Settings → Intelligence → Routing (or `GET /api/settings/routing`). The
-  agent stops when the routing document contradicts the Settings it sees, for
-  example rules about agents that are not installed. Edit the document or
-  answer, then run `routing` again.
+- **`routing` says the authoring agent asks a question.** This happened in
+  two of four authoring runs here. The agent stops when the routing document
+  contradicts itself or the Settings it sees (rules about agents that are not
+  installed; two rules that give different levels for the same task). Read
+  the question under Settings → Intelligence → Routing, or
+  `curl -s http://127.0.0.1:18080/api/settings/routing`. Edit the document
+  there so that it answers the question and save; the save starts a new run.
+  Then run `routing` again to wait for it and switch routing on. Until then
+  tasks run on their project's default level.
 - **The server log shows `The playbook engine refused: playbook_invalid_request`
   for the routing document.** The stack was seeded with the older
   `human_review_v2` playbook namespace (`scripts/dev-stack.py seed` without
@@ -249,7 +259,6 @@ These are the failures hit while this sequence was written.
 
 ## Not done
 
-- **The end-to-end run is not finished** (see the status block at the top).
 - **Codex and other harnesses.** Only the Claude harness is set up: the
   shipped execution profile and levels are Claude-only, and the internal work
   host gets only the Claude login. The live stack routes with a Codex level
