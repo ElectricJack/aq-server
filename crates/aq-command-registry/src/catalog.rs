@@ -908,26 +908,14 @@ pub fn catalog() -> Vec<CommandSpec> {
         owner(
             "intelligence.list",
             "dashboard.read",
-            "Intelligence settings: profiles, the projects using each, and model choices",
-            "/api/settings/intelligence",
+            "The intelligence profiles (levels): each document with its candidates",
+            "/api/settings/intelligence-profiles",
         ),
         owner(
             "intelligence.registry.show",
             "dashboard.read",
             "The intelligence registry: credentials and recent observations",
             "/api/intelligence/registry",
-        ),
-        owner(
-            "profile.catalog.active",
-            "dashboard.read",
-            "The active profile catalog's digest and revision",
-            "/api/profiles/catalogs",
-        ),
-        owner(
-            "profile.catalog.show",
-            "dashboard.read",
-            "One profile catalog by digest",
-            "/api/profiles/catalogs/{digest}",
         ),
         owner_post(
             "project.set",
@@ -976,14 +964,6 @@ pub fn catalog() -> Vec<CommandSpec> {
             "/api/supervisors/{id}/control",
             &[("id", "conversation_id")],
             r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","candidate_id"],"description":"A level and one of its candidates","properties":{"profile_id":{"type":"string","description":"The level document's id"},"candidate_id":{"type":"string","description":"provider:model:reasoning, as the list shows it"}}}}}"#,
-        ),
-        owner_post(
-            "intelligence.set",
-            "intelligence.admin",
-            "Create, change or delete one intelligence profile",
-            "/api/settings/intelligence",
-            &[],
-            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","profile_id","profile_version","name","description","candidates"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$","description":"The settings revision intelligence.list returned"},"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0,"description":"The profile's current version; 0 creates it"},"name":{"type":"string","minLength":1,"maxLength":128},"description":{"type":"string","maxLength":2000},"candidates":{"type":"array","maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["id","provider","model","reasoning_configuration_reference","harnesses"],"properties":{"id":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"reasoning_configuration_reference":{"type":"string"},"harnesses":{"type":"array","items":{"type":"string"}}}}},"delete":{"type":"boolean"}}}"#,
         ),
         owner_post(
             "notification.retry",
@@ -1249,13 +1229,19 @@ pub fn catalog() -> Vec<CommandSpec> {
             "routing.show",
             "dashboard.read",
             "Whether automatic routing is on, and the routing playbook source",
-            "/api/settings/intelligence/routing",
+            "/api/settings/routing",
+        ),
+        owner(
+            "routing.document.show",
+            "dashboard.read",
+            "The routing document: the text the routing playbook is authored from",
+            "/api/settings/routing-document",
         ),
         owner_post(
             "routing.set",
             "intelligence.admin",
             "Turn automatic routing on or off (on only while a routing playbook is active)",
-            "/api/settings/intelligence/routing",
+            "/api/settings/routing",
             &[],
             r#"{"type":"object","additionalProperties":false,"required":["enabled"],"properties":{"enabled":{"type":"boolean"}}}"#,
         ),
@@ -1291,16 +1277,6 @@ pub fn catalog() -> Vec<CommandSpec> {
             Some(Route::get(
                 "/api/supervisors/{id}/operations/{operation}",
                 &[("id", "conversation_id"), ("operation", "operation_id")],
-            )),
-        ),
-        read(
-            "intelligence.operation.show",
-            "dashboard.read",
-            TargetRule::Own,
-            "The recorded result of one intelligence.set",
-            Some(Route::get(
-                "/api/settings/intelligence/operations/{id}",
-                &[("id", "operation_id")],
             )),
         ),
     ];

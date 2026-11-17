@@ -288,7 +288,7 @@ pub async fn facts(
 /// `None` without an allowlist or when it names none or several.
 pub fn template(state: &AppState, environment: &str) -> Option<String> {
     let allowlist = state.config.templates.as_deref()?;
-    let resolved = crate::templates::resolve([environment], allowlist).ok()?;
+    let resolved = aq_environment_templates::resolve([environment], allowlist).ok()?;
     (resolved.into_iter().next()).map(|r| r.template_digest.as_str().to_owned())
 }
 
@@ -333,7 +333,7 @@ impl Derivation {
 }
 
 /// First store format carrying every table `derive` reads: `delegated_node_boots`
-/// (migration 50), `profile_catalog_environment_templates` (55) and
+/// (migration 50) and
 /// `node_storage_reports` (67).
 pub const PLACEMENT_FORMAT: u32 = 67;
 
@@ -508,7 +508,7 @@ fn peer_scan_truncated(scanned: usize) -> bool {
 
 /// Admission-fence re-check (offer, preparation and grant replay). The node's
 /// placement facts are re-derived inside the fence's SERIALIZABLE transaction
-/// from `delegated_node_boots`, `profile_catalog_environment_templates` and the
+/// from `delegated_node_boots`, the configured template allowlist and the
 /// node's active attempts, then the frozen choice is re-checked with the same
 /// typed reasons as selection. A ceiling reached or a template lost since
 /// selection refuses with 409 and the reason code. The preference hold is

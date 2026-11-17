@@ -25,7 +25,6 @@ pub mod node_storage;
 pub mod notifications;
 pub mod observations;
 pub mod playbooks;
-pub mod profile_catalog;
 pub mod profiled_execution;
 pub mod project_bindings;
 pub mod protected_storage;
@@ -44,7 +43,6 @@ pub mod source_retention;
 pub mod stall;
 pub mod store;
 mod swarm_settings;
-pub mod templates;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -320,7 +318,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(observations::api::admin_routes(state.clone()))
         .merge(terminal::api::human_routes(state.clone()))
         .merge(manual_agents::service(&state).human_routes())
-        .merge(profile_catalog::admin_routes())
+        .merge(routing::settings_routes())
         .merge(internal_work::admin_routes())
         .merge(playbook_authoring::admin_routes())
         .merge(swarm_settings::routes())

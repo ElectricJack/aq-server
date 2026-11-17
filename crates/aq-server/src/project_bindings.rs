@@ -2,7 +2,6 @@
 pub use aq_project_policy as domain;
 mod external;
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_profiles::ValidatedCatalog;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -131,44 +130,6 @@ async fn list(
         json!({"items":items,"next_cursor":next,"execution":execution}),
     ))
 }
-pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<String>)> {
-    let row =
-        sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(db)?;
-    Ok((
-        row.get::<i64, _>("revision") as u64,
-        row.get("active_digest"),
-    ))
-}
-pub(crate) async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
-    let bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(digest)
-            .fetch_optional(&state.store.pool)
-            .await
-            .map_err(db)?
-            .ok_or_else(|| conflict("catalog artifact absent"))?;
-    let c = tokio::task::spawn_blocking(move || ValidatedCatalog::from_artifact(&bytes))
-        .await
-        .map_err(|_| AppError::Internal)?
-        .map_err(|_| AppError::Internal)?;
-    if c.digest() != digest {
-        return Err(AppError::Internal);
-    }
-    Ok(c)
-}
-fn profiles(binding: &ProjectBinding, catalog: &ValidatedCatalog) -> Result<()> {
-    aq_profiles::validate_project_profiles(
-        catalog,
-        &binding.allowed_agent_profiles,
-        &binding.allowed_intelligence_profiles,
-        &binding.allowed_execution_profiles,
-        &binding.allowed_environments,
-    )
-    .map_err(bad)
-}
 
 async fn existing_receipt(
     state: &AppState,
@@ -235,14 +196,6 @@ async fn put_request(
         .binding
         .validate(&state.config.projects)
         .map_err(|_| bad("invalid project execution policy"))?;
-    let (catalog_revision, active) = active_catalog(&state).await?;
-    if active.as_deref() != Some(request.binding.catalog_digest.as_str()) {
-        return Err(conflict("project catalog is not active"));
-    }
-    profiles(
-        &request.binding,
-        &catalog(&state, &request.binding.catalog_digest).await?,
-    )?;
     let mut nodes = request.binding.allowed_node_ids.clone();
     for group in &request.binding.allowed_worker_groups {
         nodes.extend(&state.config.projects.worker_groups[group]);
@@ -279,7 +232,7 @@ async fn put_request(
         request.operation_id,
         request.expected_revision,
         &digest,
-        Some((catalog_revision, request.binding, observation)),
+        Some((request.binding, observation)),
         false,
     )
     .await?;
@@ -340,7 +293,7 @@ async fn mutate(
     op: Uuid,
     expected: u64,
     digest: &str,
-    new: Option<(u64, ProjectBinding, BindingObservation)>,
+    new: Option<(ProjectBinding, BindingObservation)>,
     disable: bool,
 ) -> Result<Value> {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
@@ -360,22 +313,8 @@ async fn mutate(
     {
         return Err(conflict("project revision changed"));
     }
-    let fresh_observation = new.as_ref().map(|(_, _, o)| o.clone());
-    let binding = if let Some((revision, binding, _)) = new {
-        let row = sqlx::query(
-            "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        if row.get::<i64, _>("revision") as u64 != revision
-            || row.get::<Option<String>, _>("active_digest").as_deref()
-                != Some(binding.catalog_digest.as_str())
-        {
-            return Err(conflict(
-                "catalog activation changed during project validation",
-            ));
-        }
+    let fresh_observation = new.as_ref().map(|(_, o)| o.clone());
+    let binding = if let Some((binding, _)) = new {
         // Spec 0014 §5.4: the defaults and the role notes name documents of
         // the active role snapshot. The lock is held to commit, so a delete
         // of one of them waits and then sees this binding.

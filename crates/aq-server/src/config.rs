@@ -38,8 +38,8 @@ pub struct Config {
     pub profiled_execution:
         Option<std::sync::Arc<crate::profiled_execution::config::ProfiledConfig>>,
     /// C3b environment template allowlist (C4); absent means no sandbox pins.
-    #[serde(default, deserialize_with = "crate::templates::deserialize")]
-    pub templates: Option<std::sync::Arc<crate::templates::Allowlist>>,
+    #[serde(default, deserialize_with = "aq_environment_templates::deserialize")]
+    pub templates: Option<std::sync::Arc<aq_environment_templates::Allowlist>>,
     #[serde(default)]
     pub intelligence_preferences_file: Option<PathBuf>,
     pub format_version: u32,

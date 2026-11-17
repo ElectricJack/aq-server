@@ -980,51 +980,11 @@
           },
           "route": {
             "method": "GET",
-            "path": "/api/settings/intelligence"
+            "path": "/api/settings/intelligence-profiles"
           }
         }
       },
-      "summary": "Intelligence settings: profiles, the projects using each, and model choices",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "intelligence",
-        "operation",
-        "show"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "intelligence.operation.show",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "operation_id": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "operation_id"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/settings/intelligence/operations/{id}"
-          }
-        }
-      },
-      "summary": "The recorded result of one intelligence.set",
+      "summary": "The intelligence profiles (levels): each document with its candidates",
       "target": {
         "rule": "own"
       }
@@ -1057,110 +1017,6 @@
         }
       },
       "summary": "The intelligence registry: credentials and recent observations",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "intelligence",
-        "set"
-      ],
-      "grant": "intelligence.admin",
-      "kind": "mutation",
-      "name": "intelligence.set",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "params",
-          "params_digest": "sha256:807c453649c2f0c1171234815d4b51c29e886456cf6bf6b1fb65d25b0966fad5",
-          "params_schema": {
-            "additionalProperties": false,
-            "properties": {
-              "candidates": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "harnesses": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "id": {
-                      "type": "string"
-                    },
-                    "model": {
-                      "type": "string"
-                    },
-                    "provider": {
-                      "type": "string"
-                    },
-                    "reasoning_configuration_reference": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "provider",
-                    "model",
-                    "reasoning_configuration_reference",
-                    "harnesses"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 16,
-                "type": "array"
-              },
-              "delete": {
-                "type": "boolean"
-              },
-              "description": {
-                "maxLength": 2000,
-                "type": "string"
-              },
-              "expected_revision": {
-                "description": "The settings revision intelligence.list returned",
-                "pattern": "^(0|[1-9][0-9]{0,18})$",
-                "type": "string"
-              },
-              "name": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              "operation_id": {
-                "description": "Your ID for this change; repeat it to retry safely",
-                "format": "uuid",
-                "type": "string"
-              },
-              "profile_id": {
-                "type": "string"
-              },
-              "profile_version": {
-                "description": "The profile's current version; 0 creates it",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "operation_id",
-              "expected_revision",
-              "profile_id",
-              "profile_version",
-              "name",
-              "description",
-              "candidates"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "POST",
-            "path": "/api/settings/intelligence"
-          }
-        }
-      },
-      "summary": "Create, change or delete one intelligence profile",
       "target": {
         "rule": "own"
       }
@@ -3513,78 +3369,6 @@
     },
     {
       "cli": [
-        "profile",
-        "catalog",
-        "active"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "profile.catalog.active",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {},
-            "required": [],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/profiles/catalogs"
-          }
-        }
-      },
-      "summary": "The active profile catalog's digest and revision",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "profile",
-        "catalog",
-        "show"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "profile.catalog.show",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:ff50ee07ca713bb2b66283845af4d7a64279805b5b706f3c9a7b8d20b7da841d",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "digest": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "digest"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/profiles/catalogs/{digest}"
-          }
-        }
-      },
-      "summary": "One profile catalog by digest",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
         "project",
         "disable"
       ],
@@ -4769,6 +4553,38 @@
     {
       "cli": [
         "routing",
+        "document",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "routing.document.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/routing-document"
+          }
+        }
+      },
+      "summary": "The routing document: the text the routing playbook is authored from",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "routing",
         "set"
       ],
       "grant": "intelligence.admin",
@@ -4793,7 +4609,7 @@
           },
           "route": {
             "method": "POST",
-            "path": "/api/settings/intelligence/routing"
+            "path": "/api/settings/routing"
           }
         }
       },
@@ -4824,7 +4640,7 @@
           },
           "route": {
             "method": "GET",
-            "path": "/api/settings/intelligence/routing"
+            "path": "/api/settings/routing"
           }
         }
       },

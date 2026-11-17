@@ -12,7 +12,6 @@ autotests = false
 aq-supervisor-control = { path = "../aq-supervisor-control" }
 aq-human-http = { path = "../aq-human-http" }
 aq-manual-sessions = { path = "../aq-manual-sessions" }
-aq-profile-settings = { path = "../aq-profile-settings" }
 aq-routing = { path = "../aq-routing" }
 aq-internal-work = { path = "../aq-internal-work" }
 aq-playbook-authoring = { path = "../aq-playbook-authoring" }
