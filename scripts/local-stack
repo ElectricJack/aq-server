@@ -389,6 +389,7 @@ for m in json.loads(sys.stdin.read(), strict=False)["data"]["machines"]:
     [ "$online" = online ] && break; sleep 2
   done
   if [ -n "${AQ_LOCAL_AGENTS:-}" ]; then set_agents "$AQ_LOCAL_AGENTS"; fi
+  availability_on
   worker service status --profile "$PROFILE" || true
   echo "machine $MACHINE_KEY: ${online:-not seen yet} (log: journalctl --user -u $UNIT -f)"
 }
@@ -411,9 +412,25 @@ for node in walk(d.get("machines", d)):
   | while read -r node body; do api PUT "/api/worker-management/node/$node" "$body" >/dev/null && echo "node $node: $1 agents"; done
 }
 
+# The owner's availability switch (Swarm page). A fresh server has it unset,
+# and no task is offered until it is on: selection takes the owner's word that
+# the subscription is usable from this switch.
+availability_on() {
+  local state generation op
+  state=$(api GET /api/v1/swarm | field data.server.owner_availability.state)
+  [ "$state" = on ] && return 0
+  generation=$(api GET /api/v1/swarm | field data.server.owner_availability.generation)
+  op=$(cat /proc/sys/kernel/random/uuid)
+  api POST /api/v1/actions "{\"operation_id\":\"$op\",\"kind\":\"swarm.availability.set\",\"subject\":{\"type\":\"swarm\",\"id\":\"owner-availability\"},\"expected_versions\":{},\"payload\":{\"operation_id\":\"$op\",\"available\":true,\"expected_generation\":\"$generation\"}}" >/dev/null
+  echo "availability switch: $(api GET /api/v1/swarm | field data.server.owner_availability.state)"
+}
+
 cmd_worker_stop() { systemctl --user stop "$UNIT" 2>/dev/null || true; }
 
 cmd_task() {
+  # The scratch project follows its remote's main. Until AQ has published to
+  # it once, an offer needs a central fetch of that branch under 30 s old.
+  (cd "$SRV" && python3 scripts/ms1-profiled.py sync) >/dev/null
   (cd "$SRV" && python3 scripts/e2e-queued-task.py --api "$AQ_DEV_SERVER_URL" --machine "$MACHINE_KEY" "$@")
 }
 
