@@ -52,8 +52,10 @@ struct Admin {
 /// whose internal work service is wired (retry needs it).
 async fn admin() -> Admin {
     let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    // As after server start: the shipped roles and profiles are active.
+    aq_role_settings::startup(&f.pool, 0).await.unwrap();
     f.state.internal_work =
-        InternalWork::new(f.pool.clone(), f.state.clock.clone(), None, None, None).unwrap();
+        InternalWork::new(f.pool.clone(), f.state.clock.clone(), None, None).unwrap();
     f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;
@@ -157,7 +159,6 @@ impl Admin {
 
 fn internal_save(snapshot: &Value, default: Value) -> Value {
     json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
-        "expected_catalog_revision":snapshot["catalog_revision"],
         "default_profile_id":default,"overrides":{}})
 }
 
@@ -209,12 +210,12 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
     // The internal work default, saved without the CSRF header.
     let (status, snapshot) = a.supervisor("GET", INTERNAL, None).await;
     assert_eq!(status, StatusCode::OK, "{snapshot}");
-    let body = internal_save(&snapshot, json!("engineering"));
+    let body = internal_save(&snapshot, json!("standard-high"));
     let (status, saved) = a.supervisor("POST", INTERNAL, Some(body.clone())).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["disposition"], "saved");
     let (_, read) = a.as_owner("GET", INTERNAL, None).await;
-    assert_eq!(read["default_profile_id"], "engineering");
+    assert_eq!(read["default_profile_id"], "standard-high");
     let id = body["operation_id"].as_str().unwrap();
     let receipt = a
         .supervisor("GET", &format!("{INTERNAL}/operations/{id}"), None)

@@ -16,7 +16,7 @@ use uuid::Uuid;
 fn seed() -> ValidatedCatalog {
     load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog")).unwrap()
 }
-async fn setup() -> (TestDb, Router, sqlx::PgPool) {
+pub(crate) async fn setup() -> (TestDb, Router, sqlx::PgPool) {
     setup_with("").await
 }
 async fn setup_with(extra: &str) -> (TestDb, Router, sqlx::PgPool) {

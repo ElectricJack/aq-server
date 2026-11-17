@@ -139,18 +139,11 @@ mod internal {
         }
     }
 
-    /// A catalog reference as the server stores it: an identifier, never an
-    /// effort. It must reach no native's argv or environment.
-    const CODEX_REFERENCE: &str = "v1-dcedeb627973ef0987342daa2f63b4fe@1";
-    const CLAUDE_REFERENCE: &str = "discovered-5749150bf4461778998a0d738a0a8f70@1";
-
     fn codex_candidate() -> Candidate {
         Candidate {
             provider: "openai".into(),
             model: "gpt-fixture".into(),
             reasoning: Some("high".into()),
-            reasoning_reference: CODEX_REFERENCE.into(),
-            options: BTreeMap::from([("reasoning_effort".into(), json!("high"))]),
             harness: Some("codex".into()),
             way: Way::Login,
             credential_index: 0,
@@ -162,25 +155,15 @@ mod internal {
             provider: "anthropic".into(),
             model: "claude-fixture".into(),
             reasoning: Some("default".into()),
-            reasoning_reference: CLAUDE_REFERENCE.into(),
-            options: BTreeMap::new(),
             harness: Some("claude".into()),
             ..codex_candidate()
         }
     }
 
-    /// `candidate` with the effort and options its model choice resolved to.
-    fn with_effort(
-        candidate: Candidate,
-        effort: Option<&str>,
-        options: &[(&str, &str)],
-    ) -> Candidate {
+    /// `candidate` with the effort its level states.
+    fn with_effort(candidate: Candidate, effort: Option<&str>) -> Candidate {
         Candidate {
             reasoning: effort.map(String::from),
-            options: options
-                .iter()
-                .map(|(key, value)| (key.to_string(), json!(value)))
-                .collect(),
             ..candidate
         }
     }
@@ -457,14 +440,10 @@ mod internal {
     }
 
     #[tokio::test]
-    async fn codex_run_sets_the_resolved_effort_and_service_tier_and_never_the_reference() {
+    async fn codex_run_sets_the_effort_of_its_level() {
         let f = Fixture::new(&answering()).await;
-        let candidate = with_effort(
-            codex_candidate(),
-            Some("low"),
-            &[("reasoning_effort", "low"), ("service_tier", "fast")],
-        );
-        f.submit(&[candidate]).await;
+        f.submit(&[with_effort(codex_candidate(), Some("low"))])
+            .await;
         assert!(f.tick().await);
         let argv = f.argv();
         let efforts: Vec<_> = argv
@@ -473,41 +452,24 @@ mod internal {
             .collect();
         assert_eq!(efforts, ["model_reasoning_effort=\"low\""]);
         assert!(
-            argv.iter().any(|a| a == "service_tier=\"fast\""),
-            "{argv:?}"
-        );
-        assert!(
-            !argv.iter().any(|a| a.contains(CODEX_REFERENCE)),
+            !argv.iter().any(|a| a.starts_with("service_tier")),
             "{argv:?}"
         );
     }
 
     #[tokio::test]
-    async fn codex_run_without_an_effort_sets_no_effort_and_no_service_tier() {
+    async fn codex_run_without_an_effort_sets_no_effort() {
         let f = Fixture::new(&answering()).await;
-        f.submit(&[with_effort(codex_candidate(), None, &[])]).await;
+        f.submit(&[with_effort(codex_candidate(), None)]).await;
         assert!(f.tick().await);
         let argv = f.argv();
         assert!(
-            !argv.iter().any(|a| a.starts_with("model_reasoning_effort")
-                || a.starts_with("service_tier")
-                || a.contains(CODEX_REFERENCE)),
+            !argv
+                .iter()
+                .any(|a| a.starts_with("model_reasoning_effort") || a.starts_with("service_tier")),
             "{argv:?}"
         );
         assert_eq!(argv.last().unwrap(), "-");
-    }
-
-    #[tokio::test]
-    async fn codex_candidate_with_an_unsupported_service_tier_fails_without_running() {
-        let f = Fixture::new(&answering()).await;
-        let candidate = with_effort(codex_candidate(), Some("low"), &[("service_tier", "turbo")]);
-        let id = f.submit(&[candidate]).await;
-        assert!(f.tick().await);
-        let row = f.row(id).await;
-        assert_eq!(row.status, "failed");
-        assert_eq!(row.reason, Some(aq_internal_work::Reason::ProviderError));
-        assert_eq!(row.attempts[0].detail, "unsupported service tier");
-        assert!(!f.rec("argv").exists(), "the native ran");
     }
 
     #[tokio::test]
@@ -1432,10 +1394,7 @@ sleep 0.5
             let f =
                 Fixture::with_claude("exit 1", &claude_printing(&claude_result(false, ANSWER), 0))
                     .await;
-            let options = [("thinking", "high")];
-            let id = f
-                .submit(&[with_effort(claude_candidate(), effort, &options)])
-                .await;
+            let id = f.submit(&[with_effort(claude_candidate(), effort)]).await;
             assert!(f.tick().await);
             let effort = format!("{effort:?}");
             assert_eq!(f.row(id).await.status, "answered", "{effort}");
@@ -1451,8 +1410,6 @@ sleep 0.5
                 thinking,
                 "{effort}"
             );
-            let seen = format!("{argv:?}{env:?}{}", f.claude_rec("settings"));
-            assert!(!seen.contains(CLAUDE_REFERENCE), "{seen}");
         }
     }
 
@@ -1658,7 +1615,7 @@ sleep 0.5
     #[tokio::test]
     async fn the_claude_agent_argv_allows_only_the_engine_cli_in_bash() {
         let f = Fixture::with_claude("exit 1", &saving("claude")).await;
-        let candidate = with_effort(claude_candidate(), Some("high"), &[]);
+        let candidate = with_effort(claude_candidate(), Some("high"));
         let id = f.submit_request(&agent_request(), &[candidate]).await;
         assert!(f.tick().await);
         assert_eq!(f.row(id).await.status, "answered");

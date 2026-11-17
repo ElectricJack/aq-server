@@ -1,5 +1,5 @@
-use super::profile_catalog::{call, settings_fixture};
-use aq_internal_work::{Purpose, settings::profile_for};
+use super::profile_catalog::{call, setup};
+use aq_internal_work::{Purpose, settings};
 use axum::{Router, http::StatusCode};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -8,11 +8,11 @@ const PATH: &str = "/api/settings/internal-work";
 
 fn request(snapshot: &Value, default: Value, overrides: Value) -> Value {
     json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
-        "expected_catalog_revision":snapshot["catalog_revision"],
         "default_profile_id":default,"overrides":overrides})
 }
 async fn fixture() -> (aq_server::test_support::TestDb, Router, sqlx::PgPool, Value) {
-    let (db, app, pool, _, _) = settings_fixture().await;
+    // The store has the shipped roles and profiles active, as after start.
+    let (db, app, pool) = setup().await;
     let (status, snapshot) = call(&app, PATH, None, false).await;
     assert_eq!(status, StatusCode::OK, "{snapshot}");
     (db, app, pool, snapshot)
@@ -26,16 +26,16 @@ async fn default_and_override_round_trip_and_replay_returns_the_same_receipt() {
     assert_eq!(initial["purposes"].as_array().unwrap().len(), 5);
     let body = request(
         &initial,
-        json!("engineering"),
-        json!({"playbook_call":"engineering"}),
+        json!("standard-high"),
+        json!({"playbook_call":"standard-high"}),
     );
     let (status, saved) = call(&app, PATH, Some(body.clone()), true).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["disposition"], "saved");
     assert_eq!(saved["revision"], "1");
     let (_, read) = call(&app, PATH, None, false).await;
-    assert_eq!(read["default_profile_id"], "engineering");
-    assert_eq!(read["overrides"], json!({"playbook_call":"engineering"}));
+    assert_eq!(read["default_profile_id"], "standard-high");
+    assert_eq!(read["overrides"], json!({"playbook_call":"standard-high"}));
     let replay = call(&app, PATH, Some(body.clone()), true).await;
     assert_eq!(replay, (StatusCode::OK, saved.clone()));
     let id = body["operation_id"].as_str().unwrap();
@@ -50,86 +50,84 @@ async fn default_and_override_round_trip_and_replay_returns_the_same_receipt() {
 }
 
 #[tokio::test]
-async fn stale_revision_and_stale_catalog_revision_conflict() {
-    let (_db, app, pool, initial) = fixture().await;
-    let ok = request(&initial, json!("engineering"), json!({}));
+async fn stale_revision_conflicts() {
+    let (_db, app, _pool, initial) = fixture().await;
+    let ok = request(&initial, json!("standard-high"), json!({}));
     assert_eq!(call(&app, PATH, Some(ok), true).await.0, StatusCode::OK);
     let stale = request(&initial, json!(null), json!({}));
     assert_eq!(
         call(&app, PATH, Some(stale), true).await.0,
         StatusCode::CONFLICT
     );
-    let (_, current) = call(&app, PATH, None, false).await;
-    sqlx::query("UPDATE profile_catalog_registry SET revision=revision+1")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let stale_catalog = request(&current, json!(null), json!({}));
-    assert_eq!(
-        call(&app, PATH, Some(stale_catalog), true).await.0,
-        StatusCode::CONFLICT
-    );
 }
 
+/// A choice names a level of the active role snapshot (spec 0014 §5.2).
 #[tokio::test]
-async fn unknown_profile_and_automatic_router_are_refused() {
-    let (_db, app, pool, initial) = fixture().await;
+async fn a_level_that_does_not_exist_is_refused_by_name() {
+    let (_db, app, _pool, initial) = fixture().await;
     let unknown = request(&initial, json!("nope"), json!({}));
-    assert_eq!(
-        call(&app, PATH, Some(unknown), true).await.0,
-        StatusCode::BAD_REQUEST
-    );
+    let (status, body) = call(&app, PATH, Some(unknown), true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("nope"), "{body}");
     let overridden = request(&initial, json!(null), json!({"playbook_call":"nope"}));
     assert_eq!(
         call(&app, PATH, Some(overridden), true).await.0,
         StatusCode::BAD_REQUEST
     );
-    // Mark the active catalog's profile as the automatic router.
-    let digest: String =
-        sqlx::query_scalar("SELECT active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    let bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&digest)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    let mut catalog = aq_profiles::ValidatedCatalog::from_artifact(&bytes)
-        .unwrap()
-        .artifact()
-        .catalog
-        .clone();
-    let mut router = catalog.intelligence[0].clone();
-    router.id = "router".into();
-    router.automatic_routing = Some(true);
-    catalog.intelligence.push(router);
-    let instructions = aq_profiles::ValidatedCatalog::from_artifact(&bytes)
-        .unwrap()
-        .artifact()
-        .instructions
-        .clone();
-    let catalog = aq_profiles::validate(catalog, instructions).unwrap();
-    let revision: i64 =
-        sqlx::query_scalar("SELECT revision FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    let activation = json!({"operation_id":Uuid::new_v4(),"expected_revision":revision,
-        "artifact_json":String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap()});
-    let (status, body) = call(
-        &app,
-        "/api/profiles/catalogs/activate",
-        Some(activation),
-        true,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let (_, current) = call(&app, PATH, None, false).await;
-    let router = request(&current, json!("router"), json!({}));
-    let (status, body) = call(&app, PATH, Some(router), true).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // The removed catalog fence is an unknown field.
+    let mut fenced = request(&initial, json!("standard-high"), json!({}));
+    fenced["expected_catalog_revision"] = json!("0");
+    assert_eq!(
+        call(&app, PATH, Some(fenced), true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, read) = call(&app, PATH, None, false).await;
+    assert_eq!(read["revision"], "0");
+    assert_eq!(read["missing"], json!([]));
+    assert_eq!(read.get("catalog_revision"), None);
+}
+
+/// A level deleted after it was chosen: the read names it, and its purpose
+/// runs on the default.
+#[tokio::test]
+async fn a_stored_level_that_no_longer_exists_is_reported_and_falls_back_to_the_default() {
+    let (_db, app, pool, _) = fixture().await;
+    sqlx::query("UPDATE internal_work_settings SET document=$1")
+        .bind(json!({"default_profile_id":"standard-high",
+            "overrides":{"playbook_call":"gone","decision_revision":"simple-low"}}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, read) = call(&app, PATH, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(
+        read["missing"],
+        json!([{"purpose":"playbook_call","profile_id":"gone"}])
+    );
+    assert_eq!(read["overrides"]["playbook_call"], "gone");
+    let active = aq_role_settings::active_snapshot(&pool).await.unwrap();
+    let levels = (active.unwrap().snapshot.intelligence_profiles())
+        .map(|p| p.id.clone())
+        .collect();
+    let document = settings::document(&pool).await.unwrap();
+    let level = |purpose| settings::level_for(&document, purpose, &levels);
+    assert_eq!(level(Purpose::PlaybookCall), Ok("standard-high".into()));
+    assert_eq!(level(Purpose::DecisionRevision), Ok("simple-low".into()));
+
+    // The default itself is gone: the read says so, and there is no level.
+    sqlx::query("UPDATE internal_work_settings SET document=$1")
+        .bind(json!({"default_profile_id":"gone","overrides":{}}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, read) = call(&app, PATH, None, false).await;
+    assert_eq!(
+        read["missing"],
+        json!([{"purpose":null,"profile_id":"gone"}])
+    );
+    let document = settings::document(&pool).await.unwrap();
+    let reason = settings::level_for(&document, Purpose::PlaybookCall, &levels).unwrap_err();
+    assert!(reason.contains("\"gone\""), "{reason}");
 }
 
 #[tokio::test]
@@ -138,7 +136,7 @@ async fn unknown_purpose_key_is_refused() {
     let body = request(
         &initial,
         json!(null),
-        json!({"not_a_purpose":"engineering"}),
+        json!({"not_a_purpose":"standard-high"}),
     );
     assert_eq!(
         call(&app, PATH, Some(body), true).await.0,
@@ -149,7 +147,7 @@ async fn unknown_purpose_key_is_refused() {
 #[tokio::test]
 async fn save_requires_owner_and_csrf_header() {
     let (_db, app, _pool, initial) = fixture().await;
-    let body = request(&initial, json!("engineering"), json!({}));
+    let body = request(&initial, json!("standard-high"), json!({}));
     assert_eq!(
         call(&app, PATH, Some(body), false).await.0,
         StatusCode::FORBIDDEN
@@ -159,29 +157,30 @@ async fn save_requires_owner_and_csrf_header() {
 }
 
 #[tokio::test]
-async fn profile_for_uses_override_then_default_then_none() {
+async fn a_purpose_uses_its_override_then_the_default_then_none() {
     let (_db, app, pool, initial) = fixture().await;
+    let active = aq_role_settings::active_snapshot(&pool).await.unwrap();
+    let levels = (active.unwrap().snapshot.intelligence_profiles())
+        .map(|p| p.id.clone())
+        .collect();
+    let document = settings::document(&pool).await.unwrap();
     assert_eq!(
-        profile_for(&pool, Purpose::PlaybookCall).await.unwrap(),
-        None
+        settings::level_for(&document, Purpose::PlaybookCall, &levels),
+        Err("no internal work profile configured".into())
     );
-    let body = request(&initial, json!("engineering"), json!({}));
+    let body = request(
+        &initial,
+        json!("standard-high"),
+        json!({"playbook_call":"simple-low"}),
+    );
     assert_eq!(call(&app, PATH, Some(body), true).await.0, StatusCode::OK);
+    let document = settings::document(&pool).await.unwrap();
     assert_eq!(
-        profile_for(&pool, Purpose::PlaybookCall).await.unwrap(),
-        Some("engineering".into())
-    );
-    sqlx::query("UPDATE internal_work_settings SET document=$1")
-        .bind(json!({"default_profile_id":"engineering","overrides":{"playbook_call":"other"}}))
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        profile_for(&pool, Purpose::PlaybookCall).await.unwrap(),
-        Some("other".into())
+        settings::level_for(&document, Purpose::PlaybookCall, &levels),
+        Ok("simple-low".into())
     );
     assert_eq!(
-        profile_for(&pool, Purpose::DecisionRevision).await.unwrap(),
-        Some("engineering".into())
+        settings::level_for(&document, Purpose::DecisionRevision, &levels),
+        Ok("standard-high".into())
     );
 }
