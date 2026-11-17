@@ -12,9 +12,10 @@ use axum::{
 };
 use tokio::sync::Semaphore;
 
-pub const CONTROL_LIMIT: usize = 16;
-pub const GENERAL_LIMIT: usize = 8;
-pub const BULK_LIMIT: usize = 2;
+use aq_machine_control::limits::LaunchLimits;
+pub const CONTROL_LIMIT: usize = LaunchLimits::DEFAULT.control_requests;
+pub const GENERAL_LIMIT: usize = LaunchLimits::DEFAULT.general_requests;
+pub const BULK_LIMIT: usize = LaunchLimits::DEFAULT.bulk_transfers;
 
 pub struct Admission {
     control: Semaphore,
@@ -34,13 +35,14 @@ pub struct Admission {
 }
 impl Default for Admission {
     fn default() -> Self {
+        let limits = aq_machine_control::limits::current();
         Self {
-            control: Semaphore::new(CONTROL_LIMIT),
-            renewal: Semaphore::new(8),
-            material_presence: Semaphore::new(4),
-            material_inventory: Semaphore::new(2),
-            general: Semaphore::new(GENERAL_LIMIT),
-            bulk: Semaphore::new(BULK_LIMIT),
+            control: Semaphore::new(limits.control_requests),
+            renewal: Semaphore::new(limits.renewal_requests),
+            material_presence: Semaphore::new(limits.presence_requests),
+            material_inventory: Semaphore::new(limits.inventory_requests),
+            general: Semaphore::new(limits.general_requests),
+            bulk: Semaphore::new(limits.bulk_transfers),
             notification: Semaphore::new(4),
             observation: Semaphore::new(2),
             observation_read: Semaphore::new(2),

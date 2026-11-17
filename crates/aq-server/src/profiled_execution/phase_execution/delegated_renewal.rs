@@ -90,13 +90,8 @@ pub async fn renew_delegated(
         return Err(refused());
     }
     // This lane is independent of initial preparation and its bulk material work.
-    static REQUESTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    let _slot = REQUESTS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())?;
+    let _slot = aq_machine_control::limits::DELEGATED_RENEWALS.enter();
+    let _slot = _slot.ok_or_else(|| refused())?;
     let mut tx = begin(state).await?;
     let (before, _) = load(state, &mut tx, auth, q).await?;
     tx.commit().await.map_err(db)?;

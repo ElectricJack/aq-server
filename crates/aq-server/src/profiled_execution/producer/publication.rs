@@ -85,7 +85,11 @@ pub async fn publish(
     .await
     .map_err(db)?
         || super::super::disposition::task_disposed(&mut tx, built.spec.task.task_id).await?;
-    if !slot_free || task_held {
+    if !slot_free {
+        // The slot was taken since the poll's early gate: no offer, no refusal.
+        aq_machine_control::recent::forget(node).await;
+        return Ok(None);
+    } else if task_held {
         return Err(refused());
     }
     crate::intelligence::resolver::fence_for_offer(state, &mut tx, &built.decision).await?;

@@ -424,8 +424,9 @@ async fn ready(
     Ok(c)
 }
 
-const WORKER: &str = "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at,xmin::text AS revision FROM nodes WHERE id=$1 AND revoked_at IS NULL";
-const WORKERS: &str = "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at,xmin::text AS revision FROM nodes WHERE revoked_at IS NULL ORDER BY id LIMIT 101";
+// A node the owner removed in worker settings is not a worker that needs attention.
+const WORKER: &str = "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at,xmin::text AS revision FROM nodes WHERE id=$1 AND revoked_at IS NULL AND NOT EXISTS(SELECT 1 FROM worker_settings s WHERE s.kind='node' AND s.removed AND s.id=nodes.id::text)";
+const WORKERS: &str = "SELECT id,name,worker_version,protocol_version,enrolled_at,last_seen_at,revoked_at,xmin::text AS revision FROM nodes WHERE revoked_at IS NULL AND NOT EXISTS(SELECT 1 FROM worker_settings s WHERE s.kind='node' AND s.removed AND s.id=nodes.id::text) ORDER BY id LIMIT 101";
 fn offline(
     state: &AppState,
     w: &sqlx::postgres::PgRow,

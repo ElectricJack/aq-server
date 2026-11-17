@@ -112,13 +112,7 @@ pub(super) async fn require_schema(tx: &mut Transaction<'_, Postgres>) -> Result
 }
 
 pub(super) fn request_permit() -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
-    static REQUESTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    REQUESTS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())
+    (aq_machine_control::limits::PREPARATIONS.enter()).ok_or_else(|| refused())
 }
 pub(super) async fn reject_legacy_operation_collision(
     tx: &mut Transaction<'_, Postgres>,
@@ -203,11 +197,7 @@ pub(super) async fn require_installed_material_locked(
 /// One actual blocking read budget across nominal profiles. The spawned read
 /// retains this permit through completion even when its HTTP waiter disappears.
 pub(super) fn material_read_permit() -> Result<tokio::sync::OwnedSemaphorePermit, ()> {
-    static READS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    READS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| ())
+    aq_machine_control::limits::ACCEPT_MATERIAL
+        .enter()
+        .ok_or(())
 }

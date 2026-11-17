@@ -299,3 +299,96 @@ async fn count_one_redelivers_its_full_reservation_and_admits_no_second_attempt(
         1
     );
 }
+
+/// One request of a slot's poll: the status and the offers it carried.
+async fn poll_status(c: &Case, slot: u32) -> (u16, Vec<NativeOffer>) {
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/poll")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("aq-node-slot", slot.to_string())
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&c.request).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    match decode_reply(&bytes) {
+        Ok(ControlReply::Poll(page)) if status == 200 => (status, page.offers),
+        _ => panic!("slot {slot}: {status} {}", String::from_utf8_lossy(&bytes)),
+    }
+}
+
+/// The live fault of 2026-11-17: the slots of one node poll at the same time.
+/// No poll is refused (409) or told the node row is contended (503), each ready
+/// task is offered to exactly one slot, and each slot is redelivered its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn eight_slots_of_one_node_poll_at_once_without_a_refused_or_contended_poll() {
+    let c = std::sync::Arc::new(setup().await);
+    sqlx::query("UPDATE worker_settings SET max_agents=8 WHERE kind='node' AND id=$1")
+        .bind(c.env.env.node.to_string())
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    register(&c, 8, None).await;
+    c.mode.store(7, Ordering::SeqCst);
+    let mut held = std::collections::BTreeMap::new();
+    let started = std::time::Instant::now();
+    // An assembly outlives the poll that started it; the next polls deliver it.
+    while held.len() < 2 || started.elapsed() < std::time::Duration::from_secs(3) {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(40),
+            "{held:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let polls = (1..=8u32).map(|slot| {
+            let c = c.clone();
+            tokio::spawn(async move { (slot, poll_status(&c, slot).await) })
+        });
+        for poll in polls.collect::<Vec<_>>() {
+            let (slot, (status, offers)) = poll.await.unwrap();
+            assert_eq!(status, 200, "slot {slot} was refused");
+            assert!(offers.len() <= 1);
+            for offer in offers {
+                let attempt = offer.offered.offer.binding.attempt_id;
+                assert_eq!(*held.entry(attempt).or_insert(slot), slot, "moved slot");
+            }
+        }
+    }
+    // The fixture's Graph lists two ready tasks: two slots hold one each.
+    let slots = held.values().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!((held.len(), slots.len()), (2, 2), "{held:?}");
+    let tasks: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT task_id) FROM execution_attempts WHERE node_id=$1 AND holds_task",
+    )
+    .bind(c.env.env.node)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(tasks, 2);
+}
+
+/// A ready task of a project that does not admit the polling node is no offer
+/// and no refusal: the poll is a quiet success, as with nothing ready.
+#[tokio::test]
+async fn a_poll_with_nothing_this_node_may_take_is_a_quiet_success() {
+    let c = setup().await;
+    sqlx::query("UPDATE project_execution_bindings SET binding=binding||jsonb_build_object('allow_enrolled_nodes',false,'allowed_worker_groups','[]'::jsonb,'allowed_node_ids',jsonb_build_array($1::text))")
+        .bind(Uuid::new_v4().to_string())
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        let (status, offers) = poll_status(&c, 1).await;
+        assert_eq!((status, offers.len()), (200, 0));
+    }
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
+}

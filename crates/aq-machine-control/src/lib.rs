@@ -11,9 +11,11 @@ pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_mach
 pub mod holds;
 pub mod lapse;
 pub mod launch;
+pub mod limits;
 pub mod lost;
 pub mod management;
 pub mod offer_assembly;
+pub mod recent;
 pub mod slots;
 
 /// First `state_format_version` with these tables.

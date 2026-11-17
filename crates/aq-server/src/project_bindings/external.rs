@@ -6,7 +6,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
 static READS: OnceLock<Semaphore> = OnceLock::new();
 pub(super) async fn observe(state: &AppState, binding: &ProjectBinding) -> BindingObservation {
-    observe_with_gate(state, binding, READS.get_or_init(|| Semaphore::new(4))).await
+    observe_with_gate(
+        state,
+        binding,
+        READS.get_or_init(|| Semaphore::new(aq_machine_control::limits::current().source_reads)),
+    )
+    .await
 }
 pub(super) async fn observe_execution(
     state: &AppState,
@@ -16,7 +21,8 @@ pub(super) async fn observe_execution(
     observe_with_gate(
         state,
         binding,
-        EXECUTION_READS.get_or_init(|| Semaphore::new(2)),
+        EXECUTION_READS
+            .get_or_init(|| Semaphore::new(aq_machine_control::limits::current().source_reads)),
     )
     .await
 }

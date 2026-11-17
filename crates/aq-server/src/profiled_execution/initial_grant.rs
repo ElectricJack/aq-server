@@ -480,13 +480,8 @@ pub async fn prepare(
     let lease = before.material.clone();
     let node = auth.id();
     let source = super::login_refresh::lease_source(&state.store.pool, &registry, &lease).await?;
-    static READS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    let permit = READS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())?;
+    let permit = aq_machine_control::limits::GRANT_MATERIAL.enter();
+    let permit = permit.ok_or_else(|| refused())?;
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {

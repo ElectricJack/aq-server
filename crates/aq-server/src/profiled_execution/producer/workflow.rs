@@ -27,7 +27,6 @@ use aq_machine_control::holds;
 use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
-use std::sync::OnceLock;
 use uuid::Uuid;
 /// Bounded Graph reads per poll while looking for a project with ready work.
 const MAX_PROJECTS_PER_POLL: usize = 4;
@@ -65,7 +64,7 @@ async fn runtime(
     AppError,
 > {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    crate::worker_api::read_current_node(&mut tx, auth).await?;
     if auth.id() != request.identity.node_id {
         return Err(refused());
     }
@@ -238,6 +237,10 @@ async fn selection(
     )
     .await
 }
+/// A task this poll leaves for a later one or another node; never a refused poll.
+fn not_offered(reason: &str) -> bool {
+    aq_role_settings::refusals::is_refusal(reason) || reason.starts_with(compose::INELIGIBLE)
+}
 /// Review I5: a poll skips at most MAX_SKIPPED refused successors.
 fn skips_spent(skipped: &std::collections::BTreeSet<Uuid>) -> bool {
     skipped.len() >= MAX_SKIPPED
@@ -382,11 +385,7 @@ pub async fn poll_slot(
         return Ok(page);
     }
     // Retain one assembler per node/slot across polls.
-    static ASSEMBLERS: OnceLock<aq_machine_control::offer_assembly::Gate> = OnceLock::new();
-    let Some(permit) = ASSEMBLERS
-        .get_or_init(|| aq_machine_control::offer_assembly::Gate::new(4))
-        .enter_slot(auth.id(), slot)
-    else {
+    let Some(permit) = aq_machine_control::offer_assembly::enter(auth.id(), slot) else {
         return Ok(page);
     };
     let mut assembly = tokio::spawn({
@@ -404,6 +403,8 @@ pub async fn poll_slot(
         }
     });
     match tokio::time::timeout(std::time::Duration::from_millis(750), &mut assembly).await {
+        // Contention with a sibling slot is no offer this poll, not a failed poll.
+        Ok(Ok(Err(AppError::Busy))) => Ok(page),
         Ok(Ok(result)) if page.cancellations.is_empty() => result,
         Ok(Ok(Ok(scheduled))) => Ok(scheduled),
         _ => Ok(page),
@@ -431,15 +432,16 @@ async fn offers(
         return Ok(page);
     }
     let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
-    let hold = aq_machine_control::offer_hold(&mut gate, auth.id());
+    let hold = aq_machine_control::recent::offer_hold(&mut gate, auth.id());
     if let Some(reason) = hold.await.map_err(|_| refused())? {
         tracing::info!(node_id = %auth.id(), "{reason}; no new offers");
         return Ok(page);
     }
     drop(gate);
     let mut occupancy = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::lock_current_node(&mut occupancy, auth).await?;
-    let free = super::super::compute::free_locked(&mut occupancy, auth.id(), slot).await?;
+    crate::worker_api::read_current_node(&mut occupancy, auth).await?;
+    let free = aq_machine_control::recent::poll_free(&mut occupancy, auth.id(), slot);
+    let free = free.await.map_err(crate::machine_api::mapped)?;
     occupancy.commit().await.map_err(db)?;
     if !free {
         return Ok(page);
@@ -515,6 +517,9 @@ async fn offers(
             }
             let record =
                 on_heap(|| crate::project_bindings::current(state, policy.project_id)).await?;
+            if !(record.binding).eligible_node(&state.config.projects, auth.id()) {
+                continue;
+            }
             // The head page first, as ever. When nothing on it can be offered
             // and more tasks are ready, one further page a poll, rotating
             // through the rest: tasks that wait (for a route, or held) at the
@@ -623,6 +628,11 @@ async fn offers(
         let Some((policy, record, ready, task, assessment, route)) = chosen else {
             return Ok(page);
         };
+        // A sibling slot is assembling this task: this slot takes the next one.
+        let Some(_claim) = aq_machine_control::offer_assembly::claim_task(task.task_id) else {
+            skipped.insert(task.task_id);
+            continue;
+        };
         let route = route.as_ref();
         let replacement = assessment.replacement().cloned();
         // R6: a successor's hold is recorded against the attempt count read before its refusal.
@@ -677,7 +687,7 @@ async fn offers(
             // Spec 0014 §6.1: a startup text over its byte limit, or an environment
             // without platform text, is refused and recorded for the task's work
             // read; the poll goes on with the next task.
-            Err(AppError::Conflict(reason)) if aq_role_settings::refusals::is_refusal(&reason) => {
+            Err(AppError::Conflict(reason)) if not_offered(&reason) => {
                 tracing::warn!(task_id = %task.task_id, %reason, "task not offered");
                 skipped.insert(task.task_id);
                 continue;
@@ -836,7 +846,13 @@ async fn offers(
                 route,
             )
         };
-        let compiled = on_heap(compile).await?;
+        let compiled = match on_heap(compile).await {
+            Err(AppError::Conflict(reason)) if reason.starts_with(compose::INELIGIBLE) => {
+                skipped.insert(task.task_id);
+                continue;
+            }
+            compiled => compiled?,
+        };
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
         if refused_successor(state, &decision, successor, &mut skipped).await {
             continue;
@@ -897,6 +913,7 @@ async fn offers(
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection, slot))
                 .await?;
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
+        aq_machine_control::recent::forget(auth.id()).await;
         let Some(offer) = offer else { return Ok(page) };
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);

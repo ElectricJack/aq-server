@@ -6,11 +6,8 @@ use aq_admission::{
     ArtifactRef, Digest, ObjectFormat, ObjectId, SourceAdmission, SourceSelection, Text,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    sync::Semaphore,
-};
+use std::{collections::BTreeMap, time::Duration};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 const MAX_FRAME: usize = 262_144;
 #[track_caller]
@@ -130,11 +127,8 @@ async fn observe_source(
     policy: &ProjectPolicyRecord,
     fixed: Option<Fixed>,
 ) -> Result<Observation, AppError> {
-    static READS: OnceLock<Semaphore> = OnceLock::new();
-    let _permit = READS
-        .get_or_init(|| Semaphore::new(4))
-        .try_acquire()
-        .map_err(|_| refused())?;
+    let _permit = aq_machine_control::limits::SOURCE_READS.enter();
+    let _permit = _permit.ok_or_else(|| refused())?;
     let configured = state
         .config
         .profiled_execution

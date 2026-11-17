@@ -24,7 +24,6 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use sqlx::Row;
-use std::sync::{Arc, OnceLock};
 
 pub const METADATA_HEADER: &str = "aq-material-delivery";
 /// C5b: the subscription-login version these bytes are (decimal). Echoed as
@@ -87,12 +86,8 @@ pub async fn fetch(
     if lease.lease_id != request.lease_id || lease.binding != request.binding {
         return Err(refused());
     }
-    static READS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-    let permit = READS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())?;
+    let permit = aq_machine_control::limits::MATERIAL_REQUESTS.enter();
+    let permit = permit.ok_or_else(|| refused())?;
     let read_lease = lease.clone();
     let node_id = auth.id();
     let (source, version) =
