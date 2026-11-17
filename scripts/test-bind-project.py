@@ -48,11 +48,9 @@ def test_permissions_take_the_scope_the_server_gives_each_operation():
         dict(operation="wait.register", scope_reference="attempt:self")]
 
 
-def test_the_plan_keeps_what_exists_and_drops_the_removed_fields():
-    old = current(catalog_digest="a" * 64, allowed_agent_profiles=["x@1"], allowed_intelligence_profiles=["y@1"],
-                  allowed_execution_profiles=["z@1"], role_notes=dict(developer="Use make."))
+def test_the_plan_keeps_what_exists_and_adds_what_the_role_needs():
+    old = current(role_notes=dict(developer="Use make."))
     binding, notes = bind.plan_binding(old, "developer", "standard-high", ROLE, EXECUTION)
-    assert not set(bind.REMOVED) & set(binding)
     assert binding["enabled"] is True and binding["role_notes"] == dict(developer="Use make.")
     # Defaults are left out, as the server leaves them out of what it returns.
     assert "default_role" not in binding and "default_intelligence" not in binding

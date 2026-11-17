@@ -92,8 +92,8 @@ It checks that the role and level exist, saves the binding (enabled,
 operations for this project and repository, the execution profile's
 environment), and, when the config has no entry for the project or the source
 changes, retains the starting commit in central aq-git and prints the entry to
-add. The binding has no `catalog_digest` and no `allowed_*_profiles` lists; a
-binding that still sends them is refused.
+add. A binding names no catalog and lists no allowed profiles; a binding that
+still sends those fields is refused.
 
 The config entry stays an operator edit, because it is part of the server's
 configuration digest:
@@ -116,6 +116,6 @@ id, added after the role's prompt), not in a role.
 
 ## Removed configuration
 
-`[profiled_execution] context_qualifications` and
-`[intelligence] qualified_harnesses[].models` no longer exist. A config that
-still has either fails to load with a message naming the key.
+The context qualification list of `[profiled_execution]` and the `models` list
+of each `[intelligence] qualified_harnesses` entry no longer exist. A config
+that still has either fails to load with a message naming the key.

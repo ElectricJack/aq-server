@@ -49,10 +49,6 @@ import uuid
 DEFAULT_ROLE = "developer"
 DEFAULT_INTELLIGENCE = "standard-high"
 DEFAULT_BRANCH = "refs/heads/main"
-# Binding fields removed by spec 0014. A server on this version never returns
-# them; they are dropped so a record read from an older store can be saved.
-REMOVED = ("catalog_digest", "allowed_agent_profiles", "allowed_intelligence_profiles",
-           "allowed_execution_profiles")
 # Execution profile limit -> the project ceiling that bounds it.
 LIMIT_CEILINGS = (("startup_context_bytes", "context_bytes"), ("wall_time_ms", "wall_time_ms"),
                   ("memory_bytes", "memory_bytes"), ("cpu_millis", "cpu_millis"),
@@ -121,7 +117,7 @@ def requested_permissions(operations, project, repository):
 
 def plan_binding(current, role, level, role_fields, execution_fields, raise_ceilings=False):
     """The binding to save and notes on what differs. Pure."""
-    binding = {key: value for key, value in current.items() if key not in REMOVED}
+    binding = dict(current)
     notes = []
     project, repository = binding["project_id"], binding["repository_id"]
     binding["enabled"] = True
@@ -274,8 +270,7 @@ def run(args, out=print):
         out(f"WARNING: role `{args.default_role}` is disabled; its tasks are held until it is enabled")
     binding, notes = plan_binding(current, args.default_role, args.default_intelligence, role, execution,
                                   args.raise_ceilings)
-    kept = {key: value for key, value in current.items() if key not in REMOVED}
-    changed = canonical(binding) != canonical(kept) or kept != current
+    changed = canonical(binding) != canonical(current)
     out(f"project {project} ({binding.get('name')}): binding revision {record['revision']}, "
         f"default role {args.default_role}, default intelligence {args.default_intelligence}, "
         f"execution profile {role['execution']}")
