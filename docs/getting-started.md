@@ -14,11 +14,12 @@ progresses; treat every step not marked "passed" as untested.
 | Step | State |
 | --- | --- |
 | `doctor` | Passed. |
-| `build server supervisor graph git dashboard worker` | Passed from fresh clones (about 24 minutes with 8 cargo jobs). |
-| The `aqv2` input of the template (`build-aqv2.sh`) | Passed; the result matched its pinned SHA-256. |
-| `build template` | **Failed once, fixed, re-running.** The runtime image's `cargo build` could not read `packaging/native-runtime/pins.json`: `aq-worker` embeds that file and `scripts/package-sandbox.py` did not export it (fixed on the aq-worker branch). The steps after it in the template build (assembling the template, loading it into the sandbox daemon, the registry push) have not run yet. |
-| `up`, `seed`, `pins`, `internal-work`, `worker`, `task`, `routing` | **Not run yet.** Written from the commands the live stack was built with; expect fixes. |
-| `reload …`, `down` | Not run yet. |
+| `build` (all seven parts) | Passed from fresh clones: about 24 minutes for the images, dashboard and worker programs with 8 cargo jobs, plus about 25 minutes for the sandbox template (after a fix to `scripts/package-sandbox.py` in aq-worker). |
+| `up`, `seed`, `pins`, `internal-work`, `worker` | Passed, each after fixes that are now in the scripts. They ran one at a time while being fixed. |
+| `task` | Passed: four tasks ran Claude in sandboxes on the local worker, ended `success` and published commits to the scratch remote; two ran at the same time on the node's two slots. |
+| `routing` | **In progress.** The authoring run works (Claude Opus on the internal work host); its first run stopped with a question because the routing document named agents this install does not have. The shipped document was rewritten and is being authored now. |
+| One uninterrupted `all` from an empty state | **Not run yet.** |
+| `reload …`, `down` | `down -v` passed. `reload` not run yet. |
 
 What is known not to be covered is listed under [Not done](#not-done).
 
@@ -218,7 +219,33 @@ These are the failures hit while this sequence was written.
   It happens now and then. Run a read again; do not repeat a write without
   checking its effect.
 
-This list grows as the proof run continues.
+- **The worker logs `node control: No such file or directory`.** The
+  directories `native.json` names as its template `state_dir` and host root
+  do not exist. `pins` creates them (`~/.local/share/aq-local/node/state/host`).
+- **The worker polls and gets `409 Conflict`; nothing is offered.** The server
+  log says why (`docker logs aq-local-server-1 | grep refus`):
+  - `native offer admission requirements unavailable`: the owner's
+    availability switch is not on. `worker` turns it on; it is also on the
+    Swarm page.
+  - `configured source observation unavailable or inconsistent`: the scratch
+    project follows its remote's `main`, and until AQ has published to it
+    once an offer needs a fetch under 30 seconds old. `local-stack task` does
+    that fetch; a task filed in the dashboard before the first published
+    result waits for it.
+- **`routing` says the authoring run failed with "No model that can work with
+  tools is set up for writing playbooks" or "intelligence registry is not
+  configured".** Authoring started before `pins` had registered the login.
+  Run `routing` again: it starts another run.
+- **`routing` says the authoring agent asks a question.** Read it under
+  Settings → Intelligence → Routing (or `GET /api/settings/routing`). The
+  agent stops when the routing document contradicts the Settings it sees, for
+  example rules about agents that are not installed. Edit the document or
+  answer, then run `routing` again.
+- **The server log shows `The playbook engine refused: playbook_invalid_request`
+  for the routing document.** The stack was seeded with the older
+  `human_review_v2` playbook namespace (`scripts/dev-stack.py seed` without
+  `AQ_DEV_PLAYBOOK_PROFILE=host_v9`, which `local-stack` sets). A stack keeps
+  its namespace: start a new one.
 
 ## Not done
 
