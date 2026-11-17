@@ -34,3 +34,27 @@ Validate the plan with `python3 scripts/check-v2-plan.py`; use `--ready` to list
 ## Development
 
 Run the stack with `scripts/dev-up`, a worker with `scripts/dev-worker`, and the container lifecycle check with `scripts/smoke`. See [docs/development.md](docs/development.md).
+
+## AQ v2 skills
+
+The [skills directory](skills/) is the source for the eight AQ operator and
+agent skills, including usage of the `aq` CLI, tasks, communication, knowledge,
+playbooks, reviews, mini-projects, and Git workspaces. The
+playbook engine's authoring skill is maintained in the `aq-playbooks` repository.
+The legacy `aq-bazel-upgrade` skill describes the v1 test backend and integration
+train. Retire that skill from a v2 installation by moving its `SKILL.md` out of
+the harness's skill discovery path.
+
+Install or update the suite from the checkout whose revision you want to use.
+
+```sh
+python3 scripts/install-aq-skills.py
+python3 scripts/install-aq-skills.py --dest ~/.claude/skills
+```
+
+The default is `${CODEX_HOME:-~/.codex}/skills`. Use `--dest` for another
+harness's writable skills directory. The installer backs up replaced
+`SKILL.md` files beside their originals and leaves matching files and other
+skills alone. Start a new session to load the updated guidance. The installer
+copies skill documents. See the [CLI setup](crates/aqv2/README.md) for the
+`aq` binary and connection modes.
