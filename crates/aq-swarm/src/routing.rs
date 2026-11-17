@@ -27,6 +27,15 @@ fn label(catalog: &Value, reference: &str) -> Option<RoutingProfile> {
     };
     Some(RoutingProfile { id, display_name })
 }
+/// The level `id` of a role snapshot: its id and the name its document gives it.
+fn level(snapshot: &Value, id: &str) -> Option<RoutingProfile> {
+    let profile = snapshot["intelligence"].get(id)?;
+    let name = profile["name"].as_str().filter(|n| !n.trim().is_empty());
+    Some(RoutingProfile {
+        id: id.to_owned(),
+        display_name: name.unwrap_or(id).to_owned(),
+    })
+}
 /// Add labels in two bounded key reads. Missing historical identity stays absent;
 /// the active catalog, current project binding and model strings are never used.
 pub async fn apply(conn: &mut PgConnection, swarm: &mut Swarm) -> Result<(), sqlx::Error> {
@@ -50,9 +59,26 @@ pub async fn apply(conn: &mut PgConnection, swarm: &mut Swarm) -> Result<(), sql
         "SELECT digest,artifact FROM profile_catalog_artifacts WHERE digest=ANY($1)",
     )
     .bind(&digests)
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?;
     let catalogs: BTreeMap<String, Value> = artifacts
+        .into_iter()
+        .filter_map(|(d, b)| Some((d, serde_json::from_slice(&b).ok()?)))
+        .collect();
+    // Spec 0014: an attempt launched from a role snapshot names its level by
+    // id, and the snapshot it pinned holds that level's name.
+    let stored: bool = sqlx::query_scalar("SELECT to_regclass('role_snapshots') IS NOT NULL")
+        .fetch_one(&mut *conn)
+        .await?;
+    let snapshots: Vec<(String, Vec<u8>)> = if stored {
+        sqlx::query_as("SELECT digest,snapshot FROM role_snapshots WHERE digest=ANY($1)")
+            .bind(&digests)
+            .fetch_all(&mut *conn)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let snapshots: BTreeMap<String, Value> = snapshots
         .into_iter()
         .filter_map(|(d, b)| Some((d, serde_json::from_slice(&b).ok()?)))
         .collect();
@@ -61,10 +87,11 @@ pub async fn apply(conn: &mut PgConnection, swarm: &mut Swarm) -> Result<(), sql
         .filter_map(|row| {
             let digest = row.get::<Option<String>, _>("catalog")?;
             let profile = row.get::<Option<String>, _>("profile")?;
-            Some((
-                row.get("attempt_id"),
-                label(catalogs.get(&digest)?, &profile)?,
-            ))
+            let label = match catalogs.get(&digest) {
+                Some(catalog) => label(catalog, &profile)?,
+                None => level(snapshots.get(&digest)?, &profile)?,
+            };
+            Some((row.get("attempt_id"), label))
         })
         .collect();
     for agent in swarm
