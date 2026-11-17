@@ -27,22 +27,11 @@ pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> 
     .fetch_all(pool)
     .await
     .map_err(|_| unavailable())?;
-    // Spec 0014 §7.1: what each attempt ran with, from its own record. A
-    // store without the summaries (an attempt from before roles) shows none.
-    let attempts: Vec<Uuid> = (rows.iter())
-        .filter_map(|row| row.try_get::<Uuid, _>("attempt_id").ok())
-        .collect();
-    let ran_with = match pool.acquire().await {
-        Ok(mut conn) => aq_role_settings::attempts::ran_with_many(&mut conn, &attempts)
-            .await
-            .unwrap_or_default(),
-        Err(_) => return Err(unavailable()),
-    };
+    // Spec 0014 §7.1: what each attempt ran with, from its own record.
+    let ran_with = aq_role_settings::attempts::ran_with_rows(pool, &rows).await;
     rows.iter()
         .map(|row| {
-            let attempt = row
-                .try_get::<Uuid, _>("attempt_id")
-                .map_err(|_| unavailable())?;
+            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
             let mut execution = json!({
                 "task_id": row.try_get::<Uuid, _>("task_id").map_err(|_| unavailable())?,
                 "attempt_id": attempt,
@@ -121,7 +110,12 @@ pub(super) async fn work(
             crate::role_settings::level_hold(&s, &r.pool, binding, &raw["node"]).await?
         }
     };
-    let held = held.into_iter().chain(role_hold).chain(level_hold);
+    // Spec 0014 §6.1: and one whose last offer was refused before any attempt.
+    let offer_hold = match open && execution.is_null() && crate::role_settings::tables(&s) {
+        true => aq_role_settings::refusals::shown(&r.pool, id).await,
+        false => None,
+    };
+    let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
     let readiness = aq_human_work::readiness_with(
         root["task_state"].as_str(),
         hold.as_ref(),
@@ -259,16 +253,22 @@ pub(super) async fn history(
     .await
     .map_err(|_| unavailable())?;
     let attempts_truncated = attempts.len() as i64 > ATTEMPT_LIMIT;
+    let ran_with = aq_role_settings::attempts::ran_with_rows(&r.pool, &attempts).await;
     let attempts: Vec<Value> = attempts
         .iter()
         .take(ATTEMPT_LIMIT as usize)
         .map(|row| {
-            Ok(json!({
-                "attempt_id": row.try_get::<Uuid, _>("attempt_id").map_err(|_| unavailable())?,
+            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
+            let mut shown = json!({
+                "attempt_id": attempt,
                 "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
                 "holds_task": row.try_get::<bool, _>("holds_task").map_err(|_| unavailable())?,
                 "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            }))
+            });
+            if let Some(summary) = ran_with.get(&attempt) {
+                shown["ran_with"] = json!(summary);
+            }
+            Ok(shown)
         })
         .collect::<Result<_>>()?;
     finish(

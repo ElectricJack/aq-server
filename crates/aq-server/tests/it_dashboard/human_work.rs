@@ -464,6 +464,35 @@ async fn history_pages_graph_entries_and_attempts_with_bound_cursor() {
         x.graph.cursors.lock().unwrap().clone(),
         vec![None, Some("upstream-page-2".to_owned())]
     );
+    // Spec 0014 §7.1: an attempt of the timeline shows what it ran with, in
+    // the shape of the attached execution; without a summary, no key.
+    assert!(h["attempts"][0].get("ran_with").is_none());
+    let attempt: Uuid = h["attempts"][0]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let summary = aq_role_settings::attempts::RanWith {
+        role: "developer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: None,
+    };
+    let pool = x.f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, attempt, &summary)
+        .await
+        .unwrap();
+    drop(conn);
+    let shown = x.get(&format!("/tasks/{held}/history")).await;
+    assert_eq!(
+        shown["attempts"][0]["ran_with"],
+        serde_json::to_value(&summary).unwrap()
+    );
 }
 
 #[tokio::test]

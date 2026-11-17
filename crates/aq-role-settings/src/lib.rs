@@ -12,13 +12,14 @@ use uuid::Uuid;
 
 pub mod attempts;
 pub mod http;
+pub mod refusals;
 mod store;
 pub mod suggestions;
 pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, get,
-    install_defaults, list, pin, routing_document, save, save_limits, save_routing_document,
-    save_selection_defaults, settings, snapshot, startup, unpin,
+    install_defaults, list, pin, release_finished_pins, routing_document, save, save_limits,
+    save_routing_document, save_selection_defaults, settings, snapshot, startup, unpin,
 };
 
 /// Something outside this store that names one of its documents, such as a
@@ -70,6 +71,13 @@ pub struct StoreLimits {
     pub snapshots_kept: u32,
     /// Save receipts kept for recognising a repeated operation id.
     pub operations_kept: u32,
+    /// Tasks whose last refused offer is kept for the work read
+    /// ([`refusals`]); the oldest go first.
+    #[serde(default = "default_refusals_kept")]
+    pub refusals_kept: u32,
+}
+fn default_refusals_kept() -> u32 {
+    1000
 }
 impl Default for StoreLimits {
     fn default() -> Self {
@@ -77,6 +85,7 @@ impl Default for StoreLimits {
             documents: DocumentLimits::default(),
             snapshots_kept: 20,
             operations_kept: 200,
+            refusals_kept: default_refusals_kept(),
         }
     }
 }

@@ -164,6 +164,41 @@ pub fn level_hold(
     })
 }
 
+/// The ready tasks that get no offer, with the hold code: the effective
+/// role is disabled or missing, or the level the task would run on (the class
+/// it was routed to, else the project's default) has no document. `nodes` are
+/// `(task, node, routed class)`.
+pub fn held<'a>(
+    snapshot: Option<&Snapshot>,
+    default_role: &str,
+    default_intelligence: &str,
+    nodes: impl Iterator<Item = (uuid::Uuid, &'a Value, Option<String>)>,
+) -> BTreeMap<uuid::Uuid, &'static str> {
+    nodes
+        .filter_map(|(task, node, class)| {
+            let role = effective_role(&node["metadata"], default_role);
+            let role = role_hold(snapshot, &role.id).map(|hold| hold.code);
+            let level = || {
+                let hold = level_hold(snapshot, class.as_deref(), default_intelligence)?;
+                tracing::info!(%task, level = %hold.level, "{}", hold.message());
+                Some(LevelHold::CODE)
+            };
+            role.or_else(level).map(|code| (task, code))
+        })
+        .collect()
+}
+/// Whether an attempt of `task` was ever granted; its role is then fixed.
+pub async fn granted(pool: &sqlx::PgPool, task: uuid::Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
+         WHERE e.task_id=$1 AND NOT (COALESCE(h.state,e.state)->>'status' IN ('offered','preparing','declined','never_granted') \
+         AND COALESCE(jsonb_typeof(COALESCE(h.state,e.state)->'grant'),'null')='null'))",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+}
+
 /// An agent may not hand out more than it holds: the operations of the role
 /// a task is filed with that the filing attempt's own role does not list.
 /// Empty when `named` is within `filer`.
@@ -182,6 +217,43 @@ pub fn beyond_message(filer: &str, named: &str, lacking: &[String]) -> String {
         "Role `{named}` is not within your own role `{filer}`: it may use {}, which you may not. An agent can file a task only for a role whose operations it holds itself.",
         lacking.join(", ")
     )
+}
+
+/// The role the filing attempt itself runs as, read from the snapshot it
+/// launched with. `None` when the attempt is not restricted: it has no
+/// summary (it was not launched from a role), it was recorded before roles
+/// and names no snapshot, or its snapshot or role is no longer stored.
+pub async fn filer_role(
+    pool: &sqlx::PgPool,
+    attempt: uuid::Uuid,
+) -> crate::Result<Option<aq_profiles::roles::Role>> {
+    let mut conn = pool.acquire().await?;
+    let ran_with = crate::attempts::ran_with(&mut conn, attempt).await?;
+    drop(conn);
+    let Some(ran_with) = ran_with else {
+        return Ok(None);
+    };
+    let Some(digest) = &ran_with.snapshot_digest else {
+        return Ok(None);
+    };
+    let own = crate::snapshot(pool, digest).await?;
+    Ok(own.and_then(|snapshot| snapshot.role(&ran_with.role).cloned()))
+}
+/// [`operations_beyond`] as the refusal of a filing: `target` is the role
+/// the task is filed with. A role that does not exist is refused (or held)
+/// by its own rule.
+pub fn within(
+    filer: &aq_profiles::roles::Role,
+    target: Option<&aq_profiles::roles::Role>,
+) -> Result<(), String> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let lacking = operations_beyond(&filer.operations, &target.operations);
+    match lacking.is_empty() {
+        true => Ok(()),
+        false => Err(beyond_message(&filer.id, &target.id, &lacking)),
+    }
 }
 
 /// A project binding's `default_role`, `default_intelligence` and

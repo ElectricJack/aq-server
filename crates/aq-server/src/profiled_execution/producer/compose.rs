@@ -13,8 +13,9 @@ use crate::{
 };
 use aq_profiles::{
     GraphAccessPolicy, GraphAccessPolicyKind,
-    roles::{self, Snapshot, StartupError, StartupInput, StartupText},
+    roles::{self, Snapshot, StartupInput, StartupText},
 };
+use aq_role_settings::refusals;
 use aq_selection::{CapabilitySnapshot, PreparedLaunch};
 use aq_session_api::Permission;
 use serde_json::Value;
@@ -170,7 +171,7 @@ pub async fn compile(
     let mut prepared = Vec::new();
     for harness in harnesses {
         let reporting = super::result_startup::for_adapter(state, &harness.adapter)?;
-        let startup = roles::assemble_startup(
+        let assembled = roles::assemble_startup(
             &StartupInput {
                 platform: roles::platform_text(&environment),
                 role: launch.role,
@@ -183,11 +184,22 @@ pub async fn compile(
                 reporting: reporting.as_ref().map(|r| r.text.as_str()),
             },
             limit,
-        )
-        .map_err(|error| match error {
-            StartupError::OverLimit { bytes, limit } => over_limit(bytes, limit),
-            StartupError::Empty(_) => refused(),
-        })?;
+        );
+        let startup = match assembled {
+            Ok(startup) => startup,
+            // Spec 0014 §6.1: refused with a reason the task's work read shows.
+            Err(error) => {
+                let ceiling = binding.ceilings.context_bytes;
+                let Some(refusal) = refusals::of_startup(&error, execution, ceiling, &environment)
+                else {
+                    return Err(refused());
+                };
+                let task = context.revision.task_id;
+                return Err(
+                    crate::role_settings::offer_refused(state, task, project, &refusal).await,
+                );
+            }
+        };
         let policy = GraphAccessPolicy {
             schema_version: 1,
             kind: GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1,
@@ -237,14 +249,6 @@ pub async fn compile(
         route: route.map(aq_routing::CompactRoute::limits),
         snapshot: active,
     })
-}
-/// The refusal of a startup text over its byte limit, with the two numbers.
-pub const OVER_LIMIT: &str = "startup_over_limit";
-fn over_limit(bytes: u64, limit: u64) -> AppError {
-    AppError::Conflict(format!(
-        "{OVER_LIMIT}: the startup text is {bytes} bytes, over the limit of {limit} bytes \
-         (the execution profile's startup_context_bytes within the project's context_bytes ceiling)"
-    ))
 }
 fn digest<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
     aq_profiles::digest(value).map_err(|_| AppError::Internal)

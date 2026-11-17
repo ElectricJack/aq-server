@@ -177,6 +177,21 @@ async fn roll_snapshots(conn: &mut PgConnection, active: &str, kept: u32) -> Res
     .await?;
     Ok(())
 }
+/// Pins are for live attempts (spec 0014 §7.1): release the pin of every
+/// attempt that no longer holds its task (settled, cancelled, abandoned, lost
+/// and released, never granted) or whose record is gone. Idempotent. It runs
+/// when an attempt is created and before every roll, so pins stay bounded by
+/// the live attempts and a finished attempt never keeps a snapshot from
+/// rolling off. Its summary (`attempt_ran_with`) stays.
+pub async fn release_finished_pins(conn: &mut PgConnection) -> Result<u64> {
+    let released = sqlx::query(
+        "DELETE FROM role_snapshot_pins p WHERE NOT EXISTS
+         (SELECT 1 FROM execution_attempts a WHERE a.attempt_id=p.attempt_id AND a.holds_task)",
+    )
+    .execute(conn)
+    .await?;
+    Ok(released.rows_affected())
+}
 /// Store `snapshot`, make it the active one at `revision`, and roll.
 async fn activate(
     conn: &mut PgConnection,
@@ -200,6 +215,7 @@ async fn activate(
         .bind(snapshot.digest())
         .execute(&mut *conn)
         .await?;
+    release_finished_pins(&mut *conn).await?;
     roll_snapshots(conn, snapshot.digest(), limits.snapshots_kept).await
 }
 
@@ -605,9 +621,10 @@ pub async fn startup(pool: &PgPool, now_ms: i64) -> Result<Startup> {
     })
 }
 
-/// Record that the kept attempt `attempt_id` launched with snapshot
-/// `digest`, so the snapshot stays until [`unpin`]. Call it in the
-/// transaction that creates the attempt. Repeating it is harmless.
+/// Record that the attempt `attempt_id` launched with snapshot `digest`, so
+/// the snapshot stays while the attempt holds its task
+/// ([`release_finished_pins`]). Call it in the transaction that creates the
+/// attempt. Repeating it is harmless.
 pub async fn pin(conn: &mut PgConnection, digest: &str, attempt_id: Uuid) -> Result<()> {
     read_settings(&mut *conn, Lock::Share).await?;
     let pinned = sqlx::query(

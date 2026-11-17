@@ -464,8 +464,11 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
         .await
         .unwrap()
     );
+    common::roles::pin_active(&pool, receipt.attempt_id).await;
     let done = Box::pin(c.service.complete(&c.actor, op)).await.unwrap();
     assert_eq!(done.state, "confirmed");
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pool, receipt.attempt_id).await);
     let settled: (Value, i64) =
         sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
             .bind(receipt.attempt_id)

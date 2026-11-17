@@ -133,6 +133,9 @@ async fn native_cancel_before_grant_releases_claim() {
         }
         let binding = &offer.offered.offer.binding;
         let operation = Uuid::new_v4();
+        // Spec 0014 §7.1: the offer pinned its snapshot; the cancellation releases it.
+        let pool = &c.env.env.pool;
+        assert!(common::roles::pinned(pool, binding.attempt_id).await);
         let (status, first) = cancel(
             &c.env.env.state,
             binding.attempt_id,
@@ -141,6 +144,7 @@ async fn native_cancel_before_grant_releases_claim() {
         )
         .await;
         assert_eq!(status, 200, "{first}");
+        assert!(!common::roles::pinned(pool, binding.attempt_id).await);
         assert_eq!(first["disposition"], "never_granted");
         assert_eq!(first["cancellation_id"], json!(operation));
         let (held, hot): (bool, Value) = sqlx::query_as("SELECT a.holds_task,h.state FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE attempt_id=$1")

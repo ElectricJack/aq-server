@@ -156,10 +156,13 @@ async fn failed_profiled_attempt_is_released_once_and_its_claim_stays_released()
             .is_err()
     );
 
+    common::roles::pin_active(&pool, attempt).await;
     replacement::release(&f.state, task, &assessed)
         .await
         .unwrap();
     assert!(!holds_task(&pool, attempt).await, "holds_task flips");
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pool, attempt).await);
     assert_eq!(releases(&pool, attempt).await, 1);
     let (reason, started): (String, i32) = sqlx::query_as(
         "SELECT reason,attempts_started FROM profiled_replacement_releases WHERE attempt_id=$1",

@@ -1448,3 +1448,17 @@ fn an_execution_profile_bounds_its_output_tokens() {
         ]
     );
 }
+
+/// Every environment has platform text: its own file or the shipped default.
+/// An empty one is `StartupError::Empty(Platform)` (above), which the server
+/// refuses as `platform_text_missing`; it never launches with none.
+#[test]
+fn every_environment_has_platform_text() {
+    for environment in [
+        "aq-ms1-docker-local-claude",
+        "an-environment-with-no-file",
+        "",
+    ] {
+        assert!(!platform_text(environment).is_empty(), "{environment}");
+    }
+}

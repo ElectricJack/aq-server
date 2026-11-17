@@ -1,6 +1,7 @@
 //! What an attempt ran with (spec 0014 §7.1): a summary of a few hundred
 //! bytes on the attempt's own record, which lasts exactly as long as that
-//! record, and a pin that keeps the snapshot it names.
+//! record, and a pin that keeps the snapshot it names while the attempt
+//! holds its task.
 use crate::{Result, store};
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
@@ -37,6 +38,8 @@ pub async fn record(conn: &mut PgConnection, attempt_id: Uuid, ran_with: &RanWit
     .bind(summary)
     .execute(&mut *conn)
     .await?;
+    // Attempts that finished since the last one no longer keep a snapshot.
+    store::release_finished_pins(&mut *conn).await?;
     match &ran_with.snapshot_digest {
         Some(digest) => store::pin(conn, digest, attempt_id).await,
         None => Ok(()),
@@ -51,6 +54,39 @@ pub async fn ran_with(conn: &mut PgConnection, attempt_id: Uuid) -> Result<Optio
             .fetch_optional(conn)
             .await?;
     Ok(summary.and_then(|value| serde_json::from_value(value).ok()))
+}
+/// [`ran_with`] in the caller's own type of the same serialized shape (the
+/// dashboard contract's), so every read shows one shape. Only a database
+/// failure is an error.
+pub async fn ran_with_as<T: serde::de::DeserializeOwned>(
+    conn: &mut PgConnection,
+    attempt_id: Uuid,
+) -> std::result::Result<Option<T>, sqlx::Error> {
+    let summary: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT ran_with FROM attempt_ran_with WHERE attempt_id=$1")
+            .bind(attempt_id)
+            .fetch_optional(conn)
+            .await?;
+    Ok(summary.and_then(|value| serde_json::from_value(value).ok()))
+}
+/// The summaries of the attempts in `rows` (their `attempt_id` column), for
+/// a read that lists attempts. A store without the summaries (a fixture from
+/// before roles) and a failed read both show none: the summary is an
+/// optional part of those reads.
+pub async fn ran_with_rows(
+    pool: &sqlx::PgPool,
+    rows: &[sqlx::postgres::PgRow],
+) -> std::collections::BTreeMap<Uuid, RanWith> {
+    use sqlx::Row;
+    let attempts: Vec<Uuid> = (rows.iter())
+        .filter_map(|row| row.try_get::<Uuid, _>("attempt_id").ok())
+        .collect();
+    match pool.acquire().await {
+        Ok(mut conn) => ran_with_many(&mut conn, &attempts)
+            .await
+            .unwrap_or_default(),
+        Err(_) => Default::default(),
+    }
 }
 /// The summaries of several attempts, keyed by attempt.
 pub async fn ran_with_many(

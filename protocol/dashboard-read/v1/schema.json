@@ -2326,6 +2326,49 @@
       ],
       "type": "object"
     },
+    "RanWith": {
+      "additionalProperties": false,
+      "description": "What an attempt ran with (spec 0014 §7.1), as every read shows it: the\nserialized form of `aq_role_settings::attempts::RanWith`.\n`snapshot_digest` is null for an attempt recorded before roles and\nprofiles.",
+      "properties": {
+        "execution_profile": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "snapshot_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "level",
+        "provider",
+        "model",
+        "reasoning",
+        "harness",
+        "execution_profile"
+      ],
+      "type": "object"
+    },
     "RateCardRef": {
       "additionalProperties": false,
       "properties": {
@@ -2740,6 +2783,17 @@
         "project": {
           "$ref": "#/$defs/ProjectRef"
         },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent when the attempt has no summary."
+        },
         "record_revision": {
           "anyOf": [
             {
@@ -3012,6 +3066,17 @@
             "$ref": "#/$defs/NudgeObservation"
           },
           "type": "array"
+        },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent when the attempt has no summary."
         },
         "requested_permissions": {
           "items": {

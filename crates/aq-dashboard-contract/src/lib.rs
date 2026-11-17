@@ -307,6 +307,25 @@ pub struct SessionDetail {
     /// Independently pinned from the authorized retained offer, never usage input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_binding: Option<aq_lifecycle_api::Binding>,
+    /// Absent when the attempt has no summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_with: Option<RanWith>,
+}
+/// What an attempt ran with (spec 0014 §7.1), as every read shows it: the
+/// serialized form of `aq_role_settings::attempts::RanWith`.
+/// `snapshot_digest` is null for an attempt recorded before roles and
+/// profiles.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RanWith {
+    pub role: String,
+    pub level: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning: String,
+    pub harness: String,
+    pub execution_profile: String,
+    pub snapshot_digest: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -744,6 +763,9 @@ pub struct SessionOperations {
     pub nudges: Vec<NudgeObservation>,
     pub lineage_usage: Option<LineageUsage>,
     pub instructions: Option<InstructionProvenance>,
+    /// Absent when the attempt has no summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_with: Option<RanWith>,
     pub requested_permissions: Option<Vec<PermissionScope>>,
     pub effective_permissions: Option<Vec<PermissionScope>>,
     pub terminal: Option<TerminalReplayRef>,

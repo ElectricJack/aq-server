@@ -3,7 +3,7 @@
 //! Intelligence Settings.
 use crate::{AppState, authz::RequireOwner, dashboard_api::errors::ApiError, error::AppError};
 use aq_profiles::roles::Snapshot;
-use aq_role_settings::{Error, http, tasks};
+use aq_role_settings::{Error, http, refusals, tasks};
 use axum::{
     Json, Router,
     extract::{OriginalUri, State},
@@ -140,39 +140,21 @@ pub(crate) async fn within_filer(
         return Ok(Ok(()));
     }
     let pool = &state.store.pool;
-    let mut conn = pool.acquire().await.map_err(crate::error::db)?;
-    let ran_with = aq_role_settings::attempts::ran_with(&mut conn, attempt).await;
-    drop(conn);
-    let Some(ran_with) = ran_with.map_err(error)? else {
+    let Some(filer) = tasks::filer_role(pool, attempt).await.map_err(error)? else {
         return Ok(Ok(()));
     };
-    // An attempt recorded before roles names no snapshot: not restricted.
-    let Some(digest) = &ran_with.snapshot_digest else {
-        return Ok(Ok(()));
-    };
-    let own = aq_role_settings::snapshot(pool, digest).await;
-    let (own, active) = (own.map_err(error)?, active(pool).await?);
-    let filer = own
-        .as_ref()
-        .and_then(|snapshot| snapshot.role(&ran_with.role));
     let role = match named {
         Some(role) => role.to_owned(),
         None => {
-            let record = crate::project_bindings::current(state, project).await?;
-            record.binding.default_role
+            crate::project_bindings::current(state, project)
+                .await?
+                .binding
+                .default_role
         }
     };
+    let active = active(pool).await?;
     let target = active.as_ref().and_then(|snapshot| snapshot.role(&role));
-    // A role that does not exist is refused (or held) by its own rule.
-    let (Some(filer), Some(target)) = (filer, target) else {
-        return Ok(Ok(()));
-    };
-    let lacking = tasks::operations_beyond(&filer.operations, &target.operations);
-    Ok(if lacking.is_empty() {
-        Ok(())
-    } else {
-        Err(tasks::beyond_message(&filer.id, &target.id, &lacking))
-    })
+    Ok(tasks::within(&filer, target))
 }
 /// [`named`] for the action surface: 422 `unknown_role`, naming the role and
 /// listing the roles that exist.
@@ -201,19 +183,9 @@ pub(crate) fn shown(node: &Value, default_role: &str) -> Value {
 }
 /// Whether an attempt of `task` was ever granted; its role is then fixed.
 pub(crate) async fn granted(pool: &PgPool, task: Uuid) -> Result<bool, AppError> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=$1 AND NOT (COALESCE(h.state,e.state)->>'status' IN ('offered','preparing','declined','never_granted') \
-         AND COALESCE(jsonb_typeof(COALESCE(h.state,e.state)->'grant'),'null')='null'))",
-    )
-    .bind(task)
-    .fetch_one(pool)
-    .await
-    .map_err(crate::error::db)
+    tasks::granted(pool, task).await.map_err(crate::error::db)
 }
-/// The ready tasks that get no offer, with the hold code: the effective
-/// role is disabled or missing, or the level the task would run on (the class
-/// it was routed to, else the project's default) has no document.
+/// [`tasks::held`] against the active snapshot.
 pub(crate) async fn held(
     state: &AppState,
     binding: &crate::project_bindings::domain::ProjectBinding,
@@ -223,20 +195,8 @@ pub(crate) async fn held(
         return Ok(Default::default());
     }
     let snapshot = active(&state.store.pool).await?;
-    let snapshot = snapshot.as_ref();
-    Ok(nodes
-        .filter_map(|(task, node, class)| {
-            let role = tasks::effective_role(&node["metadata"], &binding.default_role);
-            let role = tasks::role_hold(snapshot, &role.id).map(|hold| hold.code);
-            let level = || {
-                let default = &binding.default_intelligence;
-                let hold = tasks::level_hold(snapshot, class.as_deref(), default)?;
-                tracing::info!(%task, level = %hold.level, "{}", hold.message());
-                Some(tasks::LevelHold::CODE)
-            };
-            role.or_else(level).map(|code| (task, code))
-        })
-        .collect())
+    let (role, level) = (&binding.default_role, &binding.default_intelligence);
+    Ok(tasks::held(snapshot.as_ref(), role, level, nodes))
 }
 /// The level hold of a task as the work read lists it.
 pub(crate) async fn level_hold(
@@ -248,12 +208,36 @@ pub(crate) async fn level_hold(
     if !tables(state) {
         return Ok(None);
     }
-    let class = match aq_routing::CompactRoute::from_metadata(&node["metadata"]) {
-        Ok(Some(route)) => Some(route.c.to_string()),
-        _ => None,
-    };
+    let route = aq_routing::CompactRoute::from_metadata(&node["metadata"]);
+    let class = route.ok().flatten().map(|route| route.c.to_string());
     let snapshot = active(pool).await?;
     let default = &binding.default_intelligence;
     let hold = tasks::level_hold(snapshot.as_ref(), class.as_deref(), default);
     Ok(hold.map(|hold| hold.shown()))
+}
+
+/// Records why `task` gets no offer (spec 0014 §6.1) and returns the refusal
+/// the offer path skips the task on.
+pub(crate) async fn offer_refused(
+    state: &AppState,
+    task: Uuid,
+    project: Uuid,
+    refusal: &refusals::OfferRefusal,
+) -> AppError {
+    if tables(state) {
+        let now = (state.clock)().timestamp_millis();
+        refusals::record(&state.store.pool, task, project, refusal, now).await;
+    }
+    AppError::Conflict(refusal.refusal())
+}
+/// What `attempt` ran with (spec 0014 §7.1), as the dashboard reads show it.
+pub(crate) async fn ran_with(
+    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    attempt: Uuid,
+) -> Result<Option<aq_dashboard_contract::RanWith>, sqlx::Error> {
+    match tables(state) {
+        true => aq_role_settings::attempts::ran_with_as(conn, attempt).await,
+        false => Ok(None),
+    }
 }

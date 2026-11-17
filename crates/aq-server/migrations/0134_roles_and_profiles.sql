@@ -56,8 +56,14 @@ CREATE TABLE role_settings_operations (
     created_at_ms BIGINT NOT NULL
 );
 CREATE INDEX role_settings_operations_recent ON role_settings_operations(revision);
--- The snapshot a kept attempt launched with. A pinned snapshot is not rolled
--- off; the pin goes when the attempt's record does.
+-- The snapshot a live attempt launched with. A pinned snapshot is not rolled
+-- off. An attempt is live while it holds its task (`holds_task`): the pin is
+-- written with the attempt, and aq_role_settings releases the pins of
+-- attempts that no longer hold their task (settled, cancelled, abandoned,
+-- lost and released, never granted, or removed) whenever an attempt is
+-- created and whenever a snapshot is activated, before it rolls. The attempt
+-- tables' triggers are sealed by earlier formats, so this is not a trigger.
+-- The summary below is what remains afterwards.
 CREATE TABLE role_snapshot_pins (
     attempt_id UUID PRIMARY KEY,
     digest TEXT NOT NULL REFERENCES role_snapshots(digest)
@@ -74,6 +80,18 @@ CREATE TABLE attempt_ran_with (
     attempt_id UUID PRIMARY KEY,
     ran_with JSONB NOT NULL CHECK(jsonb_typeof(ran_with) = 'object')
 );
+-- Why the last offer of a task was refused before any attempt existed
+-- (spec 0014 §6.1): a startup text over its byte limit, or an environment
+-- with no platform text. One row per task; the work read shows it as a
+-- readiness reason. The row goes when a later offer of the task composes, and
+-- the table is a rolling set (aq_role_settings::refusals keeps the newest).
+CREATE TABLE task_offer_refusals (
+    task_id UUID PRIMARY KEY,
+    project_id UUID NOT NULL,
+    refusal JSONB NOT NULL CHECK(jsonb_typeof(refusal) = 'object'),
+    recorded_at_ms BIGINT NOT NULL
+);
+CREATE INDEX task_offer_refusals_recent ON task_offer_refusals(recorded_at_ms);
 -- == The profile catalog is removed ==
 -- Everything above only creates the role tables. Everything below removes
 -- the old way (spec 0014 §9, §10) and is not reversible: the old catalog

@@ -232,6 +232,70 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     assert!(pins(&c, attempt).await.is_empty());
 }
 
+/// Spec 0014 §6.1: a task whose startup text is over the execution profile's
+/// byte limit gets no offer, and its work read says so with both numbers and
+/// the limit that was exceeded. Raising the limit lets the next poll offer
+/// it, and the recorded reason is removed.
+#[tokio::test]
+async fn a_startup_over_its_limit_is_a_readiness_reason_until_an_offer_composes() {
+    let mut c = setup().await;
+    let (pool, task) = (c.env.env.pool.clone(), c.env.lineage.task_id);
+    roles::save(
+        &pool,
+        c.env.actor,
+        Kind::Execution,
+        "sandbox",
+        &roles::execution(64),
+    )
+    .await;
+    let (status, page) = poll(&c).await;
+    assert_eq!(status, 200, "{page}");
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0, "{page}");
+    // Schema-checked by the work helper.
+    let work = super::holds::full_work(&c, task).await;
+    assert_eq!(work["readiness"]["state"], "held", "{work}");
+    let reason = &work["readiness"]["reasons"][0];
+    assert_eq!(reason["code"], "startup_over_limit", "{work}");
+    assert_eq!(reason["limit"], 64);
+    assert_eq!(reason["profile_limit"], 64);
+    assert_eq!(reason["limiting"], "startup_context_bytes");
+    assert_eq!(reason["execution_profile"], "sandbox");
+    let bytes = reason["bytes"].as_u64().unwrap();
+    assert!(bytes > 64, "{reason}");
+    let message = reason["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("{bytes} bytes"))
+            && message.contains("limit of 64 bytes")
+            && message.contains("startup_context_bytes of execution profile `sandbox`"),
+        "{message}"
+    );
+
+    roles::save(
+        &pool,
+        c.env.actor,
+        Kind::Execution,
+        "sandbox",
+        &roles::execution(8192),
+    )
+    .await;
+    c.request.operation_id = Uuid::new_v4();
+    offered(&c).await;
+    let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM task_offer_refusals")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(recorded, 0);
+    let work = super::holds::full_work(&c, task).await;
+    let codes: Vec<&str> = (work["readiness"]["reasons"].as_array().unwrap().iter())
+        .filter_map(|reason| reason["code"].as_str())
+        .collect();
+    assert!(!codes.contains(&"startup_over_limit"), "{work}");
+}
+
 /// An attempt recorded before roles and profiles (spec 0014 §10): its stored
 /// selection has the old catalog's shape and its summary names no snapshot.
 /// The task's work read still answers and shows what it ran with.

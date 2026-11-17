@@ -1122,6 +1122,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanLevelHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanOfferRefusalReason"
                     }
                   ]
                 }
@@ -1261,6 +1264,9 @@
                 "status": {
                   "type": "string",
                   "maxLength": 64
+                },
+                "ran_with": {
+                  "$ref": "#/components/schemas/HumanRanWith"
                 }
               },
               "required": [
@@ -1859,6 +1865,38 @@
           "message"
         ],
         "additionalProperties": false
+      },
+      "HumanOfferRefusalReason": {
+        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. Recorded by the offer path and removed when a later offer of the task composes.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["startup_over_limit"] },
+              "bytes": { "type": "integer", "minimum": 0 },
+              "limit": { "type": "integer", "minimum": 0 },
+              "execution_profile": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "profile_limit": { "type": "integer", "minimum": 0 },
+              "project_ceiling": { "type": "integer", "minimum": 0 },
+              "limiting": { "enum": ["startup_context_bytes", "project_context_bytes"] },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "bytes", "limit", "execution_profile", "profile_limit", "project_ceiling", "limiting", "message", "recorded_at_ms"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["platform_text_missing"] },
+              "environment": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "environment", "message", "recorded_at_ms"],
+            "additionalProperties": false
+          }
+        ]
       }
     }
   }

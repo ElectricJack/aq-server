@@ -108,6 +108,57 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
 }
+/// Spec 0014 §7.1: the session detail and the session operations read show
+/// what the attempt ran with, in the one shape every read uses; an attempt
+/// without a summary shows no key.
+#[tokio::test]
+async fn session_reads_show_what_the_attempt_ran_with() {
+    let f = fixture().await;
+    insert(&f).await;
+    let app = aq_server::build_admin_router(f.state.clone());
+    let attempt = f.profiled.offer.binding.attempt_id;
+    let pool = f.db.pool().await;
+    let session: Uuid =
+        sqlx::query_scalar("SELECT session_id FROM execution_attempts WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let paths = [
+        format!("/api/v1/sessions/{session}"),
+        format!("/api/v1/sessions/{session}/operations"),
+    ];
+    for path in &paths {
+        let (status, body) = read(&app, path, "owner@localhost").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["data"].get("ran_with").is_none(), "{body}");
+    }
+    // Recorded before roles and profiles: no snapshot, so no pin either.
+    let summary = aq_role_settings::attempts::RanWith {
+        role: "developer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: None,
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, attempt, &summary)
+        .await
+        .unwrap();
+    drop(conn);
+    for path in &paths {
+        let (status, body) = read(&app, path, "owner@localhost").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"]["ran_with"],
+            serde_json::to_value(&summary).unwrap(),
+            "{path}"
+        );
+    }
+}
 #[tokio::test]
 async fn viewer_requires_current_exact_acl_and_never_gets_project_catalog() {
     let f = fixture().await;

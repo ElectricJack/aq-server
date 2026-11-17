@@ -914,6 +914,7 @@ pub(super) async fn session(
         .into(),
         last_output_at: last_activity.clone(),
     };
+    let ran_with = crate::role_settings::ran_with(state, &mut tx, attempt).await?;
     tx.commit().await?;
     Ok(SessionDetail {
         summary,
@@ -921,6 +922,7 @@ pub(super) async fn session(
         permissions,
         last_activity_at: last_activity,
         observation_binding,
+        ran_with,
     })
 }
 pub(super) async fn detail(

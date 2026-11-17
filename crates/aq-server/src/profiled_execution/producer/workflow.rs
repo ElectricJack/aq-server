@@ -667,15 +667,20 @@ async fn offers(
             )
         };
         let compiled = match on_heap(compile).await {
-            // Spec 0014 §6.1: a startup text over its byte limit is refused,
-            // with the two numbers; the poll goes on with the next task.
-            Err(AppError::Conflict(reason)) if reason.starts_with(compose::OVER_LIMIT) => {
+            // Spec 0014 §6.1: a startup text over its byte limit, or an environment
+            // without platform text, is refused and recorded for the task's work
+            // read; the poll goes on with the next task.
+            Err(AppError::Conflict(reason)) if aq_role_settings::refusals::is_refusal(&reason) => {
                 tracing::warn!(task_id = %task.task_id, %reason, "task not offered");
                 skipped.insert(task.task_id);
                 continue;
             }
             compiled => compiled?,
         };
+        // An earlier refusal of this task's offer no longer describes it.
+        if crate::role_settings::tables(state) {
+            aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
+        }
         super::observation::ReadProvenance::capture(
             &task,
             &ready,

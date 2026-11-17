@@ -522,8 +522,16 @@ async fn snapshots_and_receipts_roll_and_a_pinned_snapshot_stays_until_unpinned(
         .unwrap();
     assert_eq!(receipts, 2);
 
-    // An attempt that launched with digests[1] keeps it through later saves.
-    let attempt = Uuid::new_v4();
+    // A live attempt that launched with digests[1] keeps it through later saves.
+    let (attempt, node) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'pins','pins-hash','0.1.0',1,now())")
+        .bind(node)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,TRUE,'{}')")
+        .bind(attempt).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4())
+        .execute(&f.pool).await.unwrap();
     let mut conn = f.pool.acquire().await.unwrap();
     settings::pin(&mut conn, &digests[1], attempt)
         .await
@@ -594,6 +602,112 @@ async fn snapshots_and_receipts_roll_and_a_pinned_snapshot_stays_until_unpinned(
         .await
         .unwrap();
     assert_eq!(receipts, 0);
+}
+
+/// Spec 0014 §7.1: pins are for live attempts. Many saves, each with an
+/// attempt that launched from it and then finished, leave the active
+/// snapshot and at most `snapshots_kept` others; a live attempt's snapshot
+/// survives the same saves, and goes when its attempt releases its task.
+#[tokio::test]
+async fn finished_attempts_release_their_snapshots_and_a_live_one_keeps_its_own() {
+    let f = started().await;
+    let kept = 2;
+    f.limits(kept, 50).await;
+    let node = Uuid::new_v4();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'pins','pins-hash','0.1.0',1,now())")
+        .bind(node)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    // An attempt that holds its task, pinned to the active snapshot.
+    let launch = |digest: String| {
+        let pool = f.pool.clone();
+        async move {
+            let attempt = Uuid::new_v4();
+            sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,TRUE,'{}')")
+                .bind(attempt).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4())
+                .execute(&pool).await.unwrap();
+            let mut conn = pool.acquire().await.unwrap();
+            settings::pin(&mut conn, &digest, attempt).await.unwrap();
+            attempt
+        }
+    };
+    let finish = |attempt: Uuid| {
+        let pool = f.pool.clone();
+        async move {
+            sqlx::query("UPDATE execution_attempts SET holds_task=FALSE WHERE attempt_id=$1")
+                .bind(attempt)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+    let pins = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM role_snapshot_pins")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    };
+    let (_, first) = f.active().await;
+    let live = launch(first.clone()).await;
+    for n in 0..12 {
+        let saved = f
+            .save(Kind::Role, "developer", &developer(&format!("Rule {n}.")))
+            .await
+            .unwrap();
+        // The save released the pin of the attempt that finished before it.
+        assert_eq!(pins().await, 1, "a finished attempt pins nothing");
+        let attempt = launch(saved.digest).await;
+        assert_eq!(pins().await, 2);
+        finish(attempt).await;
+        // The active one, the live attempt's, and at most `kept` others.
+        let stored = f.stored_digests().await;
+        assert!(stored.len() <= kept as usize + 2, "{stored:?}");
+        assert!(stored.contains(&first), "the live attempt's snapshot stays");
+    }
+    // The live attempt ends: its snapshot is no longer kept by a pin, and the
+    // next save leaves the active snapshot and `kept` others.
+    finish(live).await;
+    f.save(Kind::Role, "developer", &developer("Last rule."))
+        .await
+        .unwrap();
+    assert_eq!(pins().await, 0);
+    let stored = f.stored_digests().await;
+    assert_eq!(stored.len(), kept as usize + 1, "{stored:?}");
+    assert!(!stored.contains(&first));
+    // An attempt whose record is gone pins nothing either, and the next
+    // attempt's creation is enough to release it: no save is needed.
+    let (_, active) = f.active().await;
+    let removed = launch(active.clone()).await;
+    sqlx::query("DELETE FROM execution_attempts WHERE attempt_id=$1")
+        .bind(removed)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let next = Uuid::new_v4();
+    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,TRUE,'{}')")
+        .bind(next).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4())
+        .execute(&f.pool).await.unwrap();
+    let summary = aq_role_settings::attempts::RanWith {
+        role: "developer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: Some(active),
+    };
+    let mut conn = f.pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, next, &summary)
+        .await
+        .unwrap();
+    drop(conn);
+    let pinned: Vec<Uuid> = sqlx::query_scalar("SELECT attempt_id FROM role_snapshot_pins")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(pinned, [next]);
 }
 
 #[tokio::test]

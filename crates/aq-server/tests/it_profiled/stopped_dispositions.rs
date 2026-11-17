@@ -74,9 +74,13 @@ async fn owner_disposes_stopped_unsettled_attempt_and_preserves_unresolved_evide
     let mut config = (*f.state.config).clone();
     config.profiled_execution = None;
     f.state.config = std::sync::Arc::new(config);
+    let pins = f.db.pool().await;
+    common::roles::pin_active(&pins, attempt).await;
     let (status, receipt) = call(&f, attempt, "POST", json!(request), "owner@localhost").await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["disposition"], "abandoned");
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pins, attempt).await);
     assert_eq!(receipt["actor_id"], json!(f.actor));
     assert_eq!(receipt["task_id"], json!(f.selection.lineage.task_id));
     assert_eq!(

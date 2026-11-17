@@ -85,12 +85,46 @@ async fn stored(pool: &sqlx::PgPool) -> bool {
 /// store can be upgraded by its registered migrations.
 pub async fn remove_from_historical_store(pool: &sqlx::PgPool) {
     sqlx::raw_sql(
-        "DROP TABLE attempt_ran_with,role_snapshot_pins,role_settings_operations,\
-         role_default_installs,role_settings,role_documents,role_snapshots",
+        "DROP TABLE task_offer_refusals,attempt_ran_with,role_snapshot_pins,\
+         role_settings_operations,role_default_installs,role_settings,role_documents,\
+         role_snapshots",
     )
     .execute(pool)
     .await
     .unwrap();
+}
+/// Pin the active snapshot for `attempt`, as creating the attempt from an
+/// offer does (spec 0014 §7.1). The store gets its defaults if it has none.
+pub async fn pin_active(pool: &sqlx::PgPool, attempt: Uuid) {
+    assert!(stored(pool).await, "this fixture store has no role tables");
+    if aq_role_settings::active_snapshot(pool)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        aq_role_settings::startup(pool, 0).await.unwrap();
+    }
+    let digest = active(pool).await.digest().to_string();
+    let mut conn = pool.acquire().await.unwrap();
+    aq_role_settings::pin(&mut conn, &digest, attempt)
+        .await
+        .unwrap();
+    assert!(pinned(pool, attempt).await);
+}
+/// Whether `attempt` still pins a snapshot once the pins of attempts that
+/// no longer hold their task are released, as the next attempt's creation
+/// and the next snapshot activation do.
+pub async fn pinned(pool: &sqlx::PgPool, attempt: Uuid) -> bool {
+    let mut conn = pool.acquire().await.unwrap();
+    aq_role_settings::release_finished_pins(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM role_snapshot_pins WHERE attempt_id=$1)")
+        .bind(attempt)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 pub async fn active(pool: &sqlx::PgPool) -> Snapshot {
     aq_role_settings::active_snapshot(pool)

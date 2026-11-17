@@ -225,6 +225,7 @@ pub(in crate::dashboard_api) async fn operations(
     if now < access.checked_at_ms || now >= access.valid_until_ms {
         return Err(Error::AuthorizationChanged);
     }
+    let ran_with = crate::role_settings::ran_with(state, &mut tx, attempt).await?;
     tx.commit().await?;
 
     // H2 lineage ledger (read-only: no soft ceiling, so no writes).
@@ -312,6 +313,7 @@ pub(in crate::dashboard_api) async fn operations(
         nudges,
         lineage_usage,
         instructions,
+        ran_with,
         requested_permissions,
         effective_permissions,
         terminal,
