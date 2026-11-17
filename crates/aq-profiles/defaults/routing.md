@@ -68,6 +68,11 @@ Medium and high risk work is at least Standard, high effort. Very high risk
 work is at least Complex, high effort, unless it is narrow and covered by a
 test, in which case Standard, high effort is enough.
 
+A risk minimum wins over the limits by kind of work. Those limits cap what
+was asked for and what the kind alone would give; they never pull a task
+below its risk minimum. So a very high risk sync that is not narrow and
+covered by a test gets Complex, high effort.
+
 Never raise the level because providers are busy, and never use a task's
 priority to choose anything. Priority only orders the queue.
 
