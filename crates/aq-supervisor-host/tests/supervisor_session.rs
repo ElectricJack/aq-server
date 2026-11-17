@@ -246,25 +246,7 @@ async fn installed_supervisor_capacity_is_atomic_and_replay_survives_limit_drop(
     use aq_supervisor_host::config::{Config, InstalledAuthority};
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
-    let mut case = Case::new().await;
-    let user = case
-        ._db
-        .store()
-        .await
-        .bootstrap_owner(
-            "capacity@localhost",
-            "dev",
-            "capacity@localhost",
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    let catalog = json!({"catalog":{"intelligence":[{"id":"engineering","version":4,"candidates":[{"provider":"openai","model":"test-model","harnesses":["codex"],"reasoning_configuration_reference":"high@1"}]}]}});
-    let digest = Digest::of(b"supervisor-capacity-catalog");
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)")
-        .bind(digest.as_str()).bind(serde_json::to_vec(&catalog).unwrap()).bind(user.id).execute(&case.pool).await.unwrap();
-    case.central.profiles.catalog.digest = digest.clone();
+    let case = Case::new().await;
     let config = Config {
         database_url: "postgres://unused/test".into(),
         root: case.root.path().into(),
@@ -289,7 +271,7 @@ async fn installed_supervisor_capacity_is_atomic_and_replay_survives_limit_drop(
         resource_admission: pin("admission"),
         subscription: None,
         swarm_profile: Some(
-            json!({"profile_id":"engineering","profile_version":4,"provider":"openai","model":"test-model","harness":"codex","reasoning_configuration_reference":"high@1"}),
+            json!({"profile_id":"engineering","candidate_id":"openai:test-model:high","provider":"openai","model":"test-model","reasoning":"high","harness":"codex","snapshot_digest":Digest::of(b"supervisor-capacity-snapshot")}),
         ),
     };
     let bytes = serde_json::to_vec(&config).unwrap();

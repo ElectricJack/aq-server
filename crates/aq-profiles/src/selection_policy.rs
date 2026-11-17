@@ -19,7 +19,7 @@ pub enum UnknownCostPolicy {
     Deny,
     AllowBounded,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct IntelligenceBudgetPolicy {
     pub max_cost_microunits: Option<u64>,
@@ -28,7 +28,7 @@ pub struct IntelligenceBudgetPolicy {
     pub require_hard_cost_enforcement: bool,
     pub unknown_cost: UnknownCostPolicy,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SelectionPolicy {
     pub schema_version: u32,

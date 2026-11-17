@@ -9,22 +9,16 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct Service {
     pool: PgPool,
     owner: Auth,
-    choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
 }
 impl Service {
-    pub fn new(pool: PgPool, owner: Auth, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
-        Self {
-            pool,
-            owner,
-            choices: Arc::new(choices),
-        }
+    pub fn new(pool: PgPool, owner: Auth) -> Self {
+        Self { pool, owner }
     }
     pub fn routes<S: Clone + Send + Sync + 'static>(&self) -> Router<S> {
         Router::new()
@@ -50,11 +44,19 @@ fn conflict(message: &'static str) -> Error {
 fn missing() -> Error {
     Error(StatusCode::NOT_FOUND, "Supervisor not found")
 }
+/// What a control stores of a choice: the level and the candidate, and no
+/// snapshot. It is resolved against the active snapshot when read or started.
+fn stored(mut choice: Value) -> Value {
+    if let Some(fields) = choice.as_object_mut() {
+        fields.remove("snapshot_digest");
+    }
+    choice
+}
 async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value>> {
     (s.owner)(headers).await?;
     let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',c.conversation_id,'actor_id',c.actor_id,'project_id',i.project_id,'label',COALESCE(p.label,'Global supervisor'),'enabled',c.enabled,'revision',c.revision,'profile',c.profile,'phase',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'unavailable' WHEN NOT c.enabled AND r.phase NOT IN ('working','stopping','uncertain') THEN 'stopped' ELSE r.phase END,'stage',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'Supervisor service is unavailable' ELSE r.stage END,'observed_at_ms',r.observed_at_ms,'generation',r.generation,'session_id',r.session_id,'last_error',r.last_error) FROM supervisor_controls c JOIN supervisor_conversation_ids i USING(conversation_id) LEFT JOIN project_supervisor_conversations p USING(conversation_id) LEFT JOIN supervisor_service_reports r USING(conversation_id) ORDER BY i.project_id IS NOT NULL,p.label,c.conversation_id")
         .bind(chrono::Utc::now().timestamp_millis()-15000).fetch_all(&s.pool).await?;
-    let profiles = aq_manual_sessions::intelligence::choices(&s.pool, &s.choices)
+    let profiles = aq_manual_sessions::intelligence::choices(&s.pool)
         .await?
         .into_iter()
         .filter(|p| {
@@ -62,6 +64,20 @@ async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value
                 && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
         })
         .collect::<Vec<_>>();
+    // A stored choice is resolved against the active snapshot on every read:
+    // a supervisor whose level is gone, or no longer lists its candidate,
+    // keeps its control and says why it is not running.
+    let mut rows = rows;
+    for row in &mut rows {
+        if row["profile"].is_null() {
+            continue;
+        }
+        let resolved =
+            aq_manual_sessions::intelligence::resolve_stored(&s.pool, &row["profile"]).await?;
+        if let Err(reason) = resolved {
+            row["unavailable_reason"] = json!(reason);
+        }
+    }
     Ok(Json(
         json!({"supervisors":rows,"profiles":profiles,"server_time_ms":chrono::Utc::now().timestamp_millis()}),
     ))
@@ -121,16 +137,16 @@ async fn control(
         ));
     }
     let profile = if let Some(selected) = &v.intelligence_profile {
-        aq_manual_sessions::intelligence::choices(&s.pool, &s.choices)
+        aq_manual_sessions::intelligence::choices(&s.pool)
             .await?
             .into_iter()
             .find(|p| {
                 p["harness"] == "codex"
                     && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
                     && p["profile_id"] == selected.profile_id
-                    && p["profile_version"] == selected.profile_version
                     && p["candidate_id"] == selected.candidate_id
             })
+            .map(stored)
             .ok_or_else(|| {
                 conflict("Intelligence profile changed or is unavailable; select it again")
             })?

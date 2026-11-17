@@ -53,7 +53,6 @@ pub async fn setup_fixture(
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),

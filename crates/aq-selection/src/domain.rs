@@ -1,4 +1,3 @@
-use aq_profiles::FrozenComposition;
 use aq_session_protocol::{ArtifactRef, Capability, Digest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,25 +33,17 @@ pub struct ResourceCeilings {
 pub struct ProjectSnapshot {
     pub lineage: TaskLineage,
     pub revision: u64,
-    pub catalog_revision: u64,
-    pub catalog_digest: Digest,
+    /// The digest of the role snapshot the launch was resolved from.
+    pub role_snapshot_digest: Digest,
     pub admission_snapshot_digest: Digest,
     pub expires_at_ms: u64,
     pub target: ExecutionTarget,
     pub ceilings: ResourceCeilings,
     pub permission_ceiling: Vec<aq_session_protocol::Scope>,
     pub allowed_environments: Vec<String>,
-    pub agent_profile: String,
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
-}
-#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NativeModelSupport {
-    pub provider: String,
-    pub model: String,
-    pub reasoning_configuration_reference: String,
-    pub native_reasoning: String,
 }
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,7 +65,6 @@ pub struct InstalledHarness {
     pub environment: ArtifactRef,
     pub qualification: ArtifactRef,
     pub failure_classifier: Option<ArtifactRef>,
-    pub models: Vec<NativeModelSupport>,
     pub capabilities: Vec<Capability>,
     pub limits: NativeLimits,
 }
@@ -103,6 +93,38 @@ pub struct CapabilitySnapshot {
     pub credential_bindings: Vec<CredentialBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_delivery: Option<DeliveryCapability>,
+}
+impl CapabilitySnapshot {
+    /// What a selection was resolved against: the target (node and boot), the
+    /// installed harnesses, their limits, the credential bindings and delivery.
+    /// The revision and the validity windows change on every republish and are
+    /// left out, so a later report of the same boot with the same installation
+    /// is the same content.
+    pub fn content(&self) -> Self {
+        let mut content = self.clone();
+        (
+            content.revision,
+            content.observed_at_ms,
+            content.expires_at_ms,
+        ) = (0, 0, 0);
+        for binding in &mut content.credential_bindings {
+            (binding.observed_at_ms, binding.expires_at_ms) = (0, 0);
+            if let Some(preparation) = &mut binding.preparation {
+                (preparation.observed_at_ms, preparation.expires_at_ms) = (0, 0);
+            }
+        }
+        content
+    }
+    /// Whether `current`, the node's stored report, still carries what this
+    /// snapshot was resolved against: never an older report, never another
+    /// boot, never a changed installation.
+    pub fn carried_by(&self, current: &Self) -> bool {
+        current.revision >= self.revision
+            && matches!(
+                (crate::digest(&self.content()), crate::digest(&current.content())),
+                (Ok(mine), Ok(theirs)) if mine == theirs
+            )
+    }
 }
 /// Operator authority to provision a specific profile/account/endpoint. Presence
 /// is separate from the node's installed binding and provider availability.
@@ -226,11 +248,18 @@ pub struct CandidateEstimate {
     pub currency: String,
     pub rate_card: ArtifactRef,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One startup text an offer could launch with: the role, level and execution
+/// profile of the project snapshot, rendered for one installed harness. The
+/// digest is the server's, over the rendered text and the permissions.
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct PreparedComposition {
+pub struct PreparedLaunch {
     pub digest: Digest,
-    pub composition: FrozenComposition,
+    pub harness: String,
+    pub environment: String,
+    pub startup_bytes: u64,
+    /// The execution profile's startup byte limit after the project ceiling.
+    pub startup_limit_bytes: u64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -243,23 +272,16 @@ pub struct SelectionInputs {
     pub budget: BudgetSnapshot,
     pub replacement: Option<ReplacementEvidence>,
     pub estimates: Vec<CandidateEstimate>,
-    pub compositions: Vec<PreparedComposition>,
     pub now_ms: u64,
     /// Sandbox placement facts (C4); absent for host-native workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<crate::Placement>,
-    /// A routed task's class profile, used in place of the automatic router (spec 0011 §4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
     /// A routed task's harness and provider limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteLimits>,
-}
-impl SelectionInputs {
-    /// The intelligence profile this selection uses.
-    pub fn intelligence_key(&self) -> &str {
-        (self.intelligence_override.as_deref()).unwrap_or(&self.project.intelligence_profile)
-    }
+    /// The startup texts of the launch, one per harness and environment
+    /// (spec 0014).
+    pub launches: Vec<PreparedLaunch>,
 }
 #[derive(JsonSchema, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -293,7 +315,6 @@ pub struct ConcreteChoice {
     pub provider: String,
     pub model: String,
     pub native_reasoning: String,
-    pub reasoning_configuration_reference: String,
     pub harness: String,
     pub cli_version: String,
     pub adapter: ArtifactRef,
@@ -305,7 +326,8 @@ pub struct ConcreteChoice {
     pub credential_delivery: Option<CredentialDelivery>,
     pub account_reference: String,
     pub endpoint_reference: String,
-    pub composition_digest: Digest,
+    /// The digest of the prepared launch this choice runs.
+    pub launch_digest: Digest,
     pub resources: ResourceCeilings,
     pub max_output_tokens: u64,
     pub estimate: Option<CandidateEstimate>,
@@ -319,10 +341,10 @@ pub struct ResolvedSelection {
     pub lineage: TaskLineage,
     pub target: ExecutionTarget,
     pub choice: ConcreteChoice,
+    /// The digest of the selection inputs.
     pub snapshot_digest: Digest,
-    pub catalog_digest: Digest,
+    pub role_snapshot_digest: Digest,
     pub project_revision: u64,
-    pub catalog_revision: u64,
     pub node_revision: u64,
     pub registry_revision: u64,
     pub credential_revision: u64,
@@ -378,4 +400,45 @@ pub enum CredentialDelivery {
         adapter: ArtifactRef,
         version: u32,
     },
+}
+
+/// Whether a stored selection was recorded before roles and profiles (spec
+/// 0014): it names the old catalog and not a role snapshot. Such a row is
+/// attempt history; no type here reads its shape.
+pub fn recorded_before_roles(selection: &serde_json::Value) -> bool {
+    selection.get("catalog_digest").is_some() && selection.get("role_snapshot_digest").is_none()
+}
+impl ResolvedSelection {
+    /// Whether this selection disagrees with the launch manifest its attempt
+    /// was offered, on the node `target`.
+    pub fn differs_from(
+        &self,
+        manifest: &aq_session_protocol::LaunchManifest,
+        target: &ExecutionTarget,
+    ) -> bool {
+        let choice = &self.choice;
+        self.role_snapshot_digest != manifest.catalog.digest
+            || self.project_revision != manifest.bindings.project_revision
+            || self.lineage.task_id != manifest.bindings.task_id
+            || self.lineage.workspace_id != manifest.bindings.graph_id
+            || self.lineage.project_id != manifest.bindings.project_id
+            || self.target != *target
+            || choice.provider != manifest.model.provider.as_str()
+            || choice.model != manifest.model.model.as_str()
+            || choice.native_reasoning != manifest.model.reasoning.as_str()
+            || choice.max_output_tokens != manifest.model.max_output_tokens
+            || choice.harness != manifest.harness.harness.as_str()
+            || choice.cli_version != manifest.harness.cli_version.as_str()
+            || choice.adapter != manifest.harness.adapter
+            || choice.environment != manifest.harness.environment
+            || choice.resources.memory_bytes != manifest.resources.memory_bytes
+            || choice.resources.cpu_millis != manifest.resources.cpu_millis
+            || choice.resources.process_limit != manifest.resources.process_limit
+            || choice.resources.wall_time_ms != manifest.resources.wall_time_ms
+            || manifest.credentials.is_empty()
+            || manifest
+                .credentials
+                .iter()
+                .any(|c| c.credential_profile != choice.credential_profile)
+    }
 }

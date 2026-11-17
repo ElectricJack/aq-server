@@ -94,10 +94,16 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         .unwrap();
     let mut stop_capable: registration::NativeRegistration =
         serde_json::from_value(native.clone()).unwrap();
-    stop_capable
+    if !stop_capable
         .request
         .features
-        .push(Feature::HostStopEvidenceV1);
+        .contains(&Feature::HostStopEvidenceV1)
+    {
+        stop_capable
+            .request
+            .features
+            .push(Feature::HostStopEvidenceV1);
+    }
     stop_capable.semantic_digest = registration::semantic_digest(&stop_capable.request).unwrap();
     let registered = |value: Value| async move {
         let mut tx = pool.begin().await.unwrap();

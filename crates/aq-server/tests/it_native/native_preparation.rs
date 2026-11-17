@@ -527,15 +527,13 @@ async fn swarm_native_offer_reserves_class_and_lowering_limit_preserves_preparat
             .await
             .unwrap();
     let mut conn = pool.acquire().await.unwrap();
-    let cell = admission::resolve(
-        &mut conn,
-        decision["inputs"]["project"]["catalog_digest"].as_str(),
-        decision["inputs"]["project"]["intelligence_profile"].as_str(),
-        &decision["outcome"]["resolved"]["choice"],
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    // A launch from a role snapshot: the level's id is the intelligence class
+    // and the selected choice names the provider.
+    let text = |v: &serde_json::Value| v.as_str().unwrap().to_owned();
+    let cell = admission::Cell {
+        provider: text(&decision["outcome"]["resolved"]["choice"]["provider"]),
+        intelligence_class: text(&decision["inputs"]["project"]["intelligence_profile"]),
+    };
     sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton").bind(serde_json::json!([{"provider":cell.provider,"intelligence_class":cell.intelligence_class,"limit":1}])).execute(&mut *conn).await.unwrap();
     // The committed offer consumes the one slot before any process starts.
     let mut tx = pool.begin().await.unwrap();
@@ -554,9 +552,23 @@ async fn swarm_native_offer_reserves_class_and_lowering_limit_preserves_preparat
     preparation::accept(&c.f.state, &auth, &c.request, Uuid::new_v4())
         .await
         .unwrap();
+}
+
+/// The Swarm page's agent pill names the level the attempt was admitted on.
+/// `aq_swarm::routing::apply` still reads the label from the old catalog's
+/// artifact, which a launch from a role snapshot does not have.
+#[tokio::test]
+async fn swarm_pill_names_the_level_of_a_role_snapshot_launch() {
+    let c = setup().await;
+    let pool = c.f.db.pool().await;
+    let level: String = sqlx::query_scalar(
+        "SELECT decision#>>'{inputs,project,intelligence_profile}' FROM intelligence_decisions WHERE decision_id=$1",
+    )
+    .bind(c.f.decision)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let mut conn = pool.acquire().await.unwrap();
-    // The pill's named class comes from the immutable catalog used to admit
-    // this attempt, even if the owner's active routing catalog later changes.
     let mut swarm: aq_dashboard_contract::Swarm = serde_json::from_value(
         serde_json::from_str::<serde_json::Value>(include_str!(
             "../../../../protocol/dashboard-read/v1/fixtures/swarm.json"
@@ -573,10 +585,6 @@ async fn swarm_native_offer_reserves_class_and_lowering_limit_preserves_preparat
         .next()
         .unwrap();
     agent.attempt_id = c.f.profiled.offer.binding.attempt_id;
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=NULL WHERE singleton")
-        .execute(&mut *conn)
-        .await
-        .unwrap();
     aq_swarm::routing::apply(&mut conn, &mut swarm)
         .await
         .unwrap();
@@ -590,6 +598,6 @@ async fn swarm_native_offer_reserves_class_and_lowering_limit_preserves_preparat
         .routing_profile
         .as_ref()
         .unwrap();
-    assert_eq!(routing.id, cell.intelligence_class);
+    assert_eq!(routing.id, level);
     assert!(!routing.display_name.is_empty());
 }

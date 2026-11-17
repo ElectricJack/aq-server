@@ -278,9 +278,15 @@ impl TestDb {
                 .expect("connect actual historical store");
         }
         self.clone_template(crate::STATE_FORMAT_VERSION).await;
-        Store::connect_with(self.options.clone())
+        let store = Store::connect_with(self.options.clone())
             .await
-            .expect("connect store")
+            .expect("connect store");
+        // As after server start (`role_settings::install`): the shipped roles
+        // and profiles are installed and their snapshot is active.
+        aq_role_settings::startup(&store.pool, 0)
+            .await
+            .expect("install the shipped roles and profiles");
+        store
     }
 
     /// A Store using an actual registered historical migration prefix, without

@@ -1,5 +1,6 @@
 //! Real SQL and production auth/router boundaries; no model invocation.
 use crate::common;
+use aq_profiles::roles::Kind;
 use aq_server::{build_admin_router, build_worker_router};
 use axum::{
     Router,
@@ -32,7 +33,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
     let node_path = format!("/api/worker-management/node/{node}");
-    let node_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"label":"Build worker","max_agents":3});
+    let node_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Build worker","max_agents":3});
     assert_eq!(
         call(&admin, &node_path, Some(node_change.clone()), None, false)
             .await
@@ -41,7 +42,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
     );
     let (status, receipt) = call(&admin, &node_path, Some(node_change.clone()), None, true).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
-    assert_eq!(receipt["revision"], 1);
+    assert_eq!(receipt["revision"], 2);
     assert_eq!(
         call(&admin, &node_path, Some(node_change), None, true)
             .await
@@ -113,7 +114,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
             .await
             .unwrap();
     assert_eq!(live, 2, "Lowering a limit must keep the running agents");
-    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Build worker","max_agents":3,"remove":true});
+    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"label":"Build worker","max_agents":3,"remove":true});
     let (status, receipt) = call(&admin, &node_path, Some(remove.clone()), None, true).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
     assert!(receipt["removed"].as_bool().unwrap());
@@ -191,24 +192,36 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let project = f.selection.lineage.project_id;
     let repo = f.profiled.source.repository_id;
     let node = f.node.node_id;
-    let digest = "a".repeat(64);
-    let catalog = json!({"catalog":{"intelligence":[{"id":"manual-model","name":"Standard","version":1,"candidates":[{"id":"claude","provider":"anthropic","model":"fixture-model","harnesses":["claude"],"reasoning_configuration_reference":"fixture-medium@1"},{"id":"codex","provider":"openai","model":"gpt-test","harnesses":["codex"],"reasoning_configuration_reference":"fixture-high@1"}]}]}});
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)").bind(&digest).bind(serde_json::to_vec(&catalog).unwrap()).bind(f.actor).execute(&pool).await.unwrap();
-    let binding = json!({"enabled":true,"name":"manual fixture","repository_id":repo,"catalog_digest":digest,"allowed_intelligence_profiles":["manual-model@1"],"allowed_node_ids":[],"allowed_worker_groups":[]});
+    // The level a manual session and the supervisor choose from: one
+    // candidate per logged-in harness.
+    let level = |rows: &str| {
+        format!(
+            "---\nid: manual-model\nname: Standard\ndescription: Manual fixture level.\n---\n\
+             ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
+        )
+    };
+    let claude_row = "| anthropic | fixture-model | medium | claude |\n";
+    let codex_row = "| openai | gpt-test | high | codex |\n";
+    let mut execution = common::roles::execution(8192);
+    execution = execution
+        .replace("harnesses: [claude,", "harnesses: [claude, codex,")
+        .replace(
+            "- claude: account-a\n",
+            "- claude: account-a\n- codex: account-a\n",
+        );
+    common::roles::save(&pool, f.actor, Kind::Execution, "sandbox", &execution).await;
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(&format!("{claude_row}{codex_row}")),
+    )
+    .await;
+    let snapshot_digest = common::roles::active(&pool).await.digest().to_owned();
+    let binding = json!({"enabled":true,"name":"manual fixture","repository_id":repo,"default_intelligence":"manual-model","allowed_node_ids":[],"allowed_worker_groups":[]});
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')").bind(project).bind(binding).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-        .bind(&digest)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let preferences = tempfile::tempdir().unwrap();
-    let preferences_path = preferences.path().join("models.json");
-    std::fs::write(&preferences_path,serde_json::to_vec(&json!([
-        {"provider":"anthropic","model":"fixture-model","reasoning_configuration_reference":"fixture-medium@1","reasoning":"medium","harness":"claude"},
-        {"provider":"openai","model":"gpt-test","reasoning_configuration_reference":"fixture-high@1","reasoning":"high","harness":"codex","options":{"service_tier":"fast"}}
-    ])).unwrap()).unwrap();
     let mut config = (*f.state.config).clone();
-    config.intelligence_preferences_file = Some(preferences_path);
     config.profiled_execution=Some(serde_json::from_value(json!({"revision":1,"qualified_runtimes":[],"projects":[{"project_id":project,"enabled":true,"priority":0,"source":{"kind":"immutable","object":{"format":"sha1","hex":"a".repeat(40)}},"retention_handle":Uuid::new_v4()}]})).unwrap());
     f.state.config = Arc::new(config);
     let admin = build_admin_router(f.state.clone());
@@ -226,7 +239,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
     );
     let uri = format!("/api/supervisors/{conversation}/control");
-    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","profile_version":1,"candidate_id":"codex"}});
+    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
     assert_eq!(
         call(&admin, &uri, Some(control.clone()), None, false)
             .await
@@ -235,12 +248,102 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     );
     let (status, receipt) = call(&admin, &uri, Some(control.clone()), None, true).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
+    // The saved profile is the level choice, and its admission class is the
+    // level's id on the candidate's provider.
+    assert_eq!(
+        receipt["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
+    );
+    let class = aq_swarm_settings::admission::pinned_cell(&receipt["profile"]).unwrap();
+    assert_eq!(
+        (class.provider.as_str(), class.intelligence_class.as_str()),
+        ("openai", "manual-model")
+    );
     assert_eq!(
         call(&admin, &uri, Some(control.clone()), None, true)
             .await
             .1,
         receipt
     );
+    // The stored choice names no snapshot: every read and every start
+    // resolves it against the active one. While the level does not list the
+    // candidate, or does not exist, the control stays enabled with its
+    // profile and says why the supervisor is not running.
+    let entry = |fleet: &Value| {
+        let all = fleet["supervisors"].as_array().unwrap();
+        all.iter()
+            .find(|s| s["id"] == conversation)
+            .unwrap()
+            .clone()
+    };
+    let read = || async { entry(&call(&admin, "/api/supervisors", None, None, false).await.1) };
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(snapshot_digest.clone())
+    );
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(claude_row),
+    )
+    .await;
+    let unlisted = read().await;
+    assert_eq!(
+        unlisted["unavailable_reason"],
+        "its level `manual-model` no longer lists gpt-test on codex; choose a level"
+    );
+    assert_eq!(unlisted["enabled"], true);
+    assert_eq!(unlisted["profile"], receipt["profile"]);
+    assert!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap()
+            .is_err()
+    );
+    // Once the level lists the candidate again it resolves, with no owner
+    // action, against the snapshot that is active now.
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(&format!("{claude_row}{codex_row}")),
+    )
+    .await;
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(common::roles::active(&pool).await.digest().to_owned())
+    );
+    // A carried choice whose level has no document (migration 0134 keeps an
+    // old profile id that is no level).
+    sqlx::query("UPDATE supervisor_controls SET profile=jsonb_set(profile,'{profile_id}','\"engineering\"') WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let gone = read().await;
+    assert_eq!(
+        gone["unavailable_reason"],
+        "its level `engineering` no longer exists; choose a level"
+    );
+    assert_eq!(gone["enabled"], true);
+    sqlx::query("UPDATE supervisor_controls SET profile=$2 WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .bind(&receipt["profile"])
+        .execute(&pool)
+        .await
+        .unwrap();
     let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
     assert_eq!(
         call(&admin, &uri, Some(stale), None, true).await.0,
@@ -301,7 +404,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::OK
     );
-    let selected = json!({"profile_id":"manual-model","profile_version":1,"candidate_id":"codex"});
+    let selected = json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"});
     let selected_id = Uuid::new_v4();
     let selected_launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
     let selected_body = json!({"operation_id":selected_id,"intelligence_profile":selected});
@@ -335,7 +438,16 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let choices = call(&admin, "/api/manual-agents", None, None, false)
         .await
         .1;
-    assert_eq!(choices["launch_profiles"].as_array().unwrap().len(), 2);
+    // Manual sessions list the levels of the active snapshot: one entry per
+    // level candidate a logged-in harness can run.
+    let offered: Vec<&Value> = (choices["launch_profiles"].as_array().unwrap().iter())
+        .filter(|c| c["profile_id"] == "manual-model")
+        .collect();
+    assert_eq!(offered.len(), 2, "{choices}");
+    assert_eq!(
+        offered[1],
+        &json!({"snapshot_digest":snapshot_digest,"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
+    );
     let (status, chosen) = call(
         &admin,
         &selected_launch,
@@ -347,7 +459,10 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     assert_eq!(status, StatusCode::OK, "{chosen}");
     assert_eq!(chosen["spec"]["model"], "gpt-test");
     assert_eq!(chosen["spec"]["reasoning"], "high");
-    assert_eq!(chosen["spec"]["options"]["service_tier"], "fast");
+    // The launch pins its level (the admission class) and the snapshot.
+    assert_eq!(chosen["spec"]["intelligence_class"], "manual-model");
+    assert_eq!(chosen["spec"]["harness"], "codex");
+    assert_eq!(chosen["spec"]["snapshot_digest"], snapshot_digest);
     assert_eq!(
         call(
             &admin,
@@ -361,7 +476,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         chosen
     );
     let mut changed = selected_body.clone();
-    changed["intelligence_profile"]["candidate_id"] = json!("claude");
+    changed["intelligence_profile"]["candidate_id"] = json!("anthropic:fixture-model:medium");
     assert_eq!(
         call(&admin, &selected_launch, Some(changed), None, true)
             .await
@@ -370,25 +485,22 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     );
     let mut stale = selected_body.clone();
     stale["operation_id"] = json!(Uuid::new_v4());
-    stale["intelligence_profile"]["profile_version"] = json!(2);
+    stale["intelligence_profile"]["profile_id"] = json!("no-such-level");
     assert_eq!(
         call(&admin, &selected_launch, Some(stale), None, true)
             .await
             .0,
         StatusCode::CONFLICT
     );
-    let deleted_digest = "b".repeat(64);
-    let mut deleted_catalog = catalog.clone();
-    deleted_catalog["catalog"]["intelligence"][0]["candidates"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|c| c["provider"] != "openai");
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)").bind(&deleted_digest).bind(serde_json::to_vec(&deleted_catalog).unwrap()).bind(f.actor).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-        .bind(&deleted_digest)
-        .execute(&pool)
-        .await
-        .unwrap();
+    // The level loses its Codex candidate.
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(claude_row),
+    )
+    .await;
     assert_eq!(
         call(
             &admin,
@@ -2055,11 +2167,13 @@ async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
         .0,
         StatusCode::OK
     );
-    sqlx::query("INSERT INTO worker_settings(kind,id,removed,revision) VALUES('node',$1,true,1)")
-        .bind(f.node.node_id.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE worker_settings SET removed=true,revision=revision+1 WHERE kind='node' AND id=$1",
+    )
+    .bind(f.node.node_id.to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         call(&admin, &read, None, None, false).await.0,
         StatusCode::OK
@@ -2434,35 +2548,20 @@ async fn swarm_parallel_admission_reserves_once_and_failure_releases_capacity() 
 }
 
 #[test]
-fn swarm_class_uses_catalog_profile_identity_including_automatic_routing() {
-    use aq_swarm_settings::admission::classify;
-    let candidate = json!({"provider":"openai","model":"same-model","harnesses":["codex"],"reasoning_configuration_reference":"high"});
-    let catalog = json!({"catalog":{"intelligence":[
-        {"id":"simple","version":7,"candidates":[candidate.clone()]},
-        {"id":"complex","version":2,"candidates":[candidate.clone()]},
-        {"id":"router","version":1,"automatic_routing":true,"candidates":[candidate]}
-    ]}});
-    let choice = json!({"provider":"openai","model":"same-model","harness":"codex","reasoning_configuration_reference":"high"});
+fn swarm_class_is_the_level_a_stored_choice_pins() {
+    use aq_swarm_settings::admission::pinned_cell;
+    // A manual session's spec pins `intelligence_class`; a supervisor's saved
+    // profile names its level as `profile_id`.
+    let spec = json!({"provider":"openai","model":"same-model","intelligence_class":"simple-low"});
+    assert_eq!(pinned_cell(&spec).unwrap().intelligence_class, "simple-low");
+    let profile = json!({"provider":"openai","model":"same-model","profile_id":"complex-high"});
+    let cell = pinned_cell(&profile).unwrap();
     assert_eq!(
-        classify(&catalog, Some("simple@7"), &choice)
-            .unwrap()
-            .intelligence_class,
-        "simple"
+        (cell.provider.as_str(), cell.intelligence_class.as_str()),
+        ("openai", "complex-high")
     );
-    assert_eq!(
-        classify(&catalog, Some("complex@2"), &choice)
-            .unwrap()
-            .intelligence_class,
-        "complex"
-    );
-    assert_eq!(
-        classify(&catalog, Some("router@1"), &choice)
-            .unwrap()
-            .intelligence_class,
-        "router"
-    );
-    assert!(classify(&catalog, None, &choice).is_none());
-    assert!(classify(&catalog, Some("complex@99"), &choice).is_none());
+    assert!(pinned_cell(&json!({"provider":"openai"})).is_none());
+    assert!(pinned_cell(&json!({"intelligence_class":"simple-low"})).is_none());
 }
 
 #[tokio::test]
@@ -2576,4 +2675,31 @@ async fn swarm_provider_ceiling_counts_other_classes_and_unclassified_reservatio
     .unwrap();
     assert_eq!(live, 1, "lowering ceilings preserves existing reservations");
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn node_slot_default_setting_is_revisioned_idempotent_and_does_not_resize_nodes() {
+    let f = common::profiled::fixture().await;
+    let app = build_admin_router(f.state.clone());
+    let path = "/api/worker-management/default/node-slots";
+    let change = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"max_agents":5});
+    let (status, receipt) = call(&app, path, Some(change.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(call(&app, path, Some(change), None, true).await.1, receipt);
+    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"max_agents":8});
+    assert_eq!(
+        call(&app, path, Some(stale), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let (_, list) = call(&app, "/api/worker-management", None, None, false).await;
+    assert_eq!(list["node_slot_default"]["slots"], 5);
+    assert_eq!(list["node_slot_default"]["revision"], 2);
+    let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, f.node.node_id)
+            .await
+            .unwrap(),
+        2
+    );
 }

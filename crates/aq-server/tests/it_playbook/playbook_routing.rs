@@ -2,16 +2,17 @@
 //! the routing document saved in Settings is authored into a playbook, the
 //! playbook is activated on `aq.routing` under the routing source's grant,
 //! the switch turns on, and a new task is routed by a run of that playbook
-//! and placed on the routed level's profile.
+//! and placed on the routed level's document.
 //!
-//! Real here: the project binding on the automatic router, the worker poll
-//! and placement, the Intelligence structure, the playbook service, driver
+//! Real here: the project binding, the level documents, the worker poll
+//! and placement, the routing document, the playbook service, driver
 //! and engine on protected PostgreSQL, the server's own routing port
 //! (`ServerRouting`), the save-time checks and the grant. Synthetic: the
 //! Graph peer, the judgment provider, and the agent, whose outcome (the
 //! engine's worked example `escalate-on-judgment`) is handed to the save
 //! path without a model.
 use crate::common::native_offer::{Case, poll, poll_offered, setup};
+use crate::common::roles;
 use aq_admission::control::{ControlReply, decode_reply};
 use aq_playbook_authoring::{self as authoring, compiler::docs};
 use aq_server::{
@@ -32,90 +33,30 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, sync::Arc};
 use uuid::Uuid;
 
-const ROUTER: &str = "engineering@3";
-const CLASS_PROFILE: &str = "intelligence:standard-high@1";
+const CLASS_PROFILE: &str = "intelligence:standard-high";
 const CLASS_MODEL: &str = "model-c";
 
-/// As `it_native` `native_offers::routed::on_the_router`: a catalog whose
-/// agents run on the automatic router, a class profile `standard-high@1`
-/// assigned to the standard parent at high effort, and the project bound to
-/// the router.
+/// As `it_native` `native_offers::routed::on_the_router`: the level document
+/// `standard-high` saved with its own model, as the owner would in Settings.
 async fn on_the_router(c: &mut Case) {
-    let env = &mut c.env.env;
-    let original: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(env.body["catalog_digest"].as_str().unwrap())
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
-    let mut artifact = catalog.artifact().clone();
-    let profiles = &mut artifact.catalog.intelligence;
-    let mut class = profiles[0].clone();
-    profiles[0].version = 3;
-    profiles[0].automatic_routing = Some(true);
-    (class.id, class.version, class.automatic_routing) = ("standard-high".into(), 1, None);
-    class.candidates[0].model = CLASS_MODEL.into();
-    (class.selection_policy.as_mut().unwrap()).allow_unknown_availability = true;
-    profiles.push(class);
-    for agent in &mut artifact.catalog.agents {
-        agent.version = 3;
-        agent.intelligence = ROUTER.into();
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    let app = aq_server::build_admin_router(env.state.clone());
-    let activate = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,
-        "artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()});
-    let path = "/api/profiles/catalogs/activate";
-    let (status, body) =
-        crate::common::selection::call(&app, path, Some(activate), "owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    env.body["catalog_digest"] = json!(updated.digest());
-    env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
-    env.body["allowed_intelligence_profiles"] = json!([ROUTER]);
-    let bind = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":env.body});
-    let path = crate::common::selection::path();
-    let (status, body) =
-        crate::common::selection::call(&app, &path, Some(bind), "owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    let model = json!([{"provider":"fixture-a","model":CLASS_MODEL,
-        "reasoning_configuration_reference":"reasoning-a@1","native_reasoning":"high"}]);
-    sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses,0,models}',(snapshot#>'{harnesses,0,models}')||$1::jsonb)")
-        .bind(model)
-        .execute(&env.pool)
-        .await
-        .unwrap();
-    let mut config = (*env.state.config).clone();
-    let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
-    let mut fact = profiled.context_qualifications[0].clone();
-    fact.subject.model = CLASS_MODEL.into();
-    profiled.context_qualifications.push(fact);
-    profiled.revision += 1;
-    config.profiled_execution = Some(Arc::new(profiled));
-    env.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&env.state)
-        .await
-        .unwrap();
+    let level = roles::open_level("standard-high", &[("fixture-a", CLASS_MODEL, "high")]);
+    let pool = &c.env.env.pool;
+    let kind = aq_profiles::roles::Kind::Intelligence;
+    roles::save(pool, c.env.actor, kind, "standard-high", &level).await;
+    c.env.snapshot = roles::active(pool).await;
 }
 
-/// The owner's Settings: the class assignment and the routing document.
+/// The owner's Settings: the routing document.
 async fn save_structure(pool: &sqlx::PgPool, markdown: &str) {
-    let (mut document, _, _) = aq_profile_settings::structure::document(pool)
+    let actor: uuid::Uuid = sqlx::query_scalar("SELECT id FROM users ORDER BY created_at LIMIT 1")
+        .fetch_one(pool)
         .await
         .unwrap();
-    document.assignments = vec![aq_profile_settings::structure::Assignment {
-        profile_id: "standard-high".into(),
-        parent_id: "standard".into(),
-        effort: "high".into(),
-    }];
-    document.routing_markdown = markdown.into();
-    sqlx::query(
-        "UPDATE intelligence_structure SET revision=revision+1,document=$1 WHERE singleton",
-    )
-    .bind(serde_json::to_value(&document).unwrap())
-    .execute(pool)
-    .await
-    .unwrap();
+    let (_, revision) = aq_role_settings::routing_document(pool).await.unwrap();
+    let id = uuid::Uuid::new_v4();
+    aq_role_settings::save_routing_document(pool, actor, markdown, revision, id, 1)
+        .await
+        .unwrap();
 }
 
 /// Answers every field `medium` (or its first choice) and no flag.
@@ -196,7 +137,6 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     let wired = InternalWork::new(
         c.env.env.pool.clone(),
         c.env.env.state.clock.clone(),
-        None,
         None,
         None,
     );
@@ -286,10 +226,13 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     let files = submitted.request.agent.unwrap().files;
     assert_eq!(files["source.md"], example("source.md"));
     let facts: Value = serde_json::from_str(&files["facts.json"]).unwrap();
-    assert_eq!(facts["levels"], json!(["standard-high"]));
+    // Every level document of the fixture is a level the document may name.
+    let levels = facts["levels"].as_array().unwrap();
+    assert_eq!(levels.len(), roles::levels().len(), "{levels:?}");
+    assert!(levels.contains(&json!("standard-high")), "{levels:?}");
     assert_eq!(
         facts["offers"]["standard-high"]["providers"],
-        json!(["fixture-a", "fixture-b"])
+        json!(["fixture-a"])
     );
     // Saving again with nothing changed starts no second run.
     routing::author(&state).await;
@@ -323,7 +266,7 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
 
     // (4) The switch turns on, and the read shows the source.
     let app = aq_server::build_admin_router(state.clone());
-    let path = "/api/settings/intelligence/routing";
+    let path = "/api/settings/routing";
     let on = Some(json!({"enabled": true}));
     let (status, view) = crate::common::selection::call(&app, path, on, "owner@localhost").await;
     assert_eq!(status, 200, "{view}");
@@ -365,7 +308,7 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     );
     assert!(!decided.reasons.is_empty());
 
-    // The routed task is offered on the profile Settings assigns to its level.
+    // The routed task is offered on the level document of its class.
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered(&body), [CLASS_PROFILE]);

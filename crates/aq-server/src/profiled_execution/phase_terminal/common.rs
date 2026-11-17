@@ -198,17 +198,6 @@ pub(super) async fn require_start_open_locked(
     {
         return Err(conflict());
     }
-    let (revision, active): (i64, Option<String>) = sqlx::query_as(
-        "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(database)?;
-    if revision != p.catalog_activation_revision as i64
-        || active.as_deref() != Some(current.catalog_digest.as_str())
-    {
-        return Err(conflict());
-    }
     crate::intelligence::fence_current_registry(state, tx).await?;
     let decision: uuid::Uuid = sqlx::query_scalar(
         "SELECT decision_id FROM profiled_launches WHERE attempt_id=$1 FOR SHARE",

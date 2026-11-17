@@ -5,6 +5,7 @@ pub mod authority;
 pub mod read;
 pub mod wire;
 pub use api::{Auth, Service};
+pub use aq_manual_sessions::intelligence::resolve_stored;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 pub use wire::Conversation;

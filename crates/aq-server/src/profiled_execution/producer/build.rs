@@ -45,13 +45,6 @@ fn scope(p: &aq_session_api::Permission) -> Result<wire::Scope, AppError> {
         resource: Text::new(&p.scope_reference).map_err(|_| refused())?,
     })
 }
-fn artifact(source: &aq_session_api::Source) -> Result<ArtifactRef, AppError> {
-    Ok(ArtifactRef {
-        id: Text::new(&source.identity).map_err(|_| refused())?,
-        version: Text::new(&source.revision).map_err(|_| refused())?,
-        digest: serde_json::from_value(json!(source.digest)).map_err(|_| refused())?,
-    })
-}
 /// Offer capabilities; `[2..]` is the manifest's harness list, which carries
 /// exactly one confinement capability for the frozen confinement mode.
 fn capabilities(mode: aq_selection::ConfinementMode) -> Result<Vec<wire::Capability>, AppError> {
@@ -103,51 +96,66 @@ fn criteria(context: &Value, task: Uuid) -> Result<Vec<Criterion>, AppError> {
     }
     Ok(result)
 }
-async fn catalog_definitions(
+/// The manifest's profile references and their retained bodies, on the
+/// unchanged wire (spec 0014 §8 renames the fields with the protocol):
+/// `catalog` is the role snapshot, and `agent_profile`, `intelligence_profile`
+/// and `execution_profile` are the role, the level and the execution profile
+/// by document id, each versioned by the snapshot digest.
+struct Profiles {
+    catalog: ArtifactRef,
+    role: ArtifactRef,
+    intelligence: ArtifactRef,
+    execution: ArtifactRef,
+}
+async fn snapshot_definitions(
     state: &AppState,
     set: &mut RetainedSet,
     compiled: &Compiled,
-) -> Result<(ArtifactRef, Vec<ArtifactRef>), AppError> {
-    let bytes = compiled.catalog.canonical_bytes().map_err(|_| refused())?;
-    let catalog_ref = reference("aq.profile-catalog", &bytes)?;
+) -> Result<Profiles, AppError> {
+    let snapshot = &compiled.snapshot;
+    let launch = compiled.launch()?;
+    let bytes = snapshot.canonical_bytes();
+    let catalog = ArtifactRef {
+        id: Text::new("aq.role-snapshot").map_err(|_| refused())?,
+        version: Text::new(snapshot.digest()).map_err(|_| refused())?,
+        digest: Digest::of(bytes),
+    };
     set.retain(
         state,
         OwnerKind::Catalog,
         ArtifactKind::Definition,
-        catalog_ref.clone(),
-        &bytes,
+        catalog.clone(),
+        bytes,
     )
     .await?;
-    let composition = &compiled.candidates[0].composition;
-    let mut sources = vec![
-        composition.agent_profile.clone(),
-        composition.intelligence_profile.clone(),
-        composition.execution_profile.clone(),
-    ];
-    sources.extend(
-        composition
-            .instruction_order
-            .iter()
-            .filter(|i| i.source.identity.starts_with("module:"))
-            .map(|i| i.source.clone()),
-    );
-    let mut modules = Vec::new();
-    let mut seen = BTreeSet::new();
-    for source in sources {
-        if !seen.insert(source.identity.clone()) {
-            continue;
-        }
-        let (kind, key) = source.identity.split_once(':').ok_or_else(|| refused())?;
-        let c = &compiled.catalog.artifact().catalog;
-        let value=match kind {
-            "agent"=>serde_json::to_value(c.agents.iter().find(|v|aq_profiles::key(&v.id,v.version)==key).ok_or_else(|| refused())?),
-            "intelligence"=>serde_json::to_value(c.intelligence.iter().find(|v|aq_profiles::key(&v.id,v.version)==key).ok_or_else(|| refused())?),
-            "execution"=>serde_json::to_value(c.execution.iter().find(|v|aq_profiles::key(&v.id,v.version)==key).ok_or_else(|| refused())?),
-            "module"=>{let metadata=c.modules.iter().find(|v|aq_profiles::key(&v.id,v.version)==key).ok_or_else(|| refused())?;Ok(json!({"metadata":metadata,"markdown":compiled.catalog.artifact().instructions.get(key).ok_or_else(|| refused())?}))},
-            _=>return Err(refused()),
-        }.map_err(|_|AppError::Internal)?;
+    // The execution profile keeps the confinement object the worker's mirror
+    // of it reads (`permit_container`, `require_native`, `require_container`).
+    let mut execution = serde_json::to_value(launch.execution).map_err(|_| AppError::Internal)?;
+    execution["confinement"] =
+        serde_json::to_value(launch.execution.confinement.execution_confinement())
+            .map_err(|_| AppError::Internal)?;
+    // The level carries the selection policy in effect for this launch, so
+    // everything after launch reads it from the attempt's own retained body.
+    let mut intelligence =
+        serde_json::to_value(launch.intelligence).map_err(|_| AppError::Internal)?;
+    intelligence["selection_policy"] =
+        serde_json::to_value(&launch.selection_policy).map_err(|_| AppError::Internal)?;
+    let mut out = Vec::new();
+    for (kind, id, value) in [
+        (
+            "role",
+            &launch.role.id,
+            serde_json::to_value(launch.role).map_err(|_| AppError::Internal)?,
+        ),
+        ("intelligence", &launch.intelligence.id, intelligence),
+        ("execution", &launch.execution.id, execution),
+    ] {
         let bytes = canonical(&value)?;
-        let r = artifact(&source)?;
+        let r = ArtifactRef {
+            id: Text::new(format!("{kind}:{id}")).map_err(|_| refused())?,
+            version: Text::new(snapshot.digest()).map_err(|_| refused())?,
+            digest: Digest::of(&bytes),
+        };
         set.retain(
             state,
             OwnerKind::Catalog,
@@ -156,11 +164,16 @@ async fn catalog_definitions(
             &bytes,
         )
         .await?;
-        if kind == "module" {
-            modules.push(r);
-        }
+        out.push(r);
     }
-    Ok((catalog_ref, modules))
+    let [role, intelligence, execution] =
+        <[ArtifactRef; 3]>::try_from(out).map_err(|_| refused())?;
+    Ok(Profiles {
+        catalog,
+        role,
+        intelligence,
+        execution,
+    })
 }
 pub struct Assembly<'a> {
     pub state: &'a AppState,
@@ -176,32 +189,19 @@ pub struct Assembly<'a> {
     pub generation: u64,
 }
 /// Re-derives the frozen confinement mode from the selection's placement facts
-/// and the selected execution profile's confinement permission.
+/// and the role's execution profile.
 fn confinement_mode(
     compiled: &Compiled,
-    composition: &aq_profiles::FrozenComposition,
     decision: &Decision,
     harness: &aq_selection::InstalledHarness,
 ) -> Result<aq_selection::ConfinementMode, AppError> {
-    let key = composition
-        .execution_profile
-        .identity
-        .strip_prefix("execution:")
-        .ok_or_else(|| refused())?;
-    let execution = compiled
-        .catalog
-        .artifact()
-        .catalog
+    let confinement = compiled
+        .launch()?
         .execution
-        .iter()
-        .find(|e| aq_profiles::key(&e.id, e.version) == key)
-        .ok_or_else(|| refused())?;
-    aq_selection::admit_confinement(
-        decision.inputs.placement.as_ref(),
-        &execution.confinement,
-        harness,
-    )
-    .map_err(|_| refused())
+        .confinement
+        .execution_confinement();
+    aq_selection::admit_confinement(decision.inputs.placement.as_ref(), &confinement, harness)
+        .map_err(|_| refused())
 }
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
@@ -242,31 +242,20 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         return Err(refused());
     }
     let index = compiled
-        .candidates
+        .prepared
         .iter()
-        .position(|c| c.digest == selected.choice.composition_digest)
+        .position(|p| p.launch.digest == selected.choice.launch_digest)
         .ok_or_else(|| refused())?;
-    let composition = compiled.candidates.remove(index).composition;
-    let policy = compiled.policies.remove(index);
-    // The catalog definition helper must use this same selected composition.
-    compiled.candidates = vec![aq_selection::PreparedComposition {
-        digest: selected.choice.composition_digest.clone(),
-        composition: composition.clone(),
-    }];
+    let prepared = compiled.prepared.swap_remove(index);
+    let policy = prepared.policy.clone();
     let configuration = state
         .config
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
-    let (counted, fact) = super::super::context_renewal::evaluate(
-        state,
-        runtime,
-        selected,
-        &composition,
-        now(state)?,
-    )
-    .await?;
-    let fact = &fact;
+    let (counted, renderer) =
+        crate::profiled_execution::context_budget::count(&prepared.startup, selected)
+            .map_err(|_| refused())?;
     let until = (now(state)? / 86_400_000)
         .checked_add(8)
         .and_then(|n| n.checked_mul(86_400_000))
@@ -291,8 +280,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         selected.choice.adapter.clone(),
         selected.choice.environment.clone(),
         selected.choice.credential_profile.clone(),
-        fact.counting_evidence.clone(),
-        fact.capacity_evidence.clone(),
     ];
     let project = &compiled.frozen.project.binding;
     let validation = ArtifactRef {
@@ -343,20 +330,25 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         })
         .await?;
     }
-    let (catalog, mut modules) =
-        on_heap(|| catalog_definitions(state, &mut set, &compiled)).await?;
+    let profiles = on_heap(|| snapshot_definitions(state, &mut set, &compiled)).await?;
+    let origin = startup::Origin {
+        role: &compiled.role,
+        task: compiled.projection.artifact.id.as_str(),
+        thread: compiled.thread_identity.as_deref(),
+    };
     let startup = on_heap(|| {
         startup::retain(
             state,
             &mut set,
-            &composition,
+            &prepared,
+            &origin,
             &counted,
             &compiled.projection,
-            fact,
+            &renderer,
         )
     })
     .await?;
-    modules.extend(startup.modules);
+    let mut modules = startup.modules;
     let policy_ref = policy.artifact().map_err(|_| refused())?;
     let policy_bytes = canonical(&policy)?;
     on_heap(|| {
@@ -370,32 +362,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     })
     .await?;
     modules.push(policy_ref);
-    let composition_bytes = canonical(&composition)?;
-    let composition_ref = reference("aq.frozen-composition", &composition_bytes)?;
-    on_heap(|| {
-        set.retain(
-            state,
-            OwnerKind::Composition,
-            ArtifactKind::Composition,
-            composition_ref,
-            &composition_bytes,
-        )
-    })
-    .await?;
     let model = aq_profiles::ResolvedGraphModel {
         provider: selected.choice.provider.clone(),
         model: selected.choice.model.clone(),
         native_reasoning: selected.choice.native_reasoning.clone(),
-        reasoning_configuration_reference: selected
-            .choice
-            .reasoning_configuration_reference
-            .clone(),
     };
     let profile = policy
         .resolve_profile(
             &model,
             &compiled.projection.context,
-            &compiled.agent,
+            &compiled.role,
             &aq_profiles::GraphRetryBudget {
                 max_attempts: 1,
                 max_elapsed_ms: 5000,
@@ -548,19 +524,23 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         )
     })
     .await?;
-    let requested = composition
-        .requested_permissions
-        .as_ref()
-        .ok_or_else(|| refused())?
-        .iter()
+    let requested = (compiled.requested.iter())
         .map(scope)
         .collect::<Result<Vec<_>, _>>()?;
-    let effective = composition
-        .effective_permissions
-        .iter()
+    let effective = (compiled.effective.iter())
         .map(scope)
         .collect::<Result<Vec<_>, _>>()?;
-    let mode = confinement_mode(&compiled, &composition, &decision, harness)?;
+    // What the role asks for and the project's ceilings do not hold.
+    let omissions = (compiled.requested.iter())
+        .filter(|p| {
+            !compiled
+                .effective
+                .iter()
+                .any(|e| e.operation == p.operation && e.scope_reference == p.scope_reference)
+        })
+        .map(|p| Text::new(format!("project_ceiling:{}", p.operation)).map_err(|_| refused()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mode = confinement_mode(&compiled, &decision, harness)?;
     let required_caps = capabilities(mode)?;
     let spending_budget = project
         .ceilings
@@ -582,11 +562,11 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .transpose()?;
     let manifest = wire::LaunchManifest {
         schema_version: 1,
-        catalog,
+        catalog: profiles.catalog,
         modules,
-        agent_profile: artifact(&composition.agent_profile)?,
-        intelligence_profile: artifact(&composition.intelligence_profile)?,
-        execution_profile: artifact(&composition.execution_profile)?,
+        agent_profile: profiles.role,
+        intelligence_profile: profiles.intelligence,
+        execution_profile: profiles.execution,
         bindings: wire::LaunchBindings {
             session: session.clone(),
             project_id: project.project_id,
@@ -622,11 +602,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             requested,
             effective: effective.clone(),
             required: effective,
-            omissions: composition
-                .omissions
-                .iter()
-                .map(|o| Text::new(&o.reason_code).map_err(|_| refused()))
-                .collect::<Result<Vec<_>, _>>()?,
+            omissions,
         },
         context: startup.context,
         resources: wire::ResourceLimits {
@@ -669,7 +645,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         selected.expires_at_ms,
         ready.stamp.expires_at_ms,
         context.stamp.expires_at_ms,
-        counted.proof.expires_at_ms,
     ]
     .into_iter()
     .min()

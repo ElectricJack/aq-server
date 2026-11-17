@@ -231,8 +231,7 @@ pub fn refusal_code(error: &anyhow::Error) -> &'static str {
             "finite local server exited"
             | "exact numeric finite peer origin"
             | "actual finite peer listening witness" => "finite_peer",
-            "unchanged original finite-peer qualification subject"
-            | "one original finite-peer context subject required" => "original_subject",
+            "unchanged original finite-peer qualification subject" => "original_subject",
             "assessment requires actual wall clock"
             | "actual current heartbeat required"
             | "actual awaited heartbeat absent"
@@ -678,30 +677,24 @@ impl Assessor {
             .iter()
             .find(|c| c.credential.profile == prepared.credential)
             .context("exact finite-peer credential")?;
-        let [context] = prepared.profiled.context_qualifications.as_slice() else {
-            anyhow::bail!("one original finite-peer context subject required");
-        };
-        context.validate()?;
-        let original = &context.subject;
-        let subject = serde_json::to_value(original)?;
+        // The subject of this assessment: the exact runtime, harness, model
+        // and credential the recipe prepared. The renderer is the server's
+        // one constant rule (spec 0014: no context measurement).
+        let rule = aq_server::profiled_execution::context_budget::Renderer::rule()?;
+        let subject = json!({
+            "runtime":prepared.runtime,"runtime_qualification":prepared.qualification,
+            "adapter":prepared.adapter,"environment":prepared.environment,
+            "harness":prepared.harness.harness,"cli_version":prepared.harness.cli_version,
+            "harness_qualification":prepared.harness.qualification,
+            "credential_profile":configured.credential.profile,
+            "credential_revision":configured.credential.revision,
+            "provider":configured.credential.provider,
+            "account_reference":configured.credential.account_reference,
+            "endpoint_reference":configured.credential.endpoint_reference,
+            "model":recipe::MODEL,"reasoning":recipe::REASONING,
+        });
         ensure!(
-            context.artifact()? == prepared.renderer
-                && original.runtime == prepared.runtime
-                && original.runtime_qualification == prepared.qualification
-                && original.adapter == prepared.adapter
-                && original.environment == prepared.environment
-                && original.harness == prepared.harness.harness
-                && original.cli_version == prepared.harness.cli_version
-                && original.harness_qualification == prepared.harness.qualification
-                && original.credential_profile == prepared.credential
-                && original.credential_profile == configured.credential.profile
-                && original.credential_revision == configured.credential.revision
-                && original.provider == configured.credential.provider
-                && original.account_reference == configured.credential.account_reference
-                && original.endpoint_reference == configured.credential.endpoint_reference
-                && original.model == recipe::MODEL
-                && original.native_reasoning == recipe::REASONING
-                && original.reasoning_configuration_reference == recipe::REASONING_REFERENCE
+            rule.definition == prepared.renderer
                 && self.subject.as_ref().is_none_or(|prior| prior == &subject),
             "unchanged original finite-peer qualification subject"
         );

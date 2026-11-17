@@ -1,18 +1,11 @@
-//! C4 environment templates: the operator's C3b allowlist and the
-//! activation-time pin of every `Execution.environments` entry to exactly one
-//! allowlisted image digest. Arbitrary images are never accepted; a missing or
-//! ambiguous entry refuses activation. Pins are stored per catalog digest, so a
-//! running attempt keeps the digest frozen in its launch manifest.
+//! C4 environment templates: the operator's C3b allowlist, and resolving an
+//! execution profile's environment to exactly one allowlisted image digest
+//! when an offer is made. Arbitrary images are never accepted; a missing or
+//! ambiguous entry resolves to nothing. Nothing is stored: a running attempt
+//! keeps the digest frozen in its launch manifest.
 use aq_admission::Digest;
 use serde::Deserialize;
 use std::sync::Arc;
-
-/// A storage failure; the caller maps it to its own internal error.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("database")]
-    Database,
-}
 
 const MAX_ALLOWLIST_BYTES: u64 = 1024 * 1024;
 const MAX_ENTRIES: usize = 1024;
@@ -125,59 +118,6 @@ pub fn resolve<'a>(
     }
     out.sort_by(|a, b| a.environment.cmp(&b.environment));
     Ok(out)
-}
-
-/// Every environment the catalog's execution profiles reference.
-pub fn catalog_environments(catalog: &aq_profiles::ValidatedCatalog) -> Vec<&str> {
-    catalog
-        .artifact()
-        .catalog
-        .execution
-        .iter()
-        .flat_map(|e| e.environments.iter().map(String::as_str))
-        .collect()
-}
-
-pub async fn store(
-    tx: &mut sqlx::PgConnection,
-    catalog_digest: &str,
-    resolutions: &[Resolution],
-) -> Result<(), Error> {
-    sqlx::query("DELETE FROM profile_catalog_environment_templates WHERE catalog_digest=$1")
-        .bind(catalog_digest)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| Error::Database)?;
-    for r in resolutions {
-        sqlx::query("INSERT INTO profile_catalog_environment_templates(catalog_digest,environment,template_digest) VALUES($1,$2,$3)")
-            .bind(catalog_digest)
-            .bind(&r.environment)
-            .bind(r.template_digest.as_str())
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| Error::Database)?;
-    }
-    Ok(())
-}
-
-pub async fn load(
-    conn: &mut sqlx::PgConnection,
-    catalog_digest: &str,
-) -> Result<Vec<Resolution>, Error> {
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT environment,template_digest FROM profile_catalog_environment_templates WHERE catalog_digest=$1 ORDER BY environment LIMIT 64")
-        .bind(catalog_digest)
-        .fetch_all(conn)
-        .await
-        .map_err(|_| Error::Database)?;
-    rows.into_iter()
-        .map(|(environment, digest)| {
-            Ok(Resolution {
-                environment,
-                template_digest: serde_json::from_value(serde_json::Value::String(digest))
-                    .map_err(|_| Error::Database)?,
-            })
-        })
-        .collect()
 }
 
 #[derive(Deserialize)]

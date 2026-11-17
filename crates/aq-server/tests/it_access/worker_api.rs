@@ -844,3 +844,37 @@ async fn machine_control_generation_conflicts_and_idempotent_handoffs() {
     .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn control_sends_node_count_only_to_schema_two_and_counts_are_per_node() {
+    let h = harness().await;
+    let r = enroll(&h).await;
+    let (status, siblings) =
+        post_slots(&h, Some(&r.credential), slots_body("slots-desktop", 2)).await;
+    assert_eq!(status, StatusCode::OK, "{siblings}");
+    let (status, legacy) = post_control(&h.worker, &r.credential).await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["schema_version"], 1);
+    assert!(legacy.get("slots").is_none());
+    sqlx::query("UPDATE worker_settings SET max_agents=3 WHERE kind='node' AND id=$1")
+        .bind(r.node_id.to_string())
+        .execute(&h._db.pool().await)
+        .await
+        .unwrap();
+    for (credential, count) in [
+        (r.credential.as_str(), 3),
+        (siblings["slots"][0]["credential"].as_str().unwrap(), 2),
+    ] {
+        let (status, body) = send(
+            &h.worker,
+            "POST",
+            "/v1/worker/control",
+            Some(credential),
+            Some(json!({"schema_version":2})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["schema_version"], 2);
+        assert_eq!(body["slots"], count);
+    }
+}

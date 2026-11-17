@@ -106,7 +106,7 @@ def main():
     if args.machine not in [m["id"] for m in machines]:
         print(f"no machine {args.machine}; have {[m['id'] for m in machines]}", file=sys.stderr)
         return 2
-    routing = stack.get("/api/settings/intelligence/routing")["enabled"]
+    routing = stack.get("/api/settings/routing")["enabled"]
     others = [m["id"] for m in machines if m["id"] != args.machine and m["control"]["desired"] == "running"]
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     name = f"notes/{args.note}-{args.machine}-{stamp}.md"

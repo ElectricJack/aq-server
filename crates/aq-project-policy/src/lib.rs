@@ -50,6 +50,16 @@ fn enrolled_by_default() -> bool {
 fn is_true(v: &bool) -> bool {
     *v
 }
+/// The role of a task that names none (spec 0014 §5.4).
+pub const DEFAULT_ROLE: &str = "developer";
+/// The intelligence profile of a task that was not routed to a level.
+pub const DEFAULT_INTELLIGENCE: &str = "standard-high";
+fn default_role() -> String {
+    DEFAULT_ROLE.into()
+}
+fn default_intelligence() -> String {
+    DEFAULT_INTELLIGENCE.into()
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBinding {
@@ -63,10 +73,18 @@ pub struct ProjectBinding {
     pub repository_adapter_reference: String,
     pub graph_adapter_reference: String,
     pub graph_workspace_id: Uuid,
-    pub catalog_digest: String,
-    pub allowed_agent_profiles: Vec<String>,
-    pub allowed_intelligence_profiles: Vec<String>,
-    pub allowed_execution_profiles: Vec<String>,
+    /// The role of a task that names none (spec 0014 §5.4). A request that
+    /// leaves it out gets [`DEFAULT_ROLE`]; a stored record always names it.
+    #[serde(default = "default_role")]
+    pub default_role: String,
+    /// The intelligence profile used when a task was not routed to a level.
+    #[serde(default = "default_intelligence")]
+    pub default_intelligence: String,
+    /// Markdown per role id, added after the role's prompt; it never replaces
+    /// it. Each note is bounded by the role store's document byte limit,
+    /// which the server checks when the binding is saved.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_notes: BTreeMap<String, String>,
     pub allowed_node_ids: Vec<Uuid>,
     /// Spec 0007 Q3: on by default; `false` restricts the binding to its listed nodes and groups.
     #[serde(default = "enrolled_by_default", skip_serializing_if = "is_true")]
@@ -115,26 +133,27 @@ pub struct BindingObservation {
 #[serde(deny_unknown_fields)]
 pub struct EligibilityRequest {
     pub expected_project_revision: u64,
-    pub expected_catalog_revision: u64,
     pub node_id: Uuid,
     pub environment: String,
-    pub agent_profile: String,
+    /// The role, intelligence profile and execution profile of the launch
+    /// (spec 0014), by document id, in the role snapshot `snapshot_digest`.
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
-    /// A routed task's class profile in place of the automatic router (spec 0011 §4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
+    pub snapshot_digest: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrozenProjectBinding {
     pub project: ProjectRecord,
-    pub catalog_activation_revision: u64,
+    /// The role snapshot the launch was resolved from. An offer stays on it:
+    /// a later save of a document does not change what this binding names.
+    pub snapshot_digest: String,
     pub worker_membership_digest: String,
     pub binding_observation: BindingObservation,
     pub node_id: Uuid,
     pub environment: String,
-    pub agent_profile: String,
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
 }
@@ -206,31 +225,16 @@ impl ProjectBinding {
                 && self.graph_adapter_reference == "aq.graph.configured",
             "unknown configured adapter reference",
         )?;
-        require(hex(&self.catalog_digest), "catalog digest")?;
-        for list in [
-            &self.allowed_agent_profiles,
-            &self.allowed_intelligence_profiles,
-            &self.allowed_execution_profiles,
-            &self.allowed_environments,
-        ] {
-            labels(list, 32)?;
-            require(!list.is_empty(), "empty profile/environment allowlist")?;
-        }
-        for list in [
-            &self.allowed_agent_profiles,
-            &self.allowed_intelligence_profiles,
-            &self.allowed_execution_profiles,
-        ] {
-            for profile in list {
-                let (id, version) = profile
-                    .rsplit_once('@')
-                    .ok_or("profile needs exact version")?;
-                label(id)?;
-                require(
-                    version.parse::<u32>().is_ok_and(|v| v > 0),
-                    "profile version",
-                )?;
-            }
+        labels(&self.allowed_environments, 32)?;
+        require(
+            !self.allowed_environments.is_empty(),
+            "empty environment allowlist",
+        )?;
+        label(&self.default_role).map_err(|_| "default role")?;
+        label(&self.default_intelligence).map_err(|_| "default intelligence profile")?;
+        for (role, note) in &self.role_notes {
+            label(role).map_err(|_| "role notes role")?;
+            require(!note.contains('\0'), "role notes text")?;
         }
         ids(&self.allowed_node_ids, 256)?;
         labels(&self.allowed_worker_groups, 32)?;
@@ -309,8 +313,6 @@ pub fn local_reasons(
     record: &ProjectRecord,
     request: &EligibilityRequest,
     config: &ProjectConfig,
-    active_catalog: Option<&str>,
-    catalog_revision: u64,
     node_live: bool,
 ) -> Vec<String> {
     let b = &record.binding;
@@ -324,60 +326,36 @@ pub fn local_reasons(
     if record.revision != request.expected_project_revision {
         reasons.push("project_revision_changed".into());
     }
-    if catalog_revision != request.expected_catalog_revision
-        || active_catalog != Some(b.catalog_digest.as_str())
-    {
-        reasons.push("catalog_activation_changed".into());
-    }
     if request.node_id.is_nil() || !node_live || !b.eligible_node(config, request.node_id) {
         reasons.push("node_not_eligible".into());
     }
     if !b.allowed_environments.contains(&request.environment) {
         reasons.push("environment_denied".into());
     }
-    for (allowed, selected, kind) in [
-        (
-            &b.allowed_agent_profiles,
-            &request.agent_profile,
-            "agent_profile_denied",
-        ),
-        (
-            &b.allowed_intelligence_profiles,
-            &request.intelligence_profile,
-            "intelligence_profile_denied",
-        ),
-        (
-            &b.allowed_execution_profiles,
-            &request.execution_profile,
-            "execution_profile_denied",
-        ),
+    for value in [
+        &request.role,
+        &request.intelligence_profile,
+        &request.execution_profile,
     ] {
-        if !allowed.contains(selected) {
-            reasons.push(kind.into());
+        if label(value).is_err() {
+            reasons.push("launch_reference_invalid".into());
         }
+    }
+    if !hex(&request.snapshot_digest) {
+        reasons.push("snapshot_digest_invalid".into());
     }
     reasons
 }
-#[allow(clippy::too_many_arguments)]
 pub fn decide(
     record: &ProjectRecord,
     request: &EligibilityRequest,
     config: &ProjectConfig,
     observation: &BindingObservation,
-    active_catalog: Option<&str>,
-    catalog_revision: u64,
     node_live: bool,
     now_ms: u64,
 ) -> Eligibility {
     let b = &record.binding;
-    let mut reasons = local_reasons(
-        record,
-        request,
-        config,
-        active_catalog,
-        catalog_revision,
-        node_live,
-    );
+    let mut reasons = local_reasons(record, request, config, node_live);
     if observation.repository_id != b.repository_id
         || observation.graph_workspace_id != b.graph_workspace_id
         || observation.repository_adapter_reference != b.repository_adapter_reference
@@ -409,13 +387,13 @@ pub fn decide(
         reasons,
         frozen_binding: eligible.then(|| FrozenProjectBinding {
             project: record.clone(),
-            catalog_activation_revision: catalog_revision,
+            snapshot_digest: request.snapshot_digest.clone(),
             worker_membership_digest: aq_profiles::digest(config)
                 .expect("bounded membership serializes"),
             binding_observation: observation.clone(),
             node_id: request.node_id,
             environment: request.environment.clone(),
-            agent_profile: request.agent_profile.clone(),
+            role: request.role.clone(),
             intelligence_profile: request.intelligence_profile.clone(),
             execution_profile: request.execution_profile.clone(),
         }),
@@ -436,10 +414,9 @@ pub(crate) mod tests {
             repository_adapter_reference: "aq.git.configured".into(),
             graph_adapter_reference: "aq.graph.configured".into(),
             graph_workspace_id: Uuid::from_u128(3),
-            catalog_digest: "a".repeat(64),
-            allowed_agent_profiles: vec!["implementer@1".into()],
-            allowed_intelligence_profiles: vec!["engineering@1".into()],
-            allowed_execution_profiles: vec!["confined-development@1".into()],
+            default_role: DEFAULT_ROLE.into(),
+            default_intelligence: DEFAULT_INTELLIGENCE.into(),
+            role_notes: BTreeMap::new(),
             allowed_node_ids: vec![Uuid::from_u128(4)],
             allow_enrolled_nodes: false,
             allowed_worker_groups: vec![],
@@ -478,13 +455,12 @@ pub(crate) mod tests {
     fn request() -> EligibilityRequest {
         EligibilityRequest {
             expected_project_revision: 1,
-            expected_catalog_revision: 2,
             node_id: Uuid::from_u128(4),
             environment: "confined-worktree".into(),
-            agent_profile: "implementer@1".into(),
-            intelligence_profile: "engineering@1".into(),
-            execution_profile: "confined-development@1".into(),
-            intelligence_override: None,
+            role: "developer".into(),
+            intelligence_profile: "standard-medium".into(),
+            execution_profile: "sandbox".into(),
+            snapshot_digest: "c".repeat(64),
         }
     }
     fn observation() -> BindingObservation {
@@ -506,33 +482,12 @@ pub(crate) mod tests {
         let config = ProjectConfig::default();
         let request = request();
         let observation = observation();
-        let decision = decide(
-            &record,
-            &request,
-            &config,
-            &observation,
-            Some(&"a".repeat(64)),
-            2,
-            true,
-            2000,
-        );
+        let decision = decide(&record, &request, &config, &observation, true, 2000);
         assert!(decision.eligible);
         let frozen = decision.frozen_binding.unwrap();
         record.revision = 2;
         record.binding.ceilings.context_bytes = 4096;
-        assert!(
-            !decide(
-                &record,
-                &request,
-                &config,
-                &observation,
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(!decide(&record, &request, &config, &observation, true, 2000).eligible);
         assert_eq!(frozen.project.revision, 1);
         assert_eq!(frozen.project.binding.ceilings.context_bytes, 8192);
     }
@@ -553,8 +508,6 @@ pub(crate) mod tests {
                     &request(),
                     &ProjectConfig::default(),
                     &observation,
-                    Some(&"a".repeat(64)),
-                    2,
                     true,
                     2000
                 )
@@ -568,8 +521,6 @@ pub(crate) mod tests {
                     &request(),
                     &ProjectConfig::default(),
                     &observation,
-                    Some(&"a".repeat(64)),
-                    2,
                     true,
                     2000
                 )
@@ -584,8 +535,6 @@ pub(crate) mod tests {
                 &request(),
                 &ProjectConfig::default(),
                 &o,
-                Some(&"a".repeat(64)),
-                2,
                 true,
                 2000
             )
@@ -598,8 +547,6 @@ pub(crate) mod tests {
                 &request(),
                 &ProjectConfig::default(),
                 &o,
-                Some(&"a".repeat(64)),
-                2,
                 true,
                 31000
             )
@@ -617,62 +564,18 @@ pub(crate) mod tests {
             .worker_groups
             .insert("engineering".into(), vec![Uuid::from_u128(4)]);
         assert!(record.binding.validate(&config).is_ok());
-        assert!(
-            decide(
-                &record,
-                &request(),
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(decide(&record, &request(), &config, &observation(), true, 2000).eligible);
         let mut r = request();
         r.environment = "host-unconfined".into();
-        assert!(
-            !decide(
-                &record,
-                &r,
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        // A launch names its role, level and execution profile by id; the
+        // binding holds no list of them (spec 0014 §5.4).
         let mut r = request();
-        r.agent_profile = "unlisted@1".into();
-        assert!(
-            !decide(
-                &record,
-                &r,
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
-        assert!(
-            !decide(
-                &record,
-                &request(),
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                3,
-                true,
-                2000
-            )
-            .eligible
-        );
+        r.role = "not a label".into();
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        let mut r = request();
+        r.snapshot_digest = "short".into();
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
     }
     #[test]
     fn enrolled_flag_makes_every_node_eligible_and_validates_without_lists() {
@@ -685,6 +588,74 @@ pub(crate) mod tests {
         assert!(b.validate(&config).is_ok());
         b.allow_enrolled_nodes = false;
         assert!(b.validate(&config).is_err());
+    }
+    #[test]
+    fn role_defaults_are_always_written_and_a_request_without_them_gets_the_defaults() {
+        let config = ProjectConfig::default();
+        let mut stored = serde_json::to_value(binding()).unwrap();
+        assert_eq!(stored["default_role"], "developer");
+        assert_eq!(stored["default_intelligence"], "standard-high");
+        assert!(stored.get("role_notes").is_none());
+        // A request that names neither default gets them.
+        let request = stored.as_object_mut().unwrap();
+        request.remove("default_role");
+        request.remove("default_intelligence");
+        let loaded: ProjectBinding = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            (
+                loaded.default_role.as_str(),
+                loaded.default_intelligence.as_str()
+            ),
+            ("developer", "standard-high")
+        );
+        // The fields spec 0014 removed are unknown and refused by name.
+        for field in [
+            "catalog_digest",
+            "allowed_agent_profiles",
+            "allowed_intelligence_profiles",
+            "allowed_execution_profiles",
+        ] {
+            let mut old = stored.clone();
+            old[field] = serde_json::json!([]);
+            let error = serde_json::from_value::<ProjectBinding>(old).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
+        }
+        assert!(loaded.role_notes.is_empty() && loaded.validate(&config).is_ok());
+        let mut b = binding();
+        b.default_role = "reviewer".into();
+        b.default_intelligence = "deep-high".into();
+        b.role_notes
+            .insert("reviewer".into(), "Review the migration first.".into());
+        let value = serde_json::to_value(&b).unwrap();
+        assert_eq!(value["default_role"], "reviewer");
+        assert_eq!(value["default_intelligence"], "deep-high");
+        assert_eq!(
+            value["role_notes"]["reviewer"],
+            "Review the migration first."
+        );
+        assert!(b.validate(&config).is_ok());
+        let again: ProjectBinding = serde_json::from_value(value).unwrap();
+        assert_eq!(again.role_notes, b.role_notes);
+        for (role, intelligence, note_role, note) in [
+            ("", "deep-high", "reviewer", "x"),
+            ("reviewer", "two words", "reviewer", "x"),
+            ("reviewer", "deep-high", "bad role", "x"),
+            ("reviewer", "deep-high", "reviewer", "nul\0"),
+        ] {
+            let mut b = binding();
+            b.default_role = role.into();
+            b.default_intelligence = intelligence.into();
+            b.role_notes.insert(note_role.into(), note.into());
+            assert!(
+                b.validate(&config).is_err(),
+                "{role} {intelligence} {note_role}"
+            );
+        }
     }
     #[test]
     fn binding_without_flag_serializes_unchanged() {

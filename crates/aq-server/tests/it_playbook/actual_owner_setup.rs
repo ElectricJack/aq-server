@@ -9,12 +9,6 @@ use aq_server::{
 use common::selection::ActualSetup;
 use uuid::Uuid;
 fn input() -> ActualSetup {
-    // Explicit immutable sample catalog bytes are used only for local schema/
-    // digest vectors. The actual Codex caller must provide its actual recipe.
-    let catalog = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
     let workspace = Uuid::new_v4();
     ActualSetup {
         enrollment_worker_version: "0.4.0".into(),
@@ -28,10 +22,9 @@ fn input() -> ActualSetup {
             repository_adapter_reference: "aq.git.configured".into(),
             graph_adapter_reference: "aq.graph.configured".into(),
             graph_workspace_id: workspace,
-            catalog_digest: catalog.digest().into(),
-            allowed_agent_profiles: vec!["implementer@1".into()],
-            allowed_intelligence_profiles: vec!["engineering@1".into()],
-            allowed_execution_profiles: vec!["confined-development@1".into()],
+            default_role: "developer".into(),
+            default_intelligence: "standard-high".into(),
+            role_notes: Default::default(),
             allowed_node_ids: vec![],
             allow_enrolled_nodes: false,
             allowed_worker_groups: vec!["actual-fixture".into()],
@@ -55,7 +48,7 @@ fn input() -> ActualSetup {
             },
             publication: None,
         },
-        catalog_artifact_json: String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap(),
+        documents: vec![],
         graph: AgentAccessConfig {
             graph_url: "http://127.0.0.1:49152".into(),
             graph_token_file: "not-opened-by-pure-validation".into(),
@@ -82,24 +75,25 @@ fn input() -> ActualSetup {
     }
 }
 #[test]
-fn explicit_canonical_catalog_scope_is_validated_without_owner_effects() {
+fn explicit_scope_and_role_documents_are_validated_without_owner_effects() {
     let input = input();
-    let catalog = input.validate().unwrap();
-    assert_eq!(catalog.digest(), input.project.catalog_digest);
+    input.validate().unwrap();
     assert_eq!(input.task.version, 1);
     assert_eq!(input.task.content_revision, 1);
 }
 #[test]
-fn actual_setup_refuses_mismatched_scope_digest_and_noncanonical_artifact() {
+fn actual_setup_refuses_mismatched_scope_and_invalid_role_documents() {
     let input = input();
     let mut changed = input.clone();
     changed.project.graph_workspace_id = Uuid::new_v4();
     assert!(changed.validate().is_err());
+    // A recipe document that is not a valid role refuses before any store exists.
     let mut changed = input.clone();
-    changed.project.catalog_digest = "0".repeat(64);
-    assert!(changed.validate().is_err());
-    let mut changed = input.clone();
-    changed.catalog_artifact_json.push('\n');
+    changed.documents = vec![(
+        aq_profiles::roles::Kind::Role,
+        "pilot".into(),
+        "---\nid: pilot\n---\n".into(),
+    )];
     assert!(changed.validate().is_err());
     let mut changed = input;
     changed.task.version = 0;

@@ -186,10 +186,8 @@ fn profile(reference: &ArtifactRef, kind: &str) -> Result<String, AppError> {
         .ok_or_else(|| refused())
 }
 async fn binding(state: &AppState, input: &Input) -> Result<FrozenProjectBinding, AppError> {
-    let (revision, catalog) = crate::project_bindings::active_catalog(state).await?;
-    if catalog.as_deref() != Some(input.selection.catalog_digest.as_str()) {
-        return Err(refused());
-    }
+    // The attempt stays on the role snapshot it launched with (spec 0014
+    // §7.1): a document saved since does not change what it runs as.
     let project = &input.decision.project.project.binding;
     let choice = &input.selection.choice.environment;
     let environment = project
@@ -207,13 +205,12 @@ async fn binding(state: &AppState, input: &Input) -> Result<FrozenProjectBinding
         input.spec.lifecycle.project_id,
         &EligibilityRequest {
             expected_project_revision: input.spec.project_revision,
-            expected_catalog_revision: revision,
             node_id: input.node()?,
             environment,
-            agent_profile: profile(&manifest.agent_profile, "agent")?,
+            role: profile(&manifest.agent_profile, "role")?,
             intelligence_profile: profile(&manifest.intelligence_profile, "intelligence")?,
             execution_profile: profile(&manifest.execution_profile, "execution")?,
-            intelligence_override: None,
+            snapshot_digest: input.selection.role_snapshot_digest.as_str().to_owned(),
         },
     )
     .await?;

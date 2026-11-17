@@ -980,51 +980,11 @@
           },
           "route": {
             "method": "GET",
-            "path": "/api/settings/intelligence"
+            "path": "/api/settings/intelligence-profiles"
           }
         }
       },
-      "summary": "Intelligence settings: profiles, the projects using each, and model choices",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "intelligence",
-        "operation",
-        "show"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "intelligence.operation.show",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:c81df1ad002a361f6875dd1242c165266f0094ef4786713e6f5eca6739fd5624",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "operation_id": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "operation_id"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/settings/intelligence/operations/{id}"
-          }
-        }
-      },
-      "summary": "The recorded result of one intelligence.set",
+      "summary": "The intelligence profiles (levels): each document with its candidates",
       "target": {
         "rule": "own"
       }
@@ -1057,110 +1017,6 @@
         }
       },
       "summary": "The intelligence registry: credentials and recent observations",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "intelligence",
-        "set"
-      ],
-      "grant": "intelligence.admin",
-      "kind": "mutation",
-      "name": "intelligence.set",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "params",
-          "params_digest": "sha256:807c453649c2f0c1171234815d4b51c29e886456cf6bf6b1fb65d25b0966fad5",
-          "params_schema": {
-            "additionalProperties": false,
-            "properties": {
-              "candidates": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "harnesses": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "id": {
-                      "type": "string"
-                    },
-                    "model": {
-                      "type": "string"
-                    },
-                    "provider": {
-                      "type": "string"
-                    },
-                    "reasoning_configuration_reference": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "provider",
-                    "model",
-                    "reasoning_configuration_reference",
-                    "harnesses"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 16,
-                "type": "array"
-              },
-              "delete": {
-                "type": "boolean"
-              },
-              "description": {
-                "maxLength": 2000,
-                "type": "string"
-              },
-              "expected_revision": {
-                "description": "The settings revision intelligence.list returned",
-                "pattern": "^(0|[1-9][0-9]{0,18})$",
-                "type": "string"
-              },
-              "name": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              "operation_id": {
-                "description": "Your ID for this change; repeat it to retry safely",
-                "format": "uuid",
-                "type": "string"
-              },
-              "profile_id": {
-                "type": "string"
-              },
-              "profile_version": {
-                "description": "The profile's current version; 0 creates it",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "operation_id",
-              "expected_revision",
-              "profile_id",
-              "profile_version",
-              "name",
-              "description",
-              "candidates"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "POST",
-            "path": "/api/settings/intelligence"
-          }
-        }
-      },
-      "summary": "Create, change or delete one intelligence profile",
       "target": {
         "rule": "own"
       }
@@ -1453,7 +1309,7 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:76fc936670d82bc3febf286bb28667c06740261834731d3df60a3903667f0b16",
+          "params_digest": "sha256:933b1ef15d3d8b2b7109ae2271d2ea40c4977ddb4ab57d9b5c14ddeb1d018bcb",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -1463,10 +1319,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "expected_catalog_revision": {
-                "description": "The Intelligence catalog revision as last read",
-                "type": "string"
               },
               "expected_revision": {
                 "description": "The settings revision as last read",
@@ -1500,7 +1352,6 @@
             "required": [
               "operation_id",
               "expected_revision",
-              "expected_catalog_revision",
               "overrides"
             ],
             "type": "object"
@@ -3518,78 +3369,6 @@
     },
     {
       "cli": [
-        "profile",
-        "catalog",
-        "active"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "profile.catalog.active",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {},
-            "required": [],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/profiles/catalogs"
-          }
-        }
-      },
-      "summary": "The active profile catalog's digest and revision",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "profile",
-        "catalog",
-        "show"
-      ],
-      "grant": "dashboard.read",
-      "kind": "read",
-      "name": "profile.catalog.show",
-      "owner_only": true,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:ff50ee07ca713bb2b66283845af4d7a64279805b5b706f3c9a7b8d20b7da841d",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "digest": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "digest"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/profiles/catalogs/{digest}"
-          }
-        }
-      },
-      "summary": "One profile catalog by digest",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
         "project",
         "disable"
       ],
@@ -4774,6 +4553,38 @@
     {
       "cli": [
         "routing",
+        "document",
+        "show"
+      ],
+      "grant": "dashboard.read",
+      "kind": "read",
+      "name": "routing.document.show",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "query",
+          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/api/settings/routing-document"
+          }
+        }
+      },
+      "summary": "The routing document: the text the routing playbook is authored from",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "routing",
         "set"
       ],
       "grant": "intelligence.admin",
@@ -4798,7 +4609,7 @@
           },
           "route": {
             "method": "POST",
-            "path": "/api/settings/intelligence/routing"
+            "path": "/api/settings/routing"
           }
         }
       },
@@ -4829,7 +4640,7 @@
           },
           "route": {
             "method": "GET",
-            "path": "/api/settings/intelligence/routing"
+            "path": "/api/settings/routing"
           }
         }
       },
@@ -5120,27 +4931,25 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:f15a7f14a66085f2aa4261dbaefc88373db03d53d19b2239587f95a6d686ad4a",
+          "params_digest": "sha256:60858c3e502a763fc6a806a20f16217fdfb311e114a59a846c9f4acac1b39327",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
               "intelligence_profile": {
                 "additionalProperties": false,
+                "description": "A level and one of its candidates",
                 "properties": {
                   "candidate_id": {
+                    "description": "provider:model:reasoning, as the list shows it",
                     "type": "string"
                   },
                   "profile_id": {
+                    "description": "The level document's id",
                     "type": "string"
-                  },
-                  "profile_version": {
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
                   "profile_id",
-                  "profile_version",
                   "candidate_id"
                 ],
                 "type": "object"
@@ -5550,7 +5359,7 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:afb777c7bd5e58435fb203c44ed1c90170cd05b025b9c1bf961ae0eb8b168343",
+          "params_digest": "sha256:171f13d488d6990896187b64603e9acd2667477398496a2775369c5018b91486",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -5568,21 +5377,19 @@
               },
               "intelligence_profile": {
                 "additionalProperties": false,
+                "description": "A level and one of its candidates",
                 "properties": {
                   "candidate_id": {
+                    "description": "provider:model:reasoning, as the list shows it",
                     "type": "string"
                   },
                   "profile_id": {
+                    "description": "The level document's id",
                     "type": "string"
-                  },
-                  "profile_version": {
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
                   "profile_id",
-                  "profile_version",
                   "candidate_id"
                 ],
                 "type": "object"
@@ -6036,7 +5843,7 @@
       "principals": {
         "agent": {
           "body": "params_with_api_version",
-          "params_digest": "sha256:ac8158a6171e45060ec887cc1c74657cefefe024b73e9106816905e0087c2015",
+          "params_digest": "sha256:719a5af8b52145ac7bca0f2310b69cd6d6e71699c9222091e55b10ee3cf92a49",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -6088,9 +5895,11 @@
                 "minimum": 1,
                 "type": "integer"
               },
-              "profile_hint": {
-                "description": "An agent cannot choose the profile of a task it creates",
-                "type": "null"
+              "role": {
+                "description": "The role the task expects; it must exist. Absent: the project's default role",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
               },
               "task_state": {
                 "enum": [
@@ -6122,7 +5931,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:44c0fc21cdd94ec3cec0afddab9b76cf8a23f1c5f582ea2ddb8357157f651701",
+          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6143,7 +5952,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:44c0fc21cdd94ec3cec0afddab9b76cf8a23f1c5f582ea2ddb8357157f651701",
+          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6396,7 +6205,7 @@
       "principals": {
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:e457bbff928e6264507cd72ae53f32a02523a6d4c1cbb40d9093274a5a33035a",
+          "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.graph.create"
           },
@@ -6413,7 +6222,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:e457bbff928e6264507cd72ae53f32a02523a6d4c1cbb40d9093274a5a33035a",
+          "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.graph.create"
           },
@@ -6938,6 +6747,65 @@
         }
       },
       "summary": "Release a task whose attempt has settled for a replacement attempt",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
+        "role",
+        "set"
+      ],
+      "grant": "task.edit",
+      "kind": "mutation",
+      "name": "task.role.set",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:8016e241820e4fcbcdd857a51903ba8039919e8e11991ca9cffbc21c229dde49",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.role.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
+        "supervisor": {
+          "body": "action_request",
+          "params_digest": "sha256:8016e241820e4fcbcdd857a51903ba8039919e8e11991ca9cffbc21c229dde49",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.role.set"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Set or clear the role a task names, before any attempt of it has been granted",
       "target": {
         "rule": "subject"
       }

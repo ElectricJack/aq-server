@@ -565,9 +565,13 @@ async fn list(
     let mut seen = std::collections::BTreeSet::new();
     let mut items = Vec::new();
     for value in rows {
-        let value = node(value, binding.workspace, kind)?;
+        let raw = value;
+        let mut value = node(raw, binding.workspace, kind)?;
         if !seen.insert(value["id"].as_str().ok_or_else(unavailable)?.to_owned()) {
             return Err(unavailable());
+        }
+        if kind == "task" {
+            value["role"] = crate::role_settings::shown(raw, &a.record.binding.default_role);
         }
         items.push(value)
     }
@@ -670,7 +674,10 @@ async fn detail(
     if raw["id"] != json!(id) || revision.is_some_and(|n| raw["content_revision"] != n) {
         return Err(unavailable());
     }
-    let projected = node(&raw, w, kind)?;
+    let mut projected = node(&raw, w, kind)?;
+    if kind == "task" {
+        projected["role"] = crate::role_settings::shown(&raw, &a.record.binding.default_role);
+    }
     finish(s, r, a, projected).await
 }
 async fn task(
@@ -761,7 +768,9 @@ async fn graph(
     let a = access(&s, &r, u, p).await?;
     let w = a.record.binding.graph_workspace_id;
     let raw = context(&s, w, id).await?;
-    let root = node(&raw["node"], w, "task")?;
+    let role = |n: &Value| crate::role_settings::shown(n, &a.record.binding.default_role);
+    let mut root = node(&raw["node"], w, "task")?;
+    root["role"] = role(&raw["node"]);
     let upstream_truncated = raw["truncated"].as_bool().ok_or_else(unavailable)?;
     let mut truncated = upstream_truncated;
     let mut nodes = vec![root];
@@ -786,7 +795,8 @@ async fn graph(
             count(&mut hidden_tasks, &value["task_state"]);
             continue;
         }
-        let n = node(value, w, "task")?;
+        let mut n = node(value, w, "task")?;
+        n["role"] = role(value);
         ids.insert(vid);
         nodes.push(n)
     }

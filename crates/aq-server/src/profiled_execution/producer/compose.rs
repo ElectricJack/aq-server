@@ -1,4 +1,9 @@
-use super::{now, refused};
+//! One description of a launch (spec 0014): the task's effective role, the
+//! level it was routed to or the project's default, and the role's execution
+//! profile, all read from the active role snapshot. The startup text and the
+//! permissions follow from those and the project binding; nothing here reads
+//! the old profile catalog.
+use super::{now, refused, result_startup::ReportingInstruction};
 use crate::{
     AppState,
     agent_access::scheduling::TaskContext,
@@ -6,187 +11,125 @@ use crate::{
     profiled_execution::context_projection::{self, Projection},
     project_bindings::domain::{EligibilityRequest, FrozenProjectBinding, ProjectRecord},
 };
-use aq_admission::{ArtifactRef, Digest, Text};
 use aq_profiles::{
-    Ceilings, CompileRequest, ContextInput, Delivery, GraphAccessPolicy, ValidatedCatalog,
+    GraphAccessPolicy, GraphAccessPolicyKind,
+    roles::{self, Snapshot, StartupInput, StartupText},
 };
-use aq_selection::{CapabilitySnapshot, PreparedComposition};
-use aq_session_api::{Permission, ProfileRequest, Source};
+use aq_role_settings::refusals;
+use aq_selection::{CapabilitySnapshot, PreparedLaunch};
+use aq_session_api::Permission;
+use serde_json::Value;
 use uuid::Uuid;
-const PLATFORM: &str = "Work on the exact pinned assignment in the authorized workspace. Use only the scoped tool permissions. Report source changes and evidence; a report is not task completion or authority to expand scope.";
+
+/// The launch rendered for one installed harness.
+pub struct Prepared {
+    pub launch: PreparedLaunch,
+    pub startup: StartupText,
+    pub policy: GraphAccessPolicy,
+    pub reporting: Option<ReportingInstruction>,
+}
 pub struct Compiled {
     pub frozen: FrozenProjectBinding,
     pub projection: Projection,
-    pub candidates: Vec<PreparedComposition>,
-    pub policies: Vec<GraphAccessPolicy>,
-    pub catalog: ValidatedCatalog,
-    pub agent: String,
-    /// A routed task's class profile and limits (spec 0011 §4).
-    pub intelligence_override: Option<String>,
+    /// The active role snapshot the launch was resolved from.
+    pub snapshot: Snapshot,
+    pub role: String,
+    pub level: String,
+    pub prepared: Vec<Prepared>,
+    /// What the role asks for, and what the project's ceilings leave of it.
+    pub requested: Vec<Permission>,
+    pub effective: Vec<Permission>,
+    /// The identity of the task thread in the startup text, when it has one.
+    pub thread_identity: Option<String>,
+    /// A routed task's harness and provider limits (spec 0011 §4).
     pub route: Option<aq_routing::RouteLimits>,
 }
-fn source(artifact: &ArtifactRef) -> Source {
-    Source {
-        identity: artifact.id.as_str().into(),
-        revision: artifact.version.as_str().into(),
-        digest: artifact.digest.as_str().into(),
+impl Compiled {
+    pub fn launch(&self) -> Result<roles::Launch<'_>, AppError> {
+        self.snapshot
+            .resolve(&self.role, &self.level)
+            .map_err(|_| refused())
     }
 }
+/// The level a task runs on: the class it was routed to (a level's id is the
+/// router's class, spec 0014 §5.2), otherwise the project's default.
+pub fn level(route: Option<&aq_routing::CompactRoute>, default_intelligence: &str) -> String {
+    route.map_or_else(|| default_intelligence.to_string(), |r| r.c.to_string())
+}
+/// The operations the graph access policy speaks of. The other operations a
+/// role lists are agent grants, sealed from the manifest's permission plan.
+const GRAPH_OPERATIONS: [&str; 3] = ["task.read", "knowledge.read", roles::SOURCE_WRITE];
+
+pub const INELIGIBLE: &str = "project binding does not admit this node now: ";
 pub async fn compile(
     state: &AppState,
     record: &ProjectRecord,
     node: Uuid,
     snapshot: &CapabilitySnapshot,
     context: &TaskContext,
+    metadata: &Value,
     route: Option<&aq_routing::CompactRoute>,
 ) -> Result<Compiled, AppError> {
-    let (revision, digest) = crate::project_bindings::active_catalog(state).await?;
-    let digest = digest.ok_or_else(|| refused())?;
-    if digest != record.binding.catalog_digest || record.binding.allowed_agent_profiles.len() != 1 {
-        return Err(refused());
-    }
-    let raw: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&digest)
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(|_| AppError::Internal)?;
-    if raw.len() > 2_097_152 {
-        return Err(refused());
-    }
-    let catalog = ValidatedCatalog::from_artifact(&raw).map_err(|_| refused())?;
-    if catalog.digest() != digest {
-        return Err(refused());
-    }
-    let agent_name = record.binding.allowed_agent_profiles[0].clone();
-    let agent = catalog
-        .artifact()
-        .catalog
-        .agents
-        .iter()
-        .find(|a| aq_profiles::key(&a.id, a.version) == agent_name)
+    let binding = &record.binding;
+    let active = crate::role_settings::active(&state.store.pool)
+        .await?
         .ok_or_else(|| refused())?;
-    // Spec 0011 §4: only an automatic router takes a route, and never runs one without its
-    // class profile. Allowing the router allows its class profiles.
-    let route = route.filter(|_| {
-        aq_selection::is_automatic_router(&catalog.artifact().catalog, &agent.intelligence)
-    });
-    let intelligence_override = match route {
-        Some(r) => Some(
-            crate::routing::class_profile(&state.store.pool, &catalog, r.c)
-                .await?
-                .ok_or_else(|| refused())?,
-        ),
-        None => None,
-    };
-    if !record
-        .binding
-        .allowed_intelligence_profiles
-        .contains(&agent.intelligence)
-        || !record
-            .binding
-            .allowed_execution_profiles
-            .contains(&agent.execution)
-    {
+    let role = aq_role_settings::tasks::effective_role(metadata, &binding.default_role).id;
+    let level = level(route, &binding.default_intelligence);
+    let launch = active.resolve(&role, &level).map_err(|_| refused())?;
+    if !launch.role.enabled {
         return Err(refused());
     }
-    let execution = catalog
-        .artifact()
-        .catalog
-        .execution
-        .iter()
-        .find(|e| aq_profiles::key(&e.id, e.version) == agent.execution)
-        .ok_or_else(|| refused())?;
-    let environment = execution
-        .environments
-        .iter()
-        .filter(|e| record.binding.allowed_environments.contains(e))
-        .min()
-        .ok_or_else(|| refused())?
-        .clone();
+    let execution = launch.execution;
+    let environment = execution.environment.clone();
+    if !binding.allowed_environments.contains(&environment) {
+        return Err(refused());
+    }
     let eligibility = crate::project_bindings::check_eligibility(
         state,
-        record.binding.project_id,
+        binding.project_id,
         &EligibilityRequest {
             expected_project_revision: record.revision,
-            expected_catalog_revision: revision,
             node_id: node,
             environment: environment.clone(),
-            agent_profile: agent_name.clone(),
-            intelligence_profile: agent.intelligence.clone(),
-            execution_profile: agent.execution.clone(),
-            intelligence_override: intelligence_override.clone(),
+            role: role.clone(),
+            intelligence_profile: level.clone(),
+            execution_profile: execution.id.clone(),
+            snapshot_digest: active.digest().to_string(),
         },
     )
     .await?;
-    let frozen = eligibility
-        .frozen_binding
+    // Not this node's task now: the poll goes on with the next one.
+    let ineligible = || AppError::Conflict(format!("{INELIGIBLE}{:?}", eligibility.reasons));
+    let frozen = (eligibility.frozen_binding.clone())
         .filter(|_| eligibility.eligible)
-        .ok_or_else(|| refused())?;
-    let permissions = record
-        .binding
-        .ceilings
-        .permissions
-        .iter()
+        .ok_or_else(ineligible)?;
+    // Spec 0014 §6.2: the role's operations, scoped to this project and its
+    // repository, within the project's ceilings. The scheduler is the caller
+    // and holds exactly the project's ceilings.
+    let ceilings: Vec<Permission> = (binding.ceilings.permissions.iter())
         .map(|p| Permission {
             operation: p.operation.clone(),
             scope_reference: p.scope_reference.clone(),
         })
-        .collect::<Vec<_>>();
+        .collect();
+    let (project, repository) = (binding.project_id, binding.repository_id);
+    let requested = roles::requested_permissions(launch.role, project, repository);
+    let effective =
+        roles::effective_permissions(launch.role, project, repository, &ceilings, &ceilings);
     let projection = context_projection::project(
         context,
-        record.binding.project_id,
-        record.binding.repository_id,
-        record.binding.graph_workspace_id,
-        &permissions,
+        project,
+        repository,
+        binding.graph_workspace_id,
+        &effective,
         now(state)?,
     )
     .map_err(|_| refused())?;
-    let project_ref = ArtifactRef {
-        id: Text::new(&record.binding.policy.identity).map_err(|_| refused())?,
-        version: Text::new(&record.binding.policy.revision).map_err(|_| refused())?,
-        digest: serde_json::from_value(serde_json::json!(record.binding.policy.digest))
-            .map_err(|_| refused())?,
-    };
-    let config = state
-        .config
-        .profiled_execution
-        .as_ref()
-        .ok_or_else(|| refused())?;
-    let project_body = config
-        .definition_bodies
-        .iter()
-        .find(|d| d.artifact() == &project_ref)
-        .ok_or_else(|| refused())?;
-    let project_text = format!(
-        "Project policy (exact owner definition follows):\n{}",
-        project_body.body()
-    );
-    let project_input = super::artifacts::reference(
-        &format!("aq.project-instructions/{}", project_ref.digest.as_str()),
-        project_text.as_bytes(),
-    )?;
-    // Additional opaque project context references need an owned delivery policy;
-    // this first complete profile refuses instead of treating unknown tokens as0.
-    if !record.binding.context.is_empty() {
+    // Additional opaque project context references need an owned delivery policy.
+    if !binding.context.is_empty() {
         return Err(refused());
     }
-    let mut installation = ["task.read", "knowledge.read"]
-        .into_iter()
-        .map(|operation| Permission {
-            operation: operation.into(),
-            scope_reference: format!("project:{}", record.binding.project_id),
-        })
-        .collect::<Vec<_>>();
-    installation.push(Permission {
-        operation: "source.write".into(),
-        scope_reference: format!("repository:{}", record.binding.repository_id),
-    });
-    let platform_ref = ArtifactRef {
-        id: Text::new("aq.platform-native-instructions").map_err(|_| refused())?,
-        version: Text::new("1").map_err(|_| refused())?,
-        digest: Digest::of(PLATFORM.as_bytes()),
-    };
     let mut harnesses = snapshot
         .harnesses
         .iter()
@@ -205,111 +148,110 @@ pub async fn compile(
             .cmp(&b.harness)
             .then(a.cli_version.cmp(&b.cli_version))
     });
+    harnesses.dedup_by(|a, b| a.harness == b.harness);
     if harnesses.is_empty() || harnesses.len() > 16 {
         return Err(refused());
     }
-    // Spec 0006 §7: the task thread follows the assignment, optional under the budget.
-    let task = context.revision.task_id;
+    let task = String::from_utf8(projection.bytes.clone()).map_err(|_| refused())?;
     let thread =
-        crate::agent_access::task_thread::startup_input(state, record.binding.project_id, task)
+        crate::agent_access::task_thread::startup_input(state, project, context.revision.task_id)
             .await;
-    let mut candidates = Vec::new();
-    let mut policies = Vec::new();
+    let thread_identity = thread.as_ref().map(|input| input.identity.clone());
+    let thread = thread.map(|input| input.text);
+    let limit = execution
+        .limits
+        .startup_context_bytes
+        .min(binding.ceilings.context_bytes);
+    let graph: Vec<Permission> = (effective.iter())
+        .filter(|p| GRAPH_OPERATIONS.contains(&p.operation.as_str()))
+        .cloned()
+        .collect();
+    let context_revision = format!(
+        "{}:{}:{}",
+        context.revision.task_id, context.revision.version, context.revision.content_revision
+    );
+    let mut prepared = Vec::new();
     for harness in harnesses {
         let reporting = super::result_startup::for_adapter(state, &harness.adapter)?;
-        let request = CompileRequest {
-            profile: ProfileRequest {
-                catalog_digest: digest.clone(),
-                agent_profile: agent_name.clone(),
-                project_binding_id: record.binding.project_id,
-                expected_project_revision: record.revision,
-                task_context_revision: format!(
-                    "{}:{}:{}",
-                    context.revision.task_id,
-                    context.revision.version,
-                    context.revision.content_revision
-                ),
+        let assembled = roles::assemble_startup(
+            &StartupInput {
+                platform: roles::platform_text(&environment),
+                role: launch.role,
+                project_notes: binding.role_notes.get(&role).map(String::as_str),
+                // Spec 0014 §11 q3 (a): the platform text tells the agent to
+                // read the repository's own notes in its workspace.
+                repository_notes: None,
+                task: &task,
+                task_thread: thread.as_deref(),
+                reporting: reporting.as_ref().map(|r| r.text.as_str()),
             },
-            ceilings: Ceilings {
-                installation: installation.clone(),
-                project: permissions.clone(),
-                execution: execution.permissions.clone(),
-                caller: permissions.clone(),
-            },
-            available_tools: vec![
-                "task.read".into(),
-                "knowledge.read".into(),
-                "source.write".into(),
-            ],
-            available_adapters: vec![harness.harness.clone()],
-            harness: harness.harness.clone(),
-            environment: environment.clone(),
-            platform: ContextInput {
-                source: source(&platform_ref),
-                text: PLATFORM.into(),
-                delivery: Delivery::Startup,
-                required: true,
-                omission_priority: 0,
-            },
-            project: ContextInput {
-                source: source(&project_input),
-                text: project_text.clone(),
-                delivery: Delivery::Startup,
-                required: true,
-                omission_priority: 0,
-            },
-            assignment: ContextInput {
-                source: source(&projection.artifact),
-                text: String::from_utf8(projection.bytes.clone()).map_err(|_| refused())?,
-                delivery: Delivery::Startup,
-                required: true,
-                omission_priority: 0,
-            },
-            context: reporting
-                .as_ref()
-                .map(|r| r.context())
-                .into_iter()
-                .chain(thread.clone())
-                .collect(),
-            overrides: vec![],
-            intelligence_override: intelligence_override.clone(),
+            limit,
+        );
+        let startup = match assembled {
+            Ok(startup) => startup,
+            // Spec 0014 §6.1: refused with a reason the task's work read shows.
+            Err(error) => {
+                let ceiling = binding.ceilings.context_bytes;
+                let Some(refusal) = refusals::of_startup(&error, execution, ceiling, &environment)
+                else {
+                    return Err(refused());
+                };
+                let task = context.revision.task_id;
+                return Err(
+                    crate::role_settings::offer_refused(state, task, project, &refusal).await,
+                );
+            }
         };
-        let draft = aq_profiles::compile_draft(&catalog, &request).map_err(|_| refused())?;
-        if !draft.composition_valid {
-            continue;
-        }
-        let sealed = draft
-            .composition
-            .ok_or_else(|| refused())?
-            .seal(projection.scope.clone(), &projection.context)
+        let policy = GraphAccessPolicy {
+            schema_version: 1,
+            kind: GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1,
+            project_binding_id: project,
+            project_revision: record.revision,
+            source_context_revision: context_revision.clone(),
+            context_digest: digest(&projection.context)?,
+            instructions_digest: digest(&startup.rendered)?,
+            tool_policy_digest: digest(&(&requested, &effective))?,
+            effective_permissions: graph.clone(),
+            scope: projection.scope.clone(),
+        };
+        policy
+            .validate_context(&projection.context)
             .map_err(|_| refused())?;
-        if sealed
-            .composition
-            .instruction_order
-            .iter()
-            .any(|i| i.delivery != Delivery::Startup)
-        {
-            continue;
-        }
-        let composition_digest =
-            aq_selection::digest(&sealed.composition).map_err(|_| AppError::Internal)?;
-        candidates.push(PreparedComposition {
-            digest: composition_digest,
-            composition: sealed.composition,
+        let launch_digest = aq_selection::digest(&(
+            active.digest(),
+            (&role, &level, &execution.id),
+            (&harness.harness, &environment),
+            &startup.rendered,
+            (&requested, &effective),
+            &context_revision,
+        ))
+        .map_err(|_| AppError::Internal)?;
+        prepared.push(Prepared {
+            launch: PreparedLaunch {
+                digest: launch_digest,
+                harness: harness.harness.clone(),
+                environment: environment.clone(),
+                startup_bytes: startup.rendered.len() as u64,
+                startup_limit_bytes: limit,
+            },
+            startup,
+            policy,
+            reporting,
         });
-        policies.push(sealed.graph_access_policy);
-    }
-    if candidates.is_empty() {
-        return Err(refused());
     }
     Ok(Compiled {
         frozen,
         projection,
-        candidates,
-        policies,
-        catalog,
-        agent: agent_name,
-        intelligence_override,
+        role,
+        level,
+        prepared,
+        requested,
+        effective,
+        thread_identity,
         route: route.map(aq_routing::CompactRoute::limits),
+        snapshot: active,
     })
+}
+fn digest<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
+    aq_profiles::digest(value).map_err(|_| AppError::Internal)
 }

@@ -23,12 +23,14 @@ async fn setup() -> (common::profiled::Fixture, Uuid, sqlx::PgPool) {
 #[tokio::test]
 async fn offline_expired_offer_closes_without_guardian_and_preserves_history_budget_and_replay() {
     let (f, attempt, pool) = setup().await;
+    common::roles::pin_active(&pool, attempt).await;
     assert!(
         no_grant::close_expired(&f.state, f.node.node_id, attempt)
             .await
             .unwrap()
             .is_none()
     );
+    assert!(common::roles::pinned(&pool, attempt).await);
     f.time.store((NOW + 30000) as i64, Ordering::SeqCst);
     let first = no_grant::close_expired(&f.state, f.node.node_id, attempt)
         .await
@@ -62,6 +64,8 @@ async fn offline_expired_offer_closes_without_guardian_and_preserves_history_bud
     .unwrap();
     assert_eq!(view.status, Status::NeverGranted);
     assert!(!view.holds_task);
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pool, attempt).await);
     assert!(!view.stopped);
     assert!(matches!(view.stop, Some(Stop::Unknown)));
     assert!(view.active_at(NOW + 30000).is_err());

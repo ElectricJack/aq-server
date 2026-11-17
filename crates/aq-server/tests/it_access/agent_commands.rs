@@ -363,7 +363,7 @@ async fn owner_commands_reach_the_same_handlers() {
         ),
         (
             "intelligence.list",
-            "/api/settings/intelligence".to_string(),
+            "/api/settings/intelligence-profiles".to_string(),
             json!({}),
             false,
         ),
@@ -374,15 +374,9 @@ async fn owner_commands_reach_the_same_handlers() {
             false,
         ),
         (
-            "profile.catalog.active",
-            "/api/profiles/catalogs".to_string(),
+            "routing.document.show",
+            "/api/settings/routing-document".to_string(),
             json!({}),
-            false,
-        ),
-        (
-            "profile.catalog.show",
-            format!("/api/profiles/catalogs/{}", "0".repeat(64)),
-            json!({"digest":"0".repeat(64)}),
             false,
         ),
     ] {
@@ -627,14 +621,14 @@ async fn owner_commands_reach_the_same_handlers() {
         (
             "routing.show",
             "GET",
-            "/api/settings/intelligence/routing".to_string(),
+            "/api/settings/routing".to_string(),
             json!({}),
             None,
         ),
         (
             "routing.set",
             "POST",
-            "/api/settings/intelligence/routing".to_string(),
+            "/api/settings/routing".to_string(),
             json!({"enabled":false}),
             None,
         ),
@@ -773,6 +767,69 @@ async fn owner_commands_reach_the_same_handlers() {
     assert!(owner_rows >= 3);
 }
 
+/// Spec 0014 step 3b: an agent may not hand out more than it holds. An attempt
+/// that runs as the reviewer files a reviewer task, and is refused a developer
+/// task, whose role may write source.
+#[tokio::test]
+async fn an_agent_files_a_task_only_for_a_role_within_its_own_operations() {
+    let e = setup_with(Some(json!([
+        {"operation":"task.create.subtask","scope":"task:subtree","limits":{"max_created_tasks":3,"max_depth":2}},
+        {"operation":"task.read","scope":"project:self"}
+    ])))
+    .await;
+    let attempt = Uuid::parse_str(e.binding["attempt_id"].as_str().unwrap()).unwrap();
+    let active = aq_role_settings::active_snapshot(&e.pool).await.unwrap();
+    let digest = active.unwrap().snapshot.digest().to_string();
+    let ran_with = aq_role_settings::attempts::RanWith {
+        role: "reviewer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: Some(digest),
+    };
+    let mut conn = e.pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, attempt, &ran_with)
+        .await
+        .unwrap();
+    drop(conn);
+    let create = |role: &str| {
+        let (app, token) = (e.app.clone(), e.token.clone());
+        let params =
+            json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","role":role});
+        async move {
+            let path = "/api/v1/commands/task.create";
+            send(&app, path, Some(&token), Some(json!({"params":params}))).await
+        }
+    };
+    let (status, body) = create("developer").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_request", "{body}");
+    assert_eq!(
+        body["message"],
+        "Role `developer` is not within your own role `reviewer`: it may use source.write, which you may not. An agent can file a task only for a role whose operations it holds itself."
+    );
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0, "refused before the quota is reserved");
+    // Within its own operations the rule does not refuse it.
+    let (_, body) = create("reviewer").await;
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(!message.contains("is not within your own role"), "{body}");
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        reserved, 1,
+        "the reviewer task passed the role rule: {body}"
+    );
+}
+
 /// Spec 0006 phase 2: subtask creation is confined to the attempt's subtree,
 /// limited in count and depth, and cannot pick a child's profile.
 #[tokio::test]
@@ -831,13 +888,36 @@ async fn agent_task_creation_is_scoped_limited_and_cannot_escalate() {
         (StatusCode::FORBIDDEN, "scope_denied".into()),
         "{body}"
     );
-    // A hint that could launch the child under another profile.
-    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","profile_hint":"admin"})).await;
+    // A hint that could launch the child on another level.
+    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","intelligence_hint":"deep-high"})).await;
     assert_eq!(
         (status, code(&body)),
         (StatusCode::FORBIDDEN, "scope_denied".into()),
         "{body}"
     );
+    // `profile_hint` no longer exists: it is an unknown field.
+    let (status, body) = create(json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","profile_hint":"admin"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // An agent names the role, and it must exist (spec 0014 §5.5). The
+    // refusal comes before the quota is reserved.
+    let (status, body) = create(
+        json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","role":"tester"}),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::BAD_REQUEST, "invalid_request".into()),
+        "{body}"
+    );
+    assert_eq!(
+        body["message"],
+        "Role `tester` does not exist. The roles are: developer, reviewer."
+    );
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0);
     // Depth: a grandchild (depth 2) is allowed, a great-grandchild is not.
     let (child, grandchild) = (Uuid::new_v4(), Uuid::new_v4());
     for (task, parent, depth) in [(child, own, 1), (grandchild, child, 2)] {
@@ -1104,8 +1184,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     let binding = json!({"schema_version":1,"project_id":project,"name":"Agent channel fixture","enabled":true,
         "repository_id":Uuid::from_u128(2),"repository_binding_generation":1,
         "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured",
-        "graph_workspace_id":workspace,"catalog_digest":"a".repeat(64),"allowed_agent_profiles":[],
-        "allowed_intelligence_profiles":[],"allowed_execution_profiles":[],"allowed_node_ids":[],
+        "graph_workspace_id":workspace,"allowed_node_ids":[],
         "allowed_worker_groups":[],"allowed_environments":[],
         "policy":{"identity":"project-policy","revision":"1","digest":"b".repeat(64)},"context":[],
         "ceilings":{"permissions":[],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,
@@ -1128,7 +1207,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     };
     let op = Uuid::new_v4();
     let (status, body) = create(json!({"operation_id":op,"title":"Verify changelog links",
-        "body":"Created by the agent.","parent_id":"self"}))
+        "body":"Created by the agent.","parent_id":"self","role":"reviewer"}))
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
@@ -1152,6 +1231,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     assert_eq!(created["task_state"], "active");
     assert_eq!(created["metadata"]["aq:agent_attempt_id"], json!(attempt));
     assert_eq!(created["metadata"]["aq:project_id"], project);
+    assert_eq!(created["metadata"]["aq:role"], "reviewer");
     assert!(
         ops.iter().any(|o| o["op"] == "add_edge"
             && o["edge_type"] == "parent-child"

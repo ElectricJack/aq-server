@@ -433,11 +433,22 @@ async fn load_profiled_compat(
     {
         return Err(AuthorityError::InvalidState);
     }
-    let selected: aq_selection::ResolvedSelection =
-        serde_json::from_value(immutable.get("selection"))
-            .map_err(|_| AuthorityError::InvalidState)?;
-    let selection_digest =
-        aq_selection::digest(&selected).map_err(|_| AuthorityError::InvalidState)?;
+    // A selection recorded before roles and profiles (spec 0014) keeps its
+    // old shape and its stored digest; no type here reads it.
+    let stored_selection: Value = immutable.get("selection");
+    let invalid = |_| AuthorityError::InvalidState;
+    let historical = aq_selection::recorded_before_roles(&stored_selection);
+    let selected: Option<aq_selection::ResolvedSelection> = match historical {
+        true => None,
+        false => Some(serde_json::from_value(stored_selection.clone()).map_err(invalid)?),
+    };
+    let selection_digest: Digest = match &selected {
+        Some(selected) => {
+            aq_selection::digest(selected).map_err(|_| AuthorityError::InvalidState)?
+        }
+        None => serde_json::from_value(Value::String(immutable.get("selection_digest")))
+            .map_err(invalid)?,
+    };
     let spec: Value = immutable.get("execution_spec");
     let admitted_selection: Value = immutable.get("admitted_selection");
     if spec.get("kind").and_then(Value::as_str) != Some("synthetic_profiled_authority_fixture") {
@@ -469,36 +480,12 @@ async fn load_profiled_compat(
         },
         _ => return Err(AuthorityError::Unsupported),
     };
-    let choice = &selected.choice;
     let manifest = &value.offer.manifest;
-    if admitted_selection
-        != serde_json::to_value(&selected).map_err(|_| AuthorityError::InvalidState)?
-        || selected.catalog_digest != manifest.catalog.digest
-        || selected.project_revision != manifest.bindings.project_revision
+    if admitted_selection != stored_selection
         || immutable.get::<String, _>("selection_digest") != selection_digest.as_str()
         || aq_selection::digest(&spec).map_err(|_| AuthorityError::InvalidState)?
             != value.offer.binding.execution_spec_digest
-        || selected.lineage.task_id != manifest.bindings.task_id
-        || selected.lineage.workspace_id != manifest.bindings.graph_id
-        || selected.lineage.project_id != manifest.bindings.project_id
-        || selected.target != selected_node
-        || choice.provider != manifest.model.provider.as_str()
-        || choice.model != manifest.model.model.as_str()
-        || choice.native_reasoning != manifest.model.reasoning.as_str()
-        || choice.max_output_tokens != manifest.model.max_output_tokens
-        || choice.harness != manifest.harness.harness.as_str()
-        || choice.cli_version != manifest.harness.cli_version.as_str()
-        || choice.adapter != manifest.harness.adapter
-        || choice.environment != manifest.harness.environment
-        || choice.resources.memory_bytes != manifest.resources.memory_bytes
-        || choice.resources.cpu_millis != manifest.resources.cpu_millis
-        || choice.resources.process_limit != manifest.resources.process_limit
-        || choice.resources.wall_time_ms != manifest.resources.wall_time_ms
-        || manifest.credentials.is_empty()
-        || manifest
-            .credentials
-            .iter()
-            .any(|c| c.credential_profile != choice.credential_profile)
+        || selected.is_some_and(|s| s.differs_from(manifest, &selected_node))
     {
         return Err(AuthorityError::InvalidState);
     }

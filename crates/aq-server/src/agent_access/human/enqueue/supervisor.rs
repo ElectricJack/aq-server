@@ -44,6 +44,9 @@ impl GraphPayload for SingleGraph {
     fn tasks(&self) -> Vec<Uuid> {
         self.0.tasks()
     }
+    fn roles(&self) -> Vec<&str> {
+        self.0.roles()
+    }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
         self.0.operations(c)
     }
@@ -69,7 +72,7 @@ fn single(request: &ActionRequest, p: &super::super::commands::Create) -> ApiRes
                 .map_err(|_| ApiError::invalid())?,
             parent_id: p.parent_id,
             priority: p.priority,
-            profile_hint: p.profile_hint.clone(),
+            role: p.role.clone(),
             intelligence_hint: p.intelligence_hint.clone(),
             task_type: p.task_type.clone(),
         }],
@@ -132,8 +135,10 @@ fn registry(state: &AppState, p: SupervisorPrincipal) -> ApiResult<Registry> {
         p.clone(),
     )))?;
     use super::super::graph_actions::{
-        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRouteClear, TaskRouteSet,
+        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRoleSet, TaskRouteClear,
+        TaskRouteSet,
     };
+    r.register(GraphAction::<TaskRoleSet>::for_supervisor(state, p.clone()))?;
     r.register(GraphAction::<TaskEdit>::for_supervisor(state, p.clone()))?;
     r.register(GraphAction::<TaskReprioritize>::for_supervisor(
         state,

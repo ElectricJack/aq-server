@@ -102,7 +102,7 @@ Owners upload a file first, then reference it from a Create.
 
 ## Supervisor History attachments (additive, for G8)
 
-Published schema digest: `sha256:0ad1658448757bdbca81ee6edb87de9a0269e38d256883a8c1b2033ae97ea9b9`
+Published schema digest: `sha256:412069f36c814496fb7c1d336b6342c8773c4fd4da54a12908c2c8c6c8c927ae`
 (also in `schema.sha256`; `supervisor_turns` fails if the two diverge). Pin it.
 
 A supervisor `SupervisorItem` may carry `attachments` (0–4 items, schema

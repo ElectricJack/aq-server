@@ -126,6 +126,24 @@ fell in that window (`samples_15m` is 0). Samples are stored at most once per
 5 s per node. `agent_max` is the sum of the node slot
 totals, and absent when any total is unknown.
 
+Slot-holding attempts (additive, 2026-11-17): a node's `agents` lists every
+attempt that holds a slot on it, not only the running ones, so the rows of a
+node equal its `slots.occupied` (both count `execution_attempts.holds_task`).
+They differ only when more than 128 attempts hold a slot (the 128 most recent
+are listed and `coverage.reason` says so) or under a project scope, which lists
+that project's attempts while `slots` stay node-wide. Each row carries `phase`:
+`starting` (offered, preparing or granted; the agent has not started), `running`
+(started, with a live grant; exactly what `server.running_agents` and the
+overview count) or `finishing` (stopped, cancelled or expired; the slot is not
+released yet). `started_at` is the worker's started receipt once the agent
+started, and otherwise `held_since`, the time the attempt was offered and took
+the slot; `held_since` is absent for an attempt with no launch record.
+`task.title` is the task's graph title, read once per task and cached for five
+minutes; while it has not been read it is the task id. `ran_with` is the
+attempt's summary (spec 0014 §7.1) or `null`; `last_output_at` is the last
+terminal output the relay recorded or `null`, and output is not progress. The
+attempts and their summaries are read in two statements for the whole page.
+
 Phase 1 service machines: a node enrolled with `aq-worker service` holds a server-side machine key (claimed by its slot 1). That key groups the machine's nodes ahead of any reported key, and a reported key that a service machine holds no longer groups other nodes. A service machine carries `control` (desired state, compare-and-swap generation, its time, pending handoffs). `control` is `null` for legacy and `node:` machines, which the worker actions refuse. Each service node's `service.state` is its machine's desired state.
 
 Owner availability (spec 0007 Q2): `server.owner_availability` is the owner's sticky availability switch: `state` (`unset`, `on` or `off`), its decimal compare-and-swap `generation` for `swarm.availability.set`, and `since` (when it last changed; `null` while unset, at generation `"1"`). `on` makes selection treat the owner as available (no observation row is needed) until the owner switches it off; `off` stops new offers. `unset` leaves manual observations as they were. A switch set by a user who is no longer an owner reads `unset`, with `note` saying so, at its real `generation`, so an owner can switch it again in one step; `note` is absent otherwise.
@@ -191,3 +209,11 @@ independent of the quota windows; old clients and snapshots may omit the field.
 The snapshot collector bounds display text and counts and rejects malformed
 metadata without discarding valid windows. Direct legacy HTTP sources omit
 reset metadata.
+
+Spec 0015 adds an optional one-based `slot` to each native Swarm agent row. Node
+`slots.total` is the server's configured shared count; `occupied` counts queued
+attempts whose compute is not proven stopped plus live claimed manual sessions;
+`idle` saturates at zero when the count is lowered. A stopped attempt awaiting
+settlement may remain visible as finishing history without occupying compute.
+Machines retain independent child nodes, each with its own count. These are
+capacity facts, not proof that an unknown attempt stopped or permission to launch.

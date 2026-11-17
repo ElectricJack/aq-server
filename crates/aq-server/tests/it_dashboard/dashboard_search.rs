@@ -54,6 +54,8 @@ async fn graph(
             ))
             .unwrap();
             item = item["data"].take();
+            // `role` is AQ's projection (spec 0014 §5.5), not a Graph field.
+            item.as_object_mut().unwrap().remove("role");
             item["workspace_id"] = json!(workspace);
             item["id"] = json!(Uuid::from_u128(n));
             item["kind"] = json!(q["kind"]);

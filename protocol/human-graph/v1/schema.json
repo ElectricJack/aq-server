@@ -475,6 +475,10 @@
                 "type": "null"
               }
             ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/HumanRole",
+            "description": "Present on every task node; absent on knowledge."
           }
         },
         "required": [
@@ -940,6 +944,9 @@
           "status": {
             "type": "string",
             "maxLength": 64
+          },
+          "ran_with": {
+            "$ref": "#/components/schemas/HumanRanWith"
           }
         },
         "required": [
@@ -947,6 +954,70 @@
           "attempt_id",
           "session_id",
           "status"
+        ],
+        "additionalProperties": false
+      },
+      "HumanRanWith": {
+        "type": "object",
+        "description": "What an attempt ran with (spec 0014 §7.1): its role, the intelligence profile (level), the model and reasoning effort, the harness, the execution profile and the digest of the role snapshot it launched from. For an attempt recorded before roles and profiles the summary comes from its launch record and `snapshot_digest` is null. Absent when the attempt has no such record.",
+        "properties": {
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "level": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "reasoning": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "execution_profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "snapshot_digest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "level",
+          "provider",
+          "model",
+          "reasoning",
+          "harness",
+          "execution_profile",
+          "snapshot_digest"
         ],
         "additionalProperties": false
       },
@@ -969,6 +1040,9 @@
           "version": {
             "type": "string",
             "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "role": {
+            "$ref": "#/components/schemas/HumanRole"
           },
           "readiness": {
             "type": "object",
@@ -1039,7 +1113,20 @@
                 "type": "array",
                 "maxItems": 4,
                 "items": {
-                  "$ref": "#/components/schemas/HumanHoldReason"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HumanHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanRoleHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanLevelHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanOfferRefusalReason"
+                    }
+                  ]
                 }
               }
             },
@@ -1076,6 +1163,7 @@
           "task_id",
           "task_state",
           "version",
+          "role",
           "readiness",
           "parent",
           "execution"
@@ -1176,6 +1264,9 @@
                 "status": {
                   "type": "string",
                   "maxLength": 64
+                },
+                "ran_with": {
+                  "$ref": "#/components/schemas/HumanRanWith"
                 }
               },
               "required": [
@@ -1463,7 +1554,7 @@
       },
       "HumanHistoryChange": {
         "type": "object",
-        "description": "What one history entry changed. Values are given only for task state, priority, content type, retired and deleted.",
+        "description": "What one history entry changed. Values are given only for task state, priority, role, content type, retired and deleted.",
         "properties": {
           "summary": {
             "type": "string",
@@ -1471,7 +1562,7 @@
           },
           "fields": {
             "type": "array",
-            "maxItems": 16,
+            "maxItems": 17,
             "items": {
               "type": "object",
               "properties": {
@@ -1482,6 +1573,7 @@
                     "acceptance_criteria",
                     "labels",
                     "priority",
+                    "role",
                     "metadata",
                     "task_state",
                     "provenance",
@@ -1695,6 +1787,113 @@
             "required": [
               "state"
             ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "HumanRole": {
+        "type": "object",
+        "description": "A task's effective role (spec 0014 §5.5): the role the task names (source task), otherwise the project binding's default_role (source project_default).",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "source": {
+            "enum": [
+              "task",
+              "project_default"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "HumanRoleHoldReason": {
+        "type": "object",
+        "description": "Why AQ does not offer an active task because of its role (spec 0014 §5.5): the effective role is disabled, or the active roles no longer hold it.",
+        "properties": {
+          "code": {
+            "enum": [
+              "role_disabled",
+              "role_missing"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "code",
+          "role",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "HumanLevelHoldReason": {
+        "type": "object",
+        "description": "Why AQ does not offer an active task because of its level (spec 0014 §5.2): no intelligence profile has the id of the class the task was routed to, or of the project's default.",
+        "properties": {
+          "code": {
+            "enum": [
+              "level_missing"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "code",
+          "level",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "HumanOfferRefusalReason": {
+        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. Recorded by the offer path and removed when a later offer of the task composes.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["startup_over_limit"] },
+              "bytes": { "type": "integer", "minimum": 0 },
+              "limit": { "type": "integer", "minimum": 0 },
+              "execution_profile": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "profile_limit": { "type": "integer", "minimum": 0 },
+              "project_ceiling": { "type": "integer", "minimum": 0 },
+              "limiting": { "enum": ["startup_context_bytes", "project_context_bytes"] },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "bytes", "limit", "execution_profile", "profile_limit", "project_ceiling", "limiting", "message", "recorded_at_ms"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["platform_text_missing"] },
+              "environment": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "environment", "message", "recorded_at_ms"],
             "additionalProperties": false
           }
         ]

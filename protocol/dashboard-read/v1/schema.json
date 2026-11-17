@@ -28,6 +28,26 @@
       ],
       "type": "object"
     },
+    "AgentPhase": {
+      "description": "Where a slot-holding attempt is.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Offered, preparing or granted; the agent has not started.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "The agent started and its grant is live.",
+          "type": "string"
+        },
+        {
+          "const": "finishing",
+          "description": "Stopped, cancelled or expired; the slot is not released yet.",
+          "type": "string"
+        }
+      ]
+    },
     "ApiVersion": {
       "enum": [
         "dashboard-read-1"
@@ -2326,6 +2346,49 @@
       ],
       "type": "object"
     },
+    "RanWith": {
+      "additionalProperties": false,
+      "description": "What an attempt ran with (spec 0014 §7.1), as every read shows it: the\nserialized form of `aq_role_settings::attempts::RanWith`.\n`snapshot_digest` is null for an attempt recorded before roles and\nprofiles.",
+      "properties": {
+        "execution_profile": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "snapshot_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "level",
+        "provider",
+        "model",
+        "reasoning",
+        "harness",
+        "execution_profile"
+      ],
+      "type": "object"
+    },
     "RateCardRef": {
       "additionalProperties": false,
       "properties": {
@@ -2740,6 +2803,17 @@
         "project": {
           "$ref": "#/$defs/ProjectRef"
         },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent when the attempt has no summary."
+        },
         "record_revision": {
           "anyOf": [
             {
@@ -3013,6 +3087,17 @@
           },
           "type": "array"
         },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent when the attempt has no summary."
+        },
         "requested_permissions": {
           "items": {
             "$ref": "#/$defs/PermissionScope"
@@ -3193,7 +3278,7 @@
     },
     "SlotSummary": {
       "additionalProperties": false,
-      "description": "Sandbox slots across online, unrevoked workers. `occupied` counts every\ntask-holding attempt; `total` and `idle` are unknown while any online\nworker advertises no slot total (host-native workers).",
+      "description": "Shared compute slots across online, unrevoked nodes. Occupied includes native\nattempts without stop proof and claimed manual sessions. Historical servers\ncan leave totals unknown; current counts come from server Settings.",
       "properties": {
         "coverage": {
           "$ref": "#/$defs/Coverage"
@@ -3417,7 +3502,7 @@
     },
     "SwarmAgent": {
       "additionalProperties": false,
-      "description": "A running agent on a node.",
+      "description": "A task-holding attempt, including proven-stopped attempts awaiting settlement.",
       "properties": {
         "attempt_id": {
           "format": "uuid",
@@ -3428,6 +3513,17 @@
             "string",
             "null"
           ]
+        },
+        "held_since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the attempt was offered and took its slot."
         },
         "intelligence_class": {
           "anyOf": [
@@ -3440,10 +3536,32 @@
           ],
           "description": "Legacy model-based palette hint; routing_profile identifies the enforced class."
         },
+        "last_output_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last terminal output the relay recorded. Output is not progress."
+        },
         "model": {
           "type": [
             "string",
             "null"
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPhase"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "project": {
@@ -3454,6 +3572,18 @@
             "string",
             "null"
           ]
+        },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null when the attempt has no summary."
         },
         "routing_profile": {
           "anyOf": [
@@ -3469,6 +3599,16 @@
           "format": "uuid",
           "type": "string"
         },
+        "slot": {
+          "description": "One-based durable node slot; absent only for older servers/legacy attempts.",
+          "format": "uint32",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "started_at": {
           "anyOf": [
             {
@@ -3477,7 +3617,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "When the agent started; for an attempt whose agent never started, when\nthe attempt took the slot (`held_since`)."
         },
         "task": {
           "anyOf": [

@@ -30,12 +30,8 @@ pub(crate) fn choice_supported_by_harness(
         && h.adapter == c.adapter
         && h.environment == c.environment
         && h.qualification == c.qualification
-        && h.models.iter().any(|m| {
-            m.provider == c.provider
-                && m.model == c.model
-                && m.reasoning_configuration_reference == c.reasoning_configuration_reference
-                && m.native_reasoning == c.native_reasoning
-        })
+        // An installed harness runs any model (spec 0014 §5.2): the held choice's
+        // model and reasoning were resolved and sealed at selection.
         && limits.context_bytes >= c.resources.context_bytes
         && limits.wall_time_ms >= c.resources.wall_time_ms
         && limits.memory_bytes >= c.resources.memory_bytes
@@ -54,7 +50,6 @@ pub async fn fence_locked(
 ) -> Result<Current, AppError> {
     if fresh.project.revision != p.spec.project_revision
         || fresh.node_id != request.identity.node_id
-        || fresh.project.binding.catalog_digest != p.selection.catalog_digest.as_str()
         || serde_json::to_value(&fresh.project.binding).map_err(|_| AppError::Internal)?
             != serde_json::to_value(&p.project.binding).map_err(|_| AppError::Internal)?
     {

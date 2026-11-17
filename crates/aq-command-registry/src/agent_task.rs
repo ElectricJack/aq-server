@@ -23,16 +23,17 @@ pub struct AgentTask {
     pub task_type: Option<String>,
     pub task_state: Option<String>,
     pub expected_project_revision: Option<String>,
-    pub profile_hint: Option<Value>,
+    /// The role the task expects (spec 0014 §5.5); it must exist.
+    pub role: Option<String>,
     pub intelligence_hint: Option<Value>,
 }
 impl AgentTask {
-    /// §8: an agent cannot pick the profile or intelligence of a task it
-    /// creates, so it cannot launch a child with more authority than its own.
+    /// §8: an agent cannot pick the intelligence of a task it creates. It
+    /// names the role, as anyone filing a task does (spec 0014 §5.5).
     pub fn sets_hint(&self) -> bool {
-        [&self.profile_hint, &self.intelligence_hint]
-            .iter()
-            .any(|h| h.as_ref().is_some_and(|v| !v.is_null()))
+        self.intelligence_hint
+            .as_ref()
+            .is_some_and(|v| !v.is_null())
     }
     /// The parent: `"self"` is the attempt's task `own`; none is top-level.
     pub fn parent(&self, own: Uuid) -> Option<Uuid> {
@@ -48,7 +49,7 @@ impl AgentTask {
         let payload = json!({"operation_id":self.operation_id,"expected_project_revision":revision,"title":self.title,
             "body":self.body,"acceptance_criteria":self.acceptance_criteria,"labels":self.labels,
             "task_state":self.task_state.as_deref().unwrap_or("active"),"parent_id":self.parent(own),
-            "priority":self.priority,"task_type":self.task_type});
+            "priority":self.priority,"task_type":self.task_type,"role":self.role});
         json!({"operation_id":self.operation_id,"kind":"task.create","subject":{"type":"project","id":project,"revision":revision},
             "expected_versions":{"project":revision},"payload":payload})
     }
@@ -61,7 +62,7 @@ mod tests {
     fn the_agent_task_becomes_one_create_action_without_hints() {
         let (own, project, op) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
         let t: AgentTask = serde_json::from_value(
-            json!({"api_version":1,"operation_id":op,"title":"x","parent_id":"self","profile_hint":null}),
+            json!({"api_version":1,"operation_id":op,"title":"x","parent_id":"self","role":"reviewer"}),
         )
         .unwrap();
         assert!(!t.sets_hint());
@@ -73,16 +74,20 @@ mod tests {
         );
         assert_eq!(a["payload"]["task_state"], "active");
         assert_eq!(a["payload"]["parent_id"], json!(own));
+        assert_eq!(a["payload"]["role"], "reviewer");
         let hinted: AgentTask = serde_json::from_value(
             json!({"api_version":1,"operation_id":op,"title":"x","intelligence_hint":"max"}),
         )
         .unwrap();
         assert!(hinted.sets_hint() && hinted.parent(own).is_none());
-        assert!(
-            serde_json::from_value::<AgentTask>(
-                json!({"api_version":1,"operation_id":op,"title":"x","extra":1})
-            )
-            .is_err()
-        );
+        // `profile_hint` was the old way of naming a profile; it is unknown now.
+        for extra in ["extra", "profile_hint"] {
+            assert!(
+                serde_json::from_value::<AgentTask>(
+                    json!({"api_version":1,"operation_id":op,"title":"x",extra:null})
+                )
+                .is_err()
+            );
+        }
     }
 }

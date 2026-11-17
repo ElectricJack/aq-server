@@ -21,6 +21,7 @@ mod messaging;
 mod observation_owner_peer;
 mod observation_transport;
 mod observations;
+mod role_settings;
 mod routing;
 mod scheduling_reads;
 mod stall_ladder;

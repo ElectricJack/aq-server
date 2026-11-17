@@ -111,22 +111,10 @@ impl crate::PlanAuthority for InstalledAuthority {
     }
 }
 
-async fn cell(
-    conn: &mut sqlx::PgConnection,
-    digest: &str,
-    profile: Option<&serde_json::Value>,
-) -> Result<Option<aq_swarm_settings::admission::Cell>> {
-    let Some(profile) = profile else {
-        return Ok(None);
-    };
-    let reference = profile["profile_id"]
-        .as_str()
-        .zip(profile["profile_version"].as_u64())
-        .map(|(id, version)| format!("{id}@{version}"));
-    Ok(
-        aq_swarm_settings::admission::resolve(conn, Some(digest), reference.as_deref(), profile)
-            .await?,
-    )
+/// A supervisor's saved profile names its level; the level's id is the
+/// admission class (spec 0014 §5.2).
+fn cell(profile: Option<&serde_json::Value>) -> Option<aq_swarm_settings::admission::Cell> {
+    aq_swarm_settings::admission::pinned_cell(profile?)
 }
 
 /// Only a new generation consumes capacity. All later lifecycle operations,
@@ -145,12 +133,7 @@ async fn admit_swarm(
     if existing {
         return Ok(());
     }
-    let selected = cell(
-        tx,
-        plan.profiles.catalog.digest.as_str(),
-        config.swarm_profile.as_ref(),
-    )
-    .await?;
+    let selected = cell(config.swarm_profile.as_ref());
     if let Some(selected) = &selected {
         ensure!(
             selected.provider == config.model.provider.as_str()
@@ -181,14 +164,13 @@ async fn admit_swarm(
 /// repeats the check because another machine may claim capacity meanwhile.
 pub(crate) async fn swarm_wait(
     pool: &sqlx::PgPool,
-    digest: &str,
     profile: Option<&serde_json::Value>,
 ) -> Result<Option<&'static str>> {
     let mut tx = pool.begin().await?;
     if !aq_swarm_settings::admission::available(&mut tx).await? {
         return Ok(None);
     }
-    let selected = cell(&mut tx, digest, profile).await?;
+    let selected = cell(profile);
     let reason = aq_swarm_settings::admission::check(&mut tx, selected.as_ref()).await?;
     tx.rollback().await?;
     Ok(reason)

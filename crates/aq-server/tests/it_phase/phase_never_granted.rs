@@ -14,6 +14,7 @@ async fn actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence
     let mut f = Box::pin(terminal::prepared_terminal()).await;
     let attempt = f.prepared.original.binding.attempt_id;
     let node = f.q.original.identity.node_id;
+    common::roles::pin_active(&f.c.env.env.pool, attempt).await;
     assert!(
         no_grant::close_expired(&f.c.env.env.state, node, attempt)
             .await
@@ -37,6 +38,8 @@ async fn actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence
     assert_eq!(first.bytes, replay.bytes);
     let row=sqlx::query("SELECT a.holds_task,h.state->>'status' AS status,profiled_never_granted_valid(a.attempt_id) AS valid,(SELECT count(*) FROM profiled_phase_execution_grants WHERE attempt_id=a.attempt_id) AS grants FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1").bind(attempt).fetch_one(&f.c.env.env.pool).await.unwrap();
     assert!(!row.get::<bool, _>("holds_task"));
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&f.c.env.env.pool, attempt).await);
     assert_eq!(row.get::<String, _>("status"), "never_granted");
     assert!(row.get::<bool, _>("valid"));
     assert_eq!(row.get::<i64, _>("grants"), 0);

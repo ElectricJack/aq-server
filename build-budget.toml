@@ -9,7 +9,7 @@
 # Integration test targets (tests/*.rs, tests/*/main.rs, [[test]]) across the
 # workspace. Each one is a separate executable linking the whole library. New
 # tests go into an existing binary, so this only goes down.
-max = 81
+max = 75
 
 [lib_lines]
 # Lines of .rs source in one crate's lib (src/ minus bin targets). No crate lib
@@ -22,4 +22,4 @@ target = 40000
 # temporarily: the command-surface work needs new action kinds in this crate
 # before the crate is split. It still only goes down from here, and the split
 # brings it back under the old value.
-aq-server = 107000
+aq-server = 105119

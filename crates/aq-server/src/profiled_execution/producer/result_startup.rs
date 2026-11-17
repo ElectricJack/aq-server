@@ -4,8 +4,6 @@
 use super::refused;
 use crate::{AppState, error::AppError, profiled_execution::definitions::Definition};
 use aq_admission::{ArtifactRef, Digest, Text};
-use aq_profiles::{ContextInput, Delivery};
-use aq_session_api::Source;
 use serde::Deserialize;
 
 pub(super) const STARTUP_ID: &str = "aq.agent-result-startup";
@@ -156,19 +154,6 @@ pub(super) fn for_adapter(
     from_definitions(adapter, &config.definition_bodies)
 }
 impl ReportingInstruction {
-    pub fn context(&self) -> ContextInput {
-        ContextInput {
-            source: Source {
-                identity: self.artifact.id.as_str().into(),
-                revision: self.artifact.version.as_str().into(),
-                digest: self.artifact.digest.as_str().into(),
-            },
-            text: self.text.clone(),
-            delivery: Delivery::Startup,
-            required: true,
-            omission_priority: 0,
-        }
-    }
     pub fn validate_rendered(&self, count: usize, bytes: &[u8]) -> Result<(), AppError> {
         if count != 1
             || bytes
@@ -180,11 +165,6 @@ impl ReportingInstruction {
             return Err(refused());
         }
         Ok(())
-    }
-    pub fn matches(&self, source: &Source) -> bool {
-        source.identity == self.artifact.id.as_str()
-            && source.revision == self.artifact.version.as_str()
-            && source.digest == self.artifact.digest.as_str()
     }
 }
 
@@ -240,12 +220,6 @@ mod tests {
             reporting.artifact,
             public_reference(STARTUP_ID, STARTUP_DIGEST).unwrap()
         );
-        let context = reporting.context();
-        assert!(context.required && context.delivery == Delivery::Startup);
-        assert!(reporting.matches(&context.source));
-        let mut changed = context.source;
-        changed.digest = Digest::of(b"changed").as_str().into();
-        assert!(!reporting.matches(&changed));
     }
     #[test]
     fn claude_docker_local_profile_runs_the_long_phase_without_terminal_input() {
@@ -298,7 +272,6 @@ mod tests {
         let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
         assert_eq!(reporting.text, TEXT);
         assert!(reporting.interactive);
-        assert!(reporting.context().required);
         for recipe in [
             reference("aq.codex-interactive-result-local-recipe"),
             public_reference("aq.codex-result-local-recipe", INTERACTIVE_RECIPE_DIGEST).unwrap(),

@@ -205,7 +205,7 @@ async fn run_worker(mode: Mode) {
         .as_ref()
         .unwrap();
     let qualified = &config.qualified_runtimes[0];
-    let mut request = json!({"worker":{"server_url":format!("http://{address}"),"node_id":case.env.env.node,"credential":case.env.env.credential},"root":worker_root,"git_socket":worker_socket,"git_root":worker_git_root,"runtime":qualified.runtime,"qualification":qualified.qualification,"capabilities":qualified.capabilities,"features":qualified.features,"renderer":config.context_qualifications[0].artifact().unwrap()});
+    let mut request = json!({"worker":{"server_url":format!("http://{address}"),"node_id":case.env.env.node,"credential":case.env.env.credential},"root":worker_root,"git_socket":worker_socket,"git_root":worker_git_root,"runtime":qualified.runtime,"qualification":qualified.qualification,"capabilities":qualified.capabilities,"features":qualified.features,"renderer":aq_server::profiled_execution::context_budget::Renderer::rule().unwrap().definition});
     request[PHASE_CONFIG_FIELD] = json!(phase_config);
     input
         .write_all(format!("{request}\n").as_bytes())

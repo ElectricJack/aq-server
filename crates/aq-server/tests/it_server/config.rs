@@ -160,6 +160,42 @@ enabled = false
     assert!(err.contains("auth.team_domain"), "{err}");
 }
 
+/// Spec 0014 removed two keys. A config that still has one is refused with
+/// a message that names the key and says what removed it, whatever else the
+/// section holds (the typed parse would only say "unknown field").
+#[test]
+fn a_key_removed_by_spec_0014_is_refused_by_name() {
+    let dir = vault_with(&format!(
+        "{VALID}\n[profiled_execution]\nrevision = 1\nqualified_runtimes = []\nprojects = []\ncontext_qualifications = []\n"
+    ));
+    let path = dir.path().join("config.toml").display().to_string();
+    assert_eq!(
+        load(dir.path()).unwrap_err().to_string(),
+        format!(
+            "invalid config {path}: profiled_execution.context_qualifications: was removed by \
+             spec 0014 (roles and profiles): the server holds no context measurement; delete it"
+        )
+    );
+    let dir = vault_with(&format!(
+        "{VALID}\n[intelligence]\nrevision = 1\n\n[[intelligence.qualified_harnesses]]\nharness = \"codex\"\nmodels = []\n"
+    ));
+    let path = dir.path().join("config.toml").display().to_string();
+    assert_eq!(
+        load(dir.path()).unwrap_err().to_string(),
+        format!(
+            "invalid config {path}: intelligence.qualified_harnesses[].models: was removed by \
+             spec 0014 (roles and profiles): any model an intelligence profile names is \
+             allowed; delete it"
+        )
+    );
+    // The same sections without the removed keys load.
+    let dir = vault_with(&format!(
+        "{VALID}\n[intelligence]\nrevision = 1\n\n[profiled_execution]\nrevision = 1\nqualified_runtimes = []\nprojects = []\n"
+    ));
+    let config = load(dir.path()).unwrap();
+    assert!(config.profiled_execution.is_some() && config.intelligence.is_some());
+}
+
 #[test]
 fn rejects_unknown_key() {
     let dir = vault_with(&VALID.replace("[auth]", "admni_bind = \"0.0.0.0:1\"\n\n[auth]"));

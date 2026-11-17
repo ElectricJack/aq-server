@@ -324,6 +324,104 @@ async fn work_explains_readiness_blockers_and_attached_execution() {
     assert_eq!(unsure["readiness"]["complete"], false);
 }
 
+/// Spec 0014 §5.5: every task read shows the effective role and where it
+/// comes from, and the work read holds a task whose role is disabled or gone.
+#[tokio::test]
+async fn task_reads_show_the_effective_role_and_hold_a_disabled_or_missing_one() {
+    let x = setup().await;
+    let (w, pool) = (x.w(), x.f.db.pool().await);
+    let role = |id: &str, source: &str| json!({"id":id,"source":source});
+    let named = |id: Uuid, title: &str, role: &str| {
+        let mut t = task(id, w, title, "active");
+        t["metadata"] = json!({"aq:role":role,"aq:task_type":"feature"});
+        t
+    };
+    let (plain, review, gone, draft) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    common::save_role(&pool, x.f.actor, "developer", "tester", true).await;
+    let mut drafted = named(draft, "Draft", "reviewer");
+    drafted["task_state"] = json!("draft");
+    let nodes = [
+        (plain, task(plain, w, "Plain", "active")),
+        (review, named(review, "Review", "reviewer")),
+        (gone, named(gone, "Gone", "tester")),
+        (draft, drafted),
+    ];
+    x.graph.nodes.lock().unwrap().extend(nodes.clone());
+    for (id, node) in &nodes {
+        let others = nodes.iter().filter(|(other, _)| other != id);
+        let others: Vec<Value> = others.map(|(_, n)| n.clone()).collect();
+        let c = context(node, others, vec![], false);
+        x.graph.contexts.lock().unwrap().insert(*id, c);
+    }
+    let expected = [
+        (plain, role("developer", "project_default")),
+        (review, role("reviewer", "task")),
+        (gone, role("tester", "task")),
+        (draft, role("reviewer", "task")),
+    ];
+    // Task detail, the task page, the graph and the work read agree.
+    let page = x.get("/tasks?limit=10").await;
+    let graph = x.get(&format!("/tasks/{plain}/graph")).await;
+    for (id, role) in &expected {
+        assert_eq!(&x.get(&format!("/tasks/{id}")).await["role"], role);
+        for listed in [&page["items"], &graph["nodes"]] {
+            let found = listed.as_array().unwrap().iter();
+            let found = found.clone().find(|n| n["id"] == json!(id)).unwrap();
+            assert_eq!(&found["role"], role, "{found}");
+        }
+        let work = x.get(&format!("/tasks/{id}/work")).await;
+        assert_eq!(&work["role"], role);
+        assert_eq!(work["readiness"]["reasons"], json!([]), "{work}");
+    }
+    assert_eq!(
+        x.get(&format!("/tasks/{review}/work")).await["readiness"]["state"],
+        "ready"
+    );
+
+    // A disabled role and a role that no longer exists hold their tasks.
+    common::save_role(&pool, x.f.actor, "reviewer", "reviewer", false).await;
+    common::delete_role(&pool, x.f.actor, "tester").await;
+    let held = x.get(&format!("/tasks/{review}/work")).await;
+    assert_eq!(held["readiness"]["state"], "held", "{held}");
+    let reason = &held["readiness"]["reasons"][0];
+    assert_eq!(reason["code"], "role_disabled");
+    assert_eq!(reason["role"], "reviewer");
+    assert_eq!(
+        reason["message"],
+        "AQ does not offer this task: its role `reviewer` is disabled. Enable the role in Settings or change the task's role."
+    );
+    let missing = x.get(&format!("/tasks/{gone}/work")).await;
+    assert_eq!(missing["readiness"]["state"], "held", "{missing}");
+    assert_eq!(missing["role"], role("tester", "task"));
+    let reason = &missing["readiness"]["reasons"][0];
+    assert_eq!(
+        (&reason["code"], &reason["role"]),
+        (&json!("role_missing"), &json!("tester"))
+    );
+    assert!(
+        reason["message"]
+            .as_str()
+            .unwrap()
+            .contains("its role `tester` does not exist")
+    );
+    // A task on the default role is not affected, and a draft is not held.
+    let free = x.get(&format!("/tasks/{plain}/work")).await;
+    assert_eq!(free["readiness"]["state"], "ready");
+    assert_eq!(free["readiness"]["reasons"], json!([]));
+    let idle = x.get(&format!("/tasks/{draft}/work")).await;
+    assert_eq!(idle["readiness"]["state"], "draft");
+    assert_eq!(idle["readiness"]["reasons"], json!([]));
+    // Enabling the role again releases the task.
+    common::save_role(&pool, x.f.actor, "reviewer", "reviewer", true).await;
+    let released = x.get(&format!("/tasks/{review}/work")).await;
+    assert_eq!(released["readiness"]["state"], "ready");
+}
+
 #[tokio::test]
 async fn task_pages_carry_attached_executions() {
     let x = setup().await;
@@ -365,6 +463,35 @@ async fn history_pages_graph_entries_and_attempts_with_bound_cursor() {
     assert_eq!(
         x.graph.cursors.lock().unwrap().clone(),
         vec![None, Some("upstream-page-2".to_owned())]
+    );
+    // Spec 0014 §7.1: an attempt of the timeline shows what it ran with, in
+    // the shape of the attached execution; without a summary, no key.
+    assert!(h["attempts"][0].get("ran_with").is_none());
+    let attempt: Uuid = h["attempts"][0]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let summary = aq_role_settings::attempts::RanWith {
+        role: "developer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: None,
+    };
+    let pool = x.f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, attempt, &summary)
+        .await
+        .unwrap();
+    drop(conn);
+    let shown = x.get(&format!("/tasks/{held}/history")).await;
+    assert_eq!(
+        shown["attempts"][0]["ran_with"],
+        serde_json::to_value(&summary).unwrap()
     );
 }
 
@@ -518,47 +645,6 @@ fn work_and_history_examples_match_the_schema() {
     assert!(!aq_agent_api::check(&schema, &schema, &work));
 }
 
-/// Stores the fixture's catalog and binds its project to it, with its intelligence profile an
-/// automatic router or not.
-async fn bind_catalog(x: &Fixture, automatic: bool) {
-    let pool = x.f.db.pool().await;
-    let binding: Value =
-        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
-            .bind(x.f.selection.lineage.project_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    // The fixture keeps its catalog in a file, not in the artifact table.
-    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
-    let original = raw["catalog_artifact_json"]
-        .as_str()
-        .unwrap()
-        .as_bytes()
-        .to_vec();
-    let mut artifact = aq_profiles::ValidatedCatalog::from_artifact(&original)
-        .unwrap()
-        .artifact()
-        .clone();
-    for profile in &mut artifact.catalog.intelligence {
-        profile.automatic_routing = automatic.then_some(true);
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) SELECT $1,$2,id,0 FROM users LIMIT 1")
-        .bind(updated.digest())
-        .bind(updated.canonical_bytes().unwrap())
-        .execute(&pool)
-        .await
-        .unwrap();
-    let mut binding = binding;
-    binding["catalog_digest"] = json!(updated.digest());
-    sqlx::query("UPDATE project_execution_bindings SET binding=$2 WHERE project_id=$1")
-        .bind(x.f.selection.lineage.project_id)
-        .bind(binding)
-        .execute(&pool)
-        .await
-        .unwrap();
-}
-
 #[tokio::test]
 async fn work_read_reports_waiting_then_routed() {
     let x = setup().await;
@@ -572,15 +658,10 @@ async fn work_read_reports_waiting_then_routed() {
     let path = format!("/tasks/{id}/work");
     let work = || x.get(&path);
     let pool = x.f.db.pool().await;
-    // Not on an automatic router: no routing object, even with routing on.
     sqlx::query("UPDATE routing_state SET enabled=true WHERE singleton")
         .execute(&pool)
         .await
         .unwrap();
-    bind_catalog(&x, false).await;
-    assert!(work().await.get("routing").is_none());
-
-    bind_catalog(&x, true).await;
     let waiting = work().await;
     assert_eq!(waiting["readiness"]["state"], "ready");
     // The read has no ready time, so the node's updated_at (2026-01-01T00:00:00Z) is used.
@@ -675,18 +756,4 @@ async fn routes_history_lists_reasons_newest_first() {
         json!({"items":[{"sequence":2,"at_ms":2000,"route":null},
             {"sequence":1,"at_ms":1000,"route":route}]})
     );
-}
-
-#[tokio::test]
-async fn work_read_survives_a_routing_view_that_cannot_be_computed() {
-    let x = setup().await;
-    let (w, id) = (x.w(), Uuid::new_v4());
-    x.graph.contexts.lock().unwrap().insert(
-        id,
-        context(&task(id, w, "Any", "active"), vec![], vec![], false),
-    );
-    // The binding's catalog digest names no stored artifact (the fixture stores none).
-    let work = x.get(&format!("/tasks/{id}/work")).await;
-    assert_eq!(work["readiness"]["state"], "ready");
-    assert!(work.get("routing").is_none());
 }

@@ -175,13 +175,14 @@
           "minimum": 1,
           "maximum": 300
         },
-        "profile_hint": {
+        "role": {
           "type": [
             "string",
             "null"
           ],
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "description": "The role the task expects; it must exist. Absent: the project's default role."
         },
         "intelligence_hint": {
           "type": [

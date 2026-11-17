@@ -286,6 +286,7 @@ impl Registry {
                 command.name,
                 "task.edit"
                     | "task.reprioritize"
+                    | "task.role.set"
                     | "task.route.set"
                     | "task.route.clear"
                     | "task.dependency.add"

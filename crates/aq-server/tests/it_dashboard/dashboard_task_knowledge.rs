@@ -329,50 +329,6 @@ async fn task_reprioritize_preserves_other_metadata() {
     );
 }
 
-/// Activates a catalog with profile `careful` and assigns it to standard-high.
-async fn assign_standard_high(x: &Fixture) {
-    let pool = x.f.db.pool().await;
-    let pool = &pool;
-    let base = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
-    let instructions = base.artifact().instructions.clone();
-    let mut catalog = base.artifact().catalog.clone();
-    let mut careful = catalog.intelligence[0].clone();
-    careful.id = "careful".into();
-    careful.version = 3;
-    catalog.intelligence.push(careful);
-    let validated = aq_profiles::validate(catalog, instructions).unwrap();
-    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)")
-        .bind(validated.digest())
-        .bind(validated.canonical_bytes().unwrap())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-        .bind(validated.digest())
-        .execute(pool)
-        .await
-        .unwrap();
-    let parents: Vec<Value> = ["simple", "standard", "complex", "deep"]
-        .iter()
-        .map(|id| json!({"id": id, "description": ""}))
-        .collect();
-    sqlx::query(
-        "UPDATE intelligence_structure SET revision=revision+1, document=$1 WHERE singleton",
-    )
-    .bind(json!({"routing_markdown":"","parents":parents,
-            "assignments":[{"profile_id":"careful","parent_id":"standard","effort":"high"}]}))
-    .execute(pool)
-    .await
-    .unwrap();
-}
 fn route_action(kind: &str, task: Uuid, version: &str, x: &Fixture, fields: Value) -> Value {
     let op = Uuid::new_v4();
     let mut payload =
@@ -385,9 +341,8 @@ fn route_action(kind: &str, task: Uuid, version: &str, x: &Fixture, fields: Valu
 }
 
 #[tokio::test]
-async fn task_route_set_writes_an_owner_route_and_is_refused_for_an_unassigned_class() {
+async fn task_route_set_writes_an_owner_route_and_is_refused_for_a_class_without_a_level() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 5));
     x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
@@ -422,21 +377,20 @@ async fn task_route_set_writes_an_owner_route_and_is_refused_for_an_unassigned_c
             task,
             "6",
             &x,
-            json!({"class":"simple-low"}),
+            json!({"class":"deep-max"}),
         ))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(
         x.posts().len(),
         1,
-        "an unassigned class never reaches Graph"
+        "a class with no level document never reaches Graph"
     );
 }
 
 #[tokio::test]
 async fn task_route_clear_removes_it() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 5));
     x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
@@ -474,7 +428,6 @@ async fn task_route_clear_removes_it() {
 #[tokio::test]
 async fn stale_task_version_is_reported_as_stale() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 7));
     for (kind, fields) in [
@@ -869,7 +822,7 @@ fn graph_create(project: Uuid, first: Uuid, second: Uuid, edge: Uuid) -> Value {
         json!({
             "operation_id":Uuid::new_v4(), "project_id":project, "expected_version":"1",
             "tasks":[
-                {"id":first,"title":"First","body":"Implementation","priority":300,"profile_hint":"coding","intelligence_hint":"standard-high","task_type":"feature"},
+                {"id":first,"title":"First","body":"Implementation","priority":300,"role":"reviewer","intelligence_hint":"standard-high","task_type":"feature"},
                 {"id":second,"title":"Second"}
             ],
             "edges":[{"id":edge,"source":first,"target":second}]
@@ -908,10 +861,11 @@ async fn owner_creates_graph_with_metadata_and_retained_identity() {
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0]["operations"].as_array().unwrap().len(), 3);
     assert_eq!(posts[0]["operations"][0]["metadata"]["aq:priority"], 300);
-    assert_eq!(
-        posts[0]["operations"][0]["metadata"]["aq:profile_hint"],
-        "coding"
-    );
+    assert_eq!(posts[0]["operations"][0]["metadata"]["aq:role"], "reviewer");
+    // A task that names no role stores none: the project's default applies.
+    let unnamed = posts[0]["operations"][1]["metadata"].as_object().unwrap();
+    assert!(!unnamed.contains_key("aq:role"), "{unnamed:?}");
+    assert!(!posts[0].to_string().contains("profile_hint"));
     assert_eq!(
         posts[0]["operations"][0]["metadata"]["aq:intelligence_hint"],
         "standard-high"
@@ -944,13 +898,186 @@ async fn owner_single_create_accepts_enqueue_metadata() {
         "1",
         json!({
             "operation_id":id,"expected_project_revision":"1","title":"Single","body":"","acceptance_criteria":"","labels":[],"task_state":"active",
-            "priority":1,"profile_hint":"coding","intelligence_hint":"standard-high","task_type":"feature"
+            "priority":1,"role":"developer","intelligence_hint":"standard-high","task_type":"feature"
         }),
     );
     let (status, receipt) = x.act(&request).await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["data"]["disposition"], "confirmed", "{receipt}");
     assert_eq!(x.posts()[0]["operations"][0]["metadata"]["aq:priority"], 1);
+    assert_eq!(
+        x.posts()[0]["operations"][0]["metadata"]["aq:role"],
+        "developer"
+    );
+}
+
+fn single_create(x: &Fixture, id: Uuid, extra: Value) -> Value {
+    let mut payload = json!({"operation_id":id,"expected_project_revision":"1","title":"Single","body":"",
+        "acceptance_criteria":"","labels":[],"task_state":"active"});
+    (payload.as_object_mut().unwrap()).extend(extra.as_object().unwrap().clone());
+    action("task.create", "project", x.project(), "1", payload)
+}
+const UNKNOWN_TESTER: &str = "Role `tester` does not exist. The roles are: developer, reviewer.";
+
+/// Spec 0014 §5.5: a filed task names its role; it must exist, and a disabled
+/// role may be named.
+#[tokio::test]
+async fn a_filed_task_names_an_existing_role_and_profile_hint_is_gone() {
+    let x = setup().await;
+    let pool = x.f.db.pool().await;
+    // Without a role nothing is stored.
+    let plain = Uuid::new_v4();
+    x.reply(200, change_set(vec![node(plain, x.workspace(), "task", 1)]));
+    let (status, body) = x.act(&single_create(&x, plain, json!({}))).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let metadata = x.posts()[0]["operations"][0]["metadata"].clone();
+    assert!(metadata.get("aq:role").is_none(), "{metadata}");
+    // An unknown role is refused with a typed error that lists the roles.
+    let (status, body) = x
+        .act(&single_create(&x, Uuid::new_v4(), json!({"role":"tester"})))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "unknown_role", "{body}");
+    assert_eq!(body["message"], UNKNOWN_TESTER);
+    // The old way of naming a profile is an unknown field.
+    let (status, body) = x
+        .act(&single_create(
+            &x,
+            Uuid::new_v4(),
+            json!({"profile_hint":"coding"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "invalid_request", "{body}");
+    assert_eq!(x.posts().len(), 1, "a refused create never reaches Graph");
+    // A disabled role may be named: the task is filed (and then held).
+    common::save_role(&pool, x.f.actor, "reviewer", "reviewer", false).await;
+    let held = Uuid::new_v4();
+    x.reply(200, change_set(vec![node(held, x.workspace(), "task", 1)]));
+    let (status, body) = x
+        .act(&single_create(&x, held, json!({"role":"reviewer"})))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    assert_eq!(
+        x.posts()[1]["operations"][0]["metadata"]["aq:role"],
+        "reviewer"
+    );
+}
+
+#[tokio::test]
+async fn a_graph_create_names_a_role_per_task_and_refuses_an_unknown_one() {
+    let x = setup().await;
+    let pool = x.f.db.pool().await;
+    common::save_role(&pool, x.f.actor, "developer", "tester", true).await;
+    let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    let graph = |roles: [Option<&str>; 3]| {
+        let tasks: Vec<Value> = ids
+            .iter()
+            .zip(roles)
+            .map(|(id, role)| match role {
+                Some(role) => json!({"id":id,"title":"Task","role":role}),
+                None => json!({"id":id,"title":"Task"}),
+            })
+            .collect();
+        let payload = json!({"operation_id":Uuid::new_v4(),"project_id":x.project(),
+            "expected_version":"1","tasks":tasks});
+        action("task.graph.create", "project", x.project(), "1", payload)
+    };
+    let (status, body) = x
+        .act(&graph([Some("reviewer"), Some("designer"), None]))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "unknown_role", "{body}");
+    assert_eq!(
+        body["message"],
+        "Role `designer` does not exist. The roles are: developer, reviewer, tester."
+    );
+    assert!(
+        x.posts().is_empty(),
+        "nothing of a refused graph is created"
+    );
+    let created = ids.iter().map(|id| node(*id, x.workspace(), "task", 1));
+    x.reply(200, change_set(created.collect()));
+    let (status, body) = x
+        .act(&graph([Some("reviewer"), Some("tester"), None]))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let operations = x.posts()[0]["operations"].clone();
+    assert_eq!(operations[0]["metadata"]["aq:role"], "reviewer");
+    assert_eq!(operations[1]["metadata"]["aq:role"], "tester");
+    assert!(operations[2]["metadata"].get("aq:role").is_none());
+}
+
+fn role_set(x: &Fixture, task: Uuid, version: &str, role: Value) -> Value {
+    route_action("task.role.set", task, version, x, json!({"role":role}))
+}
+
+/// The owner changes a task's role while no attempt of it has been granted.
+#[tokio::test]
+async fn task_role_set_sets_and_clears_the_role_and_is_refused_after_a_grant() {
+    let x = setup().await;
+    let pool = x.f.db.pool().await;
+    let task = x.f.selection.lineage.task_id;
+    let state = |state: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let set = format!(
+                "UPDATE execution_attempts SET state=state||'{state}'::jsonb WHERE task_id=$1"
+            );
+            sqlx::query(&set).bind(task).execute(&pool).await.unwrap();
+            sqlx::query("DELETE FROM profiled_authority_hot WHERE attempt_id IN (SELECT attempt_id FROM execution_attempts WHERE task_id=$1)")
+                .bind(task).execute(&pool).await.unwrap();
+        }
+    };
+    // An attempt that was offered and not granted does not fix the role.
+    state(r#"{"status":"offered","grant":null}"#).await;
+    x.put(node(task, x.workspace(), "task", 5));
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
+    let (status, body) = x.act(&role_set(&x, task, "5", json!("reviewer"))).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    // One Graph revision, with every other metadata key kept: the task's
+    // history shows it as a `role` change (aq-human-work).
+    let posts = x.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0]["operations"][0]["op"], "update_node");
+    assert_eq!(posts[0]["operations"][0]["expected_version"], 5);
+    let metadata = &posts[0]["operations"][0]["patch"]["metadata"];
+    assert_eq!(metadata["aq:role"], "reviewer");
+    assert_eq!(metadata["example:weight"], 2);
+
+    // An unknown role is refused; a stale version conflicts.
+    let mut named = node(task, x.workspace(), "task", 6);
+    named["metadata"] = metadata.clone();
+    x.put(named);
+    let (status, body) = x.act(&role_set(&x, task, "6", json!("tester"))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "unknown_role", "{body}");
+    assert_eq!(body["message"], UNKNOWN_TESTER);
+    let (_, body) = x.act(&role_set(&x, task, "5", json!("developer"))).await;
+    assert_eq!(body["data"]["disposition"], "conflict", "{body}");
+    assert_eq!(body["data"]["current_versions"], json!({"task":"6"}));
+    assert_eq!(x.posts().len(), 1);
+
+    // Clearing removes the key, so the project's default role applies.
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 7)]));
+    let (status, body) = x.act(&role_set(&x, task, "6", Value::Null)).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let cleared = &x.posts()[1]["operations"][0]["patch"]["metadata"];
+    assert!(cleared.get("aq:role").is_none(), "{cleared}");
+    assert_eq!(cleared["example:weight"], 2);
+
+    // Once an attempt has been granted the role is fixed.
+    state(r#"{"status":"granted","grant":{}}"#).await;
+    x.put(node(task, x.workspace(), "task", 7));
+    for role in [json!("reviewer"), Value::Null] {
+        let (status, body) = x.act(&role_set(&x, task, "7", role)).await;
+        assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
+    }
+    // A finished attempt was granted too.
+    state(r#"{"status":"finished","grant":null}"#).await;
+    let (_, body) = x.act(&role_set(&x, task, "7", json!("reviewer"))).await;
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(x.posts().len(), 2, "a refused change never reaches Graph");
 }
 
 async fn supervisor_token(x: &Fixture) -> String {

@@ -39,7 +39,6 @@ async fn enable(case: &mut common::native_offer::Case, include_startup: bool) {
             .definition_bodies
             .push(Definition::new(reporting(), ArtifactKind::Definition, STARTUP.into()).unwrap());
     }
-    profiled.context_qualifications[0].subject.adapter = adapter.clone();
     profiled.revision += 1;
     profiled.validate().unwrap();
     let mut registry = config.intelligence.as_ref().unwrap().config.clone();

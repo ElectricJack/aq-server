@@ -104,15 +104,8 @@ pub(super) async fn fence_project_locked(
     {
         return Err(changed());
     }
-    let catalog: Option<String> = sqlx::query_scalar(
-        "SELECT active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
-    if catalog.as_deref() != Some(p.catalog_digest.as_str()) {
-        return Err(changed());
-    }
+    // The attempt ran on the role snapshot it launched with (spec 0014
+    // §7.1); what is active now does not decide whether its result settles.
     Ok(p)
 }
 pub(crate) fn policy(

@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/build/target \
     case "$CARGO_PROFILE" in dev|test|bench) echo "unsupported CARGO_PROFILE=$CARGO_PROFILE" >&2; exit 1;; esac \
     && find crates vendor protocol -type f -exec touch {} + \
-    && AQ_IMAGE_STATE_FORMAT="${AQ_STATE_FORMAT}" cargo build --locked --profile "$CARGO_PROFILE" --bin aq-server \
+    && AQ_IMAGE_STATE_FORMAT="${AQ_STATE_FORMAT}" cargo build --locked --profile "$CARGO_PROFILE" -p aq-server --bin aq-server \
     && mkdir -p /out \
     && cp "target/$CARGO_PROFILE/aq-server" /out/
 

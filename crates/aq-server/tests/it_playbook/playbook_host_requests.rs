@@ -969,10 +969,10 @@ async fn judgment_request_respects_budget_and_records_provenance() {
     assert_eq!(r.output["provenance"], Value::Null);
 }
 
-/// Internal work over the fixture's own catalog, made active: its profile
-/// `engineering` lists `fixture-a`/`model-a` first, which resolves by API key
-/// to `endpoint` at the effort its model choice names. `profile` is the
-/// internal work default (`None`: unset).
+/// Internal work over the active role snapshot with one more level,
+/// `engineering`, listing `fixture-a`/`model-a` at effort `high`, which
+/// resolves by API key to `endpoint`. `profile` is the internal work default
+/// (`None`: unset).
 pub(crate) async fn internal_work(
     f: &common::profiled::Fixture,
     endpoint: String,
@@ -981,26 +981,9 @@ pub(crate) async fn internal_work(
     use aq_intelligence_config::{CredentialConfig, IntelligenceConfig};
     use aq_selection::{AuthorizedCredential, CredentialKind};
     let pool = f.db.pool().await;
-    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(
-        raw["catalog_artifact_json"].as_str().unwrap().as_bytes(),
-    )
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
-         VALUES($1,$2,$3,1) ON CONFLICT DO NOTHING",
-    )
-    .bind(catalog.digest())
-    .bind(catalog.canonical_bytes().unwrap())
-    .bind(f.actor)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-        .bind(catalog.digest())
-        .execute(&pool)
-        .await
-        .unwrap();
+    let level = common::roles::level("engineering", &[("fixture-a", "model-a", "high")]);
+    let kind = aq_profiles::roles::Kind::Intelligence;
+    common::roles::save(&pool, f.actor, kind, "engineering", &level).await;
     sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
         .bind(json!({"default_profile_id": profile, "overrides": {}}))
         .execute(&pool)
@@ -1037,11 +1020,6 @@ pub(crate) async fn internal_work(
     let secret = dir.path().join("key");
     std::fs::write(&secret, format!("{SECRET}\n")).unwrap();
     std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
-    // Settings offer the catalog's `fixture-a` choice at effort `medium`.
-    let preferences = dir.path().join("models.json");
-    let choices = json!([{"provider": "fixture-a", "model": "model-a", "harness": "codex",
-        "reasoning_configuration_reference": "reasoning-a@1", "reasoning": "medium"}]);
-    std::fs::write(&preferences, choices.to_string()).unwrap();
     let config = aq_internal_work::InternalWorkConfig {
         api: vec![aq_internal_work::ApiEndpoint {
             provider: "fixture-a".into(),
@@ -1056,7 +1034,6 @@ pub(crate) async fn internal_work(
         aq_server::system_clock(),
         Some(&config),
         Some(Arc::new(registry)),
-        Some(preferences),
     )
     .unwrap();
     (work, dir)

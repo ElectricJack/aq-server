@@ -15,20 +15,19 @@ async fn missing_intelligence_registry_refuses_new_selection_and_offer_fence_exp
         operation_id: Uuid::new_v4(),
         lineage: f.lineage.clone(),
         project: f.frozen.clone(),
-        compositions: f.input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    let decision = resolver::resolve_trusted(&f.env.state, f.actor, request())
+    let decision = resolver::resolve_trusted(&f.env.state, f.actor, request(), &f.snapshot)
         .await
         .unwrap();
     sqlx::query("DELETE FROM intelligence_registry")
         .execute(&f.env.pool)
         .await
         .unwrap();
-    let error = resolver::resolve_trusted(&f.env.state, f.actor, request())
+    let error = resolver::resolve_trusted(&f.env.state, f.actor, request(), &f.snapshot)
         .await
         .unwrap_err();
     assert!(
@@ -72,13 +71,12 @@ async fn resolve_once(f: &SelectionFixture) -> Result<(), aq_server::error::AppE
         operation_id: Uuid::new_v4(),
         lineage: f.lineage.clone(),
         project: f.frozen.clone(),
-        compositions: f.input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    resolver::resolve_trusted(&f.env.state, f.actor, request)
+    resolver::resolve_trusted(&f.env.state, f.actor, request, &f.snapshot)
         .await
         .map(|_| ())
 }
@@ -192,6 +190,145 @@ async fn revisioned_binding_replay_history_and_retained_snapshot_survive_updates
         json!({}),
         "Missing worker policy is explicit rather than inferred from enabled binding"
     );
+}
+/// Spec 0014 §5.4: a binding names its default role, its default intelligence
+/// profile and optional notes per role; each must exist, and what a binding
+/// names cannot be deleted.
+#[tokio::test]
+async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
+    use aq_profiles::roles::Kind;
+    let env = setup(false).await;
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    // A binding saved without naming its defaults gets them, and the stored
+    // record always names them.
+    let bound = bind(&env).await;
+    let stored = &bound["record"]["binding"];
+    assert_eq!(stored["default_role"], "developer", "{stored}");
+    assert_eq!(stored["default_intelligence"], "standard-high", "{stored}");
+    assert!(stored.get("role_notes").is_none(), "{stored}");
+    let row: Value = sqlx::query_scalar("SELECT binding FROM project_execution_bindings")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(row["default_role"], "developer");
+    assert_eq!(row["default_intelligence"], "standard-high");
+    assert_eq!(
+        call(&env.app, &path(), None, "owner@localhost").await.0,
+        200
+    );
+
+    let put = |revision: u64, change: Value| {
+        let mut binding = env.body.clone();
+        (binding.as_object_mut().unwrap()).extend(change.as_object().unwrap().clone());
+        let request =
+            json!({"operation_id":Uuid::new_v4(),"expected_revision":revision,"binding":binding});
+        let app = env.app.clone();
+        async move { call(&app, &path(), Some(request), "owner@localhost").await }
+    };
+    for (change, message) in [
+        (
+            json!({"default_role":"tester"}),
+            "default_role: Role `tester` does not exist. The roles are: developer, reviewer.",
+        ),
+        (
+            json!({"default_intelligence":"enormous"}),
+            "default_intelligence: Intelligence profile `enormous` does not exist. The intelligence profiles are: complex-high, complex-low, deep-high, deep-low, simple-high, simple-low, standard-high, standard-low, standard-medium.",
+        ),
+        (
+            json!({"role_notes":{"tester":"Run the slow suite."}}),
+            "role_notes: Role `tester` does not exist. The roles are: developer, reviewer.",
+        ),
+    ] {
+        let (status, body) = put(1, change).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["message"], message);
+    }
+    // A note is bounded by the role store's document byte limit, a Setting.
+    let mut limits = aq_role_settings::StoreLimits::default();
+    limits.documents.max_document_bytes = 4096;
+    aq_role_settings::save_limits(&env.pool, owner, &limits, 0, Uuid::new_v4(), 1)
+        .await
+        .unwrap();
+    let (status, body) = put(1, json!({"role_notes":{"reviewer":"n".repeat(4097)}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["message"],
+        "role_notes: the note for role `reviewer` is 4097 bytes, over the limit of 4096 bytes"
+    );
+    let named = json!({"default_role":"reviewer","default_intelligence":"deep-high",
+        "role_notes":{"developer":"n".repeat(4096)}});
+    let (status, body) = put(1, named.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = &body["record"]["binding"];
+    assert_eq!(saved["default_role"], "reviewer");
+    assert_eq!(saved["default_intelligence"], "deep-high");
+    assert_eq!(saved["role_notes"], named["role_notes"]);
+    let (_, read) = call(&env.app, &path(), None, "owner@localhost").await;
+    assert_eq!(read["binding"]["default_role"], "reviewer", "{read}");
+
+    // The document store refuses to delete what the binding names, naming
+    // the project; a document nothing names is deleted.
+    let remove = |segment: &'static str, kind: Kind, id: &'static str| {
+        let (app, pool) = (env.app.clone(), env.pool.clone());
+        async move {
+            use http_body_util::BodyExt;
+            use tower::ServiceExt;
+            let stored = aq_role_settings::get(&pool, kind, id).await.unwrap();
+            let uri = format!(
+                "/api/settings/{segment}/{id}?expected_revision={}&operation_id={}",
+                stored.unwrap().revision,
+                Uuid::new_v4()
+            );
+            let request = axum::http::Request::delete(uri)
+                .header("X-AQ-Request", "1")
+                .header("x-aq-dev-email", "owner@localhost")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    let name = env.body["name"].as_str().unwrap();
+    for (segment, kind, id, problem) in [
+        (
+            "roles",
+            Kind::Role,
+            "reviewer",
+            format!("role `reviewer`: is the default role of project `{name}`"),
+        ),
+        (
+            "roles",
+            Kind::Role,
+            "developer",
+            format!("role `developer`: is given notes by project `{name}`"),
+        ),
+        (
+            "intelligence-profiles",
+            Kind::Intelligence,
+            "deep-high",
+            format!(
+                "intelligence profile `deep-high`: is the default intelligence profile of project `{name}`"
+            ),
+        ),
+    ] {
+        let (status, body) = remove(segment, kind, id).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let message = body["message"].as_str().unwrap();
+        assert!(message.contains(&problem), "{message}");
+        assert!(
+            aq_role_settings::get(&env.pool, kind, id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    let (status, body) = remove("intelligence-profiles", Kind::Intelligence, "simple-low").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 #[tokio::test]
 async fn absent_stale_forbidden_and_offline_components_refuse_and_disable_stays_available() {
@@ -404,65 +541,64 @@ async fn final_local_fence_rechecks_node_revocation_after_lock_wait() {
     assert_eq!(response.1["eligible"], false);
     assert!(response.1["frozen_binding"].is_null());
 }
+/// A launch names the active role snapshot: after a document is saved, a
+/// request that still names the earlier snapshot is refused, and one that
+/// names the new snapshot is eligible on the same project revision.
 #[tokio::test]
-async fn catalog_activation_blocks_future_eligibility_and_keeps_frozen_project_revision() {
-    let env = setup(false).await;
+async fn a_saved_role_document_refuses_a_launch_that_names_the_earlier_snapshot() {
+    use aq_profiles::roles::Kind;
+    use common::roles;
+    let mut env = setup(false).await;
     bind(&env).await;
+    let eligibility = format!("{}/eligibility", path());
+    let earlier = admission(&env);
     let old = call(
         &env.app,
-        &format!("{}/eligibility", path()),
-        Some(admission(&env)),
+        &eligibility,
+        Some(earlier.clone()),
         "owner@localhost",
     )
     .await
     .1;
-    assert_eq!(old["eligible"], true);
-    let seed = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
+    assert_eq!(old["eligible"], true, "{old}");
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    let level = roles::level("standard-high", &[("fixture-a", "model-b", "low")]);
+    roles::save(
+        &env.pool,
+        owner,
+        Kind::Intelligence,
+        "standard-high",
+        &level,
     )
-    .unwrap();
-    let mut definitions = seed.artifact().catalog.clone();
-    let mut instructions = seed.artifact().instructions.clone();
-    let mut module = definitions.modules[0].clone();
-    module.id = "additional-policy".into();
-    module.instruction = "instructions/additional-policy.md".into();
-    definitions.modules.push(module);
-    instructions.insert(
-        "additional-policy@1".into(),
-        "Additional future policy\n".into(),
-    );
-    let next = aq_profiles::validate(definitions, instructions).unwrap();
-    let activated=call(&env.app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"artifact_json":String::from_utf8(next.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
-    assert_eq!(activated.0, StatusCode::OK, "{}", activated.1);
-    let decision = call(
-        &env.app,
-        &format!("{}/eligibility", path()),
-        Some(admission(&env)),
-        "owner@localhost",
-    )
-    .await
-    .1;
+    .await;
+    let decision = call(&env.app, &eligibility, Some(earlier), "owner@localhost")
+        .await
+        .1;
     assert_eq!(decision["eligible"], false);
-    assert!(
-        decision["reasons"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("catalog_activation_changed"))
-    );
-    assert_eq!(
-        old["frozen_binding"]["project"]["binding"]["catalog_digest"],
-        seed.digest()
-    );
-    let history = call(
+    assert_eq!(decision["reasons"], json!(["role_snapshot_changed"]));
+    assert!(decision["frozen_binding"].is_null());
+    env.snapshot = roles::active(&env.pool).await;
+    let current = call(
         &env.app,
-        &format!("{}/revisions/1", path()),
-        None,
+        &eligibility,
+        Some(admission(&env)),
         "owner@localhost",
     )
     .await
     .1;
-    assert_eq!(history["binding"]["catalog_digest"], seed.digest());
-    assert_eq!(history["revision"], 1);
+    assert_eq!(current["eligible"], true, "{current}");
+    assert_eq!(current["frozen_binding"]["project"]["revision"], 1);
+    assert_eq!(
+        current["frozen_binding"]["snapshot_digest"],
+        env.snapshot.digest()
+    );
+    assert_ne!(
+        old["frozen_binding"]["snapshot_digest"],
+        current["frozen_binding"]["snapshot_digest"]
+    );
 }
 
 #[tokio::test]
@@ -518,11 +654,88 @@ async fn exact_replay_survives_group_configuration_changes_but_new_mutations_do_
 // AQ-20 composes the already-qualified project seam with synthetic selection
 // facts. No provider or worker execution is started by this test.
 #[tokio::test]
+async fn a_republished_identical_inventory_keeps_a_decision_and_a_changed_one_refuses_it() {
+    use aq_server::intelligence::resolver::{self, ResolveRequest};
+    let SelectionFixture {
+        env,
+        snapshot,
+        frozen,
+        actor,
+        lineage,
+        operation,
+        ..
+    } = selection_fixture().await;
+    let req = ResolveRequest {
+        operation_id: operation,
+        lineage,
+        project: frozen,
+        launches: vec![common::roles::prepared_launch()],
+        replacement: None,
+        record_refused: true,
+        route: None,
+    };
+    let decision = resolver::resolve_trusted(&env.state, actor, req, &snapshot)
+        .await
+        .unwrap();
+    assert!(decision.outcome.resolved.is_some());
+    let fence = || async {
+        let mut tx = env.pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let result = resolver::fence_for_offer(&env.state, &mut tx, &decision).await;
+        tx.rollback().await.unwrap();
+        result.map_err(|e| format!("{e:?}"))
+    };
+    let store = |snapshot: serde_json::Value, revision: u64| {
+        sqlx::query("UPDATE intelligence_node_snapshots SET sequence=sequence+1,revision=$2,snapshot=$3 WHERE node_id=$1")
+            .bind(env.node)
+            .bind(revision as i64)
+            .bind(snapshot)
+            .execute(&env.pool)
+    };
+    // A sibling slot republishes the same installation: later sequence and
+    // revision, a later validity window, nothing else.
+    let mut same = decision.inputs.node.clone();
+    same.revision += 1;
+    same.observed_at_ms += 1;
+    same.expires_at_ms += 1;
+    for binding in &mut same.credential_bindings {
+        binding.observed_at_ms += 1;
+        binding.expires_at_ms += 1;
+    }
+    store(serde_json::json!(same), same.revision).await.unwrap();
+    assert_eq!(fence().await, Ok(()));
+    // The same content under an older revision is not the report that carries it.
+    let mut older = same.clone();
+    older.revision = decision.inputs.node.revision - 1;
+    store(serde_json::json!(older), same.revision)
+        .await
+        .unwrap();
+    let changed = Err(r#"Conflict("installed capability snapshot changed")"#.to_string());
+    assert_eq!(fence().await, changed);
+    // A changed installation refuses the decision, whatever its revision.
+    let mut other = same.clone();
+    other.harnesses[0].cli_version.push_str("-changed");
+    store(serde_json::json!(other), other.revision)
+        .await
+        .unwrap();
+    assert_eq!(fence().await, changed);
+    let mut removed = same.clone();
+    removed.credential_bindings.clear();
+    store(serde_json::json!(removed), removed.revision)
+        .await
+        .unwrap();
+    assert_eq!(fence().await, changed);
+}
+
+#[tokio::test]
 async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_facts() {
     use aq_server::intelligence::resolver::{self, ResolveRequest};
     let SelectionFixture {
         env,
-        input,
+        snapshot,
         frozen,
         actor,
         lineage,
@@ -530,18 +743,18 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
         unrelated,
         time,
         operation,
+        ..
     } = selection_fixture().await;
     let req = ResolveRequest {
         operation_id: operation,
         lineage: lineage.clone(),
         project: frozen.clone(),
-        compositions: input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    let decision = resolver::resolve_trusted(&env.state, actor, req)
+    let decision = resolver::resolve_trusted(&env.state, actor, req, &snapshot)
         .await
         .unwrap();
     assert!(
@@ -572,12 +785,12 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
             operation_id: operation,
             lineage: lineage.clone(),
             project: frozen.clone(),
-            compositions: input.compositions.clone(),
+            launches: vec![common::roles::prepared_launch()],
             replacement: None,
             record_refused: true,
-            intelligence_override: None,
             route: None,
         },
+        &snapshot,
     )
     .await
     .unwrap();
@@ -703,7 +916,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     };
     let SelectionFixture {
         mut env,
-        input,
+        snapshot,
         frozen,
         actor,
         lineage,
@@ -714,20 +927,18 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         operation_id: operation,
         lineage: lineage.clone(),
         project: frozen.clone(),
-        compositions: input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
     let policy = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![ProjectPolicy {
@@ -751,7 +962,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     config.profiled_execution = Some(Arc::new(policy.clone()));
     env.state.config = Arc::new(config);
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err(),
         "configured alone is not installed policy"
@@ -760,10 +971,10 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         .await
         .unwrap();
     assert_eq!(installed.installed, 1);
-    let human = resolver::resolve_trusted(&env.state, actor, request())
+    let human = resolver::resolve_trusted(&env.state, actor, request(), &snapshot)
         .await
         .unwrap();
-    let decision = resolver::resolve_for_project_policy(&env.state, request())
+    let decision = resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
         .await
         .unwrap();
     assert!(decision.outcome.resolved.is_some());
@@ -779,14 +990,14 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
             Some(1)
         )
     );
-    let replay = resolver::resolve_for_project_policy(&env.state, request())
+    let replay = resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
         .await
         .unwrap();
     assert_eq!(replay.decision_id, decision.decision_id);
     let mut changed = request();
-    changed.compositions.clear();
+    changed.launches.clear();
     assert!(
-        resolver::resolve_for_project_policy(&env.state, changed)
+        resolver::resolve_for_project_policy(&env.state, changed, &snapshot)
             .await
             .is_err()
     );
@@ -864,7 +1075,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         .await
         .unwrap();
     assert!(
-        resolver::resolve_trusted(&env.state, actor, request())
+        resolver::resolve_trusted(&env.state, actor, request(), &snapshot)
             .await
             .is_err()
     );
@@ -886,7 +1097,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         1
     );
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
@@ -895,7 +1106,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     config.profiled_execution = Some(Arc::new(newer));
     env.state.config = Arc::new(config);
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
@@ -926,7 +1137,6 @@ async fn policy_install_is_atomic_retains_tombstones_and_refuses_configuration_r
     };
     let configured = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![
@@ -964,7 +1174,6 @@ async fn policy_install_is_atomic_retains_tombstones_and_refuses_configuration_r
     assert_eq!(count, 1);
     let newer = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 2,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -1024,7 +1233,6 @@ async fn empty_policy_configuration_still_retains_global_revision_owner() {
     let mut config = (*env.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 10,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -1037,7 +1245,6 @@ async fn empty_policy_configuration_still_retains_global_revision_owner() {
     let mut config = (*env.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 9,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -1055,7 +1262,6 @@ async fn committed_binding_installs_pending_policy_and_historical_ack_survives_r
     let mut env = setup(false).await;
     let configured = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![ProjectPolicy {
@@ -1096,7 +1302,6 @@ async fn committed_binding_installs_pending_policy_and_historical_ack_survives_r
     let mut cfg = (*newer.config).clone();
     cfg.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 2,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -1114,4 +1319,47 @@ async fn committed_binding_installs_pending_policy_and_historical_ack_survives_r
     .await
     .unwrap();
     assert!(!enabled, "historical ack reinstalled a retired policy");
+}
+
+/// Spec 0014 §5.4: the catalog digest and the three allowlists are gone from
+/// the binding. A save that still sends one is refused and the answer names
+/// the field; a binding with only the remaining fields saves and reads back.
+#[tokio::test]
+async fn a_binding_that_names_a_removed_catalog_field_is_refused_by_name() {
+    let env = setup(false).await;
+    for (field, value) in [
+        ("catalog_digest", json!("a".repeat(64))),
+        ("allowed_agent_profiles", json!(["implementer@1"])),
+        ("allowed_intelligence_profiles", json!(["engineering@1"])),
+        (
+            "allowed_execution_profiles",
+            json!(["confined-development@1"]),
+        ),
+    ] {
+        let mut binding = env.body.clone();
+        binding[field] = value;
+        let request =
+            json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"binding":binding});
+        let (status, body) = call(&env.app, &path(), Some(request), "owner@localhost").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}: {body}");
+        let text = body.to_string();
+        assert!(
+            text.contains(&format!("unknown field `{field}`")),
+            "{field}: {text}"
+        );
+    }
+    for field in [
+        "catalog_digest",
+        "allowed_agent_profiles",
+        "allowed_intelligence_profiles",
+        "allowed_execution_profiles",
+    ] {
+        assert!(env.body.get(field).is_none(), "{field}");
+    }
+    let saved = bind(&env).await;
+    assert_eq!(saved["record"]["revision"], 1, "{saved}");
+    let (status, read) = call(&env.app, &path(), None, "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["binding"], saved["record"]["binding"], "{read}");
+    assert_eq!(read["binding"]["default_role"], "developer");
 }

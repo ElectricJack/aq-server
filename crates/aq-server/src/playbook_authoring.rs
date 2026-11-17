@@ -56,11 +56,11 @@ impl authoring::Host for AppState {
             SourceKind::Registered => {
                 authoring::stored_markdown(&self.store.pool, &source.id).await?
             }
-            // The routing document is part of the Intelligence structure.
+            // The routing document is a Settings value of the role store.
             SourceKind::Builtin if source.id == authoring::builtin::ROUTING => {
-                let read = aq_profile_settings::structure::document(&self.store.pool).await;
-                let (document, revision, _) = read.map_err(|e| Error::Host(e.to_string()))?;
-                Some((document.routing_markdown, revision))
+                let read = aq_role_settings::routing_document(&self.store.pool).await;
+                let (markdown, revision) = read.map_err(|e| Error::Host(e.to_string()))?;
+                Some((markdown, u64::try_from(revision).unwrap_or(0)))
             }
             SourceKind::Builtin => None,
         };
@@ -72,7 +72,8 @@ impl authoring::Host for AppState {
             if name != authoring::builtin::ROUTING_OPTIONS {
                 return Err(Error::Host(format!("there is no fact provider {name}")));
             }
-            // What Settings offers: the facts `levels`, `offers`, `harnesses`, `providers`.
+            // What Settings offers: the facts `levels`, `level_descriptions`, `offers`,
+            // `harnesses`, `providers`.
             let options = crate::routing::options(self).await;
             facts.extend(options.map_err(|e| Error::Host(format!("{e:?}")))?.facts());
         }

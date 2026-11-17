@@ -23,7 +23,8 @@
 #   media           create the private result-media root (dashboard Results view)
 #   profiled        MS1 wiring: retain the base centrally, generate [intelligence] +
 #                   [profiled_execution] (scripts/ms1-profiled.py), recreate the
-#                   server on it, activate catalog/binding revision 2
+#                   server on it, save the scratch project's binding (any other
+#                   project: scripts/bind-project.py)
 #   run             one graph attempt through the stack: worker-side aq-git, then
 #                   `aq-worker run-native` with the Claude docker-local executor
 #                   (scripts/ms1-node-run.py); repeat for the next ready task
@@ -33,9 +34,8 @@
 #   service-status  (swarm phase 1) `aq-worker service status` of the service
 #                   profile (AQ_MS1_SERVICE_PROFILE, default ms1) and each swarm
 #                   machine's id, state, control and node service states
-#   handoffs | renewals | decisions   (swarm phase 1) the newest attempt_handoffs
-#                   rows, context_qualification_renewals rows, and the
-#                   intelligence_decisions row count
+#   handoffs | decisions   (swarm phase 1) the newest attempt_handoffs rows and
+#                   the intelligence_decisions row count
 #   all             up, seed, node, import-login, live, server-restart, gaps
 #
 # Never prints, logs or passes the Claude token in argv: the live tests read
@@ -128,7 +128,7 @@ cmd_media() {
 }
 
 cmd_profiled() {
-  say "MS1 profiled execution: central base, config, catalog/binding revision 2"
+  say "MS1 profiled execution: central base, config, project binding"
   cmd_media
   (cd "$SRV" && python3 scripts/ms1-profiled.py source && python3 scripts/ms1-profiled.py configure) \
     > "$EVID/profiled-configure.json"
@@ -461,7 +461,6 @@ case ${1:-} in
   status) cmd_status ;;
   service-status) cmd_service_status ;;
   handoffs) db "SELECT attempt_id, node_id, reason, requested_at, candidate_operation_id, candidate_oid, note_comment_id FROM attempt_handoffs ORDER BY requested_at DESC LIMIT 5" ;;
-  renewals) db "SELECT renderer_digest, observed_at_ms, expires_at_ms, node_id FROM context_qualification_renewals ORDER BY observed_at_ms DESC LIMIT 5" ;;
   decisions) db "SELECT count(*) FROM intelligence_decisions" ;;
   rebuild-server) cmd_rebuild_server ;;
   profiled) cmd_profiled ;;

@@ -384,16 +384,15 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         "/api/supervisors" => NONE,
         // aq-manual-sessions api.rs::list (`Scope`)
         "/api/manual-agents" => const { &[PROJECT] },
-        // profile_catalog/settings.rs::read; intelligence.rs::inspect
-        "/api/settings/intelligence" | "/api/intelligence/registry" => NONE,
-        // profile_catalog.rs::inspect, ::artifact
-        "/api/profiles/catalogs" | "/api/profiles/catalogs/{digest}" => NONE,
+        // aq-role-settings http.rs::read; intelligence.rs::inspect
+        "/api/settings/intelligence-profiles"
+        | "/api/settings/routing-document"
+        | "/api/intelligence/registry" => NONE,
         // repository_onboarding.rs::show; profiled_execution/disposition.rs::read;
-        // aq-supervisor-control api.rs::operation; profile_catalog/settings.rs::operation
+        // aq-supervisor-control api.rs::operation
         "/api/repositories/onboard/{operation_id}"
         | "/api/execution/attempts/{id}/disposition"
-        | "/api/supervisors/{id}/operations/{operation}"
-        | "/api/settings/intelligence/operations/{id}" => NONE,
+        | "/api/supervisors/{id}/operations/{operation}" => NONE,
         // aq-playbook-authoring http.rs::list, ::read; aq-internal-work http.rs::read,
         // ::operation, ::run; routing/http.rs::policy, ::routes
         "/api/playbooks/sources"
@@ -401,7 +400,7 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         | "/api/settings/internal-work"
         | "/api/settings/internal-work/operations/{id}"
         | "/api/internal-work/runs/{id}"
-        | "/api/settings/intelligence/routing"
+        | "/api/settings/routing"
         | "/api/tasks/{id}/routes" => NONE,
         // playbooks/api.rs::status, ::admission
         "/api/playbooks/status" | "/api/playbooks/admissions/{id}" => NONE,

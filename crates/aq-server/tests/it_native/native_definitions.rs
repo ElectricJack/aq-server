@@ -53,7 +53,6 @@ fn exact_bytes_kind_identity_bounds_and_configuration_roundtrip() {
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![],
-        context_qualifications: vec![],
         definition_bodies: vec![],
     };
     assert_eq!(
@@ -91,7 +90,6 @@ async fn real_receipts_missing_bodies_and_immutable_definition_versions() {
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![],
-        context_qualifications: vec![],
         definition_bodies: vec![one.clone()],
     }));
     f.state.config = std::sync::Arc::new(config);
@@ -192,7 +190,6 @@ async fn concurrent_changed_definitions_cannot_claim_same_identity_version() {
             revision: 1,
             qualified_runtimes: vec![],
             projects: vec![],
-            context_qualifications: vec![],
             definition_bodies: vec![d],
         }));
         state.config = std::sync::Arc::new(config);

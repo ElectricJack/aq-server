@@ -54,6 +54,9 @@ repositories or services for these libraries are not required now.
 
 ## 2. Composition model
 
+> **Replaced (2026-11-16).** [Spec 0014](../specs/0014-roles-and-profiles.md) replaced this section:
+> a role, an intelligence profile and an execution profile, each one document; no behavior modules or capability packs.
+
 | Definition | Owns | Must not own |
 | --- | --- | --- |
 | Agent profile | Role description, behavior/pack references, default intelligence and execution profile references | Copied harness launch logic or duplicated tool documentation |

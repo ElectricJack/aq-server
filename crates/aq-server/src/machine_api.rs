@@ -1,8 +1,8 @@
 //! Service-machine routes (spec 0007 phase 1), under a node credential.
 use aq_machine_control::{self as mc, Error as McError, NewSlot};
 use aq_protocol::{
-    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, MeasurementSubmission,
-    QualificationPin, SlotEnrollment, SlotsRequest, SlotsResponse, valid_machine_key,
+    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, SlotEnrollment,
+    SlotsRequest, SlotsResponse, valid_machine_key,
 };
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
@@ -18,10 +18,6 @@ use crate::worker_api::{authenticate_context, lock_current_node};
 pub fn machine_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/worker/slots", post(slots))
-        .route(
-            "/v1/worker/qualifications",
-            post(qualifications).layer(DefaultBodyLimit::max(128 * 1024)),
-        )
         .with_state(state.clone())
         .merge(
             Router::new()
@@ -69,7 +65,6 @@ async fn slots(
         .begin()
         .await
         .map_err(|_| AppError::Internal)?;
-    // The machine lock precedes the node lock, as in revocation (review I3).
     let key = &req.machine_key;
     mc::lock_machine(&mut tx, key).await.map_err(mapped)?;
     lock_current_node(&mut tx, &auth).await?;
@@ -109,7 +104,7 @@ async fn control(
     ApiJson(req): ApiJson<ControlRequest>,
 ) -> Result<Json<ControlResponse>, AppError> {
     let auth = authenticate_context(&state, &headers).await?;
-    if req.schema_version != 1 {
+    if ![1, aq_protocol::NODE_SLOTS_SCHEMA_VERSION].contains(&req.schema_version) {
         return Err(AppError::BadRequest("schema_version".into()));
     }
     let node = auth.node();
@@ -130,24 +125,24 @@ async fn control(
     let handoff = mc::pending_handoffs(&mut conn, &key)
         .await
         .map_err(mapped)?;
+    let slots = if req.schema_version == 2 {
+        Some(mc::slots::count(&mut conn, node.id).await.map_err(mapped)?)
+    } else {
+        None
+    };
     drop(conn);
-    let qualification = crate::profiled_execution::context_renewal::current_pin(
-        &state,
-        u64::try_from(now.timestamp_millis()).map_err(|_| AppError::Internal)?,
-    )
-    .await?;
-    // The control poll counts as liveness.
     state
         .store
         .record_heartbeat(node.id, &node.worker_version, node.protocol_version, now)
         .await?;
     Ok(Json(ControlResponse {
-        schema_version: 1,
+        schema_version: req.schema_version,
         machine_key: key,
         desired: c.desired,
         generation: c.generation,
         handoff,
-        qualification,
+        qualification: None,
+        slots,
     }))
 }
 
@@ -166,7 +161,6 @@ async fn handoffs(
         .acquire()
         .await
         .map_err(|_| AppError::Internal)?;
-    // The answer carries the reason on record (an unrequested owner_stop is a restart).
     let now = (state.clock)();
     req.reason = mc::record_handoff(&mut conn, auth.id(), req.attempt_id, req.reason, now)
         .await
@@ -174,7 +168,6 @@ async fn handoffs(
     Ok(Json(req))
 }
 
-/// D2 ruling C: a restarted node releases an attempt whose host was lost.
 async fn lost_attempts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -184,17 +177,6 @@ async fn lost_attempts(
     Ok(Json(
         crate::profiled_execution::lost::release(&state, &auth, &req).await?,
     ))
-}
-
-/// A node's context measurement renews the configured qualifications it may (spec 0007 §7.3).
-async fn qualifications(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    ApiJson(req): ApiJson<MeasurementSubmission>,
-) -> Result<Json<QualificationPin>, AppError> {
-    let auth = authenticate_context(&state, &headers).await?;
-    let pin = crate::profiled_execution::context_renewal::record(&state, &auth, &req).await?;
-    Ok(Json(pin))
 }
 
 #[cfg(test)]

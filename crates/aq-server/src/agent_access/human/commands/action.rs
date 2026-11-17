@@ -160,6 +160,9 @@ impl ActionKind for TaskCreate {
                 .await
                 .map_err(ApiError::from)?;
         }
+        if let Some(role) = &payload.role {
+            crate::role_settings::named_api(state, &[role]).await?;
+        }
         if let Some(old) = journal::load(&self.runtime, request.operation_id)
             .await
             .map_err(ApiError::from)?

@@ -87,7 +87,7 @@ owner's REST read or action-union payload in owner mode.
 aq task show [self|TASK_ID] [--project P]
 aq task children [--param task_id=ID] | aq task history [--param task_id=ID]
 aq task create --title T [--body B|-] [--acceptance-criteria A] [--label L]... [--parent self|TASK_ID]
-               [--draft] [--priority N] [--task-type K] [--project P --expected-project-revision R]
+               [--draft] [--priority N] [--task-type K] [--role R] [--project P --expected-project-revision R]
 aq knowledge search TEXT [--kind task|knowledge] [--limit N] [--cursor C]
 aq knowledge show ID [--project P]
 aq knowledge author --title T [--body B|-] [--label L]... [--content-type note|fact|…] [--reason R]

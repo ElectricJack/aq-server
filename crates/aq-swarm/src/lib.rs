@@ -1,5 +1,6 @@
 //! Swarm read model (spec 0007): capacity assembly, machine reports and the
 //! pure swarm assembly. aq-server gathers the inputs and serves the result.
+pub mod agents;
 pub mod assemble;
 pub mod capacity;
 pub mod class;

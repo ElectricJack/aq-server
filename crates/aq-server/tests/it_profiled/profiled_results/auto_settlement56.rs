@@ -764,11 +764,15 @@ async fn unchanged_source_completes_without_publication() {
         incomplete_ttl_secs: 60,
     };
     let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config.git_socket);
+    let settling = env.report.binding.attempt_id;
+    common::roles::pin_active(&pool, settling).await;
     let s = publication::deliver_then_settle(&env.f.state, &delivery, env.report.report_id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(s.disposition, AutoDisposition::Confirmed, "{s:?}");
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pool, settling).await);
     assert_eq!(s.evidence["delivery"]["state"], "no_change", "{s:?}");
     assert_eq!(s.evidence["source"]["changed"], false, "{s:?}");
     assert_eq!(env.writes.load(Ordering::SeqCst), 1, "one Graph completion");

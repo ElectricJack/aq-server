@@ -18,7 +18,7 @@ fn error(error: aq_swarm_settings::Error) -> AppError {
     )
 }
 fn available(state: &AppState) -> Vec<aq_swarm_settings::providers::Provider> {
-    aq_swarm_settings::http::catalog(
+    aq_swarm_settings::http::providers(
         state
             .config
             .intelligence

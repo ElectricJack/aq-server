@@ -165,10 +165,13 @@ pub(super) fn assemble(
         digest: host.digest()?,
         ..host_reference
     };
+    // The role snapshot the saved profile was chosen from. The pin keeps the
+    // field name `catalog` of the stored central plan contract.
     let catalog = ArtifactRef {
-        id: Text::new("aq.owner/profile-catalog")?,
+        id: Text::new("aq.owner/role-snapshot")?,
         version: Text::new("1")?,
-        digest: serde_json::from_value(profile["catalog_digest"].clone())?,
+        digest: serde_json::from_value(profile["snapshot_digest"].clone())
+            .context("saved supervisor profile names no role snapshot; choose it again")?,
     };
     let central = CentralPlan {
         schema_version: 1,
@@ -241,7 +244,7 @@ pub(super) fn assemble(
             server_origin: config.server_origin.clone(),
             instructions,
             control_revision: control.revision,
-            options: serde_json::from_value(profile.get("options").cloned().unwrap_or(json!({})))?,
+            options: Default::default(),
         }),
     };
     crate::validate_join(&result.central, &result.host)?;
@@ -300,7 +303,7 @@ mod tests {
             actor: prior.subject.actor_id(),
             enabled: true,
             revision: 1,
-            profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","catalog_digest":Digest::of(b"catalog"),"profile_id":"engineering","profile_version":1,"reasoning_configuration_reference":"medium"}),
+            profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","snapshot_digest":Digest::of(b"snapshot"),"profile_id":"engineering","candidate_id":"openai:fixture-model:medium"}),
             owner: Some(Uuid::new_v4()),
             project: None,
             label: "Global supervisor".into(),

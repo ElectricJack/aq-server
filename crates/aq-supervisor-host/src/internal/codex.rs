@@ -11,7 +11,7 @@ use super::{
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
-    redact_login, service_tier, stage_login,
+    redact_login, stage_login,
 };
 use aq_internal_work::{Reason, Usage, validate};
 use serde_json::Value;
@@ -95,11 +95,8 @@ async fn attempt(
         "read-only"
     };
     let args = exec_arguments(sandbox, &candidate.model, cwd, &output).map_err(|_| setup())?;
-    // The model choice's effort; without one Codex keeps its default.
+    // The level's effort; without one Codex keeps its default.
     let mut overrides = exec_overrides(candidate.reasoning.as_deref());
-    let tier = service_tier(&candidate.options)
-        .map_err(|_| failure(Reason::ProviderError, "unsupported service tier"))?;
-    overrides.extend(tier);
     if agent {
         // In place of the fixed shell `PATH`.
         overrides.retain(|o| !o.starts_with("shell_environment_policy.set.PATH="));

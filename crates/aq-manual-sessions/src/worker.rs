@@ -114,6 +114,9 @@ async fn poll(
             *used.entry(x.project_id).or_default() += 1;
         }
     }
+    if let Some(witness) = s.compute_witness {
+        witness(&mut tx, node).await?;
+    }
     let mut jobs = Vec::new();
     for x in &mut sessions {
         if x.status == "pending" && x.desired_running {
@@ -132,8 +135,7 @@ async fn poll(
             {
                 continue;
             }
-            let cell =
-                aq_swarm_settings::admission::manual_cell(&mut tx, &x.spec, x.project_id).await?;
+            let cell = aq_swarm_settings::admission::pinned_cell(&x.spec);
             if let Some(reason) =
                 aq_swarm_settings::admission::check(&mut tx, cell.as_ref()).await?
             {
@@ -142,6 +144,18 @@ async fn poll(
                     .bind(x.id).bind(reason).bind(at).execute(&mut *tx).await?;
                 continue;
             }
+            let Some(slot) = aq_machine_control::slots::assign_manual(&mut tx, x.id, node)
+                .await
+                .map_err(management::storage)?
+            else {
+                continue;
+            };
+            x.spec["node_slot"] = json!(slot);
+            sqlx::query("UPDATE manual_agent_sessions SET spec=$2 WHERE id=$1")
+                .bind(x.id)
+                .bind(&x.spec)
+                .execute(&mut *tx)
+                .await?;
             total += 1;
             *used.entry(x.project_id).or_default() += 1;
             x.status = "preparing".into();

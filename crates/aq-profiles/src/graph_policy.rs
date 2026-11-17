@@ -1,7 +1,7 @@
-//! Model-independent graph policy sealed from an instruction draft. A resolved
-//! API01 profile is derived only after a concrete intelligence choice exists.
+//! The model-independent graph access policy of a launch. A resolved API01
+//! profile is derived only after a concrete intelligence choice exists.
 use crate::*;
-use aq_session_api::{Permission, Source};
+use aq_session_api::Permission;
 use aq_session_protocol::{ArtifactRef, Text};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -124,188 +124,12 @@ impl GraphAccessPolicy {
         })
     }
 }
-pub(crate) fn valid_digest(value: &str) -> bool {
+fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompositionDraft {
-    pub catalog_digest: String,
-    pub agent_profile: Source,
-    pub intelligence_profile: Source,
-    pub execution_profile: Source,
-    pub project_binding_id: Uuid,
-    pub project_revision: u64,
-    pub task_context_revision: String,
-    pub harness: String,
-    pub environment: String,
-    pub instruction_order: Vec<Instruction>,
-    pub requested_permissions: Vec<Permission>,
-    pub effective_permissions: Vec<Permission>,
-    pub context_limit_bytes: u64,
-    pub overrides: Vec<aq_session_api::OverrideExplanation>,
-    pub omissions: Vec<aq_session_api::Omission>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompilationDraft {
-    pub catalog_valid: bool,
-    pub composition_valid: bool,
-    pub blocking_reasons: Vec<String>,
-    pub composition: Option<CompositionDraft>,
-}
-pub struct SealedComposition {
-    pub composition: FrozenComposition,
-    pub graph_access_policy: GraphAccessPolicy,
-}
-impl CompositionDraft {
-    pub fn instructions_digest(&self) -> Result<String> {
-        digest(&self.instruction_order)
-    }
-    pub fn tool_policy_digest(&self) -> Result<String> {
-        digest(&(&self.requested_permissions, &self.effective_permissions))
-    }
-    /// Scope and context are owner-derived facts. This method provides no live
-    /// project authorization, graph access or execution authority.
-    pub fn seal(
-        self,
-        scope: GraphAccessScope,
-        context: &serde_json::Value,
-    ) -> Result<SealedComposition> {
-        let policy = GraphAccessPolicy {
-            schema_version: 1,
-            kind: GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1,
-            project_binding_id: self.project_binding_id,
-            project_revision: self.project_revision,
-            source_context_revision: self.task_context_revision.clone(),
-            context_digest: digest(context)?,
-            instructions_digest: self.instructions_digest()?,
-            tool_policy_digest: self.tool_policy_digest()?,
-            effective_permissions: self.effective_permissions.clone(),
-            scope,
-        };
-        policy.validate_context(context)?;
-        let composition = FrozenComposition {
-            schema_version: 2,
-            catalog_digest: self.catalog_digest,
-            agent_profile: self.agent_profile,
-            intelligence_profile: self.intelligence_profile,
-            execution_profile: self.execution_profile,
-            project_binding_id: self.project_binding_id,
-            project_revision: self.project_revision,
-            task_context_revision: self.task_context_revision,
-            graph_access_profile_digest: String::new(),
-            requested_permissions: Some(self.requested_permissions),
-            graph_access_policy_digest: Some(digest(&policy)?),
-            graph_access_policy_kind: Some(policy.kind),
-            harness: self.harness,
-            environment: self.environment,
-            instruction_order: self.instruction_order,
-            effective_permissions: self.effective_permissions,
-            context_limit_bytes: self.context_limit_bytes,
-            overrides: self.overrides,
-            omissions: self.omissions,
-        };
-        composition.validate_graph_policy(&policy)?;
-        Ok(SealedComposition {
-            composition,
-            graph_access_policy: policy,
-        })
-    }
-}
-impl FrozenComposition {
-    pub fn validate_native_v2(&self) -> Result<()> {
-        ensure(
-            self.schema_version == 2
-                && self.graph_access_profile_digest.is_empty()
-                && self
-                    .requested_permissions
-                    .as_ref()
-                    .is_some_and(|p| p.len() <= 128)
-                && self.graph_access_policy_kind
-                    == Some(GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1)
-                && self
-                    .graph_access_policy_digest
-                    .as_deref()
-                    .is_some_and(valid_digest),
-            "native composition requires graph policy schema2",
-        )?;
-        let requested = self
-            .requested_permissions
-            .as_ref()
-            .expect("validated requested permissions");
-        let mut seen = BTreeSet::new();
-        for permission in requested {
-            text(&permission.operation)?;
-            text(&permission.scope_reference)?;
-            ensure(
-                seen.insert((&permission.operation, &permission.scope_reference)),
-                "duplicate requested permission",
-            )?;
-        }
-        ensure(
-            self.effective_permissions.len() <= 128 && self.instruction_order.len() <= 128,
-            "native composition bounds",
-        )?;
-        seen.clear();
-        for permission in &self.effective_permissions {
-            ensure(
-                requested.iter().any(|p| {
-                    p.operation == permission.operation
-                        && p.scope_reference == permission.scope_reference
-                }) && seen.insert((&permission.operation, &permission.scope_reference)),
-                "effective permission outside requested plan",
-            )?;
-        }
-        let mut bytes = 0usize;
-        for instruction in &self.instruction_order {
-            text(&instruction.source.identity)?;
-            text(&instruction.source.revision)?;
-            bytes = bytes
-                .checked_add(instruction.text.len())
-                .ok_or_else(|| Error::Invalid("instruction aggregate overflow".into()))?;
-            ensure(
-                !instruction.text.trim().is_empty()
-                    && instruction.text.len() <= 65536
-                    && bytes <= 8_388_608
-                    && valid_digest(&instruction.source.digest)
-                    && ((instruction.source.identity.starts_with("module:")
-                        || instruction.source.identity.starts_with("agent:"))
-                        || instruction.source.digest
-                            == aq_session_protocol::Digest::of(instruction.text.as_bytes())
-                                .as_str())
-                    && (!instruction.required || instruction.delivery == Delivery::Startup),
-                "native instruction provenance/bounds",
-            )?;
-        }
-        Ok(())
-    }
-    pub fn validate_graph_policy(&self, policy: &GraphAccessPolicy) -> Result<()> {
-        self.validate_native_v2()?;
-        policy.validate()?;
-        ensure(
-            self.graph_access_policy_digest.as_ref() == Some(&digest(policy)?)
-                && policy.project_binding_id == self.project_binding_id
-                && policy.project_revision == self.project_revision
-                && policy.source_context_revision == self.task_context_revision
-                && policy.instructions_digest == digest(&self.instruction_order)?
-                && policy.tool_policy_digest
-                    == digest(&(
-                        self.requested_permissions.as_ref().ok_or_else(|| {
-                            Error::Invalid("missing requested permissions".into())
-                        })?,
-                        &self.effective_permissions,
-                    ))?
-                && serde_json::to_value(&policy.effective_permissions).unwrap()
-                    == serde_json::to_value(&self.effective_permissions).unwrap(),
-            "composition graph policy binding",
-        )
-    }
-}
-
 /// Supplied only after an actual concrete intelligence choice exists. These
 /// values are not availability, authentication or execution authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +138,6 @@ pub struct ResolvedGraphModel {
     pub provider: String,
     pub model: String,
     pub native_reasoning: String,
-    pub reasoning_configuration_reference: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -386,12 +209,7 @@ impl GraphAccessPolicy {
         retry: &GraphRetryBudget,
     ) -> Result<serde_json::Value> {
         self.validate_context(context)?;
-        for value in [
-            &model.provider,
-            &model.model,
-            &model.native_reasoning,
-            &model.reasoning_configuration_reference,
-        ] {
+        for value in [&model.provider, &model.model, &model.native_reasoning] {
             text(value)?;
         }
         let readable = self
@@ -424,5 +242,107 @@ impl GraphAccessPolicy {
             "resolved API01 profile bounds",
         )?;
         Ok(profile)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> serde_json::Value {
+        serde_json::json!({"observed_at":"1970-01-01T00:00:01Z","projection":"authorized_scope","root_ids":[Uuid::from_u128(3)],"nodes":[{"id":Uuid::from_u128(3),"kind":"task","version":"1","content_revision":"1","title":"Synthetic task","body":"Bounded work","acceptance_criteria":"Verify","labels":[],"task_state":"active","verification":null,"content_type":null,"retired":false,"deleted":false}],"edges":[],"pinned_revisions":[],"coverage":{"status":"complete","complete_for":"authorized_projection","reasons":[]}})
+    }
+    fn policy(context: &serde_json::Value, records: Vec<Uuid>) -> GraphAccessPolicy {
+        let project = Uuid::from_u128(1);
+        let permission = |operation: &str, scope: String| Permission {
+            operation: operation.into(),
+            scope_reference: scope,
+        };
+        GraphAccessPolicy {
+            schema_version: 1,
+            kind: GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1,
+            project_binding_id: project,
+            project_revision: 1,
+            source_context_revision: "task:1".into(),
+            context_digest: digest(context).unwrap(),
+            instructions_digest: "a".repeat(64),
+            tool_policy_digest: "b".repeat(64),
+            effective_permissions: vec![
+                permission("task.read", format!("project:{project}")),
+                permission("knowledge.read", format!("project:{project}")),
+                permission(
+                    "source.write",
+                    format!("repository:{}", Uuid::from_u128(41)),
+                ),
+            ],
+            scope: GraphAccessScope {
+                repository_id: Uuid::from_u128(41),
+                workspace_id: Uuid::from_u128(2),
+                task_id: Uuid::from_u128(3),
+                record_ids: records,
+                edge_types: vec![],
+            },
+        }
+    }
+    fn model(name: &str) -> ResolvedGraphModel {
+        ResolvedGraphModel {
+            provider: "fixture-a".into(),
+            model: name.into(),
+            native_reasoning: "high".into(),
+        }
+    }
+    const RETRY: GraphRetryBudget = GraphRetryBudget {
+        max_attempts: 3,
+        max_elapsed_ms: 60000,
+        initial_delay_ms: 100,
+        max_delay_ms: 1000,
+    };
+
+    #[test]
+    fn two_models_share_one_policy_and_resolve_distinct_profiles() {
+        let context = context();
+        let policy = policy(&context, vec![Uuid::from_u128(3)]);
+        let resolve =
+            |name| (policy.resolve_profile(&model(name), &context, "developer", &RETRY)).unwrap();
+        let (first, second) = (resolve("model-a"), resolve("model-b"));
+        assert_eq!(first["model"]["model"], "model-a");
+        assert_ne!(first["profile_id"], second["profile_id"]);
+        assert_eq!(first["instructions_digest"], second["instructions_digest"]);
+        assert_eq!(first["tool_policy_digest"], second["tool_policy_digest"]);
+        assert_eq!(
+            first["read_scope"]["record_ids"],
+            serde_json::json!(policy.scope.record_ids)
+        );
+        // The policy holds for exactly the context it was sealed for.
+        let mut changed = context.clone();
+        changed["nodes"][0]["body"] = serde_json::json!("changed");
+        assert!(policy.validate_context(&changed).is_err());
+    }
+
+    #[test]
+    fn a_context_record_needs_its_typed_read_permission_at_the_owned_scope() {
+        let mut context = context();
+        let mut knowledge = context["nodes"][0].clone();
+        knowledge["id"] = serde_json::json!(Uuid::from_u128(9));
+        knowledge["kind"] = serde_json::json!("knowledge");
+        knowledge["task_state"] = serde_json::Value::Null;
+        context["nodes"].as_array_mut().unwrap().push(knowledge);
+        let sealed = policy(&context, vec![Uuid::from_u128(3), Uuid::from_u128(9)]);
+        sealed.validate_context(&context).unwrap();
+        for missing in ["task.read", "knowledge.read"] {
+            let mut denied = sealed.clone();
+            (denied.effective_permissions).retain(|p| p.operation != missing);
+            assert!(denied.validate_context(&context).is_err(), "{missing}");
+        }
+        let mut wrong = sealed.clone();
+        wrong.effective_permissions[0].scope_reference =
+            format!("project:{}", Uuid::from_u128(8888));
+        assert!(wrong.validate_context(&context).is_err());
+        let mut alias = sealed.clone();
+        alias.effective_permissions[0].scope_reference = "project:example".into();
+        assert!(alias.validate_context(&context).is_err());
+        // A record outside the sealed scope, or a scope the context does not cover.
+        let narrower = policy(&context, vec![Uuid::from_u128(3)]);
+        assert!(narrower.validate_context(&context).is_err());
     }
 }

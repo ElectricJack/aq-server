@@ -140,9 +140,29 @@ pub fn project(
     if extra.len() >= 64 || pins.len() > 64 || edges.len() > 256 {
         return Err(Error::Invalid);
     }
+    // An agent is told about its own task (spec 0014 §6.3). The tasks this
+    // task blocks are other agents' work: they are left out of the startup
+    // text and of the read scope, with every edge and pin that names them.
+    // What the task depends on stays.
+    let root = observation.revision.task_id;
+    let mut dependents = BTreeSet::new();
+    for edge in edges {
+        if edge["edge_type"] == "blocks" && id(&edge["source"])? == root {
+            dependents.insert(id(&edge["target"])?);
+        }
+    }
+    dependents.remove(&root);
+    let names_dependent =
+        |edge: &Value| -> Result<bool, Error> {
+            Ok(dependents.contains(&id(&edge["source"])?)
+                || dependents.contains(&id(&edge["target"])?))
+        };
     let mut nodes = vec![node(&raw["node"], workspace_id, project_id, permissions)?];
     let mut current = BTreeSet::from([observation.revision.task_id]);
     for record in extra {
+        if dependents.contains(&id(&record["id"])?) {
+            continue;
+        }
         if !current.insert(id(&record["id"])?) {
             return Err(Error::Invalid);
         }
@@ -152,6 +172,9 @@ pub fn project(
     let mut pin_ids = BTreeSet::new();
     let mut record_ids = current.clone();
     for record in pins {
+        if dependents.contains(&id(&record["id"])?) {
+            continue;
+        }
         let key = (id(&record["id"])?, positive(&record["content_revision"])?);
         if !current.contains(&key.0) || !pin_ids.insert(key.clone()) {
             return Err(Error::Invalid);
@@ -164,6 +187,9 @@ pub fn project(
     let mut edge_types = BTreeSet::new();
     let mut expected_pins = BTreeSet::new();
     for edge in edges {
+        if names_dependent(edge)? {
+            continue;
+        }
         if id(&edge["workspace_id"])? != workspace_id
             || edge["deleted"] != false
             || !edge_ids.insert(id(&edge["id"])?)
@@ -374,6 +400,32 @@ mod tests {
         stale.context["node"]["version"] = json!(2);
         refresh(&mut stale);
         assert!(project(&stale, uid(1), uid(41), uid(2), &permissions(), 2000).is_err());
+    }
+    #[test]
+    fn a_task_it_blocks_is_left_out_and_what_it_depends_on_stays() {
+        let task = |n: u128, body: &str| {
+            let mut node = raw_node(n, "task");
+            node["body"] = json!(body);
+            node
+        };
+        let blocks = |edge: u128, source: u128, target: u128| json!({"id":uid(edge),"workspace_id":uid(2),"source":uid(source),"target":uid(target),"edge_type":"blocks","version":1,"source_revision":null,"target_revision":null,"description":null,"deleted":false});
+        let mut input = observation(false);
+        // 5 blocks the task (a prerequisite); the task blocks 6 (a dependent).
+        input.context["nodes"] = json!([
+            task(5, "Prerequisite work, already done"),
+            task(6, "Dependent work for another agent")
+        ]);
+        input.context["edges"] = json!([blocks(8, 5, 3), blocks(9, 3, 6)]);
+        refresh(&mut input);
+        let projected = project(&input, uid(1), uid(41), uid(2), &permissions(), 2000).unwrap();
+        let text = String::from_utf8(projected.bytes.clone()).unwrap();
+        assert!(text.contains("Prerequisite work, already done"));
+        assert!(!text.contains("Dependent work for another agent"));
+        assert!(!text.contains(&uid(6).to_string()));
+        assert_eq!(projected.scope.record_ids, vec![uid(3), uid(5)]);
+        assert_eq!(projected.context["edges"].as_array().unwrap().len(), 1);
+        assert_eq!(projected.context["edges"][0]["id"], json!(uid(8)));
+        assert!(aq_agent_api::valid("ContextSnapshot", &projected.context));
     }
     #[test]
     fn scoped_edges_require_exact_authorized_endpoints_and_pinned_revisions() {

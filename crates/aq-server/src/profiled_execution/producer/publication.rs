@@ -20,6 +20,7 @@ pub async fn publish(
     export: &source_exports::ReservedExport,
     fact: &VerifiedExport,
     inspection: &RetentionObservation,
+    slot: u32,
 ) -> Result<Option<NativeOffer>, AppError> {
     let mut digests = built
         .native
@@ -48,8 +49,7 @@ pub async fn publish(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    // Review I2: a Stop, Drain or availability off after the poll's gate (or
-    // racing this transaction) publishes no offer, as the early gate does.
+    // Recheck stop/drain/availability after the poll's early gate.
     let mc = |_| refused();
     if !aq_machine_control::lock_publishing_node(&mut tx, auth.id())
         .await
@@ -75,9 +75,8 @@ pub async fn publish(
     {
         return Err(refused());
     }
-    // SERIALIZABLE plus the common task-claim unique index arbitrates competing
-    // schedulers; no worker-selected task state or legacy discriminator is used.
-    let node_busy = super::super::compute::busy_locked(&mut tx, node).await?;
+    // SERIALIZABLE and the common task-claim index arbitrate schedulers.
+    let slot_free = super::super::compute::free_locked(&mut tx, node, slot).await?;
     let task_held: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE holds_task AND task_id=$1)",
     )
@@ -86,7 +85,11 @@ pub async fn publish(
     .await
     .map_err(db)?
         || super::super::disposition::task_disposed(&mut tx, built.spec.task.task_id).await?;
-    if node_busy || task_held {
+    if !slot_free {
+        // The slot was taken since the poll's early gate: no offer, no refusal.
+        aq_machine_control::recent::forget(node).await;
+        return Ok(None);
+    } else if task_held {
         return Err(refused());
     }
     crate::intelligence::resolver::fence_for_offer(state, &mut tx, &built.decision).await?;
@@ -156,6 +159,23 @@ pub async fn publish(
         .as_ref()
         .ok_or_else(|| refused())?;
     sqlx::query("INSERT INTO intelligence_attempt_selections(attempt_id,selection_digest,selection) VALUES($1,$2,$3)").bind(binding.attempt_id).bind(aq_selection::digest(selection).map_err(|_|AppError::Internal)?.as_str()).bind(serde_json::to_value(selection).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
+    // Spec 0014 §7.1: what the attempt ran with is part of its record, and
+    // its snapshot stays while the record does.
+    if crate::role_settings::tables(state) {
+        let ran_with = aq_role_settings::attempts::RanWith {
+            role: built.decision.project.role.clone(),
+            level: built.decision.project.intelligence_profile.clone(),
+            provider: selection.choice.provider.clone(),
+            model: selection.choice.model.clone(),
+            reasoning: selection.choice.native_reasoning.clone(),
+            harness: selection.choice.harness.clone(),
+            execution_profile: built.decision.project.execution_profile.clone(),
+            snapshot_digest: Some(built.decision.project.snapshot_digest.clone()),
+        };
+        aq_role_settings::attempts::record(&mut tx, binding.attempt_id, &ran_with)
+            .await
+            .map_err(crate::role_settings::error)?;
+    }
     let hot = crate::execution::authority::hot::HotState::from_compat(&built.state)
         .map_err(|_| refused())?;
     sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)").bind(binding.attempt_id).bind(serde_json::to_value(hot).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
@@ -215,12 +235,15 @@ pub async fn publish(
         )
     })
     .await?;
-    // Repeat time-only fences after artifact/source rows and their quota locks.
     let end = now(state)?;
     if end >= built.deadline || end >= inspection.expires_at_ms() {
         return Err(refused());
     }
     super::load_original_offer_locked(&mut tx, binding.attempt_id).await?;
+    super::super::closure::history::for_attempt_locked(&mut tx, binding).await?;
+    aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
+        .await
+        .map_err(crate::machine_api::mapped)?;
     match tx.commit().await {
         Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(None),
         done => done.map(|_| Some(native)).map_err(db),

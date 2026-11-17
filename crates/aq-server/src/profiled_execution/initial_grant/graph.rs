@@ -100,6 +100,16 @@ pub(super) async fn observe(
         .scheduling_ready_current(input.spec.task.workspace_id, 8, None, state.clock.as_ref())
         .await
         .map_err(read_error)?;
+    // Spec 0014 §5.5: the offer was made for the task's effective role. A
+    // role set or cleared since then refuses this grant; the offer lapses and
+    // the task is offered again as its new role.
+    let task = input.spec.task.task_id;
+    let current = (ready.items.iter()).find(|r| r.revision.task_id == task);
+    let metadata = &current.ok_or_else(|| refused())?.node["metadata"];
+    let role = aq_role_settings::tasks::effective_role(metadata, &binding.default_role);
+    if role.id != decision.project.role {
+        return Err(refused());
+    }
     let context = graph
         .scheduling_context_current(&input.spec.task, 1, 64, 1_048_576, state.clock.as_ref())
         .await

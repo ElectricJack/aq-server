@@ -38,8 +38,8 @@ pub struct Config {
     pub profiled_execution:
         Option<std::sync::Arc<crate::profiled_execution::config::ProfiledConfig>>,
     /// C3b environment template allowlist (C4); absent means no sandbox pins.
-    #[serde(default, deserialize_with = "crate::templates::deserialize")]
-    pub templates: Option<std::sync::Arc<crate::templates::Allowlist>>,
+    #[serde(default, deserialize_with = "aq_environment_templates::deserialize")]
+    pub templates: Option<std::sync::Arc<aq_environment_templates::Allowlist>>,
     #[serde(default)]
     pub intelligence_preferences_file: Option<PathBuf>,
     pub format_version: u32,
@@ -139,6 +139,8 @@ pub struct WorkersConfig {
     /// `[workers.registration_history]`: the same for the native registration history.
     pub registration_history: aq_row_retention::HeartbeatLog,
     pub install: aq_machine_control::install::WorkerInstall,
+    /// `[workers.limits]`: concurrency limits of the launch path.
+    pub limits: aq_machine_control::limits::LaunchLimits,
 }
 
 impl Default for WorkersConfig {
@@ -149,6 +151,7 @@ impl Default for WorkersConfig {
             heartbeat_log: Default::default(),
             registration_history: Default::default(),
             install: Default::default(),
+            limits: Default::default(),
         }
     }
 }
@@ -186,12 +189,42 @@ pub fn load(vault_dir: &Path) -> Result<Config, ConfigError> {
         path: path.clone(),
         source,
     })?;
+    if let Some((key, reason)) = removed_key(&text) {
+        let (key, reason) = (key.to_string(), reason.to_string());
+        return Err(ConfigError::Invalid { path, key, reason });
+    }
     let config: Config = toml::from_str(&text).map_err(|e| ConfigError::Parse {
         path: path.clone(),
         message: e.to_string(),
     })?;
     validate(&config).map_err(|(key, reason)| ConfigError::Invalid { path, key, reason })?;
     Ok(config)
+}
+
+/// A key spec 0014 (roles and profiles) removed, if the file still has one.
+/// The typed parse would only say "unknown field"; this says what happened.
+fn removed_key(text: &str) -> Option<(&'static str, &'static str)> {
+    let table: toml::Table = text.parse().ok()?;
+    let section = |name: &str| table.get(name).and_then(toml::Value::as_table);
+    if section("profiled_execution").is_some_and(|s| s.contains_key("context_qualifications")) {
+        return Some((
+            "profiled_execution.context_qualifications",
+            "was removed by spec 0014 (roles and profiles): the server holds no context \
+             measurement; delete it",
+        ));
+    }
+    let harnesses = section("intelligence")
+        .and_then(|s| s.get("qualified_harnesses"))
+        .and_then(toml::Value::as_array);
+    let lists_models = |harness: &toml::Value| harness.get("models").is_some();
+    if harnesses.is_some_and(|all| all.iter().any(lists_models)) {
+        return Some((
+            "intelligence.qualified_harnesses[].models",
+            "was removed by spec 0014 (roles and profiles): any model an intelligence \
+             profile names is allowed; delete it",
+        ));
+    }
+    None
 }
 
 fn validate(c: &Config) -> Result<(), (String, String)> {
@@ -240,6 +273,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
         }
     }
     let w = &c.workers;
+    if let Err(reason) = w.limits.validate() {
+        return invalid("workers.limits", reason.into());
+    }
     if w.heartbeat_log.bounds().is_none() || w.registration_history.bounds().is_none() {
         return invalid("workers.heartbeat_log", "must be at least 1".into());
     }

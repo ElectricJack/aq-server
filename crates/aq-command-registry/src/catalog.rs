@@ -75,7 +75,7 @@ const fn get(path: &'static str) -> Option<Route> {
     Some(Route::get(path, &[]))
 }
 
-const AGENT_TASK: &str = r#"{"type":"object","additionalProperties":false,"required":["operation_id","title"],"properties":{"operation_id":{"type":"string","format":"uuid"},"title":{"type":"string","minLength":1,"maxLength":512},"body":{"type":"string","maxLength":32768},"acceptance_criteria":{"type":"string","maxLength":8192},"labels":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"parent_id":{"anyOf":[{"type":"string","format":"uuid"},{"const":"self"},{"type":"null"}]},"priority":{"type":"integer","minimum":1,"maximum":300},"task_type":{"type":"string","minLength":1,"maxLength":128},"task_state":{"enum":["active","draft"]},"expected_project_revision":{"type":"string","pattern":"^[1-9][0-9]{0,18}$"},"profile_hint":{"type":"null","description":"An agent cannot choose the profile of a task it creates"},"intelligence_hint":{"type":"null","description":"An agent cannot choose the intelligence of a task it creates"}}}"#;
+const AGENT_TASK: &str = r#"{"type":"object","additionalProperties":false,"required":["operation_id","title"],"properties":{"operation_id":{"type":"string","format":"uuid"},"title":{"type":"string","minLength":1,"maxLength":512},"body":{"type":"string","maxLength":32768},"acceptance_criteria":{"type":"string","maxLength":8192},"labels":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"parent_id":{"anyOf":[{"type":"string","format":"uuid"},{"const":"self"},{"type":"null"}]},"priority":{"type":"integer","minimum":1,"maximum":300},"task_type":{"type":"string","minLength":1,"maxLength":128},"task_state":{"enum":["active","draft"]},"expected_project_revision":{"type":"string","pattern":"^[1-9][0-9]{0,18}$"},"role":{"type":"string","minLength":1,"maxLength":128,"description":"The role the task expects; it must exist. Absent: the project's default role"},"intelligence_hint":{"type":"null","description":"An agent cannot choose the intelligence of a task it creates"}}}"#;
 /// An agent's task read: an optional `task_id` (the attempt's own task when
 /// omitted) and `project_id` (the attempt's project), plus `extra` fields.
 macro_rules! task_params {
@@ -908,26 +908,14 @@ pub fn catalog() -> Vec<CommandSpec> {
         owner(
             "intelligence.list",
             "dashboard.read",
-            "Intelligence settings: profiles, the projects using each, and model choices",
-            "/api/settings/intelligence",
+            "The intelligence profiles (levels): each document with its candidates",
+            "/api/settings/intelligence-profiles",
         ),
         owner(
             "intelligence.registry.show",
             "dashboard.read",
             "The intelligence registry: credentials and recent observations",
             "/api/intelligence/registry",
-        ),
-        owner(
-            "profile.catalog.active",
-            "dashboard.read",
-            "The active profile catalog's digest and revision",
-            "/api/profiles/catalogs",
-        ),
-        owner(
-            "profile.catalog.show",
-            "dashboard.read",
-            "One profile catalog by digest",
-            "/api/profiles/catalogs/{digest}",
         ),
         owner_post(
             "project.set",
@@ -975,15 +963,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Turn a supervisor on or off and choose the profile it runs on",
             "/api/supervisors/{id}/control",
             &[("id", "conversation_id")],
-            r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
-        ),
-        owner_post(
-            "intelligence.set",
-            "intelligence.admin",
-            "Create, change or delete one intelligence profile",
-            "/api/settings/intelligence",
-            &[],
-            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","profile_id","profile_version","name","description","candidates"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$","description":"The settings revision intelligence.list returned"},"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0,"description":"The profile's current version; 0 creates it"},"name":{"type":"string","minLength":1,"maxLength":128},"description":{"type":"string","maxLength":2000},"candidates":{"type":"array","maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["id","provider","model","reasoning_configuration_reference","harnesses"],"properties":{"id":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"reasoning_configuration_reference":{"type":"string"},"harnesses":{"type":"array","items":{"type":"string"}}}}},"delete":{"type":"boolean"}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","candidate_id"],"description":"A level and one of its candidates","properties":{"profile_id":{"type":"string","description":"The level document's id"},"candidate_id":{"type":"string","description":"provider:model:reasoning, as the list shows it"}}}}}"#,
         ),
         owner_post(
             "notification.retry",
@@ -999,7 +979,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Start a session by hand on a worker for a project",
             "/api/manual-agents/workers/{node}/projects/{project}",
             &[("node", "node_id"), ("project", "project_id")],
-            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Becomes the session's ID; repeat it to retry safely"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Becomes the session's ID; repeat it to retry safely"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","candidate_id"],"description":"A level and one of its candidates","properties":{"profile_id":{"type":"string","description":"The level document's id"},"candidate_id":{"type":"string","description":"provider:model:reasoning, as the list shows it"}}}}}"#,
         ),
         owner_post(
             "session.manual.stop",
@@ -1193,7 +1173,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Choose the Intelligence profile internal work runs on, by default and per purpose",
             "/api/settings/internal-work",
             &[],
-            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","expected_catalog_revision","overrides"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^[0-9]{1,18}$","description":"The settings revision as last read"},"expected_catalog_revision":{"type":"string","description":"The Intelligence catalog revision as last read"},"default_profile_id":{"type":["string","null"],"maxLength":128},"overrides":{"type":"object","description":"Purpose to profile ID","propertyNames":{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]},"additionalProperties":{"type":"string","minLength":1,"maxLength":128}}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","overrides"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^[0-9]{1,18}$","description":"The settings revision as last read"},"default_profile_id":{"type":["string","null"],"maxLength":128},"overrides":{"type":"object","description":"Purpose to profile ID","propertyNames":{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]},"additionalProperties":{"type":"string","minLength":1,"maxLength":128}}}}"#,
         ),
         read(
             "internal.settings.operation.show",
@@ -1249,13 +1229,19 @@ pub fn catalog() -> Vec<CommandSpec> {
             "routing.show",
             "dashboard.read",
             "Whether automatic routing is on, and the routing playbook source",
-            "/api/settings/intelligence/routing",
+            "/api/settings/routing",
+        ),
+        owner(
+            "routing.document.show",
+            "dashboard.read",
+            "The routing document: the text the routing playbook is authored from",
+            "/api/settings/routing-document",
         ),
         owner_post(
             "routing.set",
             "intelligence.admin",
             "Turn automatic routing on or off (on only while a routing playbook is active)",
-            "/api/settings/intelligence/routing",
+            "/api/settings/routing",
             &[],
             r#"{"type":"object","additionalProperties":false,"required":["enabled"],"properties":{"enabled":{"type":"boolean"}}}"#,
         ),
@@ -1291,16 +1277,6 @@ pub fn catalog() -> Vec<CommandSpec> {
             Some(Route::get(
                 "/api/supervisors/{id}/operations/{operation}",
                 &[("id", "conversation_id"), ("operation", "operation_id")],
-            )),
-        ),
-        read(
-            "intelligence.operation.show",
-            "dashboard.read",
-            TargetRule::Own,
-            "The recorded result of one intelligence.set",
-            Some(Route::get(
-                "/api/settings/intelligence/operations/{id}",
-                &[("id", "operation_id")],
             )),
         ),
     ];

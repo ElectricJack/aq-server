@@ -1,34 +1,21 @@
-//! Deterministic composition, immutable catalog artifacts and activation CAS.
-//! No provider selection, authority service, database or process launch.
-mod catalog;
-pub mod central;
-mod compile;
-mod composition_core;
+//! Roles and profiles (spec 0014): the role, intelligence profile and
+//! execution profile documents and the snapshot they compile into
+//! ([`roles`]), the selection policy of a launch, and the graph access policy
+//! sealed for it. Pure: no provider selection, database or process launch.
+mod confinement;
+pub use confinement::ExecutionConfinement;
 mod graph_policy;
 pub use graph_policy::*;
-mod project;
-pub use project::validate_project_profiles;
-mod registry;
+pub mod roles;
 mod selection_policy;
 use aq_session_protocol::Digest;
-pub use catalog::*;
-pub use compile::*;
-pub use registry::*;
 pub use selection_policy::*;
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid profile catalog: {0}")]
+    #[error("invalid: {0}")]
     Invalid(String),
-    #[error("catalog activation revision conflict")]
-    RevisionConflict,
-    #[error("immutable identity has conflicting content: {0}")]
-    IdentityConflict(String),
-    #[error("catalog artifact is retained or active")]
-    Retained,
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 fn ensure(ok: bool, message: &str) -> Result<()> {

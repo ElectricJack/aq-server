@@ -43,8 +43,8 @@ pub(super) fn service(state: &AppState) -> Service {
         sources,
         state.store.manual_runtime.clone(),
     )
+    .compute_witness(crate::profiled_execution::compute::manual_witness)
     .login_materials(logins::delivery(state.clone()))
-    .intelligence_choices(crate::profile_catalog::settings::choices(state))
     .browser_origin(
         config.server.public_origin.clone(),
         matches!(config.auth, crate::config::AuthConfig::Dev { .. }),
@@ -52,18 +52,14 @@ pub(super) fn service(state: &AppState) -> Service {
 }
 
 pub(super) fn supervisor_controls(state: &AppState) -> axum::Router<AppState> {
-    aq_supervisor_control::Service::new(
-        state.store.pool.clone(),
-        service(state).owner,
-        crate::profile_catalog::settings::choices(state),
-    )
-    .routes()
+    aq_supervisor_control::Service::new(state.store.pool.clone(), service(state).owner).routes()
 }
 
 pub(super) fn supervisor_nests(state: &AppState) -> axum::Router<AppState> {
     let (clock, pool) = (state.clock.clone(), state.store.pool.clone());
     let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
-    let settings = crate::profile_catalog::settings::routes()
+    let settings = crate::routing::settings_routes()
+        .merge(crate::role_settings::admin_routes())
         .merge(internal_work::admin_routes())
         .merge(crate::playbook_authoring::admin_routes());
     let human = crate::agent_access::human::routes(state);

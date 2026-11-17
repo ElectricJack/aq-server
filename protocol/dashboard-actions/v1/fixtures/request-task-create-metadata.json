@@ -20,7 +20,7 @@
     ],
     "task_state": "draft",
     "priority": 300,
-    "profile_hint": "coding",
+    "role": "developer",
     "intelligence_hint": "standard-high",
     "task_type": "feature"
   }

@@ -3,6 +3,17 @@
 **Status:** written 2026-11-13 on `feat/internal-work` at `be84c01a`. **Not
 executed.** Nothing in this document has been run against `aq-ms1`.
 
+**Changed by [spec 0014](../specs/0014-roles-and-profiles.md) (2026-11-16).**
+The Settings routes named below moved: the routing text is read and saved at
+`GET`/`PUT /api/settings/routing-document` (`{markdown, revision}`, with
+`expected_revision` and `operation_id`); the routing switch is at
+`/api/settings/routing`; the structure route
+with its `parents` and `assignments` is gone, and no save takes an
+`expected_catalog_revision`. A level's id is the router's class and its
+`description` is what authoring reads. Internal-work profile ids are
+intelligence profile ids (`simple-low` … `deep-high`). Steps 1.7, 5.1, 5.2 and
+5.3 must be re-derived before this runbook is executed.
+
 **Do not start yet.** At `be84c01a` the branch still vendors the interim
 engine `aq-playbooks-e7df379`, which must not reach a live playbook namespace
 ([note](../implementation/playbook-authoring-B1-interim-vendor.md),
@@ -76,12 +87,12 @@ holding `[playbooks]`), the Compose override
 `$B/intelligence-settings.compose.yaml`, and the Settings documents:
 
 ```bash
-curl -fsS "$API/api/settings/intelligence/structure" > "$R/structure-before.json"
+curl -fsS "$API/api/settings/routing-document" > "$R/routing-document-before.json"
 curl -fsS "$API/api/settings/internal-work" > "$R/internal-work-settings-before.json"
-curl -fsS "$API/api/settings/intelligence/routing" > "$R/routing-before.json"
+curl -fsS "$API/api/settings/routing" > "$R/routing-before.json"
 ```
 
-Expected: routing `"enabled": false`. `structure-before.json` holds the
+Expected: routing `"enabled": false`. `routing-document-before.json` holds the
 owner's current routing text; it is the copy to restore from.
 
 ## 2. Rehearsal on a copy of the live database
@@ -320,7 +331,7 @@ authoring fails at once with `no_candidate`. Rollback: save `"overrides": {}`.
 older.
 
 ```bash
-python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["routing_markdown"])' "$R/structure-before.json" > "$R/routing-live.md"
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["markdown"])' "$R/routing-document-before.json" > "$R/routing-live.md"
 diff "$R/routing-live.md" docs/specs/0011-routing-policy-default.md
 ```
 
@@ -329,11 +340,9 @@ Expected: a diff. Show it to the owner before saving.
 5.3. Save the repo copy as the routing document. In the dashboard: Settings >
 Intelligence, routing editor, replace the text with the content of
 `docs/specs/0011-routing-policy-default.md`, save. By API it is
-`POST /api/settings/intelligence/structure` with `operation_id`,
-`expected_revision`, `expected_catalog_revision`, `routing_markdown`, and
-`parents` and `assignments` copied from a fresh GET (the `structure_save`
-helper of the 0119 runbook, reading the Markdown from the repo file).
-Expected: `"disposition": "saved"` and a revision one higher. The save
+`PUT /api/settings/routing-document` with `operation_id`,
+`expected_revision` (the `revision` of a fresh GET) and `markdown` read from
+the repo file. Expected: `{revision, digest}` with a higher revision. The save
 creates the `routing` source grant and starts one authoring run (nothing
 starts for an empty document, or when neither the text nor what Settings
 offers changed). Rollback: save the text of
@@ -342,7 +351,7 @@ offers changed). Rollback: save the text of
 5.4. Watch the run. It may take up to 30 minutes.
 
 ```bash
-curl -fsS "$API/api/settings/intelligence/routing"            # {enabled, source: SourceView}
+curl -fsS "$API/api/settings/routing"            # {enabled, source: SourceView}
 curl -fsS "$API/api/playbooks/sources/routing"                # SourceView
 curl -fsS "$API/api/internal-work/runs?purpose=playbook_compilation"
 ```
@@ -387,11 +396,11 @@ earlier playbook; a run in flight is superseded).
 the cases:
 
 ```bash
-post /api/settings/intelligence/routing '{"enabled":true}'
+post /api/settings/routing '{"enabled":true}'
 ```
 
 Expected: `"enabled": true`. Without an active routing playbook the switch
-is refused. Rollback: `post /api/settings/intelligence/routing '{"enabled":false}'`.
+is refused. Rollback: `post /api/settings/routing '{"enabled":false}'`.
 Off, placement ignores a missing route; routes already written are still
 honoured.
 

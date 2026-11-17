@@ -15,7 +15,6 @@ async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -84,7 +83,6 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),
@@ -285,7 +283,6 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),
@@ -465,7 +462,6 @@ async fn registration_receipt_cap_is_per_boot() {
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),
@@ -509,4 +505,279 @@ async fn registration_receipt_cap_is_per_boot() {
         format!("{error:?}").contains("native registration receipt capacity exhausted"),
         "{error:?}"
     );
+}
+
+#[tokio::test]
+async fn node_slot_defaults_are_snapshotted_and_legacy_registrations_stay_single_slot() {
+    let f = fixture().await;
+    let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    let node = f.node.node_id;
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, node)
+            .await
+            .unwrap(),
+        2
+    );
+    sqlx::query("UPDATE node_slot_default SET slots=3,revision=revision+1")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, node)
+            .await
+            .unwrap(),
+        2
+    );
+    sqlx::query("UPDATE worker_settings SET max_agents=1 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let view = aq_machine_control::slots::view(&mut conn, node)
+        .await
+        .unwrap();
+    assert_eq!((view.total, view.occupied, view.idle), (1, 0, 1));
+    assert!(view.free(1));
+    assert!(!view.free(2));
+    assert!(
+        !aq_machine_control::slots::poll_free(&mut conn, node, 2)
+            .await
+            .unwrap()
+    );
+    sqlx::query("UPDATE worker_settings SET max_agents=0 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        aq_machine_control::slots::view(&mut conn, node)
+            .await
+            .unwrap()
+            .idle,
+        0
+    );
+    assert!(
+        aq_machine_control::management::capacity(&mut conn, node)
+            .await
+            .unwrap()
+            .full()
+    );
+}
+
+#[tokio::test]
+async fn queued_and_manual_allocation_share_one_count_and_unknown_holds_only_its_index() {
+    let f = fixture().await;
+    let node = f.node.node_id;
+    let pool = f.db.pool().await;
+    let attempt = common::profiled::insert(&f).await;
+    let mut tx = pool.begin().await.unwrap();
+    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    aq_machine_control::slots::assign(&mut tx, attempt, node, 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let manual = Uuid::new_v4();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','pending','Waiting',1,1)")
+        .bind(manual).bind(f.actor).bind(node).bind(f.selection.lineage.project_id).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    aq_machine_control::management::lock(&mut tx).await.unwrap();
+    assert_eq!(
+        aq_machine_control::slots::assign_manual(&mut tx, manual, node)
+            .await
+            .unwrap(),
+        Some(2)
+    );
+    sqlx::query("UPDATE manual_agent_sessions SET status='preparing' WHERE id=$1")
+        .bind(manual)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let view = aq_machine_control::slots::view(&mut conn, node)
+        .await
+        .unwrap();
+    assert_eq!((view.total, view.occupied, view.idle), (2, 2, 0));
+    assert!(
+        aq_machine_control::management::capacity(&mut conn, node)
+            .await
+            .unwrap()
+            .full()
+    );
+    sqlx::query("UPDATE manual_agent_sessions SET status='stopped',stopped_at_ms=2 WHERE id=$1")
+        .bind(manual)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let view = aq_machine_control::slots::view(&mut conn, node)
+        .await
+        .unwrap();
+    assert!(!view.free(1));
+    assert!(view.free(2));
+    // Lowering the count does not mutate or release either running owner.
+    sqlx::query("UPDATE worker_settings SET max_agents=0 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let view = aq_machine_control::slots::view(&mut conn, node)
+        .await
+        .unwrap();
+    assert_eq!((view.total, view.occupied, view.idle), (0, 1, 0));
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1"
+        )
+        .bind(attempt)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn two_nodes_on_one_machine_each_reserve_three_slots_and_refuse_a_seventh() {
+    let f = fixture().await;
+    let pool = f.db.pool().await;
+    let nodes = [f.node.node_id, Uuid::new_v4()];
+    sqlx::query("UPDATE nodes SET machine_key='slot-test-desktop',slot=1 WHERE id=$1")
+        .bind(nodes[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at,machine_key,slot) VALUES($1,'sibling','slot-test-sibling','test',2,now(),'slot-test-desktop',2)").bind(nodes[1]).execute(&pool).await.unwrap();
+    for node in nodes {
+        sqlx::query("UPDATE worker_settings SET max_agents=3 WHERE kind='node' AND id=$1")
+            .bind(node.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        for slot in 1..=3 {
+            // No launch or grant: synthetic native-shaped attempt tests only SQL allocation.
+            let id = Uuid::new_v4();
+            let mut tx = pool.begin().await.unwrap();
+            aq_machine_control::management::lock(&mut tx).await.unwrap();
+            sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
+                .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(serde_json::json!(f.profiled)).execute(&mut *tx).await.unwrap();
+            aq_machine_control::slots::assign(&mut tx, id, node, slot)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let mut conn = pool.acquire().await.unwrap();
+        let view = aq_machine_control::slots::view(&mut conn, node)
+            .await
+            .unwrap();
+        assert_eq!((view.total, view.occupied, view.idle), (3, 3, 0));
+        assert!(!view.free(4));
+        assert_eq!(
+            aq_machine_control::management::capacity(&mut conn, node)
+                .await
+                .unwrap()
+                .machine_used,
+            if node == nodes[0] { 3 } else { 6 }
+        );
+        drop(conn);
+        let mut tx = pool.begin().await.unwrap();
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
+            .bind(id).bind(Uuid::new_v4()).bind(node).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(serde_json::json!(f.profiled)).execute(&mut *tx).await.unwrap();
+        assert!(
+            aq_machine_control::slots::assign(&mut tx, id, node, 1)
+                .await
+                .is_err()
+        );
+        tx.rollback().await.unwrap();
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_attempt_slots")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        6
+    );
+}
+
+#[tokio::test]
+async fn placement_peers_use_the_same_setting_as_the_polling_node() {
+    use aq_server::profiled_execution::placement::{Ledger, facts_in};
+    use serde_json::json;
+    let f = fixture().await;
+    let pool = f.db.pool().await;
+    let peer = Uuid::new_v4();
+    let template = "a".repeat(64);
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'peer','slot-peer','test',2,now())").bind(peer).execute(&pool).await.unwrap();
+    for (node, kind) in [(f.node.node_id, "boat"), (peer, "docker-local")] {
+        // Synthetic backend facts exercise placement; no runtime is qualified here.
+        let registration = json!({"backend":{"kind":kind,"capabilities":["vm-isolation"],"max_concurrent_sandboxes":1,"spend_ceiling":null,"templates":[{"digest":template,"harnesses":[{"harness":"codex","version":"1"}],"estimated_cold_start_ms":1,"estimated_cold_start_cost":{"currency":"USD","micros":0}}]}});
+        sqlx::query(
+            "INSERT INTO delegated_node_boots(node_id,boot_id,registration) VALUES($1,$2,$3)",
+        )
+        .bind(node)
+        .bind(Uuid::new_v4())
+        .bind(registration)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2)")
+        .bind(peer)
+        .bind(json!({"slots":3}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE worker_settings SET max_agents=3 WHERE kind='node' AND id=$1")
+        .bind(peer.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,1,1,$3)").bind(peer).bind(Uuid::new_v4()).bind(json!({"expires_at_ms":2000})).execute(&pool).await.unwrap();
+    let attempt = Uuid::new_v4();
+    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
+        .bind(attempt).bind(Uuid::new_v4()).bind(peer).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(json!(f.profiled)).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    aq_machine_control::slots::assign(&mut tx, attempt, peer, 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let book = aq_accounting::pricing::RateCardBook::default();
+    let ledger = Ledger {
+        pool: &pool,
+        book: &book,
+    };
+    let facts = facts_in(
+        &pool,
+        &ledger,
+        None,
+        f.node.node_id,
+        Some(&template),
+        "test",
+        1000,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        facts.preferred_peer,
+        Some(aq_selection::BackendKind::DockerLocal)
+    );
+    sqlx::query("UPDATE worker_settings SET max_agents=1 WHERE kind='node' AND id=$1")
+        .bind(peer.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let facts = facts_in(
+        &pool,
+        &ledger,
+        None,
+        f.node.node_id,
+        Some(&template),
+        "test",
+        1000,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(facts.preferred_peer, None);
 }

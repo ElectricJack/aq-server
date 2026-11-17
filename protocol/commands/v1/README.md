@@ -174,9 +174,8 @@ attempt's task or a task created below it (`task:subtree`), the new task's
 depth must be within `max_depth`, and the attempt may create at most
 `max_created_tasks`: each create is reserved in `agent_created_tasks`
 before the Graph write, and a replay of the same `operation_id` is not
-counted again. An agent cannot set `profile_hint` or `intelligence_hint`
-(`scope_denied`), so a child cannot launch with more authority than its
-creator. Tasks are `active` unless `task_state: "draft"` is given. The task
+counted again. An agent cannot set `intelligence_hint` (`scope_denied`). It
+may name the task's `role` (spec 0014 §5.5), which must exist. Tasks are `active` unless `task_state: "draft"` is given. The task
 records `aq:agent_attempt_id` and `aq:agent_task_id` in its metadata.
 
 ### Budgets

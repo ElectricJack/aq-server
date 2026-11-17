@@ -390,7 +390,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 0,
-            "profile_hint": "coding",
+            "role": "developer",
             "intelligence_hint": "standard-high",
             "task_type": "feature"
           },
@@ -433,7 +433,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 301,
-            "profile_hint": "coding",
+            "role": "developer",
             "intelligence_hint": "standard-high",
             "task_type": "feature"
           },
@@ -476,7 +476,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 300,
-            "profile_hint": "coding",
+            "role": "developer",
             "intelligence_hint": "standard-high",
             "task_type": "feature",
             "command": "shell"
@@ -499,7 +499,7 @@
     }
   },
   {
-    "name": "graph-empty-profile",
+    "name": "graph-empty-role",
     "request": {
       "operation_id": "00000000-0000-4000-8000-000000000001",
       "kind": "task.graph.create",
@@ -520,7 +520,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 300,
-            "profile_hint": "",
+            "role": "",
             "intelligence_hint": "standard-high",
             "task_type": "feature"
           },
@@ -563,7 +563,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 300,
-            "profile_hint": "coding",
+            "role": "developer",
             "intelligence_hint": "standard-high",
             "task_type": "feature"
           },
@@ -606,7 +606,7 @@
             "id": "00000000-0000-4000-8000-000000000031",
             "title": "Implement",
             "priority": 300,
-            "profile_hint": "coding",
+            "role": "developer",
             "intelligence_hint": "standard-high",
             "task_type": "feature"
           },
@@ -1241,5 +1241,100 @@
         "lane": "fast"
       }
     }
-  }
+  },
+    {
+      "name": "task-create-profile-hint-is-unknown",
+      "request": {
+        "operation_id": "00000000-0000-4000-8000-000000000205",
+        "kind": "task.create",
+        "subject": {
+          "type": "project",
+          "id": "00000000-0000-4000-8000-000000000010",
+          "revision": "1"
+        },
+        "expected_versions": {
+          "project": "1"
+        },
+        "payload": {
+          "operation_id": "00000000-0000-4000-8000-000000000205",
+          "expected_project_revision": "1",
+          "title": "Write launch notes",
+          "body": "",
+          "acceptance_criteria": "",
+          "labels": [],
+          "task_state": "draft",
+          "profile_hint": "coding"
+        }
+      }
+    },
+    {
+      "name": "graph-profile-hint-is-unknown",
+      "request": {
+        "operation_id": "00000000-0000-4000-8000-000000000205",
+        "kind": "task.graph.create",
+        "subject": {
+          "type": "project",
+          "id": "00000000-0000-4000-8000-000000000010",
+          "revision": "1"
+        },
+        "expected_versions": {
+          "project": "1"
+        },
+        "payload": {
+          "operation_id": "00000000-0000-4000-8000-000000000205",
+          "project_id": "00000000-0000-4000-8000-000000000010",
+          "expected_version": "1",
+          "tasks": [
+            {
+              "id": "00000000-0000-4000-8000-000000000031",
+              "title": "Implement",
+              "profile_hint": "coding"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "task-role-set-empty-role",
+      "request": {
+        "operation_id": "00000000-0000-4000-8000-000000000205",
+        "kind": "task.role.set",
+        "subject": {
+          "type": "task",
+          "id": "00000000-0000-4000-8000-000000000020",
+          "revision": "4"
+        },
+        "expected_versions": {
+          "task": "4"
+        },
+        "payload": {
+          "operation_id": "00000000-0000-4000-8000-000000000205",
+          "project_id": "00000000-0000-4000-8000-000000000010",
+          "expected_version": "4",
+          "role": ""
+        }
+      }
+    },
+    {
+      "name": "task-role-set-unknown-field",
+      "request": {
+        "operation_id": "00000000-0000-4000-8000-000000000205",
+        "kind": "task.role.set",
+        "subject": {
+          "type": "task",
+          "id": "00000000-0000-4000-8000-000000000020",
+          "revision": "4"
+        },
+        "expected_versions": {
+          "task": "4"
+        },
+        "payload": {
+          "operation_id": "00000000-0000-4000-8000-000000000205",
+          "project_id": "00000000-0000-4000-8000-000000000010",
+          "expected_version": "4",
+          "role": "reviewer",
+          "profile_hint": "coding"
+        }
+      }
+    }
 ]

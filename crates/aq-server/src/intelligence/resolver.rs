@@ -18,7 +18,8 @@ pub struct ResolveRequest {
     pub operation_id: Uuid,
     pub lineage: TaskLineage,
     pub project: FrozenProjectBinding,
-    pub compositions: Vec<PreparedComposition>,
+    /// The launch rendered for each installed harness (spec 0014).
+    pub launches: Vec<PreparedLaunch>,
     /// Owner-assessed failed-predecessor replacement (B4). Absent for a first
     /// attempt; legacy history without it stays conservatively unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -28,9 +29,7 @@ pub struct ResolveRequest {
     /// Not part of the request payload or its digest.
     #[serde(skip, default = "yes")]
     pub record_refused: bool,
-    /// A routed task's class profile and limits (spec 0011 §4); absent unrouted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
+    /// A routed task's harness and provider limits (spec 0011 §4); absent unrouted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<RouteLimits>,
 }
@@ -92,23 +91,36 @@ pub async fn resolve_trusted(
     state: &AppState,
     actor: Uuid,
     request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
-    resolve_with_principal(state, principal::Principal::human(actor)?, request).await
+    let subject = principal::Principal::human(actor)?;
+    resolve_with_principal(state, subject, request, snapshot).await
 }
 /// Scheduled selection derives its principal only from this daemon's configured
 /// project policy. No user identity or worker-selected policy enters this path.
 pub async fn resolve_for_project_policy(
     state: &AppState,
     request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
     let subject = principal::Principal::configured(state, request.lineage.project_id)?;
-    resolve_with_principal(state, subject, request).await
+    resolve_with_principal(state, subject, request, snapshot).await
 }
+/// `snapshot` is the role snapshot the request's frozen binding names; the
+/// candidates and the selection policy are resolved from it alone.
 async fn resolve_with_principal(
     state: &AppState,
     subject: principal::Principal,
     mut request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
+    if snapshot.digest() != request.project.snapshot_digest {
+        return Err(bad("role snapshot differs from the frozen binding"));
+    }
+    let (role, level) = (&request.project.role, &request.project.intelligence_profile);
+    let launch = snapshot
+        .resolve(role, level)
+        .map_err(|_| bad("role snapshot does not resolve the frozen launch"))?;
     if request.operation_id.is_nil()
         || request.lineage.task_id.is_nil()
         || request.lineage.project_id != request.project.project.binding.project_id
@@ -136,14 +148,6 @@ async fn resolve_with_principal(
             .map_err(db)?
             .ok_or_else(|| conflict("installed harness/credential evidence unavailable"))?;
     let node: CapabilitySnapshot = serde_json::from_value(node).map_err(|_| AppError::Internal)?;
-    let catalog_bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&request.project.project.binding.catalog_digest)
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(db)?;
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&catalog_bytes)
-        .map_err(|_| AppError::Internal)?;
     let mut credentials = aq_intelligence_config::node_credentials(loaded, node_id);
     let mut membership = state.store.pool.acquire().await.map_err(db)?;
     aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
@@ -194,7 +198,6 @@ async fn resolve_with_principal(
     let placement = crate::profiled_execution::placement::facts(
         state,
         node_id,
-        &request.project.project.binding.catalog_digest,
         request.lineage.project_id,
         &request.project.environment,
         time,
@@ -234,8 +237,7 @@ async fn resolve_with_principal(
         project: ProjectSnapshot {
             lineage: request.lineage.clone(),
             revision: request.project.project.revision,
-            catalog_revision: request.project.catalog_activation_revision,
-            catalog_digest: serde_json::from_value(json!(catalog.digest()))
+            role_snapshot_digest: serde_json::from_value(json!(snapshot.digest()))
                 .map_err(|_| AppError::Internal)?,
             admission_snapshot_digest: digest(&request.project).map_err(|_| AppError::Internal)?,
             expires_at_ms: request.project.binding_observation.expires_at_ms,
@@ -262,7 +264,7 @@ async fn resolve_with_principal(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
-            agent_profile: request.project.agent_profile.clone(),
+            role: request.project.role.clone(),
             intelligence_profile: request.project.intelligence_profile.clone(),
             execution_profile: request.project.execution_profile.clone(),
         },
@@ -302,25 +304,18 @@ async fn resolve_with_principal(
         },
         replacement: replacement.map(|r| r.evidence),
         estimates: vec![],
-        compositions: request.compositions,
         now_ms: time,
         placement,
-        intelligence_override: request.intelligence_override,
         route: request.route,
+        launches: request.launches,
     };
     let mut outcome =
-        select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
+        select_for_offer(&launch, &input).map_err(|_| bad("selection snapshot refused"))?;
     // Route from task requirements first. Capacity can wait on this exact class,
     // and never influences the router's model or class selection.
     if let Some(resolved) = &outcome.resolved {
         let mut capacity = state.store.pool.begin().await.map_err(db)?;
-        let choice = serde_json::to_value(&resolved.choice).map_err(|_| AppError::Internal)?;
-        let artifact = serde_json::to_value(catalog.artifact()).map_err(|_| AppError::Internal)?;
-        let cell = aq_swarm_settings::admission::classify(
-            &artifact,
-            Some(input.intelligence_key()),
-            &choice,
-        );
+        let cell = Some(capacity_cell(&input, &resolved.choice));
         let reason = aq_swarm_settings::admission::observe(
             &mut capacity,
             input.project.lineage.task_id,
@@ -392,6 +387,17 @@ async fn resolve_with_principal(
     Ok(decision)
 }
 
+/// The swarm capacity cell of a choice: its provider at the level it runs on.
+/// A level's id is the intelligence class the swarm limits count.
+fn capacity_cell(
+    inputs: &SelectionInputs,
+    choice: &ConcreteChoice,
+) -> aq_swarm_settings::admission::Cell {
+    aq_swarm_settings::admission::Cell {
+        provider: choice.provider.clone(),
+        intelligence_class: inputs.project.intelligence_profile.clone(),
+    }
+}
 /// AQ-08 must call inside its SERIALIZABLE offer transaction, after resolving
 /// current task/context authority, and retain all locks through atomic offer +
 /// frozen selection insertion. Retry serialization failures; never do external
@@ -401,7 +407,24 @@ pub async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
 ) -> Result<()> {
+    fence_role(state, decision).await?;
     fence_retained_decision(state, tx, decision, None).await
+}
+/// Spec 0014 §5.1: a disabled role is handed no new work. An offer made
+/// before its role was disabled (or removed) is not granted; the task is then
+/// held by its role. A change of the active snapshot alone refuses nothing:
+/// the offer stays on the snapshot it was resolved from.
+async fn fence_role(state: &AppState, decision: &Decision) -> Result<()> {
+    if !crate::role_settings::tables(state) {
+        return Ok(());
+    }
+    let active = crate::role_settings::active(&state.store.pool).await?;
+    let role = active.as_ref().and_then(|s| s.role(&decision.project.role));
+    match role {
+        Some(role) if role.enabled => Ok(()),
+        Some(_) => Err(conflict("role_disabled")),
+        None => Err(conflict("role_missing")),
+    }
 }
 /// Only the current locked, never-granted native reservation may be discounted
 /// when comparing its original pre-offer decision. No durable count is changed.
@@ -411,6 +434,7 @@ pub(crate) async fn fence_for_preparation(
     decision: &Decision,
     binding: &aq_session_protocol::LaunchBinding,
 ) -> Result<()> {
+    fence_role(state, decision).await?;
     fence_owned_attempt(state, tx, decision, binding, None).await
 }
 /// Exact initial-grant receipt replay only; this never admits another attempt
@@ -549,16 +573,8 @@ async fn fence_retained_decision(
     )
     .await?;
     if owned_attempt.is_none() {
-        let choice = serde_json::to_value(&decision.outcome.resolved.as_ref().unwrap().choice)
-            .map_err(|_| AppError::Internal)?;
-        let cell = aq_swarm_settings::admission::resolve(
-            tx,
-            Some(decision.inputs.project.catalog_digest.as_str()),
-            Some(decision.inputs.intelligence_key()),
-            &choice,
-        )
-        .await
-        .map_err(db)?;
+        let choice = &decision.outcome.resolved.as_ref().unwrap().choice;
+        let cell = Some(capacity_cell(&decision.inputs, choice));
         if let Some(reason) = aq_swarm_settings::admission::check(tx, cell.as_ref())
             .await
             .map_err(db)?
@@ -602,9 +618,8 @@ async fn fence_snapshot(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
-    if digest(&snapshot).map_err(|_| AppError::Internal)?
-        != digest(&decision.inputs.node).map_err(|_| AppError::Internal)?
-    {
+    // A sibling slot's republish of the same installation is not a change.
+    if !serde_json::from_value(snapshot).is_ok_and(|s| decision.inputs.node.carried_by(&s)) {
         return Err(conflict("installed capability snapshot changed"));
     }
     let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
@@ -674,35 +689,6 @@ pub(crate) fn check_time(state: &AppState, decision: &Decision) -> Result<()> {
     }
     Ok(())
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExplainRequest {
-    pub catalog_artifact_json: String,
-    pub inputs: SelectionInputs,
-}
-pub(super) async fn explain(
-    RequireOwner(_): RequireOwner,
-    Json(request): Json<ExplainRequest>,
-) -> Result<Json<Value>> {
-    if request.catalog_artifact_json.len() > 2 * 1024 * 1024 {
-        return Err(AppError::PayloadTooLarge("catalog byte bound".into()));
-    }
-    tokio::task::spawn_blocking(move || {
-        let catalog =
-            aq_profiles::ValidatedCatalog::from_artifact(request.catalog_artifact_json.as_bytes())
-                .map_err(|_| bad("catalog artifact refused"))?;
-        let outcome =
-            select(&catalog, &request.inputs).map_err(|_| bad("selection snapshot refused"))?;
-        let human = aq_selection::human_selection(&catalog, &request.inputs, &outcome)
-            .map_err(|_| bad("human explanation refused"))?;
-        Ok(Json(
-            json!({"authority_admission":false,"snapshot_explanation":outcome,"selection":human}),
-        ))
-    })
-    .await
-    .map_err(|_| AppError::Internal)?
-}
-
 /// Current principal fence for already accepted no-launch input retrieval only.
 /// Does not renew snapshots, select a candidate or authorize execution.
 pub(crate) async fn fence_preparation_input_principal(

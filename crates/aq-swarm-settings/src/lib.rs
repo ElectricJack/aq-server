@@ -4,7 +4,7 @@ pub mod http;
 pub mod providers;
 mod store;
 use serde::{Deserialize, Serialize};
-pub use store::{catalog, lock, operation, read, save, set_limits, set_mode};
+pub use store::{levels, lock, operation, read, save, set_limits, set_mode};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -60,7 +60,6 @@ pub struct Limits {
 pub struct LimitsRequest {
     pub operation_id: uuid::Uuid,
     pub expected_revision: String,
-    pub expected_catalog_revision: String,
     pub provider: Option<ProviderLimit>,
     pub cell: Option<IndividualCellLimit>,
 }
@@ -73,23 +72,18 @@ pub struct Settings {
     pub normal: Option<Vec<CellLimit>>,
     pub reduced: Option<Vec<CellLimit>>,
 }
+/// One provider of one level document: the unit a limit is set for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogCell {
+pub struct LevelCell {
     pub provider: String,
     pub intelligence_class: String,
     pub display_name: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Catalog {
-    pub revision: String,
-    pub cells: Vec<CatalogCell>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveRequest {
     pub operation_id: uuid::Uuid,
     pub expected_revision: String,
-    pub expected_catalog_revision: String,
     pub normal: Vec<CellLimit>,
     pub reduced: Option<Vec<CellLimit>>,
 }
@@ -103,7 +97,7 @@ pub struct ModeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cell {
     #[serde(flatten)]
-    pub catalog: CatalogCell,
+    pub level: LevelCell,
     pub normal_limit: Option<u32>,
     pub reduced_limit: Option<u32>,
     pub effective_limit: Option<u32>,
@@ -114,7 +108,6 @@ pub struct Cell {
 pub struct Snapshot {
     #[serde(flatten)]
     pub settings: Settings,
-    pub catalog_revision: String,
     pub cells: Vec<Cell>,
     pub unclassified: Vec<Unclassified>,
 }
@@ -152,10 +145,11 @@ fn conflict(message: &str) -> Error {
     Error::Conflict(message.into())
 }
 
-fn validate(matrix: &[CellLimit], catalog: &Catalog) -> Result<()> {
+/// A matrix names exactly the cells of the levels as they are now, so one
+/// read before a level changed is refused without a separate revision fence.
+fn validate(matrix: &[CellLimit], levels: &[LevelCell]) -> Result<()> {
     use std::collections::BTreeSet;
-    let expected: BTreeSet<_> = catalog
-        .cells
+    let expected: BTreeSet<_> = levels
         .iter()
         .map(|c| (&c.provider, &c.intelligence_class))
         .collect();

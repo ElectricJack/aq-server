@@ -109,10 +109,23 @@ def gemini_models(cwd):
 
 
 def choice(provider, model, effort, options, harness, source, observed):
-    identity = json.dumps([provider, model, options, harness], sort_keys=True, separators=(",", ":")).encode()
     return dict(provider=provider, model=model, reasoning=effort, options=options, harness=harness,
-                reasoning_configuration_reference="discovered-" + hashlib.sha256(identity).hexdigest()[:32] + "@1",
-                preference_only=True, source=source, observed_at=observed)
+                source=source, observed_at=observed)
+
+
+def suggestions(choices):
+    """The cache the server reads for GET /api/settings/model-suggestions: one
+    {provider, model, harness, source, observed_at} per harness, provider and model.
+    The first choice of a model wins, so official client facts stay ahead of public
+    metadata. Reasoning levels are not suggestions: a level document states its own."""
+    unique = {}
+    for c in choices:
+        entry = {"provider": c["provider"], "model": c["model"], "harness": c["harness"]}
+        for key in ("source", "observed_at"):
+            if c.get(key) is not None:
+                entry[key] = c[key]
+        unique.setdefault((c["harness"], c["provider"], c["model"]), entry)
+    return sorted(unique.values(), key=lambda e: (e["harness"], e["provider"], e["model"]))
 
 
 def public_choices(catalog, observed):
@@ -209,14 +222,12 @@ def main():
     imported = args.output.with_name("imported-model-choices.json")
     if imported.exists():
         choices.extend(json.loads(imported.read_text()))
-    # Prefer official client facts when the same model/options appear in public metadata.
-    unique = {(c["provider"], c["model"], c["reasoning_configuration_reference"], c["harness"]): c for c in choices}
-    result = sorted(unique.values(), key=lambda c: (c["provider"], c["model"], c["reasoning"]))
+    result = suggestions(choices)
     if not result or len(result) > 4096 or len(json.dumps(result).encode()) > 2_097_152:
         raise ValueError("catalog empty or exceeds Settings limits; old cache preserved")
     atomic_json(state_path, previous)
     atomic_json(args.output, result, 0o644)
-    print(json.dumps({"choices": len(result), "models": len({(c["provider"], c["model"]) for c in result}), "providers": sorted({c["provider"] for c in result}), "sources": {k: v["status"] for k, v in previous.items()}}))
+    print(json.dumps({"suggestions": len(result), "models": len({(c["provider"], c["model"]) for c in result}), "providers": sorted({c["provider"] for c in result}), "sources": {k: v["status"] for k, v in previous.items()}}))
 
 
 if __name__ == "__main__":

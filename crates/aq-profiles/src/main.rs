@@ -1,97 +1,71 @@
-use aq_profiles::{Compilation, CompileRequest, compile, load};
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-#[derive(Parser)]
-#[command(
-    name = "aq-profile",
-    about = "AQ profile catalog inspection (no daemon required)"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-#[derive(Subcommand)]
-enum Command {
-    Profile {
-        #[command(subcommand)]
-        command: ProfileCommand,
-    },
-}
-#[derive(Subcommand)]
-enum ProfileCommand {
-    /// Validate the complete catalog and optionally a bounded composition request.
-    Validate {
-        #[arg(long)]
-        catalog: PathBuf,
-        #[arg(long)]
-        request: Option<PathBuf>,
-        #[arg(long)]
-        graph_access_profile_digest: Option<String>,
-        /// Export the immutable canonical artifact for authenticated central activation.
-        #[arg(long)]
-        artifact_out: Option<PathBuf>,
-    },
-    /// Explain composition; concrete intelligence selection remains pending AQ-20.
-    Explain {
-        #[arg(long)]
-        catalog: PathBuf,
-        #[arg(long)]
-        request: PathBuf,
-        #[arg(long)]
-        graph_access_profile_digest: String,
-    },
-}
-fn run() -> Result<bool, Box<dyn std::error::Error>> {
-    let Command::Profile { command } = Cli::parse().command;
-    let (directory, request, access, artifact_out) = match command {
-        ProfileCommand::Validate {
-            catalog,
-            request,
-            graph_access_profile_digest,
-            artifact_out,
-        } => (catalog, request, graph_access_profile_digest, artifact_out),
-        ProfileCommand::Explain {
-            catalog,
-            request,
-            graph_access_profile_digest,
-        } => (
-            catalog,
-            Some(request),
-            Some(graph_access_profile_digest),
-            None,
-        ),
-    };
-    let catalog = load(&directory)?;
-    if let Some(path) = artifact_out {
-        std::fs::write(path, catalog.canonical_bytes()?)?;
+//! `aq-profile validate <directory>`: compile a directory of role, intelligence
+//! profile and execution profile documents, as a server would on a save.
+use aq_profiles::roles::{DocumentLimits, Kind, SelectionDefaults, SourceDocument, compile};
+use std::path::Path;
+
+/// The Markdown files of `directory/<name>` as documents of `kind`, in name order.
+fn read(directory: &Path, name: &str, kind: Kind) -> std::io::Result<Vec<SourceDocument>> {
+    let folder = directory.join(name);
+    if !folder.is_dir() {
+        return Ok(Vec::new());
     }
-    let result = if let Some(path) = request {
-        let request: CompileRequest =
-            serde_json::from_str(&aq_profiles::read_bounded_regular(&path, 2_097_152)?)?;
-        let result: Compilation = compile(
-            &catalog,
-            &request,
-            &access.ok_or("--graph-access-profile-digest required with --request")?,
-        )?;
-        let valid = result.composition_valid;
-        println!("{}", serde_json::to_string_pretty(&result)?);
-        valid
-    } else {
-        println!(
-            "{}",
-            serde_json::json!({"catalog_valid":true,"catalog_digest":catalog.digest(),"composition_valid":null,"selection_pending":true})
-        );
-        true
-    };
-    Ok(result)
+    let mut paths: Vec<_> = std::fs::read_dir(&folder)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    paths.retain(|path| path.extension().is_some_and(|e| e == "md"));
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let file = path.file_name().unwrap_or_default().to_string_lossy();
+            Ok(SourceDocument {
+                kind,
+                label: format!("{name}/{file}"),
+                text: std::fs::read_to_string(&path)?,
+            })
+        })
+        .collect()
 }
 fn main() {
-    match run() {
-        Ok(true) => {}
-        Ok(false) => std::process::exit(3),
-        Err(e) => {
-            eprintln!("aq-profile: {e}");
-            std::process::exit(2);
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let [command, directory] = arguments.as_slice() else {
+        eprintln!("usage: aq-profile validate <directory>");
+        std::process::exit(2);
+    };
+    if command != "validate" {
+        eprintln!("usage: aq-profile validate <directory>");
+        std::process::exit(2);
+    }
+    let directory = Path::new(directory);
+    let mut documents = Vec::new();
+    for (name, kind) in [
+        ("roles", Kind::Role),
+        ("intelligence", Kind::Intelligence),
+        ("execution", Kind::Execution),
+    ] {
+        match read(directory, name, kind) {
+            Ok(read) => documents.extend(read),
+            Err(error) => {
+                eprintln!("aq-profile: {}: {error}", directory.join(name).display());
+                std::process::exit(2);
+            }
+        }
+    }
+    match compile(
+        &documents,
+        &SelectionDefaults::default(),
+        &DocumentLimits::default(),
+    ) {
+        Ok(snapshot) => println!(
+            "valid: {} documents, snapshot {}",
+            documents.len(),
+            snapshot.digest()
+        ),
+        Err(problems) => {
+            for problem in &problems {
+                println!("{problem}");
+            }
+            std::process::exit(3);
         }
     }
 }

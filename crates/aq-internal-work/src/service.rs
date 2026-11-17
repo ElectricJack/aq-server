@@ -1,14 +1,13 @@
 //! The internal work service (spec 0012 §3, §4, §8): turning a request into a
 //! task, the in-server loop that runs API candidates and moves failures on to
 //! a supervisor or the owner, and waiting for a task to finish. The server
-//! builds one [`Service`] from its pool, clock, registry, model choices and
+//! builds one [`Service`] from its pool, clock, registry and
 //! `[internal_work]` config, and gives it the way to tell a supervisor.
 //!
 //! Internal work is outside swarm capacity: nothing here reads the swarm
 //! settings, the provider mask or the availability switch.
 use crate::*;
 use aq_intelligence_config::LoadedRegistry;
-use aq_profile_settings::ModelChoice;
 use aq_selection::AvailabilityObservation;
 use sqlx::PgPool;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -28,21 +27,6 @@ pub type NotifySupervisor = Arc<
         + Sync,
 >;
 
-/// The model choices of Settings, read afresh at each resolution.
-pub type ModelChoices = Arc<dyn Fn() -> Vec<ModelChoice> + Send + Sync>;
-
-/// The model choices the Settings page offers: each qualified harness's
-/// models from `registry`, then the cached preferences in `preferences`.
-pub fn settings_choices(
-    registry: Option<Arc<LoadedRegistry>>,
-    preferences: Option<std::path::PathBuf>,
-) -> ModelChoices {
-    Arc::new(move || {
-        let harnesses = registry.iter().flat_map(|r| &r.config.qualified_harnesses);
-        aq_profile_settings::model_choices(harnesses, preferences.as_deref())
-    })
-}
-
 /// How many API tasks the in-server loop runs at once, so that one slow
 /// provider call does not hold up the tasks queued behind it.
 pub const API_CONCURRENCY: usize = 4;
@@ -56,7 +40,6 @@ pub struct Service {
     now: Now,
     api: ApiBackend,
     registry: Option<Arc<LoadedRegistry>>,
-    choices: ModelChoices,
     poll: Duration,
     enabled: bool,
     /// Who claims tasks: this server process.
@@ -72,7 +55,6 @@ impl Service {
         now: Now,
         config: Option<&InternalWorkConfig>,
         registry: Option<Arc<LoadedRegistry>>,
-        choices: ModelChoices,
     ) -> Result<Self> {
         let config = config.cloned().unwrap_or_else(|| {
             serde_json::from_value(serde_json::json!({})).expect("every field has a default")
@@ -82,7 +64,6 @@ impl Service {
             now,
             api: ApiBackend::new(config.api)?,
             registry,
-            choices,
             poll: Duration::from_millis(config.poll_ms),
             enabled: config.enabled,
             runner: format!("server/{}", Uuid::new_v4()),
@@ -120,14 +101,26 @@ impl Service {
         request: &Request,
         now_ms: i64,
     ) -> Result<std::result::Result<Vec<Candidate>, String>> {
+        let active = aq_role_settings::active_snapshot(&self.pool).await;
+        let active = active.map_err(|error| match error {
+            aq_role_settings::Error::Database(e) => Error::Database(e),
+            _ => Error::Corrupt,
+        })?;
+        let Some(snapshot) = active.map(|a| a.snapshot) else {
+            return Ok(Err("no roles and profiles are active".into()));
+        };
         let profile = match &request.profile_override {
-            Some(id) => Some(id.clone()),
-            None => settings::profile_for(&self.pool, request.purpose).await?,
+            Some(id) => id.clone(),
+            None => {
+                let levels = (snapshot.intelligence_profiles().map(|p| p.id.clone())).collect();
+                let document = settings::document(&self.pool).await?;
+                match settings::level_for(&document, request.purpose, &levels) {
+                    Ok(id) => id,
+                    Err(reason) => return Ok(Err(reason)),
+                }
+            }
         };
-        let Some(profile) = profile else {
-            return Ok(Err("no internal work profile configured".into()));
-        };
-        let candidates = self.candidates(&profile, now_ms).await?;
+        let candidates = self.candidates(&snapshot, &profile, now_ms).await?;
         if request.agent.is_none() {
             return Ok(candidates);
         }
@@ -203,16 +196,16 @@ impl Service {
     /// The candidates of `profile`, or why there are none.
     async fn candidates(
         &self,
+        snapshot: &aq_profiles::roles::Snapshot,
         profile: &str,
         now_ms: i64,
     ) -> Result<std::result::Result<Vec<Candidate>, String>> {
         let Some(registry) = self.registry.as_deref() else {
             return Ok(Err("intelligence registry is not configured".into()));
         };
-        let (_, catalog) = settings::active_catalog(&mut *self.pool.acquire().await?).await?;
-        let Some(catalog) = catalog else {
-            return Ok(Err("no profile catalog is active".into()));
-        };
+        if snapshot.intelligence(profile).is_none() {
+            return Ok(Err(format!("no level {profile:?} exists")));
+        }
         let observations: Vec<serde_json::Value> = sqlx::query_scalar(
             "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
         )
@@ -224,8 +217,7 @@ impl Service {
             .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
             .map_err(|_| Error::Corrupt)?;
         let now = u64::try_from(now_ms).unwrap_or(0);
-        let choices = (self.choices)();
-        let resolved = resolve(&catalog, registry, &choices, &observations, profile, now);
+        let resolved = resolve(snapshot, registry, &observations, profile, now);
         Ok(resolved
             .map(|resolved| resolved.candidates)
             .map_err(|_| format!("intelligence profile {profile:?} has no usable candidate")))

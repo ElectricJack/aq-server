@@ -41,3 +41,11 @@ of the samples received in the last 900 000 ms. Memory is stored as basis
 points of used over total.
 
 The worker pins this directory by digest.
+
+Multi-agent nodes (spec 0015) retain this report unchanged: one machine report
+and inventory stream per node/boot, shared by its slots. A machine can contain
+several enrolled nodes. The node's authoritative slot count arrives in a schema-2
+`/v1/worker/control` response as `slots`; schema 1 has no new fields. Native poll
+selects its one-based slot with `aq-node-slot`; registration advertises awareness
+with `aq-node-slots`. Manual session replies pin the server's logical allocation
+in `session.spec.node_slot`. Machine CPU/RAM facts never release an occupied slot.

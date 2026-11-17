@@ -33,13 +33,12 @@ impl RoutingPort for ServerRouting {
         Ok(row.and_then(|(workspace, project)| workspace.zip(project)))
     }
     async fn on_router(&self, project: Uuid) -> Result<bool> {
-        let record = match crate::project_bindings::current(&self.0, project).await {
-            Ok(record) => record,
-            Err(crate::error::AppError::NotFound(_)) => return Ok(false),
-            Err(_) => return Err(Error::Unknown),
-        };
-        let on = crate::routing::on_router(&self.0, &record).await;
-        on.map_err(|_| Error::Unknown)
+        // Every bound project's tasks are routed (spec 0014 §5.2).
+        match crate::project_bindings::current(&self.0, project).await {
+            Ok(_) => Ok(true),
+            Err(crate::error::AppError::NotFound(_)) => Ok(false),
+            Err(_) => Err(Error::Unknown),
+        }
     }
     async fn attempts(&self, task: Uuid) -> Result<(u32, u32)> {
         use crate::profiled_execution::{no_grant, replacement};

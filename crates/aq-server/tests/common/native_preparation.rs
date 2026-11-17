@@ -101,7 +101,6 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         revision: 1,
         definition_bodies: vec![],
-        context_qualifications: vec![],
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: runtime.clone(),
             qualification,
@@ -165,12 +164,12 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
             operation_id: env.operation,
             lineage: env.lineage.clone(),
             project: env.frozen.clone(),
-            compositions: env.input.compositions.clone(),
+            launches: vec![super::roles::prepared_launch()],
             replacement: None,
             record_refused: true,
-            intelligence_override: None,
             route: None,
         },
+        &env.snapshot,
     )
     .await
     .unwrap();

@@ -37,7 +37,6 @@ pub(super) async fn configure(case: &mut Case) {
     let mut config = (*case.env.env.state.config).clone();
     let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
     assert_eq!(profiled.qualified_runtimes.len(), 1);
-    let old = profiled.qualified_runtimes[0].clone();
     let runtime = publish(
         &mut profiled,
         "aq.static-worker-runtime/0.4.0-refresh-output-v1",
@@ -57,34 +56,8 @@ pub(super) async fn configure(case: &mut Case) {
             "runtime":runtime,"worker_sha256":expected,"grant_deadline_semantics":"original issued limits only",
         }),
     );
-    let counting = publish(
-        &mut profiled,
-        "aq.static-context-count/0.4.0-refresh-output-v1",
-        json!({
-            "scope":"existing synthetic byte-bound fixture, no provider tokenizer assertion",
-            "runtime":runtime,"static_program":host["program"]["artifact"],
-        }),
-    );
-    let capacity = publish(
-        &mut profiled,
-        "aq.static-context-capacity/0.4.0-refresh-output-v1",
-        json!({
-            "scope":"existing conservative synthetic planning ceiling only, no native model window assertion",
-            "runtime":runtime,"static_program":host["program"]["artifact"],
-        }),
-    );
-    profiled.qualified_runtimes[0].runtime = runtime.clone();
-    profiled.qualified_runtimes[0].qualification = qualification.clone();
-    for context in &mut profiled.context_qualifications {
-        assert_eq!(context.subject.runtime, old.runtime);
-        assert_eq!(context.subject.runtime_qualification, old.qualification);
-        context.subject.runtime = runtime.clone();
-        context.subject.runtime_qualification = qualification.clone();
-        context.counting_evidence = counting.clone();
-        context.capacity_evidence = capacity.clone();
-        // Original source timestamps/expiry, arithmetic and planning ceiling
-        // remain unchanged; this does not make old evidence fresh again.
-    }
+    profiled.qualified_runtimes[0].runtime = runtime;
+    profiled.qualified_runtimes[0].qualification = qualification;
     profiled.revision += 1;
     profiled.validate().unwrap();
     config.profiled_execution = Some(Arc::new(profiled));

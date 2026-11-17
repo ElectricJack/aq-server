@@ -38,19 +38,18 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
             validated_at_ms: NOW,
             validation: validation.clone(),
         },
-        catalog_activation_revision: 1,
+        snapshot_digest: "synthetic-snapshot".into(),
         worker_membership_digest: "synthetic-membership".into(),
         binding_observation: validation,
         node_id: f.node.node_id,
         environment: "confined-worktree".into(),
-        agent_profile: "implementer@2".into(),
-        intelligence_profile: "engineering@2".into(),
-        execution_profile: "confined-development@2".into(),
+        role: "developer".into(),
+        intelligence_profile: "standard-medium".into(),
+        execution_profile: "sandbox".into(),
     };
     let handle = Uuid::new_v4();
     let config = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![ProjectPolicy {

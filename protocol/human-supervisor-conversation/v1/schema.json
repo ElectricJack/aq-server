@@ -633,7 +633,7 @@
             }
           ]
         },
-        "profile_hint": {
+        "role": {
           "anyOf": [
             {
               "type": "string",
@@ -643,7 +643,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The role the task expects; it must exist. Absent: the project's default role."
         },
         "intelligence_hint": {
           "anyOf": [

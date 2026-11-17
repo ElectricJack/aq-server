@@ -37,8 +37,6 @@ pub struct ProfiledConfig {
     pub qualified_runtimes: Vec<QualifiedRuntime>,
     pub projects: Vec<ProjectPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context_qualifications: Vec<super::context_budget::Qualification>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub definition_bodies: Vec<super::definitions::Definition>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,8 +98,6 @@ impl ProfiledConfig {
         super::phase_refresh_execution::policy::validate_catalog(self)?;
         super::phase_terminal::qualification::validate_catalog(self)?;
         super::phase_refresh_terminal::qualification::validate_catalog(self)?;
-        super::context_budget::validate_catalog(&self.context_qualifications)
-            .map_err(|_| "invalid context qualifications".to_string())?;
         if self.revision == 0
             || self.revision > i64::MAX as u64
             || self.qualified_runtimes.len() > 32
@@ -126,14 +122,6 @@ impl ProfiledConfig {
                 if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
                     return Err("unsupported configured material delivery".into());
                 }
-            }
-        }
-        for fact in &self.context_qualifications {
-            if !self.qualified_runtimes.iter().any(|runtime| {
-                runtime.runtime == fact.subject.runtime
-                    && runtime.qualification == fact.subject.runtime_qualification
-            }) {
-                return Err("context qualification references an unqualified runtime".into());
             }
         }
         let mut projects = BTreeSet::new();
@@ -168,15 +156,12 @@ impl ProfiledConfig {
             qualified_runtimes: &'a [QualifiedRuntime],
             projects: &'a [ProjectPolicy],
             #[serde(skip_serializing_if = "Vec::is_empty")]
-            context_qualifications: Vec<&'a super::context_budget::Qualification>,
-            #[serde(skip_serializing_if = "Vec::is_empty")]
             definition_bodies: Vec<super::definitions::DefinitionReference<'a>>,
         }
         aq_selection::digest(&Anchor {
             revision: self.revision,
             qualified_runtimes: &self.qualified_runtimes,
             projects: &self.projects,
-            context_qualifications: self.context_qualifications.iter().collect(),
             definition_bodies: super::definitions::references(&self.definition_bodies),
         })
         .map_err(|_| "profiled configuration digest".into())

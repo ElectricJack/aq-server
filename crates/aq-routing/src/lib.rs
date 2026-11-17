@@ -146,6 +146,9 @@ pub struct Route {
     /// classifier's answer here.
     pub classification: Option<serde_json::Value>,
     pub policy_digest: Option<String>,
+    /// The revision of the routing document the route was made from. The
+    /// name is the stored one: routes live in Graph task metadata and in the
+    /// human-graph contract, which a server migration cannot rewrite.
     pub structure_revision: Option<u64>,
     pub source: Source,
     /// The task's ended attempts when the route was written (stored as `a`);

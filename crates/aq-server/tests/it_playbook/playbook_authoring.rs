@@ -112,8 +112,6 @@ fn login_candidate() -> aq_internal_work::Candidate {
         provider: "anthropic".into(),
         model: "claude-fixture".into(),
         reasoning: None,
-        reasoning_reference: "default".into(),
-        options: BTreeMap::new(),
         harness: Some("claude".into()),
         way: aq_internal_work::Way::Login,
         credential_index: 0,

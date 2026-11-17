@@ -880,7 +880,7 @@ pub(super) async fn session(
             kind: "task".into(),
             id: view.task_id,
             revision: task_revision.map(Into::into),
-            title: view.task_id.to_string(),
+            title: aq_swarm::agents::title_or_id(view.task_id),
         }),
         attempt_id: Some(attempt),
         project,
@@ -914,6 +914,7 @@ pub(super) async fn session(
         .into(),
         last_output_at: last_activity.clone(),
     };
+    let ran_with = crate::role_settings::ran_with(state, &mut tx, attempt).await?;
     tx.commit().await?;
     Ok(SessionDetail {
         summary,
@@ -921,6 +922,7 @@ pub(super) async fn session(
         permissions,
         last_activity_at: last_activity,
         observation_binding,
+        ran_with,
     })
 }
 pub(super) async fn detail(

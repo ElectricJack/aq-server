@@ -1,15 +1,15 @@
 //! Public recipe data for ONE actual CLI / finite local Responses integration.
 //! This creates no liveness observation, credential, admission or host authority.
 #![allow(dead_code)] // The controller consumes this fixture API in separate stages.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use aq_admission::{ArtifactKind, ArtifactRef, Digest, ObjectId, SourceSelection, Text};
-use aq_profiles::{ContextInput, Delivery, ValidatedCatalog};
+use aq_profiles::roles::Kind;
 use aq_server::{
     agent_access::scheduling::TaskContext,
     intelligence::config::{CredentialConfig, IntelligenceConfig, MaterialDeliveryMode},
     profiled_execution::{
         config::{ProfiledConfig, ProjectPolicy, QualifiedRuntime},
-        context_budget::{CapacityKind, Qualification, Rendering, Subject},
+        context_budget::Renderer,
         context_projection,
         definitions::Definition,
     },
@@ -24,13 +24,12 @@ use std::{
 use uuid::Uuid;
 
 pub const ENVIRONMENT: &str = "aq-codex-finite-peer-trusted-node";
-pub const AGENT: &str = "codex-result-pilot@1";
-pub const INTELLIGENCE: &str = "codex-local-responses@1";
-pub const EXECUTION: &str = "codex-worker-20s@1";
+pub const ROLE: &str = "codex-result-pilot";
+pub const INTELLIGENCE: &str = "codex-local-responses";
+pub const EXECUTION: &str = "codex-worker-20s";
 pub const GROUP: &str = "codex-result-pilot";
 pub const MODEL: &str = "gpt-5.1-codex-mini";
 pub const REASONING: &str = "low";
-pub const REASONING_REFERENCE: &str = "codex-low@1";
 pub const PROFILE: &str = "codex-0.166-trusted-node-named-readonly-result-local-v1";
 pub const EXECUTION_MS: u64 = 20_000;
 pub const WORKER_VERSION: &str = "0.5.1";
@@ -44,7 +43,6 @@ const CODEX_SHA: &str = "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4
 const CLIENT_SHA: &str = "fb859cd0cdfe3ee2715cfd657fae90fc8281e85db4b088d08eb490b4607c2c3b";
 const HOST_SHA: &str = "96aaafcc295b45e95accf67d06f9a90d5a1caf9dad09ebdd09034f7cf8ad9044";
 const TMUX_SHA: &str = "034b15c64035f783d43862f2775eb4828f61571ca62c8199796000b97d556ecd";
-const PLATFORM: &str = "Work on the exact pinned assignment in the authorized workspace. Use only the scoped tool permissions. Report source changes and evidence; a report is not task completion or authority to expand scope.";
 const SCOPE: &str = "finite numeric-loopback Responses peer only; actual pinned Codex 0.166/tool/result mechanisms; trusted same-UID node, no hostile-UID secrecy, external provider/model/tokenizer/window or general production qualification";
 
 fn canonical(value: impl Serialize) -> Result<String> {
@@ -107,42 +105,47 @@ fn policy(project: Uuid, repository: Uuid) -> Result<Definition> {
         }),
     )
 }
-/// Pure catalog metadata; reporting instructions are added by result_startup,
-/// never duplicated here as another catalog module.
-pub fn catalog(project: Uuid, repository: Uuid) -> Result<ValidatedCatalog> {
-    ensure!(
-        !project.is_nil() && !repository.is_nil(),
-        "real project/repository IDs"
+/// The recipe's role, level and execution profile documents (`kind`, `id`,
+/// Markdown). Reporting instructions are added by result_startup, never
+/// duplicated in the role. No document names the project or repository: the
+/// role's operations take the project's scope.
+pub fn documents() -> Vec<(Kind, String, String)> {
+    let role = format!(
+        "---\nid: {ROLE}\nname: Codex result pilot\n\
+         description: Implements and reports one bounded change.\n\
+         execution: {EXECUTION}\noperations: [task.read, knowledge.read, source.write]\n\
+         enabled: true\n---\n## Role\n\
+         Make only the requested source change in the authorized worktree. Check the \
+         changed file and report exact evidence. Preserve unrelated files.\n"
     );
-    let value = json!({"schema_version":1,"modules":[{
-        "id":"bounded-edit","version":1,"kind":"capability","purpose":"Implement and report one bounded change",
-        "instruction":"bounded-edit.md","delivery":"startup","required":true,
-        "requirements":permissions(project,repository).into_iter().map(|p|json!({"permission":p,"required":true})).collect::<Vec<_>>()
-    }],"agents":[{"id":"codex-result-pilot","version":1,"role":"implementation",
-        "behaviors":[],"capabilities":["bounded-edit@1"],"intelligence":INTELLIGENCE,"execution":EXECUTION}],
-        "intelligence":[{"id":"codex-local-responses","version":1,"candidates":[{
-            "id":"pinned-codex-mini","provider":"openai","model":MODEL,
-            "reasoning_configuration_reference":REASONING_REFERENCE,"harnesses":["codex"]}],
-            "selection_policy":{"schema_version":1,"fallback_on":[],"allow_unknown_availability":false,
-                "observation_max_age_ms":5000,"max_output_tokens":4096,"max_attempts":1,"max_lineage_elapsed_ms":60000,
-                "required_capabilities":capabilities()?,"budget":{"max_cost_microunits":null,"currency":null,
-                    "require_complete_accounting":false,"require_hard_cost_enforcement":false,"unknown_cost":"allow_bounded"}}}],
-        "execution":[{"id":"codex-worker-20s","version":1,"harnesses":["codex"],
-            "environments":[ENVIRONMENT],"context_limit_bytes":CONTEXT_BYTES,
-            "permissions":permissions(project,repository),"credential_profile_references":["aq.finite-responses-credential@1"]}]});
-    let mut instructions = BTreeMap::new();
-    instructions.insert("bounded-edit@1".into(), "Make only the requested source change in the authorized worktree. Check the changed file and report exact evidence. Preserve unrelated files.".into());
-    Ok(aq_profiles::validate(
-        serde_json::from_value(value)?,
-        instructions,
-    )?)
+    let level = format!(
+        "---\nid: {INTELLIGENCE}\nname: Codex local Responses\n\
+         description: The pinned finite local Responses model.\n---\n\
+         ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n\
+         | openai | {MODEL} | {REASONING} | codex |\n\n\
+         ## Selection\n- max_attempts: 1\n- fallback_on: []\n\
+         - max_lineage_elapsed_ms: 60000\n- observation_max_age_ms: 5000\n"
+    );
+    let execution = format!(
+        "---\nid: {EXECUTION}\nname: Codex worker, twenty seconds\n\
+         description: The finite numeric-loopback Responses peer.\n\
+         harnesses: [codex]\nenvironment: {ENVIRONMENT}\nconfinement: native\n---\n\
+         ## Credentials\n- codex: aq.finite-responses-credential\n\n\
+         ## Limits\n- wall_time_ms: {EXECUTION_MS}\n- memory_bytes: {MEMORY_BYTES}\n\
+         - cpu_millis: 1000\n- process_limit: 64\n\
+         - startup_context_bytes: {CONTEXT_BYTES}\n- max_output_tokens: 4096\n"
+    );
+    vec![
+        (Kind::Role, ROLE.into(), role),
+        (Kind::Intelligence, INTELLIGENCE.into(), level),
+        (Kind::Execution, EXECUTION.into(), execution),
+    ]
 }
 pub fn project(
     project: Uuid,
     repository: Uuid,
     generation: u64,
     workspace: Uuid,
-    catalog: &ValidatedCatalog,
 ) -> Result<ProjectBinding> {
     let policy = policy(project, repository)?;
     Ok(ProjectBinding {
@@ -155,10 +158,9 @@ pub fn project(
         repository_adapter_reference: "aq.git.configured".into(),
         graph_adapter_reference: "aq.graph.configured".into(),
         graph_workspace_id: workspace,
-        catalog_digest: catalog.digest().into(),
-        allowed_agent_profiles: vec![AGENT.into()],
-        allowed_intelligence_profiles: vec![INTELLIGENCE.into()],
-        allowed_execution_profiles: vec![EXECUTION.into()],
+        default_role: ROLE.into(),
+        default_intelligence: INTELLIGENCE.into(),
+        role_notes: Default::default(),
         allowed_node_ids: vec![],
         allow_enrolled_nodes: false,
         allowed_worker_groups: vec![GROUP.into()],
@@ -276,7 +278,6 @@ fn runtime_code(worker: &ProgramPin, worker_source: &str) -> Result<Definition> 
 pub struct PrepareInput<'a> {
     pub actual: &'a crate::common::selection::ActualSelectionFixture,
     pub context: &'a TaskContext,
-    pub catalog: &'a ValidatedCatalog,
     pub images: &'a ImagePins,
     pub now_ms: u64,
     pub base: ObjectId,
@@ -310,19 +311,6 @@ pub struct Prepared {
     pub inventory_evidence: ArtifactRef,
     pub health: Value,
 }
-fn context(artifact: &ArtifactRef, text: String) -> ContextInput {
-    ContextInput {
-        source: aq_session_api::Source {
-            identity: artifact.id.as_str().into(),
-            revision: artifact.version.as_str().into(),
-            digest: artifact.digest.as_str().into(),
-        },
-        text,
-        delivery: Delivery::Startup,
-        required: true,
-        omission_priority: 0,
-    }
-}
 pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
     use aq_admission::preparation_refresh_v1 as phase;
     input.images.validate()?;
@@ -332,23 +320,23 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
     );
     let project = &input.actual.project.binding;
     ensure!(
-        input.actual.task == input.context.revision
-            && project.catalog_digest == input.catalog.digest(),
-        "exact original actual task/catalog"
+        input.actual.task == input.context.revision,
+        "exact original actual task"
     );
     let expected_project = self::project(
         project.project_id,
         project.repository_id,
         project.repository_binding_generation,
         project.graph_workspace_id,
-        input.catalog,
     )?;
     ensure!(
         serde_json::to_value(project)? == serde_json::to_value(expected_project)?,
         "unchanged supported actual project policy"
     );
     let permissions = permissions(project.project_id, project.repository_id);
-    let projection = context_projection::project(
+    // The task context must project within the role's scope; the server
+    // renders the startup text itself.
+    context_projection::project(
         input.context,
         project.project_id,
         project.repository_id,
@@ -357,85 +345,22 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
         input.now_ms,
     )?;
     let project_policy = policy(project.project_id, project.repository_id)?;
-    let project_text = format!(
-        "Project policy (exact owner definition follows):\n{}",
-        project_policy.body()
-    );
-    let project_input = reference(
-        &format!(
-            "aq.project-instructions/{}/{}",
-            project_policy.artifact().digest.as_str(),
-            Digest::of(project_text.as_bytes()).as_str()
-        ),
-        project_text.as_bytes(),
-    )?;
-    let startup = reference("aq.agent-result-startup", input.images.startup.as_bytes())?;
-    let draft = aq_profiles::compile_draft(
-        input.catalog,
-        &aq_profiles::CompileRequest {
-            profile: aq_session_api::ProfileRequest {
-                catalog_digest: input.catalog.digest().into(),
-                agent_profile: AGENT.into(),
-                project_binding_id: project.project_id,
-                expected_project_revision: input.actual.project.revision,
-                task_context_revision: format!(
-                    "{}:{}:{}",
-                    input.context.revision.task_id,
-                    input.context.revision.version,
-                    input.context.revision.content_revision
-                ),
-            },
-            ceilings: aq_profiles::Ceilings {
-                installation: permissions.clone(),
-                project: permissions.clone(),
-                execution: permissions.clone(),
-                caller: permissions,
-            },
-            available_tools: vec![
-                "task.read".into(),
-                "knowledge.read".into(),
-                "source.write".into(),
-            ],
-            available_adapters: vec!["codex".into()],
-            harness: "codex".into(),
-            environment: ENVIRONMENT.into(),
-            platform: context(
-                &reference("aq.platform-native-instructions", PLATFORM.as_bytes())?,
-                PLATFORM.into(),
-            ),
-            project: context(&project_input, project_text),
-            assignment: context(&projection.artifact, String::from_utf8(projection.bytes)?),
-            context: vec![context(&startup, input.images.startup.clone())],
-            overrides: vec![],
-            intelligence_override: None,
-        },
-    )?;
-    ensure!(
-        draft.catalog_valid && draft.composition_valid && draft.blocking_reasons.is_empty(),
-        "actual compiler rejected recipe: {:?}",
-        draft.blocking_reasons
-    );
-    let composition = draft.composition.context("actual composition absent")?;
-    let scopes = |v: &[aq_session_api::Permission]| -> Result<Vec<aq_session_protocol::Scope>> {
-        v.iter()
-            .map(|p| {
-                Ok(aq_session_protocol::Scope {
-                    operation: Text::new(&p.operation)?,
-                    resource: Text::new(&p.scope_reference)?,
-                })
+    // The role's operations at this project's scope. The project ceiling holds
+    // each of them, so the effective set is the requested set.
+    let scopes: Vec<aq_session_protocol::Scope> = permissions
+        .iter()
+        .map(|p| {
+            Ok(aq_session_protocol::Scope {
+                operation: Text::new(&p.operation)?,
+                resource: Text::new(&p.scope_reference)?,
             })
-            .collect()
-    };
-    let effective = scopes(&composition.effective_permissions)?;
+        })
+        .collect::<Result<_>>()?;
     let permission_plan = aq_session_protocol::PermissionPlan {
-        requested: scopes(&composition.requested_permissions)?,
-        effective: effective.clone(),
-        required: effective,
-        omissions: composition
-            .omissions
-            .iter()
-            .map(|o| Text::new(&o.reason_code))
-            .collect::<std::result::Result<_, _>>()?,
+        requested: scopes.clone(),
+        effective: scopes.clone(),
+        required: scopes,
+        omissions: vec![],
     };
     let permission_digest = Digest::of(canonical(&permission_plan)?.as_bytes());
     let images = input.images;
@@ -494,52 +419,8 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
         "aq.finite-responses-credential",
         json!({"schema_version":1,"provider":"openai","account_reference":"finite-responses-account","endpoint_reference":"finite-private-loopback-responses","scope":SCOPE,"secret":"synthetic fixed fixture key; separately protected owner file; not included here"}),
     )?;
-    let count = append(
-        &mut defs,
-        "aq.codex-finite-peer-counting",
-        json!({"schema_version":1,"adapter":adapter,"runtime":runtime,"qualification":qualification,"harness_qualification":harness_q,
-        "scope":SCOPE,"rendering":"exact UTF8 double-newline joined startup","maximum_tokens_per_utf8_byte":1,"fixed_overhead_tokens":32768,
-        "basis":"conservative finite-peer planning units; prior actual CLI implicit context/tool capture bounded below 32768 bytes; NOT external model tokenizer evidence"}),
-    )?;
-    let capacity = append(
-        &mut defs,
-        "aq.codex-finite-peer-capacity",
-        json!({"schema_version":1,"scope":SCOPE,"adapter":adapter,"planning_ceiling":131072,"kind":"qualified_conservative_planning_ceiling","basis":"bounded finite-peer integration policy; not model-native window"}),
-    )?;
-    let context_fact = Qualification {
-        schema_version: 1,
-        subject: Subject {
-            runtime: runtime.clone(),
-            runtime_qualification: qualification.clone(),
-            harness: "codex".into(),
-            cli_version: "0.166.0".into(),
-            adapter: adapter.clone(),
-            environment: environment.clone(),
-            harness_qualification: harness_q.clone(),
-            provider: "openai".into(),
-            model: MODEL.into(),
-            native_reasoning: REASONING.into(),
-            reasoning_configuration_reference: REASONING_REFERENCE.into(),
-            credential_profile: credential.clone(),
-            credential_revision: 1,
-            account_reference: "finite-responses-account".into(),
-            endpoint_reference: "finite-private-loopback-responses".into(),
-        },
-        rendering: Rendering::Utf8DoubleNewlineV1,
-        maximum_tokens_per_utf8_byte: 1,
-        fixed_overhead_tokens: 32768,
-        counting_evidence: count,
-        capacity_kind: CapacityKind::QualifiedConservativePlanningCeiling,
-        capacity_tokens: 131072,
-        capacity_evidence: capacity,
-        observed_at_ms: input.now_ms,
-        expires_at_ms: input
-            .now_ms
-            .checked_add(120000)
-            .context("qualification expiry")?,
-    };
-    context_fact.validate()?;
-    let renderer = context_fact.artifact()?;
+    // The startup renderer is the server's one constant rule (spec 0014).
+    let renderer = Renderer::rule()?.definition;
     let primary_manifest = json!({"schema_version":1,"profile":"codex-0.166-named-readonly-exec-stdin-v1","executable_bytes":images.codex.bytes,"environment":environment,
         "installation":{"schema_version":1,"adapter":adapter,"runtime":runtime,"qualification":qualification,"renderer":renderer,"handoff":"opaque_private_file_v1",
             "executable":{"path":images.codex.path,"artifact":images.codex.artifact},"helper":{"path":images.helper.path,"artifact":images.helper.artifact},"tmux":{"path":images.tmux.path,"artifact":images.tmux.artifact}}});
@@ -610,12 +491,6 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
         environment: environment.clone(),
         qualification: harness_q,
         failure_classifier: None,
-        models: vec![aq_selection::NativeModelSupport {
-            provider: "openai".into(),
-            model: MODEL.into(),
-            reasoning_configuration_reference: REASONING_REFERENCE.into(),
-            native_reasoning: REASONING.into(),
-        }],
         capabilities: capabilities.clone(),
         limits: aq_selection::NativeLimits {
             context_bytes: CONTEXT_BYTES,
@@ -648,7 +523,6 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
             placement: None,
             agent_grants: None,
         }],
-        context_qualifications: vec![context_fact],
         definition_bodies: defs,
     };
     profiled.validate().map_err(anyhow::Error::msg)?;
@@ -871,36 +745,53 @@ mod tests {
     }
 
     #[test]
-    fn actual_catalog_is_canonical_and_requests_only_existing_scoped_permissions() {
-        let project = Uuid::new_v4();
-        let repository = Uuid::new_v4();
-        let catalog = catalog(project, repository).unwrap();
-        let bytes = catalog.canonical_bytes().unwrap();
-        let roundtrip = ValidatedCatalog::from_artifact(&bytes).unwrap();
-        assert_eq!(roundtrip.canonical_bytes().unwrap(), bytes);
-        assert_eq!(catalog.artifact().catalog.execution[0].permissions.len(), 3);
-        assert_eq!(catalog.artifact().catalog.modules.len(), 1);
-        assert!(
-            !String::from_utf8(bytes)
-                .unwrap()
-                .contains("AQ_AGENT_RESULT")
+    fn the_recipe_documents_compile_with_the_shipped_ones_and_resolve_the_pinned_launch() {
+        use aq_profiles::roles::{
+            DocumentLimits, SelectionDefaults, SourceDocument, compile, default_documents,
+        };
+        let mut sources = default_documents();
+        for (kind, id, text) in documents() {
+            assert!(!text.contains("AQ_AGENT_RESULT"));
+            sources.push(SourceDocument {
+                kind,
+                label: format!("recipe/{id}.md"),
+                text,
+            });
+        }
+        let snapshot = compile(
+            &sources,
+            &SelectionDefaults::default(),
+            &DocumentLimits::default(),
+        )
+        .unwrap_or_else(|problems| panic!("{problems:?}"));
+        let launch = snapshot.resolve(ROLE, INTELLIGENCE).unwrap();
+        assert_eq!(launch.execution.id, EXECUTION);
+        assert_eq!(launch.execution.environment, ENVIRONMENT);
+        assert_eq!(
+            launch.role.operations,
+            ["task.read", "knowledge.read", "source.write"]
         );
-        let selected = catalog.artifact().catalog.intelligence[0]
-            .selection_policy
-            .as_ref()
-            .unwrap();
+        let [candidate] = launch.candidates.as_slice() else {
+            panic!("one pinned candidate")
+        };
+        assert_eq!(
+            (candidate.model.as_str(), candidate.reasoning.as_str()),
+            (MODEL, REASONING)
+        );
+        let selected = &launch.selection_policy;
         assert_eq!(selected.max_output_tokens, 4096);
+        assert_eq!(selected.max_attempts, 1);
+        assert!(selected.fallback_on.is_empty());
         assert!(!selected.allow_unknown_availability);
         assert_eq!(selected.observation_max_age_ms, 5000);
     }
 
     #[test]
-    fn project_binds_real_ids_catalog_and_exact_twenty_second_policy() {
+    fn project_binds_real_ids_and_exact_twenty_second_policy() {
         let project_id = Uuid::new_v4();
         let repository = Uuid::new_v4();
         let workspace = Uuid::new_v4();
-        let catalog = catalog(project_id, repository).unwrap();
-        let project = project(project_id, repository, 7, workspace, &catalog).unwrap();
+        let project = project(project_id, repository, 7, workspace).unwrap();
         let config = aq_server::project_bindings::domain::ProjectConfig {
             worker_groups: BTreeMap::from([(GROUP.into(), vec![Uuid::new_v4()])]),
         };
@@ -910,7 +801,6 @@ mod tests {
         assert!(invalid.validate(&config).is_err());
         assert_eq!(project.repository_binding_generation, 7);
         assert_eq!(project.graph_workspace_id, workspace);
-        assert_eq!(project.catalog_digest, catalog.digest());
         assert_eq!(project.ceilings.wall_time_ms, 20_000);
         assert!(project.allowed_node_ids.is_empty());
         let definition = policy(project_id, repository).unwrap();

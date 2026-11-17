@@ -6,26 +6,14 @@ use crate::profiled_execution::source_exports::ReservedExport;
 use aq_admission::Digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    io::Read,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    sync::Semaphore,
-};
+use std::{io::Read, time::Duration};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 const MAX_MANIFEST: usize = 1_048_576;
 const MAX_RETENTION: usize = 16_384;
 pub const MAX_VERIFIED_BYTES: usize = 4_194_304;
-static FILE_READS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 fn file_slot() -> Result<tokio::sync::OwnedSemaphorePermit> {
-    FILE_READS
-        .get_or_init(|| Arc::new(Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| pending())
+    (aq_machine_control::limits::EXPORT_FILES.enter()).ok_or_else(pending)
 }
 fn refused() -> AppError {
     AppError::Conflict("pre-offer source export unavailable or inconsistent".into())
@@ -347,11 +335,7 @@ pub(crate) async fn inspect_retained_for_execution(
     token: &ReservedExport,
     fact: &VerifiedExport,
 ) -> Result<RetentionObservation> {
-    static READS: OnceLock<Semaphore> = OnceLock::new();
-    let _slot = READS
-        .get_or_init(|| Semaphore::new(2))
-        .try_acquire()
-        .map_err(|_| pending())?;
+    let _slot = (aq_machine_control::limits::EXPORT_INSPECTIONS.enter()).ok_or_else(pending)?;
     tokio::time::timeout(
         Duration::from_secs(2),
         inspect_retained_inner(state, token, fact),
@@ -967,7 +951,7 @@ mod actual_git_test {
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
         };
-        let runtime = Arc::new(Runtime::new(settings).unwrap());
+        let runtime = std::sync::Arc::new(Runtime::new(settings).unwrap());
         let mut child =
             tokio::process::Command::new(std::env::var("AQ_TEST_GIT_CANDIDATE").unwrap())
                 .arg("--state-dir")
@@ -1021,7 +1005,7 @@ mod actual_git_test {
             agent_access: None,
             source_retention: Some(runtime.clone()),
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),
-            config: Arc::new(config),
+            config: std::sync::Arc::new(config),
             store: db.store().await,
             clock: crate::system_clock(),
         };

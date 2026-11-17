@@ -44,8 +44,6 @@ fn api(provider: &str) -> Candidate {
         provider: provider.into(),
         model: format!("{provider}-model"),
         reasoning: Some("medium".into()),
-        reasoning_reference: format!("v1-{provider}-5749150b@1"),
-        options: Default::default(),
         harness: None,
         way: Way::Api,
         credential_index: 0,
@@ -824,85 +822,52 @@ async fn a_transcript_is_kept_once_per_candidate_and_bounded() {
 mod resolve {
     use aq_intelligence_config::{CredentialConfig, IntelligenceConfig, LoadedRegistry};
     use aq_internal_work::{Reason, Way, resolve};
-    use aq_profile_settings::ModelChoice;
-    use aq_profiles::{ModelCandidate, ValidatedCatalog};
+    use aq_profiles::roles::{Kind, Snapshot, SourceDocument};
     use aq_selection::{
         ArtifactRef, AuthorizedCredential, Availability, AvailabilityObservation, CredentialKind,
         Digest, ObservationScope, ObservationSource, Text,
     };
-    use serde_json::json;
     use uuid::Uuid;
 
     const NOW: u64 = 1_000_000;
 
-    pub(super) fn candidate(id: &str, provider: &str, harnesses: &[&str]) -> ModelCandidate {
-        ModelCandidate {
-            id: id.into(),
-            provider: provider.into(),
-            model: format!("{provider}-model"),
-            reasoning_configuration_reference: reference(provider),
-            harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
-        }
-    }
+    /// A candidate row of a level document: `provider`'s fixture model at
+    /// `reasoning` on `harnesses`.
+    pub(super) type Row<'a> = (&'a str, &'a str, &'a [&'a str]);
 
-    /// The catalog reference of `provider`'s fixture candidate: an identifier
-    /// like the live ones, never an effort, so the two cannot be confused.
-    pub(super) fn reference(provider: &str) -> String {
-        format!("v1-{provider}-dcedeb62@1")
-    }
-
-    /// The model choices of Settings for the fixture candidates: openai on
-    /// Codex at `low` with the fast service tier, anthropic on Claude at
-    /// `high`, claude-direct on Claude at `medium`.
-    pub(super) fn choices() -> Vec<ModelChoice> {
-        [
-            (
-                "openai",
-                "codex",
-                "low",
-                json!({"reasoning_effort": "low", "service_tier": "fast"}),
-            ),
-            ("anthropic", "claude", "high", json!({"thinking": "high"})),
-            ("claude-direct", "claude", "medium", json!({})),
-        ]
-        .into_iter()
-        .map(|(provider, harness, effort, options)| {
-            serde_json::from_value(json!({
-                "provider": provider, "model": format!("{provider}-model"),
-                "reasoning_configuration_reference": reference(provider),
-                "reasoning": effort, "harness": harness, "options": options,
-            }))
-            .unwrap()
-        })
-        .collect()
-    }
-
-    pub(super) fn catalog(profiles: Vec<(&str, Vec<ModelCandidate>)>) -> ValidatedCatalog {
-        let base = aq_profiles::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../aq-profiles/examples/catalog"),
-        )
-        .unwrap();
-        let instructions = base.artifact().instructions.clone();
-        let mut catalog = base.artifact().catalog.clone();
-        let template = catalog.intelligence[0].clone();
-        let engineering = template.id.clone();
-        catalog.intelligence = profiles
-            .into_iter()
-            .map(|(id, candidates)| {
-                let mut profile = template.clone();
-                profile.id = id.into();
-                profile.candidates = candidates;
-                profile
+    /// The Markdown of the level `id` with `rows`, and `selection` lines
+    /// under `## Selection` when there are any.
+    pub(super) fn level(id: &str, rows: &[Row], selection: &[&str]) -> String {
+        let rows: String = (rows.iter())
+            .map(|(provider, reasoning, harnesses)| {
+                let harnesses = harnesses.join(", ");
+                format!("| {provider} | {provider}-model | {reasoning} | {harnesses} |\n")
             })
             .collect();
-        // Agents point at the example's own profile; keep it present.
-        if !catalog.intelligence.iter().any(|p| p.id == engineering) {
-            let mut keep = template;
-            keep.id = engineering;
-            catalog.intelligence.push(keep);
-        }
-        aq_profiles::validate(catalog, instructions).unwrap()
+        let selection = match selection {
+            [] => String::new(),
+            lines => format!("\n## Selection\n- {}\n", lines.join("\n- ")),
+        };
+        format!(
+            "---\nid: {id}\nname: Level {id}\ndescription: Fixture level {id}.\n---\n\
+             ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n\
+             {rows}{selection}"
+        )
+    }
+
+    /// The shipped roles and profiles with the level `internal` added.
+    fn snapshot_with(rows: &[Row], selection: &[&str]) -> Snapshot {
+        let mut sources = aq_profiles::roles::default_documents();
+        sources.push(SourceDocument {
+            kind: Kind::Intelligence,
+            label: "internal".into(),
+            text: level("internal", rows, selection),
+        });
+        aq_profiles::roles::compile(&sources, &Default::default(), &Default::default())
+            .unwrap_or_else(|problems| panic!("{problems:?}"))
+    }
+    fn snapshot(rows: &[Row]) -> Snapshot {
+        snapshot_with(rows, &[])
     }
 
     fn profile_ref(name: &str) -> ArtifactRef {
@@ -979,14 +944,12 @@ mod resolve {
         }
     }
 
-    fn two_providers() -> (ValidatedCatalog, LoadedRegistry, AuthorizedCredential) {
-        let catalog = catalog(vec![(
-            "internal",
-            vec![
-                candidate("a", "anthropic", &["claude-code"]),
-                candidate("o", "openai", &["codex"]),
-            ],
-        )]);
+    const TWO: [Row<'static>; 2] = [
+        ("anthropic", "high", &["claude"]),
+        ("openai", "low", &["codex"]),
+    ];
+    fn two_providers() -> (Snapshot, LoadedRegistry, AuthorizedCredential) {
+        let catalog = snapshot(&TWO);
         let login = credential("anthropic-login", "anthropic", true);
         let registry = registry(vec![
             (login.clone(), CredentialKind::SubscriptionLogin),
@@ -1001,9 +964,8 @@ mod resolve {
     #[test]
     fn candidates_keep_profile_order_and_carry_the_way_of_their_credential() {
         let (catalog, registry, _) = two_providers();
-        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
         assert_eq!(resolved.profile_id, "internal");
-        assert_eq!(resolved.profile_version, 1);
         let got: Vec<_> = resolved
             .candidates
             .iter()
@@ -1028,88 +990,53 @@ mod resolve {
         assert_eq!(resolved.candidates[1].model, "openai-model");
     }
 
-    /// The one candidate of a profile listing openai on a Codex login,
-    /// resolved against `choices`.
-    fn codex_login(choices: &[ModelChoice]) -> aq_internal_work::Candidate {
-        let catalog = catalog(vec![(
-            "internal",
-            vec![candidate("o", "openai", &["codex"])],
-        )]);
+    /// The one candidate of a level listing openai on a Codex login at
+    /// `reasoning`.
+    fn codex_login(reasoning: &str) -> aq_internal_work::Candidate {
+        let catalog = snapshot(&[("openai", reasoning, &["codex"])]);
         let registry = registry(vec![(
             credential("openai-login", "openai", true),
             CredentialKind::SubscriptionLogin,
         )]);
-        let resolved = resolve(&catalog, &registry, choices, &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates.len(), 1);
         resolved.candidates[0].clone()
     }
 
-    /// `choices()` with the openai choice's label and options replaced.
-    fn openai_choice(label: &str, options: serde_json::Value) -> Vec<ModelChoice> {
-        let mut choices = choices();
-        choices[0].reasoning = label.into();
-        choices[0].options = serde_json::from_value(options).unwrap();
-        choices
-    }
-
     #[test]
-    fn a_reference_resolves_to_the_effort_and_options_of_its_model_choice() {
-        let codex = codex_login(&choices());
+    fn a_candidate_carries_the_effort_its_level_states() {
+        let codex = codex_login("low");
         assert_eq!(codex.harness.as_deref(), Some("codex"));
         assert_eq!(codex.reasoning.as_deref(), Some("low"));
-        assert_eq!(codex.reasoning_reference, "v1-openai-dcedeb62@1");
-        assert_eq!(codex.options["service_tier"], "fast");
+        assert_eq!(codex.model, "openai-model");
     }
 
-    /// The label is for display; `options.reasoning_effort` is the effort.
+    /// `default` is the harness's own setting: no effort is passed.
     #[test]
-    fn a_label_that_is_not_an_effort_takes_the_effort_from_the_options() {
-        let options = json!({"reasoning_effort": "low", "service_tier": "fast"});
-        let codex = codex_login(&openai_choice("low (fast service)", options));
-        assert_eq!(codex.reasoning.as_deref(), Some("low"));
-        assert_eq!(codex.options["service_tier"], "fast");
-        assert_eq!(codex.reasoning_reference, "v1-openai-dcedeb62@1");
+    fn the_effort_default_leaves_the_harness_its_own_setting() {
+        assert_eq!(codex_login("default").reasoning, None);
     }
 
+    /// Any level of the snapshot resolves, the shipped ones too: no model
+    /// list and no model choice stands between a level and its candidates.
     #[test]
-    fn a_label_that_is_not_an_effort_without_an_effort_option_leaves_the_harness_default() {
-        let codex = codex_login(&openai_choice("Provider default", json!({})));
-        assert_eq!(codex.reasoning, None);
-        assert!(codex.options.is_empty());
-    }
-
-    /// Codex checks its own configuration; the option is not second-guessed.
-    #[test]
-    fn an_effort_option_the_harness_does_not_list_is_passed_through() {
-        let options = json!({"reasoning_effort": "turbo-9"});
-        let codex = codex_login(&openai_choice("Turbo", options));
-        assert_eq!(codex.reasoning.as_deref(), Some("turbo-9"));
-    }
-
-    #[test]
-    fn a_reference_without_a_model_choice_on_its_harness_drops_the_candidate() {
-        let (catalog, registry, _) = two_providers();
-        let mut elsewhere = choices();
-        // The anthropic choice exists only for another harness.
-        elsewhere[1].harness = "opencode".into();
-        let without: Vec<_> = choices()
-            .into_iter()
-            .filter(|c| c.provider != "anthropic")
+    fn a_shipped_level_resolves_to_the_candidates_of_its_document() {
+        let (catalog, _, _) = two_providers();
+        let registry = registry(vec![(
+            credential("anthropic-key", "anthropic", true),
+            CredentialKind::ApiKey,
+        )]);
+        let level = catalog.intelligence("standard-high").unwrap();
+        let resolved = resolve(&catalog, &registry, &[], "standard-high", NOW).unwrap();
+        assert_eq!(resolved.profile_id, "standard-high");
+        let got: Vec<_> = (resolved.candidates.iter())
+            .map(|c| (c.provider.clone(), c.model.clone(), c.way))
             .collect();
-        for choices in [elsewhere, without] {
-            let resolved = resolve(&catalog, &registry, &choices, &[], "internal", NOW).unwrap();
-            let providers: Vec<_> = resolved.candidates.iter().map(|c| &c.provider).collect();
-            assert_eq!(providers, ["openai"]);
-        }
-    }
-
-    #[test]
-    fn a_profile_whose_candidates_all_lack_a_model_choice_is_no_candidate() {
-        let (catalog, registry, _) = two_providers();
-        assert_eq!(
-            resolve(&catalog, &registry, &[], &[], "internal", NOW).unwrap_err(),
-            Reason::NoCandidate
-        );
+        let stated: Vec<_> = (level.candidates.iter())
+            .map(|c| (c.provider.clone(), c.model.clone(), Way::Api))
+            .collect();
+        assert_eq!(got, stated);
+        assert!(!got.is_empty());
     }
 
     #[test]
@@ -1122,8 +1049,7 @@ mod resolve {
         ] {
             for cooldown in [0, NOW + 30_000] {
                 let seen = [observation(&login, state, NOW + 60_000, cooldown)];
-                let resolved =
-                    resolve(&catalog, &registry, &choices(), &seen, "internal", NOW).unwrap();
+                let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
                 assert_eq!(
                     resolved.candidates.len(),
                     1,
@@ -1132,8 +1058,7 @@ mod resolve {
                 assert_eq!(resolved.candidates[0].provider, "openai");
             }
             let seen = [observation(&login, state, NOW + 60_000, NOW + 30_000)];
-            let resolved =
-                resolve(&catalog, &registry, &choices(), &seen, "internal", NOW).unwrap();
+            let resolved = resolve(&catalog, &registry, &seen, "internal", NOW).unwrap();
             assert_eq!(resolved.candidates.len(), 1, "{state:?}");
             assert_eq!(resolved.candidates[0].provider, "openai");
         }
@@ -1143,8 +1068,7 @@ mod resolve {
             NOW + 60_000,
             0,
         )];
-        let resolved =
-            resolve(&catalog, &registry, &choices(), &available, "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &available, "internal", NOW).unwrap();
         assert_eq!(resolved.candidates[0].provider, "anthropic");
     }
 
@@ -1157,8 +1081,7 @@ mod resolve {
         let (catalog, registry, login) = two_providers();
         let lapsed = observation(&login, Availability::QuotaUnavailable, NOW, NOW + 30_000);
         for seen in [lapsed, lapsed_without_cooldown(&login)] {
-            let resolved =
-                resolve(&catalog, &registry, &choices(), &[seen], "internal", NOW).unwrap();
+            let resolved = resolve(&catalog, &registry, &[seen], "internal", NOW).unwrap();
             assert_eq!(resolved.candidates[0].provider, "anthropic");
         }
     }
@@ -1167,7 +1090,7 @@ mod resolve {
     fn missing_profile_and_profile_without_usable_credentials_are_no_candidate() {
         let (catalog, usable, _) = two_providers();
         assert_eq!(
-            resolve(&catalog, &usable, &choices(), &[], "nope", NOW).unwrap_err(),
+            resolve(&catalog, &usable, &[], "nope", NOW).unwrap_err(),
             Reason::NoCandidate
         );
         let disabled = registry(vec![
@@ -1181,20 +1104,17 @@ mod resolve {
             ),
         ]);
         assert_eq!(
-            resolve(&catalog, &disabled, &choices(), &[], "internal", NOW).unwrap_err(),
+            resolve(&catalog, &disabled, &[], "internal", NOW).unwrap_err(),
             Reason::NoCandidate
         );
     }
 
     #[test]
     fn login_candidate_whose_only_harness_is_gemini_is_dropped() {
-        let catalog = catalog(vec![(
-            "internal",
-            vec![
-                candidate("g", "google", &["gemini"]),
-                candidate("o", "openai", &["codex", "gemini"]),
-            ],
-        )]);
+        let catalog = snapshot(&[
+            ("google", "default", &["gemini"]),
+            ("openai", "default", &["codex", "gemini"]),
+        ]);
         let registry = registry(vec![
             (
                 credential("google-login", "google", true),
@@ -1205,79 +1125,29 @@ mod resolve {
                 CredentialKind::SubscriptionLogin,
             ),
         ]);
-        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
+        let resolved = resolve(&catalog, &registry, &[], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates.len(), 1);
         assert_eq!(resolved.candidates[0].provider, "openai");
         assert_eq!(resolved.candidates[0].harness.as_deref(), Some("codex"));
     }
 
     #[test]
-    fn claude_code_in_the_catalog_resolves_to_the_claude_harness() {
-        let catalog = catalog(vec![(
-            "internal",
-            vec![
-                candidate("a", "anthropic", &["gemini", "claude-code"]),
-                candidate("c", "claude-direct", &["claude"]),
-            ],
-        )]);
-        let registry = registry(vec![
-            (
-                credential("a-login", "anthropic", true),
-                CredentialKind::SubscriptionLogin,
-            ),
-            (
-                credential("c-login", "claude-direct", true),
-                CredentialKind::SubscriptionLogin,
-            ),
-        ]);
-        let resolved = resolve(&catalog, &registry, &choices(), &[], "internal", NOW).unwrap();
-        let harnesses: Vec<_> = resolved
-            .candidates
-            .iter()
-            .map(|c| c.harness.as_deref())
-            .collect();
-        assert_eq!(harnesses, vec![Some("claude"), Some("claude")]);
-    }
-
-    #[test]
     fn recent_observation_older_than_the_policy_age_without_cooldown_does_not_skip() {
-        let (mut catalog_value, registry, login) =
-            (two_providers().0, two_providers().1, two_providers().2);
-        let mut raw = catalog_value.artifact().catalog.clone();
-        raw.intelligence[0].selection_policy = Some(
-            serde_json::from_value(serde_json::json!({
-                "schema_version":1,"fallback_on":[],"allow_unknown_availability":true,
-                "observation_max_age_ms":1000,"max_output_tokens":1000,"max_attempts":2,
-                "max_lineage_elapsed_ms":60000,"required_capabilities":[],
-                "budget":{"max_cost_microunits":null,"currency":null,"require_complete_accounting":false,
-                    "require_hard_cost_enforcement":false,"unknown_cost":"deny"}
-            }))
-            .unwrap(),
-        );
-        let instructions = catalog_value.artifact().instructions.clone();
-        catalog_value = aq_profiles::validate(raw, instructions).unwrap();
+        let (_, registry, login) = two_providers();
+        // The level states its own observation age, over the default.
+        let catalog = snapshot_with(&TWO, &["observation_max_age_ms: 1000"]);
         let mut old = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, 0);
         old.received_at_ms = NOW - 5_000;
-        let resolved = resolve(
-            &catalog_value,
-            &registry,
-            &choices(),
-            &[old.clone()],
-            "internal",
-            NOW,
-        )
-        .unwrap();
+        let resolved = resolve(&catalog, &registry, &[old.clone()], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates[0].provider, "anthropic");
         old.received_at_ms = NOW - 500;
-        let resolved = resolve(
-            &catalog_value,
-            &registry,
-            &choices(),
-            &[old],
-            "internal",
-            NOW,
-        )
-        .unwrap();
+        let resolved = resolve(&catalog, &registry, &[old], "internal", NOW).unwrap();
+        assert_eq!(resolved.candidates[0].provider, "openai");
+        // Without the override the default age (30 s) still covers it.
+        let (catalog, _, _) = two_providers();
+        let mut old = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, 0);
+        old.received_at_ms = NOW - 5_000;
+        let resolved = resolve(&catalog, &registry, &[old], "internal", NOW).unwrap();
         assert_eq!(resolved.candidates[0].provider, "openai");
     }
 }
@@ -1585,31 +1455,21 @@ mod service {
         id
     }
 
-    /// Activates a catalog whose profile `internal` lists openai, then
-    /// anthropic, and makes it the internal work default.
+    /// Saves the level `internal` with `rows` as the owner would.
+    async fn save_level(pool: &PgPool, rows: &[resolve::Row<'_>]) {
+        let document = resolve::level("internal", rows, &[]);
+        let kind = aq_profiles::roles::Kind::Intelligence;
+        crate::common::roles::save(pool, user(pool).await, kind, "internal", &document).await;
+    }
+
+    /// Adds the level `internal`, listing openai, then anthropic, to the
+    /// active roles and profiles and makes it the internal work default.
     async fn configure(pool: &PgPool) {
-        let catalog = resolve::catalog(vec![(
-            "internal",
-            vec![
-                resolve::candidate("o", "openai", &["codex"]),
-                resolve::candidate("a", "anthropic", &["claude-code"]),
-            ],
-        )]);
-        sqlx::query(
-            "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
-             VALUES($1,$2,$3,1)",
-        )
-        .bind(catalog.digest())
-        .bind(catalog.canonical_bytes().unwrap())
-        .bind(user(pool).await)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-            .bind(catalog.digest())
-            .execute(pool)
-            .await
-            .unwrap();
+        let rows: [resolve::Row; 2] = [
+            ("openai", "low", &["codex"]),
+            ("anthropic", "high", &["claude"]),
+        ];
+        save_level(pool, &rows).await;
         sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
             .bind(json!({"default_profile_id": "internal", "overrides": {}}))
             .execute(pool)
@@ -1633,8 +1493,6 @@ mod service {
     struct Fixture {
         _db: TestDb,
         _dir: tempfile::TempDir,
-        /// The Settings model choices file the service reads.
-        preferences: std::path::PathBuf,
         pool: PgPool,
         work: InternalWork,
         openai: Arc<std::sync::Mutex<fake::Seen>>,
@@ -1648,8 +1506,6 @@ mod service {
         configure(&pool).await;
         let dir = tempfile::tempdir().unwrap();
         let secret = secret_file(dir.path(), 0o600);
-        let preferences = dir.path().join("models.json");
-        std::fs::write(&preferences, json!(resolve::choices()).to_string()).unwrap();
         let (openai_url, openai) = fake::serve(200, fake::completed(openai)).await;
         let (anthropic_url, anthropic) = fake::serve(200, fake::completed(anthropic)).await;
         let config = InternalWorkConfig {
@@ -1669,13 +1525,11 @@ mod service {
             aq_server::system_clock(),
             Some(&config),
             Some(registry(kind)),
-            Some(preferences.clone()),
         )
         .unwrap();
         Fixture {
             _db: db,
             _dir: dir,
-            preferences,
             pool,
             work,
             openai,
@@ -1853,11 +1707,28 @@ mod service {
         assert_eq!(provider, "openai");
     }
 
+    /// A purpose whose stored level no longer exists runs on the default;
+    /// when the default's level is gone too the task fails naming it.
     #[tokio::test]
-    async fn a_profile_without_a_usable_model_choice_fails_no_candidate_naming_the_profile() {
+    async fn a_missing_level_falls_back_to_the_default_and_a_missing_default_is_named() {
         let f = fixture(SMALL, LARGE, CredentialKind::ApiKey).await;
-        // Settings read the choices afresh: none is offered any more.
-        std::fs::write(&f.preferences, "[]").unwrap();
+        let _stop = start(&f.work);
+        let set = |document: Value| {
+            sqlx::query("UPDATE internal_work_settings SET document=$1 WHERE singleton")
+                .bind(document)
+                .execute(&f.pool)
+        };
+        set(json!({"default_profile_id": "internal",
+            "overrides": {"routing_classification": "gone"}}))
+        .await
+        .unwrap();
+        let (_, provider, _) = answered(f.work.run(request(true)).await.unwrap());
+        assert_eq!(provider, "openai");
+        let asked = f.openai.lock().unwrap().bodies.len();
+
+        set(json!({"default_profile_id": "gone", "overrides": {}}))
+            .await
+            .unwrap();
         let id = f.work.submit(request(true)).await.unwrap();
         match wait(&f.work, id).await {
             Outcome::Failed {
@@ -1866,12 +1737,25 @@ mod service {
                 attempts,
             } => {
                 assert_eq!(reason, Reason::NoCandidate);
-                assert!(detail.contains("\"internal\""), "{detail}");
+                assert!(detail.contains("\"gone\""), "{detail}");
                 assert!(attempts.is_empty());
             }
             answered => panic!("expected a failure, got {answered:?}"),
         }
-        assert!(f.openai.lock().unwrap().bodies.is_empty());
+        // An override naming no level is no candidate, by name.
+        let overridden = Request {
+            profile_override: Some("nowhere".into()),
+            ..request(true)
+        };
+        let id = f.work.submit(overridden).await.unwrap();
+        match wait(&f.work, id).await {
+            Outcome::Failed { reason, detail, .. } => {
+                assert_eq!(reason, Reason::NoCandidate);
+                assert!(detail.contains("\"nowhere\""), "{detail}");
+            }
+            answered => panic!("expected a failure, got {answered:?}"),
+        }
+        assert_eq!(f.openai.lock().unwrap().bodies.len(), asked);
     }
 
     #[tokio::test]
@@ -1940,8 +1824,7 @@ mod service {
         };
         let registry = Some(registry(CredentialKind::ApiKey));
         let clock = aq_server::system_clock();
-        let preferences = Some(f.preferences.clone());
-        InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap()
+        InternalWork::new(f.pool.clone(), clock, Some(&config), registry).unwrap()
     }
 
     /// The loop stops a provider that never answers at the candidate budget
@@ -2169,9 +2052,7 @@ mod service {
         };
         let registry = Some(registry(CredentialKind::ApiKey));
         let clock = aq_server::system_clock();
-        let preferences = Some(f.preferences.clone());
-        let disabled =
-            InternalWork::new(f.pool.clone(), clock, Some(&config), registry, preferences).unwrap();
+        let disabled = InternalWork::new(f.pool.clone(), clock, Some(&config), registry).unwrap();
         let _stop = start(&disabled);
         let short = Request {
             deadline_ms: 1_000,
@@ -2223,27 +2104,9 @@ mod service {
         }
     }
 
-    /// A second active catalog whose profile `internal` lists only anthropic.
+    /// The level `internal` saved again, listing only anthropic.
     async fn configure_login_only(pool: &PgPool) {
-        let catalog = resolve::catalog(vec![(
-            "internal",
-            vec![resolve::candidate("a", "anthropic", &["claude-code"])],
-        )]);
-        sqlx::query(
-            "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
-             VALUES($1,$2,$3,1)",
-        )
-        .bind(catalog.digest())
-        .bind(catalog.canonical_bytes().unwrap())
-        .bind(user(pool).await)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-            .bind(catalog.digest())
-            .execute(pool)
-            .await
-            .unwrap();
+        save_level(pool, &[("anthropic", "high", &["claude"])]).await;
     }
 
     #[tokio::test]
@@ -2319,7 +2182,7 @@ enabled=true
         ))
         .unwrap();
         let clock = Arc::new(Utc::now);
-        let work = InternalWork::new(db.pool().await, clock.clone(), None, None, None).unwrap();
+        let work = InternalWork::new(db.pool().await, clock.clone(), None, None).unwrap();
         aq_server::build_admin_router(AppState {
             internal_work: work,
             identity: verifier_from_config(&config.auth, reqwest::Client::new()),
@@ -2684,7 +2547,6 @@ mod escalation {
             Arc::new(move || now.load(Ordering::SeqCst)),
             None,
             None,
-            Arc::new(Vec::new),
         )
         .unwrap()
         .notify_supervisor(notify);
@@ -2764,14 +2626,8 @@ mod escalation {
             poll_ms: 20,
             enabled: true,
         };
-        let work = InternalWork::new(
-            pool.clone(),
-            aq_server::system_clock(),
-            Some(&config),
-            None,
-            None,
-        )
-        .unwrap();
+        let work = InternalWork::new(pool.clone(), aq_server::system_clock(), Some(&config), None)
+            .unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         let mut about_project = loud();
         about_project.affected.project_id = Some(project);

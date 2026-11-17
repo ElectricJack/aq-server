@@ -4,16 +4,24 @@ docker-local sandbox on the desktop node (aq-ms1 stack).
 
 Ported from aq-worker scripts/e0-qual/definitions.py (the MS0/I0 Codex
 qualification that ran end to end). Every value is a pinned observed artifact
-(program SHA-256 on this host, public bodies printed by the pinned aq-worker),
-a measured value (three bounded Claude calls, see `measure` in ms1-demo.sh) or
-an operator decision recorded below. Nothing here admits or grants anything:
+(program SHA-256 on this host, public bodies printed by the pinned aq-worker)
+or an operator decision recorded below. Nothing here admits or grants anything:
 aq-server and aq-worker re-check all of it.
 
+Roles, intelligence profiles and execution profiles are not built here (spec
+0014): the server installs its default documents at start and they are edited
+in Settings. No model is measured or listed; a worker runs the model an offer
+names. Any other project is bound with scripts/bind-project.py.
+
 Commands (paths come from the environment set by scripts/ms1-demo.sh):
-  source     central aq-git: sync main, retain the base, record the handle
-  configure  write intelligence.toml ([intelligence] + [profiled_execution]),
-             the worker bundle and catalog revision 2
-  apply      activate catalog revision 2 and project binding revision 2
+  source       central aq-git: sync main, retain the base, record the handle
+  configure    write intelligence.toml ([intelligence] + [profiled_execution])
+               and the worker bundle
+  apply        install the intelligence registry and save the scratch
+               project's binding (default role and level, ceilings, nodes)
+  observe      owner availability observation for the Claude subscription
+  sync         (D1) central fetch of the project's remote main
+  publication  (D1) delivery evidence and the remote's main
 No credential bytes are read or written by this script.
 """
 import hashlib
@@ -35,10 +43,9 @@ PROJECT = "e0000000-0000-4000-8000-000000000002"
 REPOSITORY = "e0000000-0000-4000-8000-000000000003"
 WORKSPACE = "e0000000-0000-4000-8000-000000000001"
 ENVIRONMENT = "aq-ms1-docker-local-claude"
-AGENT = "ms1-implementer@2"
-MODULE = "ms1-bounded-edit@1"
-INTELLIGENCE = "ms1-claude-sonnet@1"
-EXECUTION = "ms1-docker-local-15m@2"
+# The scratch project's defaults; both are shipped Settings documents.
+DEFAULT_ROLE = os.environ.get("AQ_MS1_DEFAULT_ROLE", "developer")
+DEFAULT_INTELLIGENCE = os.environ.get("AQ_MS1_DEFAULT_INTELLIGENCE", "standard-high")
 CREDENTIAL = "owner-claude-subscription"
 # Bump (AQ_MS1_CREDENTIAL_REVISION) when the credential state changes, e.g. the
 # base file staged by import-login after the registry was first installed.
@@ -50,8 +57,6 @@ HARNESS = "claude"
 CLI_VERSION = "2.1.318"
 PROVIDER = "anthropic"
 MODEL = "claude-sonnet-5-5"
-NATIVE_REASONING = "default"
-REASONING_REFERENCE = "claude-default@1"
 PROFILE = "claude-2.1.318-docker-local-result-local-v1"
 CONTEXT_BYTES = 65536
 MAX_OUTPUT_TOKENS = 32000
@@ -63,11 +68,6 @@ CLIENT_RESERVATION = 64 * 1024 * 1024
 # aq-git native reservation: 2 * max_expanded + max_bundle + 1 MiB (aq-worker source.rs).
 SOURCE_DISK_BYTES = 2 * 10737418240 + 1073741824 + 1024 * 1024
 DISK_BYTES = 24 * 1024 * 1024 * 1024
-# Measured: Claude Code 2.1.318 adds ~19.5k tokens of its own system prompt and
-# tools; 32768 covers it with margin (each measured call is checked below).
-FIXED_OVERHEAD_TOKENS = 32768
-TOKENS_PER_BYTE = 1
-QUALIFICATION_TTL_MS = 86400000
 # Bump on every content change: the server refuses changed bodies at a version.
 # AQ_MS1_REVISION (default 1) bumps all three together after any pinned change
 # (for example a rebuilt aq-worker) once an offer has retained the bodies.
@@ -76,9 +76,6 @@ _REV = int(os.environ.get("AQ_MS1_REVISION") or (_REV_FILE.read_text().strip() i
 PROFILED_REVISION = _REV
 INTELLIGENCE_REVISION = _REV + 1
 DEFINITION_VERSION = str(_REV)
-# Catalog identities are immutable too: version the profiles with the revision.
-AGENT = f"ms1-implementer@{_REV}"
-EXECUTION = f"ms1-docker-local-15m@{_REV}"
 LONG_CONTRACT = {"id": "aq.admission.preparation-registry-refresh-v1-contract.interactive-long-v1", "version": "1",
                  "digest": "bd9abe1d9ef02970beb7946c007418de90a6066a146698ac0c075da1c1f2a28f"}
 TERMINAL_CONTRACT = {"id": "aq.phase-terminal.registry-refresh-v1.contract", "version": "1",
@@ -231,40 +228,6 @@ def tmux_pin():
             "bytes": len(data)}
 
 
-def measured():
-    """Three bounded Claude calls in the sandbox (stream-json result events)."""
-    rows = []
-    windows = set()
-    directory = BASE / "measure"
-    for call in ("minimal", "mixed", "adversarial"):
-        prompt = (directory / f"{call}.txt").read_bytes()
-        result = None
-        for line in (directory / f"{call}.jsonl").read_text().splitlines():
-            event = json.loads(line)
-            if event.get("type") == "result":
-                result = event
-        require(result is not None and result.get("subtype") == "success" and not result.get("is_error"),
-                f"measurement {call} incomplete")
-        usage = result["usage"]
-        total = usage["input_tokens"] + usage["cache_creation_input_tokens"] + usage["cache_read_input_tokens"]
-        models = result["modelUsage"]
-        require(list(models) == [MODEL], f"measurement {call} is not for {MODEL}")
-        windows.add(models[MODEL]["contextWindow"])
-        bound = len(prompt) * TOKENS_PER_BYTE + FIXED_OVERHEAD_TOKENS
-        require(total <= bound, f"measured {call} exceeds the counting bound")
-        rows.append({"call": call, "prompt_utf8_bytes": len(prompt), "prompt_sha256": sha(prompt),
-                     "input_tokens": usage["input_tokens"],
-                     "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
-                     "cache_read_input_tokens": usage["cache_read_input_tokens"], "total_input_tokens": total,
-                     "output_tokens": usage["output_tokens"], "bound_tokens": bound,
-                     "session_id": result.get("session_id")})
-    require(len(windows) == 1, "measured context window is not a single value")
-    capacity = windows.pop()
-    require(FIXED_OVERHEAD_TOKENS < capacity <= 16777216, "measured capacity out of range")
-    observed = int((directory / "observed_at_ms").read_text().strip())
-    return rows, capacity, observed
-
-
 def build():
     seed = json.loads((STATE / "seed.json").read_text())
     src = json.loads((STATE / "ms1-source.json").read_text())
@@ -339,34 +302,11 @@ def build():
                        "no API key",
         "secret": "long-lived setup-token delivered by the server material owner, env-only in the sandbox"},
         CREDENTIAL_VERSION)
-    rows, capacity, observed = measured()
-    rendering = "utf8_double_newline_v1"
-    counting = b.add("aq.ms1-counting", {
-        "schema_version": 1, "adapter": adapter, "runtime": runtime, "qualification": qualification,
-        "harness_qualification": harness_q, "scope": scope, "rendering": rendering,
-        "maximum_tokens_per_utf8_byte": TOKENS_PER_BYTE, "fixed_overhead_tokens": FIXED_OVERHEAD_TOKENS,
-        "basis": "measured: three bounded Claude Code 2.1.318 print-mode calls in the docker-local sandbox; total "
-                 "input (input + cache creation + cache read) includes Claude Code's own prompt and tools; every "
-                 "call satisfies total <= prompt_utf8_bytes * 1 + 32768",
-        "measurements": rows}, DEFINITION_VERSION)
-    capacity_ref = b.add("aq.ms1-capacity", {
-        "schema_version": 1, "adapter": adapter, "scope": scope, "capacity_kind": "qualified_model_window",
-        "capacity_tokens": capacity, "basis": "measured: modelUsage.contextWindow of each of the three calls"},
-        DEFINITION_VERSION)
-    fact = {"schema_version": 1,
-            "subject": {"runtime": runtime, "runtime_qualification": qualification, "harness": HARNESS,
-                        "cli_version": CLI_VERSION, "adapter": adapter, "environment": environment,
-                        "harness_qualification": harness_q, "provider": PROVIDER, "model": MODEL,
-                        "native_reasoning": NATIVE_REASONING,
-                        "reasoning_configuration_reference": REASONING_REFERENCE, "credential_profile": credential,
-                        "credential_revision": CREDENTIAL_REVISION, "account_reference": ACCOUNT,
-                        "endpoint_reference": ENDPOINT},
-            "rendering": rendering, "maximum_tokens_per_utf8_byte": TOKENS_PER_BYTE,
-            "fixed_overhead_tokens": FIXED_OVERHEAD_TOKENS, "counting_evidence": counting,
-            "capacity_kind": "qualified_model_window", "capacity_tokens": capacity, "capacity_evidence": capacity_ref,
-            "observed_at_ms": observed, "expires_at_ms": observed + QUALIFICATION_TTL_MS}
-    fact_digest = sha(canonical(fact))
-    renderer = {"id": f"aq.qualified-context/{fact_digest}", "version": "1", "digest": fact_digest}
+    # The startup renderer is one constant rule (aq-server context_budget.rs
+    # `Renderer::rule`); no model is measured. The worker bundle still names it
+    # until the worker drops its renderer pin (spec 0014 §8).
+    rendering = canonical({"rendering": "utf8_double_newline_v1", "schema_version": 1})
+    renderer = {"id": f"aq.startup-renderer/{sha(rendering)}", "version": "1", "digest": sha(rendering)}
     source_profile = b.add("aq.ms1-default-git-profile", {
         "schema_version": 1, "checkout_profile": "no_attributes_v1", "max_expanded_bytes": 10737418240,
         "max_bundle_bytes": 1073741824, "source_disk_bytes": SOURCE_DISK_BYTES,
@@ -414,8 +354,6 @@ def build():
     require(len(definitions) <= 64 and max(sizes) <= 2 * 1024 * 1024, "definition bounds")
     harness = {"harness": HARNESS, "cli_version": CLI_VERSION, "adapter": adapter, "environment": environment,
                "qualification": harness_q,
-               "models": [{"provider": PROVIDER, "model": MODEL, "reasoning_configuration_reference": REASONING_REFERENCE,
-                           "native_reasoning": NATIVE_REASONING}],
                "capabilities": CAPABILITIES,
                "limits": {"context_bytes": CONTEXT_BYTES, "max_output_tokens": MAX_OUTPUT_TOKENS,
                           "wall_time_ms": EXECUTION_MS, "memory_bytes": MEMORY_BYTES, "cpu_millis": CPU_MILLIS,
@@ -429,7 +367,7 @@ def build():
                                         {"kind": "immutable",
                                          "object": {"format": src["base"]["algorithm"], "hex": src["base"]["hex"]}},
                               "retention_handle": src["retention_handle"]}],
-                "context_qualifications": [fact], "definition_bodies": definitions}
+                "definition_bodies": definitions}
     intelligence = {"revision": INTELLIGENCE_REVISION, "material_store": "/var/lib/aq/login-material",
                     "credentials": [{
                         "kind": "subscription-login",
@@ -468,89 +406,29 @@ def build():
     files = {"native.json": canonical(native), "adapter.json": canonical(placeholder),
              "composite.json": canonical(composite), "inventory.json": canonical(presence)}
     return dict(definitions=definitions, profiled=profiled, intelligence=intelligence, files=files, policy=policy,
-                permissions=permissions, fact=fact, renderer=renderer, node_id=node_id, seed=seed, allowed=allowed)
+                permissions=permissions, renderer=renderer, node_id=node_id, seed=seed, allowed=allowed)
 
 
-def catalog_rev2(built):
-    root = Path(__file__).resolve().parent
-    artifact = json.loads((root / "dev-catalog.json").read_text())
-    catalog = artifact["catalog"]
-    module_id, module_version = MODULE.split("@")
-    catalog["modules"].append({
-        "id": module_id, "version": int(module_version), "kind": "capability",
-        "purpose": "Make one bounded owner-requested change in the scratch repository",
-        "instruction": f"instructions/{module_id}.md", "delivery": "startup", "required": True,
-        "dependencies": [], "required_adapters": [],
-        "requirements": [{"permission": p, "required": True} for p in built["permissions"]]})
-    artifact["instructions"][MODULE] = (
-        "# Bounded scratch edit\n\nChange only what the assignment asks for, inside the authorized worktree of the "
-        "owner's scratch repository (the current directory). You run inside an isolated sandbox: edit files with "
-        "your tools and run focused checks. Do not commit or push; the runner retains your worktree changes "
-        "centrally. Do not try to submit an AQ result yourself: AQ_AGENT_RESULT_COMMAND is not available in this "
-        "sandbox, and the runner submits your final message as the result claim. End with one line: "
-        "Changes: ...; Checks: exact commands and outcomes; Limits: ...\n")
-    agent_id, agent_version = AGENT.split("@")
-    catalog["agents"].append({
-        "id": agent_id, "version": int(agent_version),
-        "role": "Implement the exact scoped scratch assignment and report evidence.", "behaviors": [],
-        "capabilities": [MODULE], "intelligence": INTELLIGENCE, "execution": EXECUTION, "allowed_overrides": []})
-    intel_id, intel_version = INTELLIGENCE.split("@")
-    catalog["intelligence"].append({
-        "id": intel_id, "version": int(intel_version),
-        "candidates": [{"id": "owner-claude-sonnet", "provider": PROVIDER, "model": MODEL,
-                        "reasoning_configuration_reference": REASONING_REFERENCE, "harnesses": [HARNESS]}],
-        "selection_policy": {"schema_version": 1, "fallback_on": [], "allow_unknown_availability": False,
-                             "observation_max_age_ms": 30000, "max_output_tokens": MAX_OUTPUT_TOKENS,
-                             "max_attempts": 2, "max_lineage_elapsed_ms": 3600000,
-                             "required_capabilities": CAPABILITIES,
-                             "budget": {"max_cost_microunits": None, "currency": None,
-                                        "require_complete_accounting": False,
-                                        "require_hard_cost_enforcement": False, "unknown_cost": "allow_bounded"}}})
-    exec_id, exec_version = EXECUTION.split("@")
-    catalog["execution"].append({
-        "id": exec_id, "version": int(exec_version), "harnesses": [HARNESS], "environments": [ENVIRONMENT],
-        "context_limit_bytes": CONTEXT_BYTES, "permissions": built["permissions"],
-        "credential_profile_references": [f"{CREDENTIAL}@{CREDENTIAL_VERSION}"],
-        # The harness always runs inside the docker-local sandbox (C6a container mode).
-        "confinement": {"permit_container": True, "require_native": False, "require_container": True}})
-    artifact["identities"] = identities(catalog, artifact["instructions"])
-    return canonical(artifact)
-
-
-def identities(catalog, instructions):
-    out = {}
-    for m in catalog["modules"]:
-        m = dict(m)
-        for key in ("dependencies", "requirements", "required_adapters"):
-            m.setdefault(key, [])
-        key = f"{m['id']}@{m['version']}"
-        out["module:" + key] = sha(canonical({"metadata": m, "markdown": instructions[key]}))
-    for a in catalog["agents"]:
-        a = dict(a)
-        a.setdefault("allowed_overrides", [])
-        out[f"agent:{a['id']}@{a['version']}"] = sha(canonical(a))
-    for kind in ("intelligence", "execution"):
-        for entry in catalog[kind]:
-            out[f"{kind}:{entry['id']}@{entry['version']}"] = sha(canonical(entry))
-    return out
-
-
-def binding_rev(built, catalog_digest, current):
+def binding_rev(built, current):
     seed = built["seed"]
     return dict(schema_version=1, project_id=PROJECT, name=current.get("name", "E0 local development scratch"),
                 enabled=True, repository_id=REPOSITORY, repository_binding_generation=1,
                 repository_adapter_reference="aq.git.configured", graph_adapter_reference="aq.graph.configured",
-                graph_workspace_id=seed["workspace_id"], catalog_digest=catalog_digest,
-                allowed_agent_profiles=[AGENT], allowed_intelligence_profiles=[INTELLIGENCE],
-                allowed_execution_profiles=[EXECUTION], allowed_node_ids=built["allowed"], allowed_worker_groups=[],
+                graph_workspace_id=seed["workspace_id"],
+                allowed_node_ids=built["allowed"], allowed_worker_groups=[],
                 allowed_environments=[ENVIRONMENT],
                 policy=dict(identity=built["policy"]["id"], revision="1", digest=built["policy"]["digest"]),
                 context=[], ceilings=dict(permissions=built["permissions"], context_bytes=CONTEXT_BYTES,
                                           wall_time_ms=EXECUTION_MS, memory_bytes=MEMORY_BYTES, cpu_millis=CPU_MILLIS,
                                           process_limit=PROCESS_LIMIT, cost_limit_microunits=None, currency=None,
                                           require_hard_cost_enforcement=False),
-                # The server omits a true flag from the binding it returns, so only false is sent:
-                # an explicit true would differ from the current binding on every apply.
+                # The server omits a default from the binding it returns (a true flag, the
+                # default role and level), so only a non-default is sent: an explicit default
+                # would differ from the current binding on every apply.
+                **{key: value for key, value, default in (
+                    ("default_role", DEFAULT_ROLE, "developer"),
+                    ("default_intelligence", DEFAULT_INTELLIGENCE, "standard-high")) if value != default},
+                **({"role_notes": current["role_notes"]} if current.get("role_notes") else {}),
                 **({} if ENROLLED_NODES else {"allow_enrolled_nodes": False}),
                 **({"publication": PUBLICATION} if D1 else {}))
 
@@ -581,9 +459,7 @@ def configure():
     private_write(target, toml)
     for name, text in built["files"].items():
         private_write(NODE / "config" / name, text)
-    catalog = catalog_rev2(built)
-    private_write(BASE / "catalog-rev2.json", catalog)
-    public = dict(catalog_rev2_digest=sha(catalog), intelligence_sha256=sha(toml),
+    public = dict(intelligence_sha256=sha(toml),
                   definitions=[{"id": d["artifact"]["id"], "digest": d["artifact"]["digest"]}
                                for d in built["definitions"]],
                   renderer=built["renderer"], policy=built["policy"], node_id=built["node_id"],
@@ -593,28 +469,21 @@ def configure():
 
 
 def apply():
-    configured = json.loads((BASE / "configure.json").read_text())
-    catalog = (BASE / "catalog-rev2.json").read_text()
-    digest = sha(catalog)
-    require(digest == configured["catalog_rev2_digest"], "catalog changed since configure")
-    active = http(SERVER + "/api/profiles/catalogs")
-    if active.get("active_digest") != digest:
-        http(SERVER + "/api/profiles/catalogs/activate", dict(
-            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"ms1-catalog-{digest}")),
-            expected_revision=active.get("revision"), artifact_json=catalog))
     # The intelligence registry is installed from the vault by an owner request.
     http(SERVER + "/api/intelligence/register", {})
     built = build()
     current = http(SERVER + "/api/projects/" + PROJECT)
     require(current is not None, "seed the project first")
-    binding = binding_rev(built, digest, current.get("binding", {}))
+    for kind, name in (("roles", DEFAULT_ROLE), ("intelligence-profiles", DEFAULT_INTELLIGENCE)):
+        require(http(f"{SERVER}/api/settings/{kind}/{name}") is not None, f"no {kind} document {name!r} exists")
+    binding = binding_rev(built, current.get("binding", {}))
     if current.get("binding") != binding:
         http(SERVER + "/api/projects/" + PROJECT, dict(
             operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "ms1-binding-" + sha(canonical(binding)))),
             expected_revision=current.get("revision"), binding=binding))
     after = http(SERVER + "/api/projects/" + PROJECT)
-    catalogs = http(SERVER + "/api/profiles/catalogs")
-    return dict(catalog={k: catalogs.get(k) for k in ("active_digest", "revision")},
+    snapshot = http(SERVER + "/api/settings/profiles/snapshot")
+    return dict(profiles={k: snapshot.get(k) for k in ("active_digest", "revision")},
                 binding_revision=after.get("revision"))
 
 

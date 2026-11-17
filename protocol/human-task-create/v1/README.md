@@ -10,9 +10,11 @@ execution attempt, worker assignment or launch is manufactured.
   title cap), nonblank and no controls; body 32768 UTF-8 bytes; acceptance 8192 UTF-8 bytes;
   body and acceptance cannot contain NUL;
   unique labels at most 16, each nonblank/no controls/at most 128 UTF-8 bytes.
-  Optional priority is 1–300; profile_hint, intelligence_hint and task_type
+  Optional priority is 1–300; role, intelligence_hint and task_type
   are nonblank/no controls/at most 128 UTF-8 bytes. They are stored under
-  aq:priority, aq:profile_hint, aq:intelligence_hint and aq:task_type metadata.
+  aq:priority, aq:role, aq:intelligence_hint and aq:task_type metadata.
+  role must be an existing role (spec 0014 §5.5): an unknown one is refused
+  with 400 and a message naming it and listing the roles that exist.
   Omitted fields retain the original serialization and defaults.
   Expected project revision is a positive signed 64-bit decimal string.
 - GET `/api/human/operations/{operation_id}`: pure retained status lookup. It

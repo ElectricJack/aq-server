@@ -393,12 +393,24 @@ mod tests {
     use super::*;
     use aq_selection::{ObservationScope, ObservationSource};
     fn fixture() -> (ResolvedSelection, AvailabilityObservation) {
-        let v: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../aq-selection/tests/fixtures/installed-selection-v0.1.0.json"
-        ))
+        // A sealed selection of one concrete choice; only its credential
+        // scope and model matter to the availability ceiling.
+        let digest = |name: &str| aq_admission::Digest::of(name.as_bytes());
+        let reference = |id: &str| serde_json::json!({"id":id,"version":"1","digest":digest(id)});
+        let s: ResolvedSelection = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"lineage":{"project_id":Uuid::from_u128(11),"workspace_id":Uuid::from_u128(12),"task_id":Uuid::from_u128(13)},
+            "target":{"kind":"worker","node_id":Uuid::from_u128(1),"boot_id":Uuid::from_u128(14)},
+            "choice":{"candidate_id":"choice:1","profile_candidate_id":"fixture-a:model-a:high","provider":"fixture-a","model":"model-a",
+                "native_reasoning":"high","harness":"codex","cli_version":"fixture-1","adapter":reference("codex-adapter"),
+                "environment":reference("confined-worktree"),"qualification":reference("synthetic-qualification"),"failure_classifier":null,
+                "credential_profile":reference("account-a"),"account_reference":"billing-a","endpoint_reference":"endpoint-a",
+                "launch_digest":digest("launch"),"max_output_tokens":128,"estimate":null,
+                "resources":{"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,
+                    "cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}},
+            "snapshot_digest":digest("inputs"),"role_snapshot_digest":digest("roles"),"project_revision":1,"node_revision":1,
+            "registry_revision":1,"credential_revision":1,"budget_revision":1,"selected_at_ms":100,"expires_at_ms":1000,"traces":[]
+        }))
         .unwrap();
-        let s: ResolvedSelection =
-            serde_json::from_value(v["outcome"]["resolved"].clone()).unwrap();
         let o = AvailabilityObservation {
             observation_id: Uuid::new_v4(),
             scope: ObservationScope {

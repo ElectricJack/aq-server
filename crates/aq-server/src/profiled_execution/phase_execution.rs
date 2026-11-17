@@ -122,13 +122,7 @@ async fn validate_registry_replay(
 
 // Both nominal issuers consume the same bounded initial-execution request lane.
 pub(super) fn request_permit() -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
-    static REQUESTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    REQUESTS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())
+    (aq_machine_control::limits::PHASE_EXECUTIONS.enter()).ok_or_else(|| refused())
 }
 
 async fn replay_preflight(

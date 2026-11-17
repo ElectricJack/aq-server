@@ -73,19 +73,11 @@ async fn monthly_vm_budget_prices_authenticated_facts_and_refuses_placement() {
         let pool = &pool;
         let book = &book;
         async move {
-            placement::facts_in(
-                pool,
-                &Ledger { pool, book },
-                None,
-                node,
-                &"f".repeat(64),
-                "ci@1",
-                now,
-            )
-            .await
-            .unwrap()
-            .unwrap()
-            .ceiling
+            placement::facts_in(pool, &Ledger { pool, book }, None, node, None, "ci@1", now)
+                .await
+                .unwrap()
+                .unwrap()
+                .ceiling
         }
     };
     // Existing attempts without VM evidence cannot silently look free.
@@ -1352,7 +1344,7 @@ mod accounting {
                 pool: &pool,
                 book: &book,
             };
-            placement::facts_in(&pool, &ledger, None, node, &"f".repeat(64), "ci@1", NOW)
+            placement::facts_in(&pool, &ledger, None, node, None, "ci@1", NOW)
                 .await
                 .unwrap()
                 .expect("a B1-registered node has placement facts")

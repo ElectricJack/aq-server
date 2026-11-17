@@ -189,6 +189,8 @@ async fn overview_ready_owner_preserves_samples_failures_and_binding_fence() {
     ))
     .unwrap()["data"]
         .clone();
+    // `role` is AQ's projection (spec 0014 §5.5), not a Graph field.
+    node.as_object_mut().unwrap().remove("role");
     node["workspace_id"] = json!(workspace);
     node["metadata"] = json!({});
     node["version"] = json!(1);
@@ -326,6 +328,19 @@ async fn overview_workers_use_configured_threshold_and_project_association() {
         .await
         .unwrap();
     assert_eq!(worker["subject"]["id"], json!(f.node.node_id));
+    // A node the owner removed in worker settings is not listed, though stale.
+    let removed = |removed: bool| {
+        sqlx::query("WITH absent AS (INSERT INTO worker_settings(kind,id,revision) SELECT 'node',$1,1 WHERE NOT EXISTS(SELECT 1 FROM worker_settings WHERE kind='node' AND id=$1)) UPDATE worker_settings SET removed=$2 WHERE kind='node' AND id=$1")
+            .bind(f.node.node_id.to_string())
+            .bind(removed)
+            .execute(&pool)
+    };
+    removed(true).await.unwrap();
+    removed(true).await.unwrap();
+    let (_, hidden) = read(&app, "/api/v1/overview").await;
+    let attention = hidden["data"]["attention"].as_array().unwrap();
+    assert!(!attention.iter().any(|v| v["kind"] == "worker_offline"));
+    removed(false).await.unwrap();
     assert_eq!(worker["subject"]["revision"], revision);
     assert_eq!(
         worker["project"]["id"],
@@ -483,7 +498,7 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
     ));
     f.state.config = Arc::new(config);
     let pool = f.db.pool().await;
-    // The fixture node is host-native: online, but advertises no slot total.
+    // Native and sandbox nodes both use their snapshotted server slot Setting.
     sqlx::query(
         "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
     )
@@ -551,21 +566,21 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
     let (status, body) = read(&app, "/api/v1/capacity").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let data = &body["data"];
-    // Host-native online worker: slot total and idle are unknown, not zero.
+    // Counts come from Settings even without a backend advertisement.
     assert_eq!(
         data["slots"]["total"],
-        json!({"value": null, "accuracy": "unknown"})
+        json!({"value": 4, "accuracy": "exact"})
     );
     assert_eq!(
         data["slots"]["idle"],
-        json!({"value": null, "accuracy": "unknown"})
+        json!({"value": 4, "accuracy": "exact"})
     );
     assert_eq!(
         data["slots"]["occupied"],
         json!({"value": 0, "accuracy": "exact"})
     );
-    assert_eq!(data["slots"]["coverage"]["state"], "partial");
-    assert_eq!(body["coverage"]["state"], "partial");
+    assert_eq!(data["slots"]["coverage"]["state"], "complete");
+    assert_eq!(body["coverage"]["state"], "complete");
     let node = |id: uuid::Uuid, body: &Value| {
         body["data"]["nodes"]
             .as_array()
@@ -577,7 +592,7 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
     };
     let native = node(f.node.node_id, &body);
     assert_eq!(native["health"], "online");
-    assert!(native["slots"]["total"].is_null() && native["slots"]["idle"].is_null());
+    assert_eq!(native["slots"], json!({"total":2,"occupied":0,"idle":2}));
     assert!(native["backend_kind"].is_null());
     let b = node(boat, &body);
     assert_eq!(b["backend_kind"], "boat");
@@ -612,8 +627,7 @@ async fn capacity_reports_slots_eligibility_availability_and_storage() {
     assert!(!body.to_string().contains("private-capacity-canary"));
     capacity_fixture(&body);
 
-    // Placement's own refusal: above 85% used is node_disk_pressure. Revoking
-    // the host-native worker makes the slot totals exact.
+    // Disk pressure is a placement refusal; revoked nodes leave the online total.
     disk(90).await;
     sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
         .bind(f.node.node_id)

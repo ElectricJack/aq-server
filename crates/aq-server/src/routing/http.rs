@@ -1,9 +1,7 @@
 //! What the owner sees of a task's routing (spec 0011 §3, §4, §8): the `routing` object of the
 //! task work read and the route history.
-use super::{enabled, history, on_router};
-use crate::{
-    AppState, authz::RequireOwner, error::AppError, project_bindings::domain::ProjectRecord,
-};
+use super::{enabled, history};
+use crate::{AppState, authz::RequireOwner, error::AppError};
 use aq_routing::{CompactRoute, Placement};
 use axum::{
     Json, Router,
@@ -17,13 +15,13 @@ pub(crate) fn admin_routes() -> Router<AppState> {
     Router::new().route("/api/tasks/{id}/routes", get(routes))
 }
 
-/// Under the Intelligence settings, so the supervisor admin nest reaches it as well.
+/// A Settings route, so the supervisor admin nest reaches it as well.
 pub(crate) fn settings_routes() -> Router<AppState> {
     let policy = get(policy).post(switch);
-    Router::new().route("/api/settings/intelligence/routing", policy)
+    Router::new().route("/api/settings/routing", policy)
 }
 
-/// `GET /api/settings/intelligence/routing`: the switch and the routing source.
+/// `GET /api/settings/routing`: the switch and the routing source.
 async fn policy(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -50,7 +48,7 @@ struct Switch {
     enabled: bool,
 }
 
-/// `POST /api/settings/intelligence/routing` with `{enabled}`; on only while a routing
+/// `POST /api/settings/routing` with `{enabled}`; on only while a routing
 /// playbook is active.
 async fn switch(
     State(state): State<AppState>,
@@ -93,14 +91,10 @@ fn compact(route: &CompactRoute) -> Value {
 /// ready); otherwise `unrouted` (no route, nothing held back).
 pub(crate) async fn view(
     state: &AppState,
-    record: &ProjectRecord,
     task: Uuid,
     node: &Value,
     ready_state: &str,
 ) -> Result<Option<Value>, AppError> {
-    if !on_router(state, record).await? {
-        return Ok(None);
-    }
     let pool = &state.store.pool;
     let on = enabled(pool).await?;
     let updated = node["updated_at"]

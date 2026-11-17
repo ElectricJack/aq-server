@@ -2,7 +2,6 @@
 pub use aq_project_policy as domain;
 mod external;
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_profiles::ValidatedCatalog;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -131,44 +130,6 @@ async fn list(
         json!({"items":items,"next_cursor":next,"execution":execution}),
     ))
 }
-pub(crate) async fn active_catalog(state: &AppState) -> Result<(u64, Option<String>)> {
-    let row =
-        sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(db)?;
-    Ok((
-        row.get::<i64, _>("revision") as u64,
-        row.get("active_digest"),
-    ))
-}
-pub(crate) async fn catalog(state: &AppState, digest: &str) -> Result<ValidatedCatalog> {
-    let bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(digest)
-            .fetch_optional(&state.store.pool)
-            .await
-            .map_err(db)?
-            .ok_or_else(|| conflict("catalog artifact absent"))?;
-    let c = tokio::task::spawn_blocking(move || ValidatedCatalog::from_artifact(&bytes))
-        .await
-        .map_err(|_| AppError::Internal)?
-        .map_err(|_| AppError::Internal)?;
-    if c.digest() != digest {
-        return Err(AppError::Internal);
-    }
-    Ok(c)
-}
-fn profiles(binding: &ProjectBinding, catalog: &ValidatedCatalog) -> Result<()> {
-    aq_profiles::validate_project_profiles(
-        catalog,
-        &binding.allowed_agent_profiles,
-        &binding.allowed_intelligence_profiles,
-        &binding.allowed_execution_profiles,
-        &binding.allowed_environments,
-    )
-    .map_err(bad)
-}
 
 async fn existing_receipt(
     state: &AppState,
@@ -235,14 +196,6 @@ async fn put_request(
         .binding
         .validate(&state.config.projects)
         .map_err(|_| bad("invalid project execution policy"))?;
-    let (catalog_revision, active) = active_catalog(&state).await?;
-    if active.as_deref() != Some(request.binding.catalog_digest.as_str()) {
-        return Err(conflict("project catalog is not active"));
-    }
-    profiles(
-        &request.binding,
-        &catalog(&state, &request.binding.catalog_digest).await?,
-    )?;
     let mut nodes = request.binding.allowed_node_ids.clone();
     for group in &request.binding.allowed_worker_groups {
         nodes.extend(&state.config.projects.worker_groups[group]);
@@ -279,7 +232,7 @@ async fn put_request(
         request.operation_id,
         request.expected_revision,
         &digest,
-        Some((catalog_revision, request.binding, observation)),
+        Some((request.binding, observation)),
         false,
     )
     .await?;
@@ -340,7 +293,7 @@ async fn mutate(
     op: Uuid,
     expected: u64,
     digest: &str,
-    new: Option<(u64, ProjectBinding, BindingObservation)>,
+    new: Option<(ProjectBinding, BindingObservation)>,
     disable: bool,
 ) -> Result<Value> {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
@@ -360,21 +313,16 @@ async fn mutate(
     {
         return Err(conflict("project revision changed"));
     }
-    let fresh_observation = new.as_ref().map(|(_, _, o)| o.clone());
-    let binding = if let Some((revision, binding, _)) = new {
-        let row = sqlx::query(
-            "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        if row.get::<i64, _>("revision") as u64 != revision
-            || row.get::<Option<String>, _>("active_digest").as_deref()
-                != Some(binding.catalog_digest.as_str())
-        {
-            return Err(conflict(
-                "catalog activation changed during project validation",
-            ));
+    let fresh_observation = new.as_ref().map(|(_, o)| o.clone());
+    let binding = if let Some((binding, _)) = new {
+        // Spec 0014 §5.4: the defaults and the role notes name documents of
+        // the active role snapshot. The lock is held to commit, so a delete
+        // of one of them waits and then sees this binding.
+        let (role, level) = (&binding.default_role, &binding.default_intelligence);
+        if crate::role_settings::tables(state) {
+            aq_role_settings::check_binding(&mut tx, role, level, &binding.role_notes)
+                .await
+                .map_err(crate::role_settings::error)?;
         }
         binding
     } else {
@@ -437,6 +385,48 @@ async fn mutate(
     tx.commit().await.map_err(db)?;
     Ok(response)
 }
+/// What the bindings name in the role store; it refuses to delete these.
+pub(crate) fn role_references(
+    conn: &mut sqlx::PgConnection,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = aq_role_settings::Result<Vec<aq_role_settings::Reference>>>
+            + Send
+            + '_,
+    >,
+> {
+    use aq_profiles::roles::Kind;
+    Box::pin(async move {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "SELECT binding FROM project_execution_bindings ORDER BY project_id",
+        )
+        .fetch_all(conn)
+        .await?;
+        let mut out = Vec::new();
+        for row in rows {
+            let b: ProjectBinding =
+                serde_json::from_value(row).map_err(|_| aq_role_settings::Error::Internal)?;
+            let mut add = |kind, id: &String, what: &str| {
+                out.push(aq_role_settings::Reference {
+                    kind,
+                    id: id.clone(),
+                    by: format!("{what} project `{}`", b.name),
+                })
+            };
+            add(Kind::Role, &b.default_role, "the default role of");
+            let level = &b.default_intelligence;
+            add(
+                Kind::Intelligence,
+                level,
+                "the default intelligence profile of",
+            );
+            for role in b.role_notes.keys() {
+                add(Kind::Role, role, "given notes by");
+            }
+        }
+        Ok(out)
+    })
+}
 async fn eligibility(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -456,34 +446,40 @@ pub async fn check_eligibility(
 }
 /// Fresh current binding facts for continuing a pinned execution. This chooses
 /// no model and does not reuse an original admission observation or decision.
+/// The attempt stays on the role snapshot it launched with (spec 0014 §7.1):
+/// its role, level and execution profile are not looked up again.
 pub(crate) async fn check_execution_eligibility(
     state: &AppState,
     id: Uuid,
     request: &EligibilityRequest,
 ) -> Result<Eligibility> {
-    let routed = routed_launch(state, id, request).await?;
-    check_eligibility_current(state, id, routed.as_ref().unwrap_or(request), true).await
+    check_eligibility_current(state, id, request, true).await
 }
-/// Spec 0011 §4: a routed launch's intelligence profile is its class profile, outside the
-/// binding's allowlist; it is checked as an override of the agent's automatic router.
-async fn routed_launch(
+/// A new launch names documents of the active role snapshot: the role exists
+/// and is enabled, the level exists, the execution profile is the role's and
+/// runs in the named environment.
+async fn launch_reason(
     state: &AppState,
-    id: Uuid,
     request: &EligibilityRequest,
-) -> Result<Option<EligibilityRequest>> {
-    let record = current(state, id).await?;
-    let allowed = &record.binding.allowed_intelligence_profiles;
-    if request.intelligence_override.is_some() || allowed.contains(&request.intelligence_profile) {
-        return Ok(None);
+) -> Result<Option<&'static str>> {
+    let Some(snapshot) = crate::role_settings::active(&state.store.pool).await? else {
+        return Ok(Some("role_snapshot_absent"));
+    };
+    if snapshot.digest() != request.snapshot_digest {
+        return Ok(Some("role_snapshot_changed"));
     }
-    let catalog = catalog(state, &record.binding.catalog_digest).await?;
-    let (agent, launched) = (&request.agent_profile, &request.intelligence_profile);
-    let router = aq_selection::router_of_launch(&catalog.artifact().catalog, agent, launched);
-    Ok(router.map(|router| EligibilityRequest {
-        intelligence_profile: router.into(),
-        intelligence_override: Some(launched.clone()),
-        ..request.clone()
-    }))
+    let Ok(launch) = snapshot.resolve(&request.role, &request.intelligence_profile) else {
+        return Ok(Some("launch_documents_missing"));
+    };
+    Ok(if !launch.role.enabled {
+        Some("role_disabled")
+    } else if launch.execution.id != request.execution_profile
+        || launch.execution.environment != request.environment
+    {
+        Some("profile_combination_denied")
+    } else {
+        None
+    })
 }
 async fn check_eligibility_current(
     state: &AppState,
@@ -491,23 +487,12 @@ async fn check_eligibility_current(
     request: &EligibilityRequest,
     execution_read: bool,
 ) -> Result<Eligibility> {
-    if request.expected_project_revision == 0
-        || request.expected_catalog_revision == 0
-        || request.node_id.is_nil()
-    {
+    if request.expected_project_revision == 0 || request.node_id.is_nil() {
         return Err(bad("invalid eligibility identity/revision"));
     }
     let record = current(state, id).await?;
-    let (initial_catalog_revision, initial_active) = active_catalog(state).await?;
     let initial_node_live = node_current(state, request.node_id).await?;
-    let early = local_reasons(
-        &record,
-        request,
-        &state.config.projects,
-        initial_active.as_deref(),
-        initial_catalog_revision,
-        initial_node_live,
-    );
+    let early = local_reasons(&record, request, &state.config.projects, initial_node_live);
     if !early.is_empty() {
         return Ok(Eligibility {
             eligible: false,
@@ -522,16 +507,12 @@ async fn check_eligibility_current(
     };
     // Read local admission-sensitive revisions after external I/O.
     let latest = current(state, id).await?;
-    let (revision, active) = active_catalog(state).await?;
     let node_live = node_current(state, request.node_id).await?;
-    let catalog = catalog(state, &latest.binding.catalog_digest).await?;
     let mut result = decide(
         &latest,
         request,
         &state.config.projects,
         &observation,
-        active.as_deref(),
-        revision,
         node_live,
         (state.clock)().timestamp_millis().max(1) as u64,
     );
@@ -540,18 +521,8 @@ async fn check_eligibility_current(
             .reasons
             .push("project_changed_during_external_validation".into());
     }
-    let artifact = &catalog.artifact().catalog;
-    let routed = request.intelligence_override.as_deref();
-    if !artifact.agents.iter().any(|a| {
-        aq_profiles::key(&a.id, a.version) == request.agent_profile
-            && a.intelligence == request.intelligence_profile
-            && a.execution == request.execution_profile
-            && aq_selection::routed_intelligence(artifact, &a.intelligence, routed).is_some()
-    }) || !artifact.execution.iter().any(|e| {
-        aq_profiles::key(&e.id, e.version) == request.execution_profile
-            && e.environments.contains(&request.environment)
-    }) {
-        result.reasons.push("profile_combination_denied".into());
+    if !execution_read && let Some(reason) = launch_reason(state, request).await? {
+        result.reasons.push(reason.into());
     }
     if result.reasons.is_empty() {
         let mut tx = state.store.pool.begin().await.map_err(db)?;
@@ -587,29 +558,22 @@ pub(crate) async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     frozen: &FrozenProjectBinding,
 ) -> Result<()> {
-    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR UPDATE")
+    let node = sqlx::query("SELECT revoked_at,last_seen_at FROM nodes WHERE id=$1 FOR SHARE")
         .bind(frozen.node_id)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db)?
         .ok_or_else(|| conflict("node_not_eligible"))?;
     let row=sqlx::query("SELECT revision,binding,validated_at_ms,binding_observation FROM project_execution_bindings WHERE project_id=$1 FOR SHARE").bind(frozen.project.binding.project_id).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(||conflict("project_absent"))?;
-    let registry = sqlx::query(
-        "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(db)?;
     let record = record(row)?;
     let request = EligibilityRequest {
         expected_project_revision: frozen.project.revision,
-        expected_catalog_revision: frozen.catalog_activation_revision,
         node_id: frozen.node_id,
         environment: frozen.environment.clone(),
-        agent_profile: frozen.agent_profile.clone(),
+        role: frozen.role.clone(),
         intelligence_profile: frozen.intelligence_profile.clone(),
         execution_profile: frozen.execution_profile.clone(),
-        intelligence_override: None,
+        snapshot_digest: frozen.snapshot_digest.clone(),
     };
     let now = (state.clock)();
     let live = node
@@ -621,14 +585,11 @@ pub(crate) async fn fence_for_offer(
                 at >= now
                     - chrono::Duration::seconds(state.config.workers.offline_after_secs as i64)
             });
-    let active: Option<String> = registry.get("active_digest");
     let result = decide(
         &record,
         &request,
         &state.config.projects,
         &frozen.binding_observation,
-        active.as_deref(),
-        registry.get::<i64, _>("revision") as u64,
         live,
         now.timestamp_millis().max(1) as u64,
     );

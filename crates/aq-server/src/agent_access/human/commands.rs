@@ -35,9 +35,11 @@ pub(crate) struct Create {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 300))]
     pub(in crate::agent_access::human) priority: Option<u16>,
+    /// The role the task expects; it must exist. Absent: the project's
+    /// default role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
-    pub(in crate::agent_access::human) profile_hint: Option<String>,
+    pub(in crate::agent_access::human) role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
     pub(in crate::agent_access::human) intelligence_hint: Option<String>,
@@ -64,7 +66,7 @@ impl Create {
                 .is_some_and(|p| p.is_nil() || p == v.operation_id)
             || !super::enqueue::hints_valid(
                 v.priority,
-                [&v.profile_hint, &v.intelligence_hint, &v.task_type],
+                [&v.role, &v.intelligence_hint, &v.task_type],
             )
             || v.revision().is_err()
             || v.title.trim().is_empty()
@@ -268,6 +270,12 @@ pub(super) async fn create(
             return Err(conflict());
         }
     }
+    // This route's action errors carry fixed text; an unknown role says so.
+    if let Some(role) = &request.role {
+        crate::role_settings::named(&state, &[role])
+            .await?
+            .map_err(|unknown| AppError::BadRequest(unknown.to_string()))?;
+    }
     let adapter = action::TaskCreate {
         runtime: r.clone(),
         original: Some(bytes.clone()),
@@ -354,7 +362,7 @@ async fn create_on_node(
     super::enqueue::metadata(
         &mut payload["operations"][0]["metadata"],
         request.priority,
-        &request.profile_hint,
+        &request.role,
         &request.intelligence_hint,
         &request.task_type,
     );

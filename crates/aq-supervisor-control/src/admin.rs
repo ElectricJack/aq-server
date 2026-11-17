@@ -11,9 +11,20 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-/// Profiles and the routing policy, and the internal work default and
-/// overrides: each document at its own path and below it.
-const DOCUMENTS: [&str; 2] = ["/api/settings/intelligence", "/api/settings/internal-work"];
+/// The routing switch, the routing document, the level documents and the
+/// internal work default and overrides: each at its own path and below it.
+const DOCUMENTS: [&str; 4] = [
+    "/api/settings/routing",
+    "/api/settings/routing-document",
+    "/api/settings/intelligence-profiles",
+    "/api/settings/internal-work",
+];
+/// Settings a supervisor saves with PUT or removes with DELETE, as the owner
+/// does: the routing document and the level documents.
+const WRITTEN: [&str; 2] = [
+    "/api/settings/routing-document",
+    "/api/settings/intelligence-profiles",
+];
 /// Internal runs: only below it.
 const RUNS: &str = "/api/internal-work/";
 /// Playbook sources (spec 0013 §4.4): the list and each source below it. A
@@ -39,13 +50,16 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
     }
     let allowed = match *request.method() {
         Method::GET | Method::HEAD | Method::POST => true,
-        Method::PUT | Method::DELETE => under(request.uri().path(), SOURCES),
+        Method::PUT | Method::DELETE => {
+            let path = request.uri().path();
+            under(path, SOURCES) || WRITTEN.iter().any(|document| under(path, document))
+        }
         _ => false,
     };
     if !allowed {
         return Error(
             StatusCode::FORBIDDEN,
-            "Supervisor admin endpoint accepts GET, HEAD and POST only",
+            "Supervisor admin endpoint does not accept this method here",
         )
         .into_response();
     }

@@ -10,13 +10,11 @@ mod common;
 
 mod internal_work_settings;
 mod lifecycle_artifacts;
-mod profile_catalog;
-mod profile_inspection;
+mod profile_swarm;
 mod profiled_artifact_phases;
 mod profiled_artifacts;
 mod profiled_authority;
 mod profiled_config;
-mod profiled_context;
 mod profiled_hot;
 mod profiled_material;
 mod profiled_results;

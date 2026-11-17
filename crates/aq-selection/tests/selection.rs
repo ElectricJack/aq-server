@@ -1,4 +1,5 @@
 mod common;
+use aq_profiles::roles::Confinement;
 use aq_profiles::{ExecutionConfinement, FallbackReason, UnknownCostPolicy};
 use aq_selection::*;
 use common::*;
@@ -78,11 +79,16 @@ fn stale_node_and_unsupported_native_settings_never_become_unknown_availability_
     let catalog = change_policy(&catalog, policy, &mut input);
     input.node.expires_at_ms = 1500;
     assert!(select(&catalog, &input).unwrap().resolved.is_none());
-    let (catalog, mut input) = fixture();
-    input.node.harnesses[0].models.clear();
+    // A reasoning effort the harness does not accept is never substituted.
+    let (mut catalog, input) = fixture();
+    for candidate in &mut catalog.intelligence.candidates {
+        candidate.reasoning = "ultra".into();
+    }
     assert!(select(&catalog, &input).unwrap().resolved.is_none());
     let (catalog, mut input) = fixture();
-    input.node.harnesses[0].limits.max_output_tokens = 10;
+    for harness in &mut input.node.harnesses {
+        harness.limits.max_output_tokens = 10;
+    }
     assert!(select(&catalog, &input).unwrap().resolved.is_none());
 }
 #[test]
@@ -239,109 +245,19 @@ fn ledger_unknown_is_not_zero_and_hard_cost_requires_qualified_provider_and_adap
     );
 }
 #[test]
-fn missing_policy_old_catalog_is_explicitly_ineligible_and_snapshots_are_bound() {
-    let (catalog, mut input) = fixture();
-    input.project.revision = 2;
-    assert!(select(&catalog, &input).is_err());
-    let (catalog, mut input) = fixture();
-    let mut definitions = catalog.artifact().catalog.clone();
-    definitions.intelligence[0].selection_policy = None;
-    let old = aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
-    input.project.catalog_digest = serde_json::from_value(serde_json::json!(old.digest())).unwrap();
-    for c in &mut input.compositions {
-        c.composition.catalog_digest = old.digest().into();
-        c.composition.intelligence_profile = old
-            .source("intelligence", &input.project.intelligence_profile)
-            .unwrap();
-        c.digest = aq_selection::digest(&c.composition).unwrap();
-    }
-    assert!(
-        select(&old, &input)
-            .unwrap()
-            .reason_codes
-            .contains(&"selection_policy_missing".into())
-    );
-}
-/// A routed fixture: the agent's `engineering@2` becomes an automatic router (with the
-/// fixture policy when `router_policy`) and a copy `level@1` is the routed level profile
-/// (with the fixture policy when `level_policy`).
-fn routed_fixture(
-    level_policy: bool,
-    router_policy: bool,
-) -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
-    let (catalog, mut input) = fixture();
-    let mut definitions = catalog.artifact().catalog.clone();
-    let mut level = definitions.intelligence[0].clone();
-    level.id = "level".into();
-    level.version = 1;
-    level.automatic_routing = None;
-    level.selection_policy = level_policy.then(policy);
-    let router = &mut definitions.intelligence[0];
-    router.automatic_routing = Some(true);
-    router.selection_policy = router_policy.then(policy);
-    definitions.intelligence.push(level);
-    let updated =
-        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
-    input.project.catalog_digest =
-        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
-    input.intelligence_override = Some("level@1".into());
-    for composition in &mut input.compositions {
-        composition.composition.catalog_digest = updated.digest().into();
-        composition.composition.intelligence_profile =
-            updated.source("intelligence", "level@1").unwrap();
-        composition.digest = aq_selection::digest(&composition.composition).unwrap();
-    }
-    (updated, input)
-}
-#[test]
-fn routed_level_without_selection_policy_uses_the_routers_policy() {
-    let (catalog, input) = routed_fixture(false, true);
-    let out = select(&catalog, &input).unwrap();
-    assert!(
-        !out.reason_codes
-            .contains(&"selection_policy_missing".into())
-    );
-    assert!(out.resolved.is_some());
-}
-#[test]
-fn routed_level_and_router_without_selection_policy_report_missing() {
-    let (catalog, input) = routed_fixture(false, false);
-    let out = select(&catalog, &input).unwrap();
-    assert!(out.resolved.is_none());
-    assert_eq!(out.reason_codes, ["selection_policy_missing"]);
-}
-#[test]
-fn unrouted_profile_without_selection_policy_ignores_router_and_reports_missing() {
-    // An unrouted selection whose own profile has no policy gets no fallback.
-    let (catalog, mut input) = fixture();
-    let mut definitions = catalog.artifact().catalog.clone();
-    definitions.intelligence[0].selection_policy = None;
-    let old = aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
-    input.project.catalog_digest = serde_json::from_value(serde_json::json!(old.digest())).unwrap();
-    for c in &mut input.compositions {
-        c.composition.catalog_digest = old.digest().into();
-        c.composition.intelligence_profile = old
-            .source("intelligence", &input.project.intelligence_profile)
-            .unwrap();
-        c.digest = aq_selection::digest(&c.composition).unwrap();
-    }
-    assert!(input.intelligence_override.is_none());
-    assert_eq!(
-        select(&old, &input).unwrap().reason_codes,
-        ["selection_policy_missing"]
-    );
-}
-#[test]
 fn fallback_unsupported_is_explicit_and_provider_specific_reasoning_remains_native() {
-    let (catalog, mut input) = fixture();
-    input.node.harnesses[0]
-        .models
-        .retain(|m| m.provider != "fixture-a");
+    let (mut catalog, mut input) = fixture();
+    // `codex` does not accept `xhigh`; the fallback keeps its own stated effort.
+    catalog.intelligence.candidates[0].reasoning = "xhigh".into();
     let mut policy = policy();
     policy.fallback_on = vec![FallbackReason::Unsupported];
     let catalog = change_policy(&catalog, policy, &mut input);
     let out = select(&catalog, &input).unwrap();
-    assert_eq!(out.resolved.unwrap().choice.native_reasoning, "deliberate");
+    assert_eq!(
+        out.traces[0].reason_codes,
+        ["model_or_reasoning_unsupported"]
+    );
+    assert_eq!(out.resolved.unwrap().choice.native_reasoning, "default");
 }
 #[test]
 fn unknown_cost_never_bypasses_known_exhaustion_or_incompatible_currency() {
@@ -500,33 +416,6 @@ fn project_environment_allowlist_cannot_be_widened_by_installed_qualified_adapte
     }));
 }
 #[test]
-fn published_human_selection_preserves_exact_provenance_and_refuses_changed_decisions() {
-    let (catalog, input) = fixture();
-    let mut outcome = select(&catalog, &input).unwrap();
-    let human = human_selection(&catalog, &input, &outcome).unwrap();
-    assert_eq!(
-        human.selected_candidate_id.as_deref(),
-        Some(
-            outcome
-                .resolved
-                .as_ref()
-                .unwrap()
-                .choice
-                .candidate_id
-                .as_str()
-        )
-    );
-    assert_eq!(
-        human.candidates[0].observations[0].endpoint_reference,
-        input.observations[0].scope.endpoint_reference
-    );
-    let encoded = serde_json::to_vec(&human).unwrap();
-    let decoded: aq_session_api::Selection = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.snapshot_digest, human.snapshot_digest);
-    outcome.resolved.as_mut().unwrap().choice.account_reference = "foreign-account".into();
-    assert!(human_selection(&catalog, &input, &outcome).is_err());
-}
-#[test]
 fn independent_matching_source_cannot_clear_another_sources_live_restriction() {
     let (catalog, mut input) = fixture();
     let mut restricted = input.observations[0].clone();
@@ -567,20 +456,6 @@ fn source_sequence_precedes_wall_clock_when_history_contains_clock_correction() 
             .provider,
         "fixture-b"
     );
-}
-#[test]
-fn installed_only_v010_snapshots_and_decisions_roundtrip_byte_semantics_unchanged() {
-    let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/installed-selection-v0.1.0.json")).unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(include_bytes!(
-        "fixtures/installed-catalog-v0.1.0.json"
-    ))
-    .unwrap();
-    let input: SelectionInputs = serde_json::from_value(golden["inputs"].clone()).unwrap();
-    assert_eq!(serde_json::to_value(&input).unwrap(), golden["inputs"]);
-    assert!(select(&catalog, &input).is_err());
-    let outcome = select_legacy_for_inspection(&catalog, &input).unwrap();
-    assert_eq!(serde_json::to_value(outcome).unwrap(), golden["outcome"]);
 }
 fn prepared_credentials(input: &mut SelectionInputs) {
     let delivery = DeliveryCapability {
@@ -667,160 +542,6 @@ fn arbitrary_node_delivery_claims_cannot_manufacture_keys_owner_identity_or_curr
         binding.preparation.as_mut().unwrap().expires_at_ms = input.now_ms;
     }
     assert!(select(&catalog, &input).unwrap().resolved.is_none());
-}
-
-#[test]
-fn two_models_on_one_harness_share_acyclic_policy_but_resolve_distinct_actual_profiles() {
-    use aq_profiles::{GraphRetryBudget, ResolvedGraphModel};
-    let (catalog, mut input) = fixture();
-    let composition = input.compositions[0].composition.clone();
-    assert_eq!(composition.schema_version, 2);
-    let serialized = serde_json::to_value(&composition).unwrap();
-    assert!(serialized.get("graph_access_profile_digest").is_none());
-    assert!(serialized.get("graph_access_policy_digest").is_some());
-    let policy = graph_policy(&composition);
-    composition.validate_graph_policy(&policy).unwrap();
-    let first = select(&catalog, &input).unwrap().resolved.unwrap();
-    input.observations[0].state = Availability::QuotaUnavailable;
-    let second = select(&catalog, &input).unwrap().resolved.unwrap();
-    assert_eq!(first.choice.harness, second.choice.harness);
-    assert_ne!(first.choice.model, second.choice.model);
-    assert_eq!(
-        first.choice.composition_digest,
-        second.choice.composition_digest
-    );
-    let retry = GraphRetryBudget {
-        max_attempts: 3,
-        max_elapsed_ms: 60000,
-        initial_delay_ms: 100,
-        max_delay_ms: 1000,
-    };
-    let resolve = |selection: &ResolvedSelection| {
-        policy
-            .resolve_profile(
-                &ResolvedGraphModel {
-                    provider: selection.choice.provider.clone(),
-                    model: selection.choice.model.clone(),
-                    native_reasoning: selection.choice.native_reasoning.clone(),
-                    reasoning_configuration_reference: selection
-                        .choice
-                        .reasoning_configuration_reference
-                        .clone(),
-                },
-                &graph_context(),
-                "implementer",
-                &retry,
-            )
-            .unwrap()
-    };
-    let first_profile = resolve(&first);
-    let second_profile = resolve(&second);
-    assert_eq!(first_profile["model"]["provider"], first.choice.provider);
-    assert_eq!(second_profile["model"]["model"], second.choice.model);
-    assert_ne!(first_profile["profile_id"], second_profile["profile_id"]);
-    assert_ne!(
-        digest(&first_profile).unwrap(),
-        digest(&second_profile).unwrap()
-    );
-    assert_eq!(
-        first_profile["instructions_digest"],
-        second_profile["instructions_digest"]
-    );
-    assert_eq!(
-        first_profile["tool_policy_digest"],
-        second_profile["tool_policy_digest"]
-    );
-    assert_eq!(
-        first_profile["read_scope"]["record_ids"],
-        serde_json::json!(policy.scope.record_ids)
-    );
-    let mut changed = graph_context();
-    changed["nodes"][0]["body"] = serde_json::json!("changed");
-    assert!(policy.validate_context(&changed).is_err());
-    let mut changed_policy = policy.clone();
-    changed_policy.instructions_digest = "f".repeat(64);
-    assert!(composition.validate_graph_policy(&changed_policy).is_err());
-    let mut changed_composition = composition;
-    changed_composition.graph_access_profile_digest = "a".repeat(64);
-    assert!(changed_composition.validate_native_v2().is_err());
-}
-
-#[test]
-fn graph_policy_refuses_uncovered_mixed_context_and_wrong_owner_scope_before_selection() {
-    use aq_profiles::{GraphAccessScope, compile_draft};
-    let (catalog, input) = fixture();
-    let mut context = graph_context();
-    let mut knowledge = context["nodes"][0].clone();
-    knowledge["id"] = serde_json::json!(Uuid::from_u128(9));
-    knowledge["kind"] = serde_json::json!("knowledge");
-    knowledge["task_state"] = serde_json::Value::Null;
-    context["nodes"].as_array_mut().unwrap().push(knowledge);
-    let scope = GraphAccessScope {
-        repository_id: Uuid::from_u128(41),
-        workspace_id: Uuid::from_u128(2),
-        task_id: Uuid::from_u128(3),
-        record_ids: vec![Uuid::from_u128(3), Uuid::from_u128(9)],
-        edge_types: vec![],
-    };
-    let draft = compile_draft(&catalog, &compile_request(&catalog))
-        .unwrap()
-        .composition
-        .unwrap();
-    let sealed = draft.seal(scope.clone(), &context).unwrap();
-    sealed
-        .graph_access_policy
-        .validate_context(&context)
-        .unwrap();
-    for missing in ["task.read", "knowledge.read"] {
-        let mut denied = sealed.graph_access_policy.clone();
-        denied
-            .effective_permissions
-            .retain(|p| p.operation != missing);
-        assert!(denied.validate_context(&context).is_err(), "{missing}");
-    }
-    let mut wrong = sealed.graph_access_policy.clone();
-    wrong.effective_permissions[0].scope_reference = format!("project:{}", Uuid::from_u128(8888));
-    assert!(wrong.validate_context(&context).is_err());
-    let mut alias = sealed.graph_access_policy.clone();
-    alias.effective_permissions[0].scope_reference = "project:example".into();
-    assert!(alias.validate_context(&context).is_err());
-    let mut wrong_repository = sealed.graph_access_policy;
-    wrong_repository.scope.repository_id = Uuid::from_u128(8888);
-    assert!(wrong_repository.validate_context(&context).is_err());
-    let mut request = compile_request(&catalog);
-    request
-        .available_tools
-        .retain(|tool| tool != "knowledge.read");
-    let task_only = compile_draft(&catalog, &request)
-        .unwrap()
-        .composition
-        .unwrap();
-    assert!(task_only.seal(scope, &context).is_err());
-    assert_eq!(input.compositions[0].composition.schema_version, 2);
-}
-
-#[test]
-fn native_policy_binding_does_not_allow_rehashed_instruction_or_permission_forgery() {
-    let (catalog, mut input) = fixture();
-    let prepared = &mut input.compositions[0];
-    prepared
-        .composition
-        .instruction_order
-        .iter_mut()
-        .find(|i| i.source.identity.starts_with("module:"))
-        .unwrap()
-        .text
-        .push_str(" unauthorized instruction");
-    prepared.digest = digest(&prepared.composition).unwrap();
-    assert!(select(&catalog, &input).is_err());
-    let (_, mut input) = fixture();
-    input.compositions[0].composition.requested_permissions = Some(vec![]);
-    input.compositions[0].digest = digest(&input.compositions[0].composition).unwrap();
-    assert!(select(&catalog, &input).is_err());
-    let (_, mut input) = fixture();
-    input.compositions[0].composition.graph_access_policy_kind = None;
-    input.compositions[0].digest = digest(&input.compositions[0].composition).unwrap();
-    assert!(select(&catalog, &input).is_err());
 }
 
 #[test]
@@ -920,13 +641,15 @@ fn sandbox_placement(input: &SelectionInputs, harness_version: &str) -> Placemen
         required_capabilities: vec![],
         templates: vec![AdvertisedTemplate {
             digest: template.clone(),
-            harnesses: vec![AdvertisedHarness {
-                harness: "codex".into(),
-                version: harness_version.into(),
-            }],
+            harnesses: ["codex", "opencode"]
+                .map(|harness| AdvertisedHarness {
+                    harness: harness.into(),
+                    version: harness_version.into(),
+                })
+                .into(),
         }],
         environment_templates: vec![EnvironmentTemplate {
-            environment: "confined-worktree".into(),
+            environment: ENVIRONMENT.into(),
             template,
         }],
         ceiling: None,
@@ -1040,7 +763,7 @@ fn container_only_backend_admits_only_permitted_container_confinement() {
         require_native: true,
         require_container: false,
     };
-    let required = change_confinement(&catalog, native, &mut input);
+    let required = change_confinement(&catalog, Confinement::NativeRequired, &mut input);
     let out = select(&required, &input).unwrap();
     all_traces_refuse(
         &out,
@@ -1052,7 +775,7 @@ fn container_only_backend_admits_only_permitted_container_confinement() {
         require_native: false,
         require_container: false,
     };
-    let permitted = change_confinement(&catalog, permit, &mut input);
+    let permitted = change_confinement(&catalog, Confinement::ContainerPermitted, &mut input);
     assert!(select(&permitted, &input).unwrap().resolved.is_some());
     assert_eq!(
         admit_confinement(input.placement.as_ref(), &permit, &input.node.harnesses[0]),
@@ -1134,7 +857,7 @@ fn container_only_backend_admits_only_permitted_container_confinement() {
         ),
         Ok(ConfinementMode::Native)
     );
-    let required = change_confinement(&catalog, native, &mut input);
+    let required = change_confinement(&catalog, Confinement::NativeRequired, &mut input);
     assert!(select(&required, &input).unwrap().resolved.is_some());
 }
 type PlacementMutation = (fn(&mut Placement), &'static str);
@@ -1172,7 +895,11 @@ fn fence_recheck_refuses_frozen_choice_with_selection_reasons() {
         ),
         (|p| p.templates.clear(), "template_not_advertised"),
         (
-            |p| p.templates[0].harnesses[0].version = "fixture-2".into(),
+            |p| {
+                for harness in &mut p.templates[0].harnesses {
+                    harness.version = "fixture-2".into();
+                }
+            },
             "template_missing_selected_harness_version",
         ),
         (
@@ -1197,33 +924,24 @@ fn fence_recheck_refuses_frozen_choice_with_selection_reasons() {
         );
     }
 }
-/// Spec 0011 §4: the fixture with a second installed harness (`claude-code`) that both
-/// candidates support, so a route can choose between harnesses.
-fn two_harnesses() -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
-    let (catalog, mut input) = fixture();
-    let mut definitions = catalog.artifact().catalog.clone();
-    for candidate in &mut definitions.intelligence[0].candidates {
-        candidate.harnesses.push("claude-code".into());
+/// Spec 0011 §4: the fixture with a second installed harness for each candidate
+/// (`claude` beside `codex` for the primary, `gemini` beside `opencode` for the
+/// fallback), so a route can choose between harnesses.
+fn two_harnesses() -> (Fx, SelectionInputs) {
+    let (mut fx, mut input) = fixture();
+    for (index, (harness, credential)) in [("claude", "account-a"), ("gemini", "account-b")]
+        .into_iter()
+        .enumerate()
+    {
+        fx.intelligence.candidates[index]
+            .harnesses
+            .push(harness.into());
+        fx.execution.harnesses.push(harness.into());
+        (fx.execution.credentials).insert(harness.into(), credential.into());
+        input.node.harnesses.push(installed(harness));
+        input.launches.push(prepared(harness));
     }
-    let updated =
-        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
-    input.project.catalog_digest =
-        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
-    let mut claude = input.compositions[0].clone();
-    claude.composition.harness = "claude-code".into();
-    input.compositions.push(claude);
-    for composition in &mut input.compositions {
-        composition.composition.catalog_digest = updated.digest().into();
-        composition.composition.intelligence_profile = updated
-            .source("intelligence", &input.project.intelligence_profile)
-            .unwrap();
-        composition.digest = aq_selection::digest(&composition.composition).unwrap();
-    }
-    let mut harness = input.node.harnesses[0].clone();
-    harness.harness = "claude-code".into();
-    harness.adapter = artifact("claude-code-adapter");
-    input.node.harnesses.push(harness);
-    (updated, input)
+    (fx, input)
 }
 fn route(edit: impl FnOnce(&mut RouteLimits)) -> Option<RouteLimits> {
     let mut route = RouteLimits::default();
@@ -1247,7 +965,7 @@ fn rows(out: &SelectionOutcome) -> Vec<(String, String, CandidateState, String)>
 #[test]
 fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes() {
     let (catalog, mut input) = fixture();
-    input.route = route(|r| r.harnesses = vec!["claude-code".into()]);
+    input.route = route(|r| r.harnesses = vec!["claude".into()]);
     let out = select(&catalog, &input).unwrap();
     assert!(out.resolved.is_none(), "{out:?}");
     assert_eq!(out.reason_codes, ["no_eligible_candidate"]);
@@ -1269,7 +987,7 @@ fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes(
     assert_eq!(
         rows(&out)[0],
         (
-            "primary".into(),
+            PRIMARY.into(),
             "codex".into(),
             CandidateState::PolicyDenied,
             "route_excludes_provider".into()
@@ -1277,7 +995,7 @@ fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes(
     );
     // Both allowlists naming what the candidate has leave the profile's choice unchanged.
     input.route = route(|r| {
-        r.harnesses = vec!["codex".into()];
+        r.harnesses = vec!["codex".into(), "opencode".into()];
         r.providers = vec!["fixture-a".into(), "fixture-b".into()];
     });
     let out = select(&catalog, &input).unwrap();
@@ -1293,24 +1011,24 @@ fn preferred_harness_is_tried_first_and_profile_order_is_kept_otherwise() {
             chosen.profile_candidate_id.as_str(),
             chosen.harness.as_str()
         ),
-        ("primary", "codex")
+        (PRIMARY, "codex")
     );
     let order = |out: &SelectionOutcome| {
         rows(out)
             .into_iter()
-            .map(|(c, h, _, _)| format!("{c}/{h}"))
+            .map(|(c, h, _, _)| {
+                format!("{}/{h}", if c == PRIMARY { "primary" } else { "fallback" })
+            })
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        order(&out),
-        [
-            "primary/codex",
-            "primary/claude-code",
-            "fallback/codex",
-            "fallback/claude-code"
-        ]
-    );
-    input.route = route(|r| r.prefer = vec!["claude-code".into()]);
+    let profile_order = [
+        "primary/codex",
+        "primary/claude",
+        "fallback/opencode",
+        "fallback/gemini",
+    ];
+    assert_eq!(order(&out), profile_order);
+    input.route = route(|r| r.prefer = vec!["claude".into(), "gemini".into()]);
     let out = select(&catalog, &input).unwrap();
     let chosen = &out.resolved.as_ref().unwrap().choice;
     assert_eq!(
@@ -1318,29 +1036,21 @@ fn preferred_harness_is_tried_first_and_profile_order_is_kept_otherwise() {
             chosen.profile_candidate_id.as_str(),
             chosen.harness.as_str()
         ),
-        ("primary", "claude-code")
+        (PRIMARY, "claude")
     );
     assert_eq!(
         order(&out),
         [
-            "primary/claude-code",
-            "fallback/claude-code",
+            "primary/claude",
+            "fallback/gemini",
             "primary/codex",
-            "fallback/codex"
+            "fallback/opencode"
         ]
     );
     // A preferred harness that no candidate row has keeps the profile order exactly.
-    input.route = route(|r| r.prefer = vec!["gemini".into()]);
+    input.route = route(|r| r.prefer = vec!["pi".into()]);
     let out = select(&catalog, &input).unwrap();
-    assert_eq!(
-        order(&out),
-        [
-            "primary/codex",
-            "primary/claude-code",
-            "fallback/codex",
-            "fallback/claude-code"
-        ]
-    );
+    assert_eq!(order(&out), profile_order);
 }
 #[test]
 fn pinned_route_refuses_fallback_with_route_provider_pinned() {
@@ -1373,23 +1083,21 @@ fn pinned_route_refuses_fallback_with_route_provider_pinned() {
     assert_eq!(out.resolved.unwrap().choice.provider, "fixture-b");
 }
 #[test]
-fn inputs_without_a_route_serialize_exactly_as_before() {
-    // Golden: an existing frozen native fixture's inputs and the selection made from them.
+fn the_server_fixture_inputs_roundtrip_and_a_route_changes_their_digest() {
+    // Golden: the server's frozen fixture inputs.
     let golden: serde_json::Value = serde_json::from_str(include_str!(
         "../../aq-server/tests/fixtures/selection-v2.json"
     ))
     .unwrap();
     let input: SelectionInputs = serde_json::from_value(golden["inputs"].clone()).unwrap();
-    assert!(input.route.is_none() && input.intelligence_override.is_none());
+    assert!(input.route.is_none());
     let encoded = serde_json::to_value(&input).unwrap();
     assert_eq!(encoded, golden["inputs"]);
     assert_eq!(
         aq_selection::digest(&input).unwrap(),
         aq_selection::digest(&golden["inputs"]).unwrap()
     );
-    for key in ["route", "intelligence_override"] {
-        assert!(encoded.get(key).is_none(), "{key}");
-    }
+    assert!(encoded.get("route").is_none());
     // A route that restricts nothing still changes the snapshot it is part of.
     let mut routed = input.clone();
     routed.route = Some(RouteLimits::default());
@@ -1398,38 +1106,23 @@ fn inputs_without_a_route_serialize_exactly_as_before() {
         aq_selection::digest(&input).unwrap()
     );
 }
-/// The fixture whose first candidate (`primary`, fixture-a) lists only a harness that is not
-/// installed, so it has no installed composition (a placeholder row); `fallback` (fixture-b)
-/// stays eligible. `fallback_on` is the policy's.
-fn primary_not_installed(
-    fallback_on: Vec<FallbackReason>,
-) -> (aq_profiles::ValidatedCatalog, SelectionInputs) {
-    let (catalog, mut input) = fixture();
-    let mut definitions = catalog.artifact().catalog.clone();
-    definitions.intelligence[0].candidates[0].harnesses = vec!["claude-code".into()];
-    definitions.intelligence[0]
-        .selection_policy
-        .as_mut()
-        .unwrap()
-        .fallback_on = fallback_on;
-    let updated =
-        aq_profiles::validate(definitions, catalog.artifact().instructions.clone()).unwrap();
-    input.project.catalog_digest =
-        serde_json::from_value(serde_json::json!(updated.digest())).unwrap();
-    for composition in &mut input.compositions {
-        composition.composition.catalog_digest = updated.digest().into();
-        composition.composition.intelligence_profile = updated
-            .source("intelligence", &input.project.intelligence_profile)
-            .unwrap();
-        composition.digest = aq_selection::digest(&composition.composition).unwrap();
-    }
-    (updated, input)
+/// The fixture whose first candidate (`primary`, fixture-a) lists only a harness the
+/// execution profile may use but the node has not installed, so it has no installed
+/// launch (a placeholder row); `fallback` (fixture-b) stays eligible. `fallback_on` is
+/// the policy's.
+fn primary_not_installed(fallback_on: Vec<FallbackReason>) -> (Fx, SelectionInputs) {
+    let (mut fx, input) = fixture();
+    fx.intelligence.candidates[0].harnesses = vec!["claude".into()];
+    fx.execution.harnesses.push("claude".into());
+    (fx.execution.credentials).insert("claude".into(), "account-a".into());
+    fx.policy.fallback_on = fallback_on;
+    (fx, input)
 }
 #[test]
 fn pinned_route_is_pinned_by_a_first_provider_without_an_installed_composition() {
     let (catalog, mut input) = primary_not_installed(policy().fallback_on);
     let placeholder = (
-        "primary".to_string(),
+        PRIMARY.to_string(),
         "unavailable".to_string(),
         CandidateState::Unsupported,
         "compatible_installed_composition_unavailable".to_string(),
@@ -1440,14 +1133,14 @@ fn pinned_route_is_pinned_by_a_first_provider_without_an_installed_composition()
     // Its harness is unknown, so the harness allowlist does not exclude it: it pins fixture-a.
     input.route = route(|r| {
         r.pinned = true;
-        r.harnesses = vec!["codex".into()];
+        r.harnesses = vec!["codex".into(), "opencode".into()];
     });
     let out = select(&catalog, &input).unwrap();
     assert!(out.resolved.is_none(), "{out:?}");
     assert_eq!(out.reason_codes, ["route_provider_pinned"]);
     let rows = rows(&out);
     assert_eq!(rows[0], placeholder);
-    assert_eq!(rows[1].0, "fallback");
+    assert_eq!(rows[1].0, FALLBACK);
     assert_eq!(rows[1].2, CandidateState::PolicyDenied);
     assert!(
         out.traces[1]
@@ -1481,7 +1174,7 @@ fn a_first_provider_without_an_installed_composition_still_bounds_fallback_under
         None,
         "a policy refusal is not a route one"
     );
-    input.route = route(|r| r.harnesses = vec!["codex".into()]);
+    input.route = route(|r| r.harnesses = vec!["opencode".into()]);
     let routed = select(&catalog, &input).unwrap();
     assert!(routed.resolved.is_none(), "{routed:?}");
     assert_eq!(routed.reason_codes, plain.reason_codes);

@@ -6,13 +6,18 @@ use aq_task_thread as thread;
 fn at(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms).map_or_else(String::new, |t| t.to_rfc3339())
 }
+/// The task-thread block of a startup text and the identity it is recorded under.
+pub(crate) struct StartupInput {
+    pub identity: String,
+    pub text: String,
+}
 /// The block for `task`, as an optional startup input after the assignment,
 /// or `None` when the task has no comments, questions or unread mail.
 pub(crate) async fn startup_input(
     state: &AppState,
     project: Uuid,
     task: Uuid,
-) -> Option<aq_profiles::ContextInput> {
+) -> Option<StartupInput> {
     let pool = &state.store.pool;
     let max = thread::MAX_ITEMS as u16;
     let (comments, more) = aq_task_comments::list(
@@ -72,15 +77,8 @@ pub(crate) async fn startup_input(
     }
     let text = thread::render(&t, thread::BUDGET_BYTES)?;
     let digest = aq_admission::Digest::of(text.as_bytes());
-    Some(aq_profiles::ContextInput {
-        source: aq_session_api::Source {
-            identity: format!("aq.task-thread/{}", digest.as_str()),
-            revision: "1".into(),
-            digest: digest.as_str().into(),
-        },
+    Some(StartupInput {
+        identity: format!("aq.task-thread/{}", digest.as_str()),
         text,
-        delivery: aq_profiles::Delivery::Startup,
-        required: false,
-        omission_priority: 0,
     })
 }

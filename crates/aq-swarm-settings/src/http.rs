@@ -63,7 +63,7 @@ pub async fn operation(pool: &PgPool, actor: Uuid, id: Uuid, path: &str) -> Resu
     }
 }
 /// Aggregate safe account metadata without exporting credential identities or material paths.
-pub fn catalog(credentials: &[aq_selection::AuthorizedCredential]) -> Vec<Provider> {
+pub fn providers(credentials: &[aq_selection::AuthorizedCredential]) -> Vec<Provider> {
     let mut map =
         std::collections::BTreeMap::<&str, (std::collections::BTreeSet<String>, bool, bool)>::new();
     // Provider presets are discoverable before a connection is configured.

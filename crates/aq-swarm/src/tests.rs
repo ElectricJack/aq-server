@@ -217,22 +217,18 @@ fn facts(key: &str, cpu: u16, received_at_ms: u64) -> MachineFacts {
         samples_15m: 3,
     }
 }
-fn session(attempt: Option<Uuid>, model: &str) -> SessionSummary {
+fn agent(attempt: Uuid, model: &str, phase: AgentPhase) -> SwarmAgent {
     serde_json::from_value(serde_json::json!({
-        "id": uid(900), "label": "s", "task": null, "attempt_id": attempt,
+        "session_id": uid(900), "attempt_id": attempt,
+        "task": {"type": "task", "id": uid(903), "title": "Fix the flaky test"},
         "project": {"id": uid(901), "label": "p"},
-        "profile": {"provider": "anthropic", "model": model, "harness": "claude-code"},
-        "authority": "a",
-        "observation": {"state": "running", "observed_at": "2026-11-07T00:00:00.000Z",
-                        "fresh_until": "2026-11-07T00:00:30.000Z"},
-        "wait": null,
-        "controller": {"state": "none", "label": null},
-        "terminal": null,
-        "session_identity": {"kind": "central", "authority_id": uid(902), "session_id": uid(900), "generation": "1"},
-        "record_revision": null, "execution_authority": "e", "source_kind": "k",
-        "lifecycle": {"started_at": "2026-11-07T00:00:00.000Z", "stopped_at": null}
+        "provider": "anthropic", "model": model, "harness": "claude-code",
+        "intelligence_class": crate::class::intelligence_class(model),
+        "terminal": null, "started_at": "2026-11-07T00:00:00.000Z",
+        "phase": phase, "held_since": "2026-11-06T23:59:50.000Z",
+        "ran_with": null, "last_output_at": "2026-11-07T00:00:03.000Z"
     }))
-    .expect("session summary shape")
+    .expect("swarm agent shape")
 }
 fn input(nodes: Vec<NodeCapacity>) -> SwarmInput {
     let (slots, _) = crate::capacity::slot_summary(&nodes, 0, false, NOW).unwrap();
@@ -350,8 +346,10 @@ fn offline_machine_omits_load_and_keeps_agents() {
         vec![IneligibleReason::WorkerOffline],
     )]);
     i.machines.insert(uid(1), facts("desktop", 100, NOW));
-    i.agents
-        .push((uid(1), session(Some(uid(5)), "claude-opus-5-5")));
+    i.agents.push((
+        uid(1),
+        agent(uid(5), "claude-opus-5-5", AgentPhase::Running),
+    ));
     let s = assemble(i).unwrap();
     let m = &s.machines[0];
     assert_eq!(m.state, MachineState::Offline);
@@ -365,10 +363,85 @@ fn offline_machine_omits_load_and_keeps_agents() {
     assert!(m.nodes[0].holding.is_empty());
 }
 #[test]
-fn agent_without_attempt_is_skipped() {
-    let mut i = input(vec![node(1, "a", WorkerHealth::Online, Some(2), 0, vec![])]);
-    i.agents.push((uid(1), session(None, "claude-opus-5-5")));
-    assert!(assemble(i).unwrap().machines[0].nodes[0].agents.is_empty());
+fn every_slot_holder_is_listed_under_its_own_node_with_phase_and_output_time() {
+    let mut i = input(vec![
+        node(1, "a", WorkerHealth::Online, Some(4), 3, vec![]),
+        node(2, "b", WorkerHealth::Online, Some(4), 1, vec![]),
+    ]);
+    use AgentPhase::*;
+    for (n, attempt, phase) in [
+        (1, 5, Starting),
+        (1, 6, Running),
+        (1, 7, Finishing),
+        (2, 8, Running),
+    ] {
+        i.agents
+            .push((uid(n), agent(uid(attempt), "claude-sonnet-5", phase)));
+    }
+    let s = assemble(i).unwrap();
+    let nodes: Vec<&SwarmNode> = s.machines.iter().flat_map(|m| &m.nodes).collect();
+    for n in &nodes {
+        assert_eq!(n.agents.len() as u32, n.slots.occupied, "{}", n.name);
+    }
+    let phases: Vec<_> = nodes[0].agents.iter().map(|a| a.phase.unwrap()).collect();
+    assert_eq!(phases, [Starting, Running, Finishing]);
+    assert_eq!(nodes[1].agents[0].attempt_id, uid(8));
+    let row = serde_json::to_value(&nodes[0].agents[0]).unwrap();
+    assert_eq!(row["phase"], "starting");
+    assert_eq!(row["last_output_at"], "2026-11-07T00:00:03.000Z");
+    assert_eq!(row["held_since"], "2026-11-06T23:59:50.000Z");
+    assert!(row["ran_with"].is_null() && row.get("ran_with").is_some());
+    assert_eq!(row["task"]["title"], "Fix the flaky test");
+}
+/// The title reads below never wait, so one poll finishes them.
+fn finish<F: std::future::Future>(future: F) -> F::Output {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match std::pin::pin!(future).poll(&mut context) {
+        std::task::Poll::Ready(value) => value,
+        std::task::Poll::Pending => panic!("title read waited"),
+    }
+}
+#[test]
+fn titles_are_read_once_per_task_and_then_served_from_the_cache() {
+    use crate::agents::{Held, remember, title};
+    let (known, fresh, slow) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    remember(known, Some("  Known title ".into()));
+    let mut held = Held {
+        agents: Vec::new(),
+        running: 0,
+        cut: false,
+    };
+    for task in [known, fresh, slow, fresh] {
+        let mut a = agent(Uuid::new_v4(), "claude-sonnet-5", AgentPhase::Running);
+        a.task.as_mut().unwrap().id = task;
+        a.task.as_mut().unwrap().title = task.to_string();
+        held.agents.push((uid(1), a));
+    }
+    let reads = std::cell::RefCell::new(Vec::new());
+    let read = |_project: Uuid, task: Uuid| {
+        reads.borrow_mut().push(task);
+        // The third task's read runs out of time: no further reads this page.
+        std::future::ready((task == fresh).then(|| Some("Fresh title".to_owned())))
+    };
+    finish(held.titles(read));
+    let titles: Vec<&str> = (held.agents.iter())
+        .map(|(_, a)| a.task.as_ref().unwrap().title.as_str())
+        .collect();
+    let id = slow.to_string();
+    assert_eq!(
+        titles,
+        ["Known title", "Fresh title", id.as_str(), "Fresh title"]
+    );
+    assert_eq!(*reads.borrow(), [fresh, slow]);
+    assert_eq!(title(fresh), Some(Some("Fresh title".into())));
+    assert_eq!(title(slow), None);
+    assert_eq!(crate::agents::title_or_id(fresh), "Fresh title");
+    assert_eq!(crate::agents::title_or_id(slow), id);
+    // A second page reads nothing it already has.
+    reads.borrow_mut().clear();
+    held.agents.truncate(2);
+    finish(held.titles(read));
+    assert!(reads.borrow().is_empty());
 }
 #[test]
 fn holding_drops_concurrency_and_maps_measurement() {
@@ -614,8 +687,8 @@ fn legacy_machine_has_no_control() {
 }
 #[test]
 fn reason_notes_a_cut_candidate_list() {
-    assert_eq!(reason(None, 3, false), None);
-    assert!(reason(None, 3, true).unwrap().contains("128 most recent"));
+    assert_eq!(reason(None, false), None);
+    assert!(reason(None, true).unwrap().contains("128 most recent"));
 }
 #[test]
 fn busy_node_is_not_held_for_a_lapsed_capability_report() {

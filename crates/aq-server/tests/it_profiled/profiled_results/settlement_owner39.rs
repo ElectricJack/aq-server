@@ -76,10 +76,11 @@ pub(super) fn context_bytes(f: &Fixture) -> Vec<u8> {
 pub(super) async fn initial_project(f: &Fixture) {
     let p = &f.profiled;
     let a = policy();
-    let binding = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic settlement fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"catalog_digest":f.selection.catalog_digest,"allowed_agent_profiles":["implementer@2"],"allowed_intelligence_profiles":["engineering@2"],"allowed_execution_profiles":["confined-development@2"],"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":a.artifact().id,"revision":a.artifact().version,"digest":a.artifact().digest},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":format!("project:{}",f.selection.lineage.project_id)}],"context_bytes":1048576,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
+    let binding = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic settlement fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":a.artifact().id,"revision":a.artifact().version,"digest":a.artifact().digest},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":format!("project:{}",f.selection.lineage.project_id)}],"context_bytes":1048576,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
     let typed: aq_server::project_bindings::domain::ProjectBinding =
-        serde_json::from_value(binding.clone()).unwrap();
+        serde_json::from_value(binding).unwrap();
     typed.validate(&Default::default()).unwrap();
+    let binding = serde_json::to_value(&typed).unwrap();
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,$3,'{}')").bind(f.selection.lineage.project_id).bind(binding).bind(NOW as i64).execute(&f.db.pool().await).await.unwrap();
 }
 fn external(attempt: Uuid) -> ExternalDeclaration {
@@ -116,13 +117,6 @@ async fn setup() -> Case {
     let mut profile = fixture["proposal_profiles"][0]["profile"].clone();
     profile["capabilities"] = json!(["read.get", "read.context"]);
     let mut env = Box::pin(review_env_options(16, Some(profile.clone()), true)).await;
-    // Activate the real immutable fixture catalog through its authenticated owner,
-    // rather than assigning a digest-shaped pointer in SQL.
-    use tower::ServiceExt;
-    let selection: Value =
-        serde_json::from_str(include_str!("../../fixtures/selection-v2.json")).unwrap();
-    let response=aq_server::build_admin_router(env.f.state.clone()).oneshot(axum::http::Request::builder().method("POST").uri("/api/profiles/catalogs/activate").header("content-type","application/json").header("X-AQ-Request","1").body(axum::body::Body::from(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"artifact_json":selection["catalog_artifact_json"]}).to_string())).unwrap()).await.unwrap();
-    assert_eq!(response.status(), 200);
     let r = {
         let mut tx = env.f.db.pool().await.begin().await.unwrap();
         let r = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
@@ -470,8 +464,11 @@ async fn settlement39_actual_owners_accept_one_combined_decision_hold_until_exac
         .await
         .unwrap()
     );
+    common::roles::pin_active(&pool, receipt.attempt_id).await;
     let done = Box::pin(c.service.complete(&c.actor, op)).await.unwrap();
     assert_eq!(done.state, "confirmed");
+    // Spec 0014 §7.1: the snapshot pin is released with the attempt's hold on its task.
+    assert!(!common::roles::pinned(&pool, receipt.attempt_id).await);
     let settled: (Value, i64) =
         sqlx::query_as("SELECT state,record_revision FROM execution_attempts WHERE attempt_id=$1")
             .bind(receipt.attempt_id)

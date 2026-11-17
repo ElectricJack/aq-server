@@ -100,9 +100,11 @@ python3 scripts/dev-stack.py seed
 `none` is an explicit choice for a public repository. The pinned Git candidate
 rejects named credential profiles; private authenticated remotes require a
 separately qualified candidate. URLs containing credentials are rejected.
-The seed registers the remote/base ref through Git, creates one graph task,
-activates the checked-in example profile artifact, and creates one revisioned
-project binding through the public owner API. It does not fetch or publish.
+The seed registers the remote/base ref through Git, creates one graph task
+and creates one revisioned project binding through the public owner API. It
+seeds no roles or profiles: the server installs its default role, intelligence
+and execution documents at start
+([operator's guide](operations/profile-catalogs.md)). It does not fetch or publish.
 Stable IDs and operation receipts make retries safe. Changing seed inputs
 is refused; use a new state directory **and** Compose project to start fresh.
 For nondefault ports, set `AQ_DEV_SERVER_URL`, `AQ_DEV_WORKER_URL`, and
@@ -139,7 +141,7 @@ activates the supported decision and settlement HTTP owners without creating
 fake reports, approvals or completed tasks. A real retained result and human
 review are still required to settle work.
 
-The example catalog requires intelligence configuration. The seed enrolls an
+The seed enrolls an
 offline `e0-local-development` worker because binding validation requires a real
 worker identity. Its credential is kept in private `secrets.dev/dev_worker.json`
 and never printed. New credential files are published atomically. Replay checks
@@ -147,7 +149,9 @@ the saved node identity and authenticates it with a correlated worker probe,
 without marking the worker online. Missing, malformed or stale credentials are
 refused while preserving identities. Recover the original credential, or use
 fresh state, secrets and a Compose project; seed does not silently enroll a
-replacement node. Configure an actual worker and revise the profile policy for MS0/MS1. E0
+replacement node. Configure an actual worker for MS0/MS1; any other registered
+project is bound with `scripts/bind-project.py PROJECT_ID` (dry run; `--apply`
+saves the binding and prints the `[profiled_execution] projects` entry). E0
 establishes local service integration, not a model-backed execution claim.
 
 Run the disposable acceptance test without a designated GitHub repository:

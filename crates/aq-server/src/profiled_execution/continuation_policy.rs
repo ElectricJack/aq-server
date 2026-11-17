@@ -2,7 +2,7 @@
 //! Callers hold current node/attempt ownership and separately fence live facts.
 use crate::error::AppError;
 use aq_admission::{ArtifactRef, LaunchBinding, RetainedArtifact};
-use aq_profiles::{Intelligence, SelectionPolicy};
+use aq_profiles::SelectionPolicy;
 use aq_selection::BudgetSnapshot;
 use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
@@ -39,17 +39,19 @@ fn policy_of(reference: &ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, Ap
     {
         return Err(refused());
     }
-    let definition: Intelligence = serde_json::from_slice(body).map_err(|_| refused())?;
-    if reference.id.as_str()
-        != format!(
-            "intelligence:{}",
-            aq_profiles::key(&definition.id, definition.version)
-        )
-        || reference.version.as_str() != definition.version.to_string()
-    {
+    // The level as the attempt's offer retained it: the document and the
+    // selection policy in effect for the launch (the defaults of its
+    // snapshot, the level's own keys and the execution profile's limits).
+    #[derive(serde::Deserialize)]
+    struct PinnedLevel {
+        id: String,
+        selection_policy: SelectionPolicy,
+    }
+    let level: PinnedLevel = serde_json::from_slice(body).map_err(|_| refused())?;
+    if reference.id.as_str() != format!("intelligence:{}", level.id) {
         return Err(refused());
     }
-    definition.selection_policy.ok_or_else(|| refused())
+    Ok(level.selection_policy)
 }
 /// The attempt's one retained definition body for `reference`, verified.
 async fn pinned_body(
@@ -135,24 +137,17 @@ mod tests {
     fn fixture() -> (ArtifactRef, Vec<u8>, BudgetSnapshot) {
         let value: Value =
             serde_json::from_str(include_str!("../../tests/fixtures/selection-v2.json")).unwrap();
-        let catalog = aq_profiles::ValidatedCatalog::from_artifact(
-            value["catalog_artifact_json"].as_str().unwrap().as_bytes(),
-        )
-        .unwrap();
-        let definition = &catalog.artifact().catalog.intelligence[0];
-        let mut json = serde_json::to_value(definition).unwrap();
+        // The level as an offer retains it: its id and the selection policy
+        // in effect, under the identity `intelligence:<id>`.
+        let id = "standard-high";
+        let policy = aq_profiles::roles::SelectionDefaults::default().policy(4096, Vec::new());
+        let mut json = serde_json::json!({"id": id, "selection_policy": policy});
         json.sort_all_objects();
         let body = serde_json::to_vec(&json).unwrap();
-        let source = catalog
-            .source(
-                "intelligence",
-                &aq_profiles::key(&definition.id, definition.version),
-            )
-            .unwrap();
         let reference = ArtifactRef {
-            id: aq_admission::Text::new(source.identity).unwrap(),
-            version: aq_admission::Text::new(source.revision).unwrap(),
-            digest: serde_json::from_value(serde_json::json!(source.digest)).unwrap(),
+            id: aq_admission::Text::new(format!("intelligence:{id}")).unwrap(),
+            version: aq_admission::Text::new("1").unwrap(),
+            digest: aq_admission::Digest::of(&body),
         };
         (
             reference,
@@ -185,8 +180,9 @@ mod tests {
         let mut legacy = reference.clone();
         legacy.digest = aq_admission::Digest::of(&bytes);
         assert!(decode(legacy, &bytes, budget.clone()).is_err());
+        // A reference that names another level than the body does.
         let mut wrong = reference;
-        wrong.version = aq_admission::Text::new("999").unwrap();
+        wrong.id = aq_admission::Text::new("intelligence:another").unwrap();
         assert!(decode(wrong, &body, budget).is_err());
     }
 }

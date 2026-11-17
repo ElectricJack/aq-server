@@ -67,10 +67,6 @@ fn loaded(state: &AppState) -> Result<&config::LoadedRegistry> {
 }
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/intelligence/explain",
-            post(resolver::explain).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
-        )
         .route("/api/intelligence/registry", get(inspect))
         .route("/api/intelligence/observations", post(observe))
         .route("/api/intelligence/register", post(install))

@@ -33,6 +33,10 @@
     "created_by": "contract-fixture",
     "provenance": [],
     "version": "1",
-    "content_revision": "1"
+    "content_revision": "1",
+    "role": {
+      "id": "developer",
+      "source": "project_default"
+    }
   }
 }
