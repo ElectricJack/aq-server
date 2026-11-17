@@ -2,6 +2,10 @@
 # and compose.dev.yaml: an aq-git image built from a sibling checkout, and the
 # internal work host (routing classification and playbook authoring run there).
 services:
+  server:
+    environment:
+      # Refusals are logged without their detail unless this target is on.
+      RUST_LOG: ${AQ_LOCAL_RUST_LOG:-info,aq_refusal=debug}
   aq-git:
     image: ${AQ_LOCAL_GIT_IMAGE:-${AQ_SERVER_IMAGE:-agent-q-server:dev}}
   internal-work:
