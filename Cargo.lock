@@ -994,6 +994,7 @@ dependencies = [
  "aq-dashboard-contract",
  "aq-history-caps",
  "aq-machine-control",
+ "aq-role-settings",
  "aq-selection",
  "chrono",
  "schemars",

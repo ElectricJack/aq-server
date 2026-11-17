@@ -880,7 +880,7 @@ pub(super) async fn session(
             kind: "task".into(),
             id: view.task_id,
             revision: task_revision.map(Into::into),
-            title: view.task_id.to_string(),
+            title: aq_swarm::agents::title_or_id(view.task_id),
         }),
         attempt_id: Some(attempt),
         project,

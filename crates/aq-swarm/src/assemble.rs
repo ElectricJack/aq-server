@@ -1,6 +1,5 @@
 //! Pure swarm assembly: machines, nodes, agents, states and waiting reasons
 //! from facts the server has already read.
-use crate::class::intelligence_class;
 use crate::machine::{FRESH_MS, MachineFacts};
 use crate::service::{ControlFact, ServiceFact};
 use crate::{TimeError, timestamp};
@@ -49,9 +48,6 @@ pub struct NodeExtra {
     /// The server-held machine key (`nodes.machine_key`) of a service node.
     pub machine_key: Option<String>,
 }
-
-/// Upper bound of running agents resolved per read.
-pub const MAX_AGENTS: usize = 64;
 
 impl NodeExtra {
     /// Version, sandbox templates and measurement state of each node.
@@ -105,43 +101,18 @@ impl NodeExtra {
     }
 }
 
-/// Task-holding attempts read per swarm poll: twice the agents shown, so a
-/// stopped attempt that keeps its task cannot crowd out a running one.
-pub const MAX_CANDIDATES: usize = MAX_AGENTS * 2;
+/// Slot-holding attempts listed per swarm poll.
+pub const MAX_CANDIDATES: usize = 128;
 
-/// `(attempt, session, node)` of task-holding attempts, most recent first (the
-/// latest execution deadline; no deadline is the most recent), at most `limit`,
-/// and whether more exist. These are candidates only: a stopped attempt keeps
-/// its task until released, so the caller keeps the ones the overview read
-/// counts as running (`AuthorityView::running_at`).
-pub async fn holding(
-    conn: &mut sqlx::PgConnection,
-    ids: &[Uuid],
-    limit: usize,
-) -> sqlx::Result<(Vec<(Uuid, Uuid, Uuid)>, bool)> {
-    let mut rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as("SELECT attempt_id, session_id, node_id FROM execution_attempts WHERE holds_task AND node_id = ANY($1) ORDER BY execution_deadline_ms DESC NULLS FIRST, node_id, session_id LIMIT $2")
-        .bind(ids)
-        .bind(i64::try_from(limit).unwrap_or(i64::MAX).saturating_add(1))
-        .fetch_all(conn)
-        .await?;
-    let more = rows.len() > limit;
-    rows.truncate(limit);
-    Ok((rows, more))
-}
-
-/// The read's coverage reason: the capacity gap, a note when the candidate
-/// list was cut (the running count is then a lower bound), and a note when the
-/// agent list was cut.
-pub fn reason(capacity: Option<String>, running: usize, candidates_cut: bool) -> Option<String> {
-    let counted = candidates_cut.then(|| {
-        format!("Running agents are counted from the {MAX_CANDIDATES} most recent attempts")
+/// The read's coverage reason: the capacity gap, and a note when more attempts
+/// hold a slot than the read lists (the running count is then a lower bound).
+pub fn reason(capacity: Option<String>, cut: bool) -> Option<String> {
+    let counted = cut.then(|| {
+        format!("Agents are listed and counted from the {MAX_CANDIDATES} most recent attempts")
     });
-    let cut =
-        (running > MAX_AGENTS).then(|| "More than 64 running agents; some are not shown".into());
     let all = capacity
         .into_iter()
         .chain(counted)
-        .chain(cut)
         .collect::<Vec<String>>()
         .join("; ");
     Some(all).filter(|r| !r.is_empty())
@@ -155,7 +126,8 @@ pub struct SwarmInput {
     pub machines: BTreeMap<Uuid, MachineFacts>,
     pub services: BTreeMap<Uuid, ServiceFact>,
     pub controls: BTreeMap<String, ControlFact>,
-    pub agents: Vec<(Uuid, SessionSummary)>,
+    /// `(node, row)` of every attempt holding a slot (`agents::load`).
+    pub agents: Vec<(Uuid, SwarmAgent)>,
     pub history: Vec<aq_history_caps::Hold>,
     /// R6: current task holds per (project, reason code), `aq_machine_control::holds::counts`.
     pub task_holds: Vec<(Uuid, String, i64)>,
@@ -346,20 +318,8 @@ pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
         }
         let agents = agents
             .iter()
-            .filter(|(node, s)| *node == id && s.attempt_id.is_some())
-            .map(|(_, s)| SwarmAgent {
-                session_id: s.id,
-                attempt_id: s.attempt_id.unwrap_or_default(),
-                task: s.task.clone(),
-                project: s.project.clone(),
-                provider: s.profile.provider.clone(),
-                model: s.profile.model.clone(),
-                harness: s.profile.harness.clone(),
-                intelligence_class: s.profile.model.as_deref().map(intelligence_class),
-                routing_profile: None,
-                terminal: s.terminal.clone(),
-                started_at: s.lifecycle.as_ref().and_then(|l| l.started_at.clone()),
-            })
+            .filter(|(node, _)| *node == id)
+            .map(|(_, agent)| agent.clone())
             .collect();
         let node = SwarmNode {
             node: n.node.clone(),

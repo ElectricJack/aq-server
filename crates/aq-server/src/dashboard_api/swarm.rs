@@ -1,14 +1,14 @@
-//! Swarm read: machines, worker nodes and running agents (spec 0007). Owner
+//! Swarm read: machines, worker nodes and slot-holding attempts (spec 0007). Owner
 //! only; nothing here grants placement.
 use super::{
     contract::*,
     runtime::Runtime,
-    service::{auth, envelope, fence, session, stamp, tx},
+    service::{auth, envelope, fence, stamp, tx},
     *,
 };
-use crate::execution::authority::{self, Policy};
+use crate::agent_access::human::{self as graph, ReadRuntime};
 use crate::{store::User, version_info};
-use aq_swarm::assemble::{MAX_AGENTS, MAX_CANDIDATES, NodeExtra, SwarmInput, assemble};
+use aq_swarm::assemble::{MAX_CANDIDATES, NodeExtra, SwarmInput, assemble};
 
 fn projects_of(state: &AppState) -> Vec<Uuid> {
     (state.config.profiled_execution.as_ref())
@@ -47,33 +47,33 @@ pub(super) async fn swarm(
     // R6: tasks a server-side hold keeps from being offered, per project and reason.
     let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state)).await;
     let task_holds = task_holds.map_err(|_| Error::Unavailable)?;
-    let mut held = Vec::new();
-    let (candidates, cut) = aq_swarm::assemble::holding(&mut tx, &ids, MAX_CANDIDATES).await?;
-    for (attempt, id, node) in candidates {
-        let v = authority::read_attempt(state, &mut tx, node, attempt, Policy::IdentityOnly)
-            .await
-            .map_err(|_| Error::Unavailable)?;
-        if v.running_at(now) {
-            held.push((id, node));
-        }
-    }
+    let query = aq_swarm::agents::Query {
+        nodes: &ids,
+        project: scope.project(),
+        runtime: state.config.terminals.as_ref().map(|t| t.runtime_id),
+        summaries: crate::role_settings::tables(state),
+        now_ms: now,
+        limit: MAX_CANDIDATES,
+    };
+    let mut held = aq_swarm::agents::load(&mut tx, query).await?;
     tx.commit().await?;
-    let mut agents = Vec::new();
-    for (id, node) in held.iter().take(MAX_AGENTS) {
-        match session(state, runtime, user, *id, &scope).await {
-            Ok(d) => agents.push((*node, d.summary)),
-            Err(Error::Api(AppError::Forbidden(_) | AppError::NotFound(_))) => {}
-            Err(e) => return Err(e),
-        }
-    }
+    let reader =
+        (state.agent_access.is_some()).then(|| ReadRuntime::with_pool(state.store.pool.clone()));
+    let until = tokio::time::Instant::now() + aq_swarm::agents::TITLE_BUDGET;
+    held.titles(async |project, task| {
+        let read = graph::task_brief(state, reader.as_ref()?, user, project, task);
+        let brief = tokio::time::timeout_at(until, read).await.ok()?;
+        Some(brief.ok().and_then(|b| b.title))
+    })
+    .await;
     let info = version_info();
     let server = SwarmServer {
         version: info.server_version,
         source_revision: info.source_revision,
-        running_agents: u32::try_from(held.len()).unwrap_or(u32::MAX),
+        running_agents: u32::try_from(held.running).unwrap_or(u32::MAX),
         owner_availability,
     };
-    let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.len(), cut);
+    let reason = aq_swarm::assemble::reason(cap.coverage.reason.clone(), held.cut);
     let data = assemble(SwarmInput {
         now_ms: now,
         server,
@@ -82,7 +82,7 @@ pub(super) async fn swarm(
         machines,
         services,
         controls,
-        agents,
+        agents: held.agents,
         history,
         task_holds,
     })?;

@@ -80,15 +80,19 @@
               {
                 "attempt_id": "18b0b16f-5a27-47d4-ac8b-7ddbd6f6eef9",
                 "harness": "codex",
+                "held_since": "1970-01-01T00:16:40.000Z",
                 "intelligence_class": "standard",
+                "last_output_at": null,
                 "model": "model-a",
+                "phase": "running",
                 "project": {
                   "id": "00000000-0000-0000-0000-000000000001",
                   "label": "Synthetic authority fixture"
                 },
                 "provider": "fixture-a",
+                "ran_with": null,
                 "session_id": "8443464c-ffb8-4666-b947-c0b39e7db38d",
-                "started_at": null,
+                "started_at": "1970-01-01T00:16:40.000Z",
                 "task": {
                   "id": "00000000-0000-0000-0000-000000000003",
                   "revision": "1",

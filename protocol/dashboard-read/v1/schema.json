@@ -28,6 +28,26 @@
       ],
       "type": "object"
     },
+    "AgentPhase": {
+      "description": "Where a slot-holding attempt is.",
+      "oneOf": [
+        {
+          "const": "starting",
+          "description": "Offered, preparing or granted; the agent has not started.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "The agent started and its grant is live.",
+          "type": "string"
+        },
+        {
+          "const": "finishing",
+          "description": "Stopped, cancelled or expired; the slot is not released yet.",
+          "type": "string"
+        }
+      ]
+    },
     "ApiVersion": {
       "enum": [
         "dashboard-read-1"
@@ -3482,7 +3502,7 @@
     },
     "SwarmAgent": {
       "additionalProperties": false,
-      "description": "A running agent on a node.",
+      "description": "An attempt that holds a slot on a node: one row per occupied slot.",
       "properties": {
         "attempt_id": {
           "format": "uuid",
@@ -3493,6 +3513,17 @@
             "string",
             "null"
           ]
+        },
+        "held_since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the attempt was offered and took its slot."
         },
         "intelligence_class": {
           "anyOf": [
@@ -3505,10 +3536,32 @@
           ],
           "description": "Legacy model-based palette hint; routing_profile identifies the enforced class."
         },
+        "last_output_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last terminal output the relay recorded. Output is not progress."
+        },
         "model": {
           "type": [
             "string",
             "null"
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPhase"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "project": {
@@ -3519,6 +3572,18 @@
             "string",
             "null"
           ]
+        },
+        "ran_with": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RanWith"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null when the attempt has no summary."
         },
         "routing_profile": {
           "anyOf": [
@@ -3542,7 +3607,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "When the agent started; for an attempt whose agent never started, when\nthe attempt took the slot (`held_since`)."
         },
         "task": {
           "anyOf": [

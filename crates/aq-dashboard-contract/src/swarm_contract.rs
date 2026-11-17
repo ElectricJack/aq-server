@@ -1,5 +1,5 @@
 //! Swarm read model (spec 0007 phase 2), served at `GET /api/v1/swarm`.
-use crate::{EntityRef, NodeSlots, ProjectRef, Timestamp, TitledRef, WorkerHealth};
+use crate::{EntityRef, NodeSlots, ProjectRef, RanWith, Timestamp, TitledRef, WorkerHealth};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -193,7 +193,18 @@ pub enum IntelligenceClass {
     Standard,
     Deep,
 }
-/// A running agent on a node.
+/// Where a slot-holding attempt is.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPhase {
+    /// Offered, preparing or granted; the agent has not started.
+    Starting,
+    /// The agent started and its grant is live.
+    Running,
+    /// Stopped, cancelled or expired; the slot is not released yet.
+    Finishing,
+}
+/// An attempt that holds a slot on a node: one row per occupied slot.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SwarmAgent {
@@ -209,7 +220,20 @@ pub struct SwarmAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_profile: Option<RoutingProfile>,
     pub terminal: Option<EntityRef>,
+    /// When the agent started; for an attempt whose agent never started, when
+    /// the attempt took the slot (`held_since`).
     pub started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<AgentPhase>,
+    /// When the attempt was offered and took its slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_since: Option<Timestamp>,
+    /// Null when the attempt has no summary.
+    #[serde(default)]
+    pub ran_with: Option<RanWith>,
+    /// Last terminal output the relay recorded. Output is not progress.
+    #[serde(default)]
+    pub last_output_at: Option<Timestamp>,
 }
 /// The authoritative intelligence profile pinned for this attempt.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
