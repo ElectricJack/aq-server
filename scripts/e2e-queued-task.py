@@ -153,7 +153,8 @@ def main():
             work = stack.work(args.project, task)
             execution, readiness = work.get("execution") or {}, work.get("readiness") or {}
             now = (execution.get("status"), readiness.get("state"))
-            if execution.get("attempt_id"):
+            # An offer that lapses before it is granted never ran anything.
+            if execution.get("attempt_id") and now[0] != "offered":
                 attempts.add(execution["attempt_id"])
             if now != seen:
                 say(f"execution={now[0]} readiness={now[1]} {[r.get('code') for r in readiness.get('reasons', [])]}")
