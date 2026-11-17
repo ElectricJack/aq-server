@@ -2,8 +2,9 @@
 """Run the scoped central fleet. Private config, Docker access, no native agent.
 
 Creates only labelled, per-conversation containers. It neither prunes containers
-nor changes worker services. Existing containers keep their own subscription
-cache and durable host state. A stopped supervisor retains its conversation.
+nor changes worker services. Every supervisor reads and refreshes one shared
+ChatGPT login (a volume at /login); existing containers keep their durable host
+state. A stopped supervisor retains its conversation.
 """
 import io
 import json
@@ -47,6 +48,14 @@ def main():
     prefix = cfg['prefix']
     if not prefix.startswith('aq-ms1-supervisor-') or not prefix.replace('-', '').isalnum():
         raise ValueError('scoped namespace required')
+    # A refresh rotates the refresh token, so per-container copies lock each
+    # other out. One login file for the fleet: the host's flock on its
+    # directory serializes copy-backs and each turn starts from the newest.
+    # shortcut: two turns refreshing in the same seconds can still collide;
+    # upgrade to refreshing under the lock if that is seen.
+    login_volume = prefix + 'login'
+    if cfg['service'].get('secret_file') != '/login/auth.json':
+        raise ValueError('shared supervisor login required')
     stopping = False
 
     def stop(_signum, _frame):
@@ -69,7 +78,9 @@ def main():
                 found = run(['docker', 'container', 'ls', '-aq', '--filter', 'name=^/' + name + '$']).decode().strip()
                 if found:
                     record = json.loads(run(['docker', 'inspect', name]))[0]
-                    if record['Config']['Labels'].get('io.agent-q.supervisor.scope') != scope or record['Image'] != image:
+                    mounts = {m.get('Destination'): m.get('Name') for m in record.get('Mounts', [])}
+                    if (record['Config']['Labels'].get('io.agent-q.supervisor.scope') != scope or record['Image'] != image
+                            or mounts.get('/login') != login_volume):
                         raise ValueError('retained supervisor needs explicit upgrade')
                     if not record['State']['Running']:
                         # No blind restart: a dead PID namespace can leave an
@@ -85,18 +96,19 @@ def main():
                      '--pids-limit', '512', '--stop-timeout', '30', '--ulimit', 'core=0', '--security-opt', 'no-new-privileges',
                      '--mount', 'type=volume,src=' + volume + ',dst=/state',
                      '--mount', 'type=volume,src=' + name + '-workspace,dst=/workspace',
+                     '--mount', 'type=volume,src=' + login_volume + ',dst=/login',
                      '--log-opt', 'max-size=2m', '--log-opt', 'max-file=2',
                      image, 'serve', '/state/service.json'])
                 files={'service.json':json.dumps(service).encode()}
-                # Preserve a private, refreshed subscription cache in a retained
-                # volume. This read is discarded without printing token bytes.
-                cached=subprocess.run(['docker','cp',name+':/state/subscription.json','-'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE).returncode==0
-                if not cached:
+                # Seed the shared login once; afterwards it holds the fleet's
+                # newest refresh. This read is discarded without printing token bytes.
+                seeded=subprocess.run(['docker','cp',name+':/login/auth.json','-'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE).returncode==0
+                if not seeded:
                     auth=private(Path(cfg['subscription_file']))
                     parsed=json.loads(auth)
                     if parsed.get('auth_mode')!='chatgpt' or parsed.get('OPENAI_API_KEY'):
                         raise ValueError('subscription authentication required')
-                    files['subscription.json']=auth
+                    run(['docker', 'cp', '-', name + ':/login'], archive({'auth.json': auth}))
                 run(['docker', 'cp', '-', name + ':/state'], archive(files))
                 if cfg.get('egress_network'):
                     run(['docker', 'network', 'connect', cfg['egress_network'], name])
