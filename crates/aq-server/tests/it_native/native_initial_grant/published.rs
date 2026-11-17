@@ -568,33 +568,8 @@ async fn actual_initial_grant_reconciliation_returns_history_without_live_clock_
 #[tokio::test]
 async fn initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time() {
     let mut case = native_offer::setup().await;
-    let original: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(case.env.env.body["catalog_digest"].as_str().unwrap())
-            .fetch_one(&case.env.env.pool)
-            .await
-            .unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
-    let mut artifact = catalog.artifact().clone();
-    for profile in &mut artifact.catalog.intelligence {
-        if let Some(policy) = profile.selection_policy.as_mut() {
-            policy.max_lineage_elapsed_ms = 5000;
-            profile.version = 3;
-        }
-    }
-    for profile in &mut artifact.catalog.agents {
-        profile.version = 3;
-        profile.intelligence = "engineering@3".into();
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    let app = aq_server::build_admin_router(case.env.env.state.clone());
-    let (status,body)=super::common::selection::call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    case.env.env.body["catalog_digest"] = json!(updated.digest());
-    case.env.env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
-    case.env.env.body["allowed_intelligence_profiles"] = json!(["engineering@3"]);
-    let (status,body)=super::common::selection::call(&app,&super::common::selection::path(),Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":case.env.env.body})),"owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
+    // Every level of the fixture uses the selection defaults.
+    native_offer::pin_policy(&mut case, |p| p.max_lineage_elapsed_ms = 5000).await;
     let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let aq_admission::control::ControlReply::Poll(mut page) =
