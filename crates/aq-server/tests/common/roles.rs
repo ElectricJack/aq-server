@@ -44,12 +44,11 @@ pub fn open_level(id: &str, candidates: &[(&str, &str, &str)]) -> String {
         level(id, candidates)
     )
 }
+/// A candidate row: `(provider, model, reasoning)`.
+pub type Candidate = (&'static str, &'static str, &'static str);
 /// The fixture's levels: every shipped id. Two models and three efforts, so
 /// a routed task shows which level it ran on.
-pub fn levels() -> Vec<(
-    &'static str,
-    Vec<(&'static str, &'static str, &'static str)>,
-)> {
+pub fn levels() -> Vec<(&'static str, Vec<Candidate>)> {
     let a = |reasoning| vec![("fixture-a", "model-a", reasoning)];
     let small = |reasoning| vec![("fixture-a", "model-small", reasoning)];
     vec![

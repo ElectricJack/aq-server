@@ -60,7 +60,7 @@ impl<'a> CoreProfile<'a> {
             harnesses: &execution.harnesses,
             environments: &execution.environments,
             credentials: CoreCredentials::Listed(&execution.credential_profile_references),
-            confinement: execution.confinement.clone(),
+            confinement: execution.confinement,
         }
     }
     /// The launch a role snapshot resolved: each candidate states its
