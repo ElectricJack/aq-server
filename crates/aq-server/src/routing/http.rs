@@ -15,13 +15,13 @@ pub(crate) fn admin_routes() -> Router<AppState> {
     Router::new().route("/api/tasks/{id}/routes", get(routes))
 }
 
-/// Under the Intelligence settings, so the supervisor admin nest reaches it as well.
+/// A Settings route, so the supervisor admin nest reaches it as well.
 pub(crate) fn settings_routes() -> Router<AppState> {
     let policy = get(policy).post(switch);
-    Router::new().route("/api/settings/intelligence/routing", policy)
+    Router::new().route("/api/settings/routing", policy)
 }
 
-/// `GET /api/settings/intelligence/routing`: the switch and the routing source.
+/// `GET /api/settings/routing`: the switch and the routing source.
 async fn policy(
     State(state): State<AppState>,
     RequireOwner(_): RequireOwner,
@@ -48,7 +48,7 @@ struct Switch {
     enabled: bool,
 }
 
-/// `POST /api/settings/intelligence/routing` with `{enabled}`; on only while a routing
+/// `POST /api/settings/routing` with `{enabled}`; on only while a routing
 /// playbook is active.
 async fn switch(
     State(state): State<AppState>,

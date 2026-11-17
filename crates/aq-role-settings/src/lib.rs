@@ -13,11 +13,12 @@ use uuid::Uuid;
 pub mod attempts;
 pub mod http;
 mod store;
+pub mod suggestions;
 pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, get,
-    install_defaults, list, pin, save, save_limits, save_selection_defaults, settings, snapshot,
-    startup, unpin,
+    install_defaults, list, pin, routing_document, save, save_limits, save_routing_document,
+    save_selection_defaults, settings, snapshot, startup, unpin,
 };
 
 /// Something outside this store that names one of its documents, such as a
@@ -101,6 +102,9 @@ pub struct Settings {
     pub selection_defaults_revision: i64,
     pub limits: StoreLimits,
     pub limits_revision: i64,
+    /// The routing document: the text the routing playbook is authored from.
+    pub routing_markdown: String,
+    pub routing_revision: i64,
 }
 
 /// The active snapshot and the store revision it was read at.
@@ -125,6 +129,8 @@ pub enum Change {
     },
     SelectionDefaults(SelectionDefaults),
     Limits(StoreLimits),
+    /// The routing document. It is not part of a snapshot.
+    RoutingDocument(String),
 }
 /// A change with its fence and its retry identity.
 #[derive(Debug, Clone, PartialEq, Eq)]

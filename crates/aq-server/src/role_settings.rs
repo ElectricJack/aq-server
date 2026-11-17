@@ -26,6 +26,20 @@ pub(crate) fn error(error: Error) -> AppError {
 }
 pub(crate) fn admin_routes() -> Router<AppState> {
     http::routes(get(read), put(write), delete(remove))
+        .route("/api/settings/model-suggestions", get(model_suggestions))
+}
+/// `GET /api/settings/model-suggestions`: per harness, the models a host tool
+/// discovered (`intelligence_preferences_file`). Suggestions for the level
+/// editor only: any model a level names is allowed.
+async fn model_suggestions(
+    State(state): State<AppState>,
+    RequireOwner(_): RequireOwner,
+) -> Json<Value> {
+    let path = state.config.intelligence_preferences_file.clone();
+    let read =
+        tokio::task::spawn_blocking(move || aq_role_settings::suggestions::read(path.as_deref()));
+    let harnesses = read.await.unwrap_or_default();
+    Json(serde_json::json!({ "harnesses": harnesses }))
 }
 async fn read(
     State(state): State<AppState>,
@@ -42,6 +56,10 @@ async fn write(
 ) -> Response {
     let now_ms = (state.clock)().timestamp_millis();
     let saved = http::write(&state.store.pool, actor.id, uri.path(), body, now_ms).await;
+    if saved.is_ok() {
+        // The routing document or what the levels offer may have changed.
+        crate::routing::author(&state).await;
+    }
     http::respond(saved, error)
 }
 async fn remove(
@@ -52,6 +70,9 @@ async fn remove(
     let now_ms = (state.clock)().timestamp_millis();
     let (pool, references) = (&state.store.pool, crate::project_bindings::role_references);
     let removed = http::remove(pool, actor.id, uri.path(), uri.query(), now_ms, references).await;
+    if removed.is_ok() {
+        crate::routing::author(&state).await;
+    }
     http::respond(removed, error)
 }
 /// Server start: shipped defaults that are missing are installed and the

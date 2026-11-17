@@ -531,6 +531,7 @@ mod tests {
                 ("deep-high".parse().unwrap(), vec![]),
             ]
             .into(),
+            described: Default::default(),
         }
     }
     fn input(level: &str, harnesses: &[&str], providers: &[&str]) -> Value {

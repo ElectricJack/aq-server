@@ -39,13 +39,13 @@ enum Lock {
 async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> {
     let sql = match lock {
         Lock::None => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision FROM role_settings WHERE singleton"
+            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton"
         }
         Lock::Share => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision FROM role_settings WHERE singleton FOR SHARE"
+            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton FOR SHARE"
         }
         Lock::Update => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision FROM role_settings WHERE singleton FOR UPDATE"
+            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton FOR UPDATE"
         }
     };
     let row = sqlx::query(sql).fetch_one(conn).await?;
@@ -65,6 +65,10 @@ async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> 
         selection_defaults_revision: row.get("selection_defaults_revision"),
         limits: stored(row.get("limits"))?,
         limits_revision: row.get("limits_revision"),
+        routing_markdown: row
+            .get::<Option<String>, _>("routing_markdown")
+            .unwrap_or_default(),
+        routing_revision: row.get("routing_revision"),
     })
 }
 async fn documents(conn: &mut PgConnection, kind: Option<Kind>) -> Result<Vec<Document>> {
@@ -299,6 +303,7 @@ pub async fn apply_referenced(
             state.limits = *limits;
             current
         }
+        Change::RoutingDocument(_) => state.routing_revision,
     };
     if current != mutation.expected_revision {
         return Err(conflict(
@@ -316,12 +321,25 @@ pub async fn apply_referenced(
             }
         }
     }
-    let snapshot = match compile(&set, &state.selection_defaults, &state.limits) {
-        Ok(snapshot) if problems.is_empty() => snapshot,
-        Ok(_) => return Err(Error::Problems(problems)),
-        Err(more) => {
-            problems.extend(more);
-            return Err(Error::Problems(problems));
+    // The routing document is not part of a snapshot: saving it compiles
+    // and activates nothing.
+    let snapshot = if let Change::RoutingDocument(markdown) = &mutation.change {
+        let limit = state.limits.documents.max_document_bytes;
+        if markdown.len() > limit {
+            return Err(invalid(&format!(
+                "The routing document is {} bytes, over the limit of {limit} bytes",
+                markdown.len()
+            )));
+        }
+        None
+    } else {
+        match compile(&set, &state.selection_defaults, &state.limits) {
+            Ok(snapshot) if problems.is_empty() => Some(snapshot),
+            Ok(_) => return Err(Error::Problems(problems)),
+            Err(more) => {
+                problems.extend(more);
+                return Err(Error::Problems(problems));
+            }
         }
     };
     match &mutation.change {
@@ -361,12 +379,24 @@ pub async fn apply_referenced(
                 .execute(&mut *tx)
                 .await?;
         }
+        Change::RoutingDocument(markdown) => {
+            sqlx::query(
+                "UPDATE role_settings SET revision=$1,routing_markdown=$2,routing_revision=$1 WHERE singleton",
+            )
+            .bind(revision)
+            .bind(markdown)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
-    activate(&mut tx, &snapshot, revision, &state.limits, now_ms).await?;
-    let receipt = Receipt {
-        revision,
-        digest: snapshot.digest().into(),
+    let digest = match &snapshot {
+        Some(snapshot) => {
+            activate(&mut tx, snapshot, revision, &state.limits, now_ms).await?;
+            snapshot.digest().to_owned()
+        }
+        None => state.active_digest.clone().unwrap_or_default(),
     };
+    let receipt = Receipt { revision, digest };
     sqlx::query(
         "INSERT INTO role_settings_operations(operation_id,actor_id,request_digest,receipt,revision,created_at_ms) VALUES($1,$2,$3,$4,$5,$6)",
     )
@@ -451,6 +481,29 @@ pub async fn save_selection_defaults(
         operation_id,
     };
     apply(pool, actor, &mutation, now_ms).await
+}
+/// Replace the routing document (spec 0014 §5.2: it has its own place in
+/// Settings). `expected_revision` is its revision as last read, 0 before the
+/// first save.
+pub async fn save_routing_document(
+    pool: &PgPool,
+    actor: Uuid,
+    markdown: &str,
+    expected_revision: i64,
+    operation_id: Uuid,
+    now_ms: i64,
+) -> Result<Receipt> {
+    let mutation = Mutation {
+        change: Change::RoutingDocument(markdown.into()),
+        expected_revision,
+        operation_id,
+    };
+    apply(pool, actor, &mutation, now_ms).await
+}
+/// The routing document and its revision; empty at revision 0 until saved.
+pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
+    let settings = settings(pool).await?;
+    Ok((settings.routing_markdown, settings.routing_revision))
 }
 pub async fn save_limits(
     pool: &PgPool,

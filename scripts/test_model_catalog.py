@@ -11,12 +11,18 @@ class CatalogTests(unittest.TestCase):
   data={'google':{'models':{'unknown':{'tool_call':True,'modalities':{'input':['text']}}}}}
   choices=catalog.public_choices(data,'2026-11-09T00:00:00Z')
   self.assertEqual([(c['reasoning'],c['options']) for c in choices],[('Provider default',{})])
-  self.assertTrue(all(c['preference_only'] for c in choices))
  def test_exact_model_efforts_and_partial_budget_bounds_are_preserved(self):
   data={'google':{'models':{'level-model':{'tool_call':True,'reasoning_options':[{'type':'effort','values':['low','high']}]},'budget-model':{'tool_call':True,'reasoning_options':[{'type':'budget_tokens','min':128}]}}}}
   choices=catalog.public_choices(data,None)
   self.assertEqual({c['reasoning'] for c in choices if c['model']=='level-model'},{'low','high'})
   self.assertEqual([c['options'] for c in choices if c['model']=='budget-model'],[{'thinking_budget':128}])
+ def test_the_cache_lists_each_model_once_per_harness_without_reasoning(self):
+  first=catalog.choice('openai','gpt-x','low',{},'codex','Codex CLI','2026-11-16T00:00:00Z')
+  again=catalog.choice('openai','gpt-x','high',{'effort':'high'},'codex','OpenCode public metadata',None)
+  other=catalog.choice('openai','gpt-x','high',{},'opencode','OpenCode public metadata',None)
+  self.assertEqual(catalog.suggestions([first,again,other]),[
+   {'provider':'openai','model':'gpt-x','harness':'codex','source':'Codex CLI','observed_at':'2026-11-16T00:00:00Z'},
+   {'provider':'openai','model':'gpt-x','harness':'opencode','source':'OpenCode public metadata'}])
  def test_non_tool_and_embedding_only_models_are_excluded(self):
   data={'google':{'models':{'embedding':{'tool_call':False},'image-only':{'tool_call':True,'modalities':{'input':['image']}}}}}
   self.assertEqual(catalog.public_choices(data,None),[])

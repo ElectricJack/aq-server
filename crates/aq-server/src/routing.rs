@@ -221,12 +221,17 @@ pub async fn ensure_source(pool: &PgPool) -> Result<(), AppError> {
     Ok(aq_playbook_authoring::ensure_builtin(pool, &record).await?)
 }
 
-/// Authors the routing document after a save of the structure or of Settings. Nothing starts
+/// The routing document is empty (or unreadable): there is nothing to author.
+async fn no_document(pool: &PgPool) -> bool {
+    let document = aq_role_settings::routing_document(pool).await;
+    document.is_ok_and(|(markdown, _)| markdown.trim().is_empty())
+}
+
+/// Authors the routing document after a save of it or of a level document. Nothing starts
 /// for an empty document or when nothing the agent would see changed. A server without an
 /// open playbook engine, or without the source, only logs: the save has succeeded.
 pub async fn author(state: &AppState) {
-    let document = aq_profile_settings::structure::document(&state.store.pool).await;
-    if document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty()) {
+    if no_document(&state.store.pool).await {
         return;
     }
     if let Err(error) = aq_playbook_authoring::author(state, ROUTING_SOURCE).await {
@@ -240,9 +245,7 @@ pub(crate) async fn reconcile(state: AppState) {
     let every = Duration::from_millis(state.config.playbook_authoring.poll_ms.saturating_mul(30));
     loop {
         let pool = &state.store.pool;
-        let document = aq_profile_settings::structure::document(pool).await;
-        let empty = document.is_ok_and(|(d, _, _)| d.routing_markdown.trim().is_empty());
-        if !empty
+        if !no_document(pool).await
             && ensure_source(pool).await.is_ok()
             && let Err(error) = aq_playbook_authoring::author_missed(&state, ROUTING_SOURCE).await
         {
@@ -253,8 +256,8 @@ pub(crate) async fn reconcile(state: AppState) {
 }
 
 /// What Settings offers: each class that has a level document in the active role
-/// snapshot (a level's id is the router's class, spec 0014 §5.2), and every
-/// (provider, harness) pair of that level's candidates. Worker inventory is not read: a
+/// snapshot (a level's id is the router's class, spec 0014 §5.2) with that document's
+/// name and description, and every (provider, harness) pair of that level's candidates. Worker inventory is not read: a
 /// route may name what no worker can run now, and placement makes such a route wait.
 pub async fn options(state: &AppState) -> Result<Options, AppError> {
     let mut options = Options::default();
@@ -266,6 +269,11 @@ pub async fn options(state: &AppState) -> Result<Options, AppError> {
             let candidates =
                 (profile.candidates.iter()).map(|c| (c.provider.as_str(), c.harnesses.as_slice()));
             options.classes.insert(class, classify::offers(candidates));
+            let described = classify::Described {
+                name: profile.name.clone(),
+                description: profile.description.clone(),
+            };
+            options.described.insert(class, described);
         }
     }
     Ok(options)

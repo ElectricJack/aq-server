@@ -8,6 +8,7 @@
 //! | `/selection-defaults` | the selection defaults | replace | |
 //! | `/profiles/limits` | this store's limits | replace | |
 //! | `/profiles/snapshot` | the active digest and store revision | | |
+//! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
 //!
 //! Revisions travel as decimal strings, as in the other Settings routes.
 use crate::{Change, Document, Error, Mutation, Result, invalid, store};
@@ -50,7 +51,8 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/execution-profiles", read.clone())
         .route("/api/settings/execution-profiles/{id}", one)
         .route("/api/settings/selection-defaults", value.clone())
-        .route("/api/settings/profiles/limits", value)
+        .route("/api/settings/profiles/limits", value.clone())
+        .route("/api/settings/routing-document", value)
         .route("/api/settings/profiles/snapshot", read)
         .layer(DefaultBodyLimit::max(BODY_BYTES))
 }
@@ -61,16 +63,21 @@ enum Target {
     SelectionDefaults,
     Limits,
     Snapshot,
+    RoutingDocument,
 }
 fn target(path: &str) -> Result<Target> {
     let missing = || Error::NotFound("No such settings route".into());
-    let rest = path.strip_prefix("/api/settings/").ok_or_else(missing)?;
+    // The supervisor admin nest mounts these routes below its own prefix.
+    const ROOT: &str = "/api/settings/";
+    let at = path.find(ROOT).ok_or_else(missing)?;
+    let rest = &path[at + ROOT.len()..];
     let (first, id) = match rest.split_once('/') {
         Some((first, id)) => (first, Some(id)),
         None => (rest, None),
     };
     match (first, id) {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
+        ("routing-document", None) => Ok(Target::RoutingDocument),
         ("profiles", Some("limits")) => Ok(Target::Limits),
         ("profiles", Some("snapshot")) => Ok(Target::Snapshot),
         _ => {
@@ -150,6 +157,10 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
                 "active_digest": settings.active_digest,
             }))
         }
+        Target::RoutingDocument => {
+            let (markdown, revision) = store::routing_document(pool).await?;
+            Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
+        }
     }
 }
 
@@ -195,6 +206,7 @@ pub async fn write(
         (Target::Document(kind, id), Some(markdown), None, None) => {
             Change::Save { kind, id, markdown }
         }
+        (Target::RoutingDocument, Some(markdown), None, None) => Change::RoutingDocument(markdown),
         (Target::SelectionDefaults, None, Some(defaults), None) => {
             Change::SelectionDefaults(serde_json::from_value(defaults).map_err(|_| bad())?)
         }

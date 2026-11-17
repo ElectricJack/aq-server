@@ -14,6 +14,18 @@ use crate::Class;
 #[serde(deny_unknown_fields)]
 pub struct Options {
     pub classes: BTreeMap<Class, Vec<Offer>>,
+    /// The name and description of each class's level document: what a
+    /// routing document's author reads to tell the levels apart.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub described: BTreeMap<Class, Described>,
+}
+
+/// What a level document says about itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Described {
+    pub name: String,
+    pub description: String,
 }
 
 /// One (provider, harness) pair a class's profile lists among its candidates,
@@ -32,8 +44,9 @@ impl Options {
     }
 
     /// What a routing document's author is told Settings offers, as named
-    /// facts: `levels` from the lowest up, `offers` with each level's
-    /// harnesses and providers, and every harness and provider any level has.
+    /// facts: `levels` from the lowest up, `level_descriptions` with each
+    /// level's name and description, `offers` with each level's harnesses
+    /// and providers, and every harness and provider any level has.
     pub fn facts(&self) -> BTreeMap<String, serde_json::Value> {
         use std::collections::BTreeSet;
         let names = |offers: &[Offer], pick: fn(&Offer) -> &String| -> BTreeSet<String> {
@@ -49,8 +62,12 @@ impl Options {
                 (class.to_string(), offered)
             })
             .collect();
+        let described: serde_json::Map<String, serde_json::Value> = (self.described.iter())
+            .map(|(class, d)| (class.to_string(), json!(d)))
+            .collect();
         BTreeMap::from([
             ("levels".to_owned(), json!(levels)),
+            ("level_descriptions".to_owned(), json!(described)),
             ("offers".to_owned(), json!(offers)),
             ("harnesses".to_owned(), json!(names(&all, |o| &o.harness))),
             ("providers".to_owned(), json!(names(&all, |o| &o.provider))),
@@ -95,6 +112,7 @@ mod tests {
                     harness: "claude".into(),
                 }],
             )]),
+            described: BTreeMap::new(),
         };
         let value = serde_json::to_value(&options).unwrap();
         assert_eq!(
@@ -102,6 +120,28 @@ mod tests {
             json!({"classes": {"standard-high": [{"provider": "anthropic", "harness": "claude"}]}})
         );
         assert_eq!(serde_json::from_value::<Options>(value).unwrap(), options);
+    }
+
+    #[test]
+    fn the_facts_describe_each_level_by_its_document() {
+        let level = class("standard-high");
+        let options = Options {
+            classes: BTreeMap::from([(level, vec![])]),
+            described: BTreeMap::from([(
+                level,
+                Described {
+                    name: "Standard, high".into(),
+                    description: "Ordinary work that needs careful checking.".into(),
+                },
+            )]),
+        };
+        let facts = options.facts();
+        assert_eq!(facts["levels"], json!(["standard-high"]));
+        assert_eq!(
+            facts["level_descriptions"],
+            json!({"standard-high": {"name": "Standard, high",
+                "description": "Ordinary work that needs careful checking."}})
+        );
     }
 
     #[test]

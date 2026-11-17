@@ -30,7 +30,11 @@ CREATE TABLE role_settings (
     selection_defaults_revision BIGINT NOT NULL DEFAULT 0,
     -- Document sizes and how many snapshots and save receipts are kept.
     limits JSONB CHECK(limits IS NULL OR jsonb_typeof(limits) = 'object'),
-    limits_revision BIGINT NOT NULL DEFAULT 0
+    limits_revision BIGINT NOT NULL DEFAULT 0,
+    -- The routing document (spec 0014 §5.2): the text the routing playbook is
+    -- authored from. NULL until first saved. Not part of any snapshot.
+    routing_markdown TEXT,
+    routing_revision BIGINT NOT NULL DEFAULT 0
 );
 INSERT INTO role_settings(singleton) VALUES(TRUE);
 -- The shipped default documents this database has installed. A default is
