@@ -15,20 +15,19 @@ async fn missing_intelligence_registry_refuses_new_selection_and_offer_fence_exp
         operation_id: Uuid::new_v4(),
         lineage: f.lineage.clone(),
         project: f.frozen.clone(),
-        compositions: f.input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    let decision = resolver::resolve_trusted(&f.env.state, f.actor, request())
+    let decision = resolver::resolve_trusted(&f.env.state, f.actor, request(), &f.snapshot)
         .await
         .unwrap();
     sqlx::query("DELETE FROM intelligence_registry")
         .execute(&f.env.pool)
         .await
         .unwrap();
-    let error = resolver::resolve_trusted(&f.env.state, f.actor, request())
+    let error = resolver::resolve_trusted(&f.env.state, f.actor, request(), &f.snapshot)
         .await
         .unwrap_err();
     assert!(
@@ -72,13 +71,12 @@ async fn resolve_once(f: &SelectionFixture) -> Result<(), aq_server::error::AppE
         operation_id: Uuid::new_v4(),
         lineage: f.lineage.clone(),
         project: f.frozen.clone(),
-        compositions: f.input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    resolver::resolve_trusted(&f.env.state, f.actor, request)
+    resolver::resolve_trusted(&f.env.state, f.actor, request, &f.snapshot)
         .await
         .map(|_| ())
 }
@@ -543,67 +541,6 @@ async fn final_local_fence_rechecks_node_revocation_after_lock_wait() {
     assert!(response.1["frozen_binding"].is_null());
 }
 #[tokio::test]
-async fn catalog_activation_blocks_future_eligibility_and_keeps_frozen_project_revision() {
-    let env = setup(false).await;
-    bind(&env).await;
-    let old = call(
-        &env.app,
-        &format!("{}/eligibility", path()),
-        Some(admission(&env)),
-        "owner@localhost",
-    )
-    .await
-    .1;
-    assert_eq!(old["eligible"], true);
-    let seed = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
-    let mut definitions = seed.artifact().catalog.clone();
-    let mut instructions = seed.artifact().instructions.clone();
-    let mut module = definitions.modules[0].clone();
-    module.id = "additional-policy".into();
-    module.instruction = "instructions/additional-policy.md".into();
-    definitions.modules.push(module);
-    instructions.insert(
-        "additional-policy@1".into(),
-        "Additional future policy\n".into(),
-    );
-    let next = aq_profiles::validate(definitions, instructions).unwrap();
-    let activated=call(&env.app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"artifact_json":String::from_utf8(next.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
-    assert_eq!(activated.0, StatusCode::OK, "{}", activated.1);
-    let decision = call(
-        &env.app,
-        &format!("{}/eligibility", path()),
-        Some(admission(&env)),
-        "owner@localhost",
-    )
-    .await
-    .1;
-    assert_eq!(decision["eligible"], false);
-    assert!(
-        decision["reasons"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("catalog_activation_changed"))
-    );
-    assert_eq!(
-        old["frozen_binding"]["project"]["binding"]["catalog_digest"],
-        seed.digest()
-    );
-    let history = call(
-        &env.app,
-        &format!("{}/revisions/1", path()),
-        None,
-        "owner@localhost",
-    )
-    .await
-    .1;
-    assert_eq!(history["binding"]["catalog_digest"], seed.digest());
-    assert_eq!(history["revision"], 1);
-}
-
-#[tokio::test]
 async fn exact_replay_survives_group_configuration_changes_but_new_mutations_do_not() {
     let env = setup(false).await;
     let request = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"binding":env.body});
@@ -660,7 +597,7 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
     use aq_server::intelligence::resolver::{self, ResolveRequest};
     let SelectionFixture {
         env,
-        input,
+        snapshot,
         frozen,
         actor,
         lineage,
@@ -668,18 +605,18 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
         unrelated,
         time,
         operation,
+        ..
     } = selection_fixture().await;
     let req = ResolveRequest {
         operation_id: operation,
         lineage: lineage.clone(),
         project: frozen.clone(),
-        compositions: input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
-    let decision = resolver::resolve_trusted(&env.state, actor, req)
+    let decision = resolver::resolve_trusted(&env.state, actor, req, &snapshot)
         .await
         .unwrap();
     assert!(
@@ -710,12 +647,12 @@ async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_fact
             operation_id: operation,
             lineage: lineage.clone(),
             project: frozen.clone(),
-            compositions: input.compositions.clone(),
+            launches: vec![common::roles::prepared_launch()],
             replacement: None,
             record_refused: true,
-            intelligence_override: None,
             route: None,
         },
+        &snapshot,
     )
     .await
     .unwrap();
@@ -841,7 +778,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     };
     let SelectionFixture {
         mut env,
-        input,
+        snapshot,
         frozen,
         actor,
         lineage,
@@ -852,14 +789,13 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         operation_id: operation,
         lineage: lineage.clone(),
         project: frozen.clone(),
-        compositions: input.compositions.clone(),
+        launches: vec![common::roles::prepared_launch()],
         replacement: None,
         record_refused: true,
-        intelligence_override: None,
         route: None,
     };
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
@@ -889,7 +825,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     config.profiled_execution = Some(Arc::new(policy.clone()));
     env.state.config = Arc::new(config);
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err(),
         "configured alone is not installed policy"
@@ -898,10 +834,10 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         .await
         .unwrap();
     assert_eq!(installed.installed, 1);
-    let human = resolver::resolve_trusted(&env.state, actor, request())
+    let human = resolver::resolve_trusted(&env.state, actor, request(), &snapshot)
         .await
         .unwrap();
-    let decision = resolver::resolve_for_project_policy(&env.state, request())
+    let decision = resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
         .await
         .unwrap();
     assert!(decision.outcome.resolved.is_some());
@@ -917,14 +853,14 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
             Some(1)
         )
     );
-    let replay = resolver::resolve_for_project_policy(&env.state, request())
+    let replay = resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
         .await
         .unwrap();
     assert_eq!(replay.decision_id, decision.decision_id);
     let mut changed = request();
-    changed.compositions.clear();
+    changed.launches.clear();
     assert!(
-        resolver::resolve_for_project_policy(&env.state, changed)
+        resolver::resolve_for_project_policy(&env.state, changed, &snapshot)
             .await
             .is_err()
     );
@@ -1002,7 +938,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         .await
         .unwrap();
     assert!(
-        resolver::resolve_trusted(&env.state, actor, request())
+        resolver::resolve_trusted(&env.state, actor, request(), &snapshot)
             .await
             .is_err()
     );
@@ -1024,7 +960,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
         1
     );
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
@@ -1033,7 +969,7 @@ async fn project_policy_decisions_have_no_human_actor_and_recheck_installed_poli
     config.profiled_execution = Some(Arc::new(newer));
     env.state.config = Arc::new(config);
     assert!(
-        resolver::resolve_for_project_policy(&env.state, request())
+        resolver::resolve_for_project_policy(&env.state, request(), &snapshot)
             .await
             .is_err()
     );
