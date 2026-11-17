@@ -32,7 +32,11 @@ pub(super) fn guard_overrides(supported: u32) -> Result<Vec<(&'static str, &'sta
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
     // Format 133 widens the owner's disposition to a launch closed before it started.
-    let closed = include_str!("../../migrations/0133_abandon_closed_launch.sql");
+    // Format 136 widens it again, to any held attempt of a revoked node.
+    let closed = match supported >= 136 {
+        true => include_str!("../../migrations/0136_recorded_compute_release.sql"),
+        false => include_str!("../../migrations/0133_abandon_closed_launch.sql"),
+    };
     for name in [
         "profiled_stopped_disposition_guard",
         "profiled_stopped_disposition_committed",

@@ -65,7 +65,7 @@ fn db(error: sqlx::Error) -> AppError {
 }
 fn conflict() -> AppError {
     AppError::Conflict(
-        "disposition requires an unsettled held attempt with verified stop proof or a launch closure".into(),
+        "disposition requires an unsettled held attempt with verified stop proof, a launch closure or a revoked node".into(),
     )
 }
 
@@ -164,7 +164,14 @@ pub async fn abandon(
         sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1 AND encode(sha256(receipt_bytes),'hex')=receipt_digest")
             .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?
     };
-    if !row.get::<bool, _>("holds_task") || !unsettled || !(stopped || closed) || stop.is_none() {
+    // A revoked node can report nothing more: its held attempts are the owner's to abandon
+    // whatever their stop (migration 0136). The proof named is the node's revocation.
+    let stop = match stop.filter(|_| stopped || closed) {
+        Some(stop) => Some(stop),
+        None => sqlx::query_scalar("SELECT encode(sha256(convert_to('aq.node-revoked/'||id::text,'UTF8')),'hex') FROM nodes WHERE id=$1 AND revoked_at IS NOT NULL")
+            .bind(node).fetch_optional(&mut *tx).await.map_err(db)?,
+    };
+    if !row.get::<bool, _>("holds_task") || !unsettled || stop.is_none() {
         // Granted and never started: it may still start until its grant expires, and then the
         // server closes it itself.
         let pending = aq_machine_control::lapse::pending(&mut tx, attempt).await;

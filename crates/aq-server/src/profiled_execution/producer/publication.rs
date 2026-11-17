@@ -87,7 +87,6 @@ pub async fn publish(
         || super::super::disposition::task_disposed(&mut tx, built.spec.task.task_id).await?;
     if !slot_free {
         // The slot was taken since the poll's early gate: no offer, no refusal.
-        aq_machine_control::recent::forget(node).await;
         return Ok(None);
     } else if task_held {
         return Err(refused());

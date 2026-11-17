@@ -432,7 +432,7 @@ async fn offers(
         return Ok(page);
     }
     let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
-    let hold = aq_machine_control::recent::offer_hold(&mut gate, auth.id());
+    let hold = aq_machine_control::offer_hold(&mut gate, auth.id());
     if let Some(reason) = hold.await.map_err(|_| refused())? {
         tracing::info!(node_id = %auth.id(), "{reason}; no new offers");
         return Ok(page);
@@ -440,7 +440,7 @@ async fn offers(
     drop(gate);
     let mut occupancy = state.store.pool.begin().await.map_err(db)?;
     crate::worker_api::read_current_node(&mut occupancy, auth).await?;
-    let free = aq_machine_control::recent::poll_free(&mut occupancy, auth.id(), slot);
+    let free = aq_machine_control::slots::poll_free(&mut occupancy, auth.id(), slot);
     let free = free.await.map_err(crate::machine_api::mapped)?;
     occupancy.commit().await.map_err(db)?;
     if !free {
@@ -913,7 +913,6 @@ async fn offers(
             on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection, slot))
                 .await?;
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
-        aq_machine_control::recent::forget(auth.id()).await;
         let Some(offer) = offer else { return Ok(page) };
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);

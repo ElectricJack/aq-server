@@ -12,6 +12,30 @@ pub async fn available(conn: &mut PgConnection) -> Result<bool, Error> {
     Ok(version.parse::<u32>().unwrap_or(0) >= 135)
 }
 
+/// Whether the stop proof of a held attempt is valid on its node: from format 136 the release
+/// recorded when the stop was accepted, before it the proof itself, validated again.
+pub async fn stop_recorded(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+    node: Uuid,
+) -> Result<bool, Error> {
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut *conn)
+            .await?;
+    let query = match version.parse::<u32>().unwrap_or(0) >= 136 {
+        true => {
+            "SELECT EXISTS(SELECT 1 FROM execution_attempt_compute_releases WHERE attempt_id=$1 AND node_id=$2)"
+        }
+        false => "SELECT profiled_compute_stopped_valid($1,$2)",
+    };
+    Ok(sqlx::query_scalar(query)
+        .bind(attempt)
+        .bind(node)
+        .fetch_one(conn)
+        .await?)
+}
+
 pub async fn count(conn: &mut PgConnection, node: Uuid) -> Result<u32, Error> {
     if !available(conn).await? {
         return Ok(1);
@@ -154,28 +178,55 @@ pub async fn aware(conn: &mut PgConnection, node: Uuid) -> Result<bool, Error> {
     Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM execution_nodes WHERE node_id=$1 AND jsonb_typeof(state->'slots')='number')").bind(node).fetch_one(conn).await?)
 }
 
-/// Startup verifies slot owners and fences, alongside the existing exact compute guard.
+/// The function body `CREATE [OR REPLACE] FUNCTION <name>(` introduces in a migration.
+fn body<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let (_, tail) = source.split_once(&format!("FUNCTION {name}("))?;
+    let (_, body) = tail.split_once("$$")?;
+    Some(body.split_once("$$;")?.0)
+}
+
+/// Startup verifies slot owners and fences, alongside the existing exact compute guard. From
+/// format 136 occupancy is the recorded compute release (`execution_attempt_compute_releases`).
 pub async fn validate(conn: &mut PgConnection) -> Result<(), Error> {
     let present: bool=sqlx::query_scalar("SELECT to_regclass('node_slot_default') IS NOT NULL AND to_regclass('execution_attempt_slots') IS NOT NULL AND to_regclass('manual_agent_slots') IS NOT NULL AND (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled='O' AND tgname IN ('execution_attempt_slot_guard','manual_agent_slot_guard','initialize_node_slots'))=3 AND to_regprocedure('native_attempt_holds_compute(uuid,uuid)') IS NOT NULL AND to_regprocedure('native_compute_reuse_proven(uuid,uuid)') IS NOT NULL")
         .fetch_one(&mut *conn).await?;
     if !present {
         return Err(Error::Invalid("node slot schema missing"));
     }
-    let source = include_str!("../../aq-server/migrations/0135_node_slots.sql");
-    for name in [
-        "initialize_node_slots",
-        "native_attempt_holds_compute",
-        "native_compute_reuse_proven",
-        "node_slot_assignment_guard",
-    ] {
-        let expected = source
-            .split_once(&format!("CREATE FUNCTION {name}("))
-            .and_then(|(_, tail)| tail.split_once("$$"))
-            .and_then(|(_, body)| body.split_once("$$;"))
-            .map(|(body, _)| body);
-        let body: Option<String>=sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname=$1 AND pronamespace='public'::regnamespace AND NOT prosecdef AND proconfig IS NULL")
+    let slots = include_str!("../../aq-server/migrations/0135_node_slots.sql");
+    let recorded = include_str!("../../aq-server/migrations/0136_recorded_compute_release.sql");
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut *conn)
+            .await?;
+    let mut expected = vec![
+        ("initialize_node_slots", slots),
+        ("native_attempt_holds_compute", slots),
+        ("native_compute_reuse_proven", slots),
+        ("node_slot_assignment_guard", slots),
+    ];
+    if version.parse::<u32>().unwrap_or(0) >= 136 {
+        let triggers: bool = sqlx::query_scalar("SELECT to_regclass('execution_attempt_compute_releases') IS NOT NULL AND (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled='O' AND ((tgname='execution_attempt_compute_release_guard' AND tgrelid=to_regclass('execution_attempt_compute_releases') AND tgtype=31) OR (tgname='native_compute_release_on_stop' AND tgrelid=to_regclass('profiled_authority_hot') AND tgtype=21)))=2")
+            .fetch_one(&mut *conn).await?;
+        if !triggers {
+            return Err(Error::Invalid("recorded compute release schema missing"));
+        }
+        expected.retain(|(name, _)| !name.starts_with("native_"));
+        for name in [
+            "native_attempt_holds_compute",
+            "native_compute_reuse_proven",
+            "native_compute_release_record",
+            "native_compute_release_on_stop",
+            "execution_attempt_compute_release_guard",
+        ] {
+            expected.push((name, recorded));
+        }
+    }
+    for (name, source) in expected {
+        let expected = body(source, name);
+        let found: Option<String>=sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname=$1 AND pronamespace='public'::regnamespace AND NOT prosecdef AND proconfig IS NULL")
             .bind(name).fetch_optional(&mut *conn).await?;
-        if expected.is_none() || body.as_deref() != expected {
+        if expected.is_none() || found.as_deref() != expected {
             return Err(Error::Invalid("node slot guard drift"));
         }
     }

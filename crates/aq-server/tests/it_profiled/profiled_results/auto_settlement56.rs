@@ -1122,6 +1122,171 @@ async fn ambiguous_or_foreign_presence_stays_held_without_a_source_head() {
 /// receipt pinned by the report; a settled read-only AQ effect ledger), so the
 /// failed attempt becomes replaceable. It never completes the task, never
 /// releases the claim, and never touches a confirmed (Success) settlement.
+/// Synthetic sealed admission history, as settlement_effects.rs: the agent launch binding
+/// the effect ledger is read under. Returns the binding.
+async fn seal_agent_binding(env: &AutoEnv, profile: &Value) -> Value {
+    let pool = env.f.db.pool().await;
+    let attempt = env.report.binding.attempt_id;
+    let mut tx = pool.begin().await.unwrap();
+    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
+        .await
+        .unwrap();
+    let SessionIdentity::Remote {
+        node_id,
+        boot_id,
+        session_id,
+        ..
+    } = env.report.binding.session
+    else {
+        unreachable!()
+    };
+    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
+    assert!(aq_agent_api::valid("Binding", &binding));
+    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(profile).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    binding
+}
+
+/// A failed (reworked) attempt of a read-only profile, stopped, with its result recorded and
+/// its agent binding sealed; `mailed` adds a mailbox operation sent from its session.
+async fn reworked_env(mailed: bool) -> AutoEnv {
+    use aq_admission::transport::ProcessOutcome;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
+    ))
+    .unwrap();
+    let mut profile = fixture["proposal_profiles"][0]["profile"].clone();
+    profile["capabilities"] = json!(["read.get", "read.context"]);
+    let env = Box::pin(auto_env_profiled(
+        "not_required",
+        axum::http::StatusCode::OK,
+        false,
+        Some(ProcessOutcome::Failed),
+        Some(profile.clone()),
+    ))
+    .await;
+    let binding = seal_agent_binding(&env, &profile).await;
+    if mailed {
+        let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding})).unwrap();
+        sqlx::query("INSERT INTO mailbox_operations(sender_key,operation_id,payload_digest,response) VALUES($1,$2,$3,'{}')")
+            .bind(key)
+            .bind(Uuid::new_v4())
+            .bind("a".repeat(64))
+            .execute(&env.f.db.pool().await)
+            .await
+            .unwrap();
+    }
+    let s = env.settle().await;
+    env.assert_not_completed(&s, AutoDisposition::ReworkRequired, "not_accepted")
+        .await;
+    env
+}
+
+/// Nothing finished may hold its task. A reworked attempt whose stop, source and effects
+/// are settled releases its claim at once, whether or not a retry is admitted: here the
+/// task is held on an exhausted retry budget, the claim is released, the hold stays (it is
+/// about the task) and a later offer is still the replacement owner's decision.
+#[tokio::test]
+async fn settled_reworked_attempt_stops_holding_its_task_while_its_retry_is_held() {
+    use aq_machine_control::{holds, settled};
+    use aq_server::profiled_execution::replacement::{self, Assessment};
+    let env = reworked_env(false).await;
+    let pool = env.f.db.pool().await;
+    let attempt = env.report.binding.attempt_id;
+    let (project, task) = (
+        env.f.selection.lineage.project_id,
+        env.f.selection.lineage.task_id,
+    );
+    assert!(env.holds_task().await, "facts alone release nothing");
+    // The offer path held the task: its catalog retry budget is used up.
+    let reason = "replacement_policy_retry_budget_exhausted";
+    let seen = holds::attempts(&pool, task).await.unwrap();
+    let d = holds::Decision {
+        project,
+        task,
+        reason,
+        seen,
+        attempt: Some(attempt),
+    };
+    holds::hold(&pool, Some(d), (env.f.state.clock)()).await;
+    let now = (env.f.state.clock)().timestamp_millis();
+    let mut cursor = None;
+    assert_eq!(settled::sweep(&pool, &mut cursor, now).await.unwrap(), 1);
+    assert!(
+        !env.holds_task().await,
+        "the finished attempt left its task"
+    );
+    let (release, started): (String, i32) = sqlx::query_as(
+        "SELECT reason,attempts_started FROM profiled_replacement_releases WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (release.as_str(), started),
+        ("failed_attempt_replacement", 1)
+    );
+    let held = holds::current(&pool, project, task).await.unwrap();
+    assert_eq!(
+        held.map(|h| h.reason).as_deref(),
+        Some(reason),
+        "the task stays held for its owner"
+    );
+    // Idempotent, and a wrapped cursor finds nothing more.
+    assert_eq!(settled::sweep(&pool, &mut cursor, now).await.unwrap(), 0);
+    assert_eq!(settled::sweep(&pool, &mut None, now).await.unwrap(), 0);
+    assert!(!settled::release(&pool, attempt, now).await.unwrap());
+    // A retry stays the replacement owner's: with the budget it is admitted without a
+    // second release.
+    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
+        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
+    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    match replacement::assess_task(&env.f.state, task, NOW + 1)
+        .await
+        .unwrap()
+    {
+        Assessment::Replace(r) => {
+            assert_eq!(r.predecessor, attempt);
+            assert!(!r.needs_release);
+        }
+        other => panic!("a released failed attempt stays replaceable: {other:?}"),
+    }
+}
+
+/// An attempt that sent mail has effects the server cannot settle (a retry could repeat the
+/// mail): its facts stay unknown, so no sweep releases it and it waits for its owner, whose
+/// disposition (or the task's cancellation) releases the claim.
+#[tokio::test]
+async fn reworked_attempt_with_unsettled_mail_waits_for_its_owner() {
+    use aq_machine_control::settled;
+    use aq_server::execution::profiled::Effects;
+    let env = reworked_env(true).await;
+    let pool = env.f.db.pool().await;
+    let facts = settlement::record_replacement_facts(&env.f.state, env.report.report_id)
+        .await
+        .unwrap();
+    assert!(facts.source_retained && !facts.effects_quiescent);
+    let v: Value =
+        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(env.report.binding.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let hot: aq_server::execution::authority::hot::HotState = serde_json::from_value(v).unwrap();
+    assert!(matches!(hot.effects, Effects::Unknown));
+    let now = (env.f.state.clock)().timestamp_millis();
+    assert_eq!(settled::sweep(&pool, &mut None, now).await.unwrap(), 0);
+    assert!(env.holds_task().await);
+}
+
 #[tokio::test]
 async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceable() {
     use aq_admission::transport::ProcessOutcome;
@@ -1171,24 +1336,7 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
         "all or nothing per call"
     );
 
-    // Synthetic sealed admission history, as settlement_effects.rs.
-    let mut tx = pool.begin().await.unwrap();
-    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
-        .await
-        .unwrap();
-    let SessionIdentity::Remote {
-        node_id,
-        boot_id,
-        session_id,
-        ..
-    } = env.report.binding.session
-    else {
-        unreachable!()
-    };
-    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(&profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
-    assert!(aq_agent_api::valid("Binding", &binding));
-    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(&profile).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
+    seal_agent_binding(&env, &profile).await;
 
     // The replay of the final rework now records both facts; the verdict,
     // the claim and the Graph are unchanged.
@@ -1277,4 +1425,12 @@ async fn replacement_facts_are_never_recorded_for_a_confirmed_result() {
     let hot: aq_server::execution::authority::hot::HotState = serde_json::from_value(v).unwrap();
     assert!(matches!(hot.retention, Retention::Pending));
     assert!(matches!(hot.effects, Effects::Unknown));
+    let pool = env.f.db.pool().await;
+    let now = (env.f.state.clock)().timestamp_millis();
+    let released = aq_machine_control::settled::sweep(&pool, &mut None, now).await;
+    assert_eq!(
+        released.unwrap(),
+        0,
+        "a completed attempt is never a candidate"
+    );
 }
