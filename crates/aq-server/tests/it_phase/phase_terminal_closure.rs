@@ -221,7 +221,6 @@ async fn suppressed_phase_closure_after_expiry_and_retirement_is_historical_and_
     let mut config = (*f.c.env.env.state.config).clone();
     let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
     p.qualified_runtimes.clear();
-    p.context_qualifications.clear();
     p.definition_bodies.retain(|d| {
         !d.artifact()
             .id

@@ -92,7 +92,6 @@ async fn exact_ack_survives_retired_launch_eligibility_but_new_start_does_not() 
     let mut config = (*retired.config).clone();
     let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
     p.qualified_runtimes.clear();
-    p.context_qualifications.clear();
     p.definition_bodies.retain(|d| {
         !d.artifact()
             .id

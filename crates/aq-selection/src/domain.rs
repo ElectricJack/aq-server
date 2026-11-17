@@ -47,14 +47,6 @@ pub struct ProjectSnapshot {
 }
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NativeModelSupport {
-    pub provider: String,
-    pub model: String,
-    pub reasoning_configuration_reference: String,
-    pub native_reasoning: String,
-}
-#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct NativeLimits {
     pub context_bytes: u64,
     pub max_output_tokens: u64,
@@ -73,7 +65,6 @@ pub struct InstalledHarness {
     pub environment: ArtifactRef,
     pub qualification: ArtifactRef,
     pub failure_classifier: Option<ArtifactRef>,
-    pub models: Vec<NativeModelSupport>,
     pub capabilities: Vec<Capability>,
     pub limits: NativeLimits,
 }

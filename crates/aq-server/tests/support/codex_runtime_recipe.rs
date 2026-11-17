@@ -1,7 +1,7 @@
 //! Public recipe data for ONE actual CLI / finite local Responses integration.
 //! This creates no liveness observation, credential, admission or host authority.
 #![allow(dead_code)] // The controller consumes this fixture API in separate stages.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use aq_admission::{ArtifactKind, ArtifactRef, Digest, ObjectId, SourceSelection, Text};
 use aq_profiles::roles::Kind;
 use aq_server::{
@@ -9,7 +9,7 @@ use aq_server::{
     intelligence::config::{CredentialConfig, IntelligenceConfig, MaterialDeliveryMode},
     profiled_execution::{
         config::{ProfiledConfig, ProjectPolicy, QualifiedRuntime},
-        context_budget::{CapacityKind, Qualification, Rendering, Subject},
+        context_budget::Renderer,
         context_projection,
         definitions::Definition,
     },
@@ -30,7 +30,6 @@ pub const EXECUTION: &str = "codex-worker-20s";
 pub const GROUP: &str = "codex-result-pilot";
 pub const MODEL: &str = "gpt-5.1-codex-mini";
 pub const REASONING: &str = "low";
-pub const REASONING_REFERENCE: &str = "codex-low@1";
 pub const PROFILE: &str = "codex-0.166-trusted-node-named-readonly-result-local-v1";
 pub const EXECUTION_MS: u64 = 20_000;
 pub const WORKER_VERSION: &str = "0.5.1";
@@ -420,52 +419,8 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
         "aq.finite-responses-credential",
         json!({"schema_version":1,"provider":"openai","account_reference":"finite-responses-account","endpoint_reference":"finite-private-loopback-responses","scope":SCOPE,"secret":"synthetic fixed fixture key; separately protected owner file; not included here"}),
     )?;
-    let count = append(
-        &mut defs,
-        "aq.codex-finite-peer-counting",
-        json!({"schema_version":1,"adapter":adapter,"runtime":runtime,"qualification":qualification,"harness_qualification":harness_q,
-        "scope":SCOPE,"rendering":"exact UTF8 double-newline joined startup","maximum_tokens_per_utf8_byte":1,"fixed_overhead_tokens":32768,
-        "basis":"conservative finite-peer planning units; prior actual CLI implicit context/tool capture bounded below 32768 bytes; NOT external model tokenizer evidence"}),
-    )?;
-    let capacity = append(
-        &mut defs,
-        "aq.codex-finite-peer-capacity",
-        json!({"schema_version":1,"scope":SCOPE,"adapter":adapter,"planning_ceiling":131072,"kind":"qualified_conservative_planning_ceiling","basis":"bounded finite-peer integration policy; not model-native window"}),
-    )?;
-    let context_fact = Qualification {
-        schema_version: 1,
-        subject: Subject {
-            runtime: runtime.clone(),
-            runtime_qualification: qualification.clone(),
-            harness: "codex".into(),
-            cli_version: "0.166.0".into(),
-            adapter: adapter.clone(),
-            environment: environment.clone(),
-            harness_qualification: harness_q.clone(),
-            provider: "openai".into(),
-            model: MODEL.into(),
-            native_reasoning: REASONING.into(),
-            reasoning_configuration_reference: REASONING_REFERENCE.into(),
-            credential_profile: credential.clone(),
-            credential_revision: 1,
-            account_reference: "finite-responses-account".into(),
-            endpoint_reference: "finite-private-loopback-responses".into(),
-        },
-        rendering: Rendering::Utf8DoubleNewlineV1,
-        maximum_tokens_per_utf8_byte: 1,
-        fixed_overhead_tokens: 32768,
-        counting_evidence: count,
-        capacity_kind: CapacityKind::QualifiedConservativePlanningCeiling,
-        capacity_tokens: 131072,
-        capacity_evidence: capacity,
-        observed_at_ms: input.now_ms,
-        expires_at_ms: input
-            .now_ms
-            .checked_add(120000)
-            .context("qualification expiry")?,
-    };
-    context_fact.validate()?;
-    let renderer = context_fact.artifact()?;
+    // The startup renderer is the server's one constant rule (spec 0014).
+    let renderer = Renderer::rule()?.definition;
     let primary_manifest = json!({"schema_version":1,"profile":"codex-0.166-named-readonly-exec-stdin-v1","executable_bytes":images.codex.bytes,"environment":environment,
         "installation":{"schema_version":1,"adapter":adapter,"runtime":runtime,"qualification":qualification,"renderer":renderer,"handoff":"opaque_private_file_v1",
             "executable":{"path":images.codex.path,"artifact":images.codex.artifact},"helper":{"path":images.helper.path,"artifact":images.helper.artifact},"tmux":{"path":images.tmux.path,"artifact":images.tmux.artifact}}});
@@ -536,12 +491,6 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
         environment: environment.clone(),
         qualification: harness_q,
         failure_classifier: None,
-        models: vec![aq_selection::NativeModelSupport {
-            provider: "openai".into(),
-            model: MODEL.into(),
-            reasoning_configuration_reference: REASONING_REFERENCE.into(),
-            native_reasoning: REASONING.into(),
-        }],
         capabilities: capabilities.clone(),
         limits: aq_selection::NativeLimits {
             context_bytes: CONTEXT_BYTES,
@@ -574,7 +523,6 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
             placement: None,
             agent_grants: None,
         }],
-        context_qualifications: vec![context_fact],
         definition_bodies: defs,
     };
     profiled.validate().map_err(anyhow::Error::msg)?;

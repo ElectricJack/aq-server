@@ -131,7 +131,6 @@ mod tests {
             revision: 1,
             qualified_runtimes: vec![],
             projects: vec![],
-            context_qualifications: vec![],
             definition_bodies,
         }
     }

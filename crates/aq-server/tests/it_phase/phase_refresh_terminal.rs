@@ -339,7 +339,6 @@ async fn expired_retired_runtime_still_cleans_up_with_exact_immutable_refresh_ac
     let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
     profiled.revision += 1;
     profiled.qualified_runtimes.clear();
-    profiled.context_qualifications.clear();
     profiled.definition_bodies.retain(|d| {
         !d.artifact()
             .id

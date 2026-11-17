@@ -15,7 +15,6 @@ async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![],
@@ -84,7 +83,6 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),
@@ -285,7 +283,6 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),
@@ -465,7 +462,6 @@ async fn registration_receipt_cap_is_per_boot() {
     let mut config = (*f.state.config).clone();
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),

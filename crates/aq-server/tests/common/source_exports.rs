@@ -34,7 +34,6 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
             features: features.clone(),
             material_delivery: None,
         }],
-        context_qualifications: vec![],
         projects: vec![ProjectPolicy {
             project_id: project,
             enabled: true,

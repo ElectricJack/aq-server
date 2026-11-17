@@ -103,7 +103,6 @@ pub fn installed(harness: &str) -> InstalledHarness {
         environment: artifact(ENVIRONMENT),
         qualification: artifact("synthetic-qualification"),
         failure_classifier: Some(artifact("synthetic-error-classifier")),
-        models: vec![],
         capabilities: vec![],
         limits: NativeLimits {
             context_bytes: 8192,

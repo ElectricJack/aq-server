@@ -834,7 +834,6 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
         aq_server::profiled_execution::config::ProfiledConfig {
             revision: 1,
             qualified_runtimes: vec![],
-            context_qualifications: vec![],
             definition_bodies: vec![],
             projects: vec![aq_server::profiled_execution::config::ProjectPolicy {
                 project_id: project,

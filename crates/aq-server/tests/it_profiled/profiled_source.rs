@@ -50,7 +50,6 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
     let handle = Uuid::new_v4();
     let config = ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![],
         projects: vec![ProjectPolicy {

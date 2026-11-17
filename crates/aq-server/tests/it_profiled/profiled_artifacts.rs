@@ -292,7 +292,6 @@ async fn assigned_native_http_ranges_require_exact_sealed_binding_and_live_offer
     let mut cfg = (*f.state.config).clone();
     cfg.profiled_execution = Some(Arc::new(ProfiledConfig {
         definition_bodies: vec![],
-        context_qualifications: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: request.runtime.clone(),

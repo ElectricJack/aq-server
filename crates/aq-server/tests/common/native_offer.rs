@@ -280,7 +280,6 @@ pub async fn setup() -> Case {
             placement: None,
             agent_grants: None,
         }],
-        context_qualifications: vec![],
         definition_bodies: definitions,
     }));
     env.env.state.config = Arc::new(config);

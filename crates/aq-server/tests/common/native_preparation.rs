@@ -101,7 +101,6 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         revision: 1,
         definition_bodies: vec![],
-        context_qualifications: vec![],
         qualified_runtimes: vec![QualifiedRuntime {
             runtime: runtime.clone(),
             qualification,

@@ -55,7 +55,6 @@ async fn expired_cancelled_paired_stop_retains_claim_and_exact_ack_after_runtime
     let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
     p.revision += 1;
     p.qualified_runtimes.clear();
-    p.context_qualifications.clear();
     p.definition_bodies.retain(|d| {
         !d.artifact()
             .id

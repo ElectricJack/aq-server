@@ -107,7 +107,6 @@
             "process_limit": 8,
             "wall_time_ms": 60000
           },
-          "models": [],
           "qualification": {
             "digest": "f509b0f6c2ea603de25e609afd3521ffebf6c307d22779ca76a8b698150e857c",
             "id": "synthetic-qualification",
