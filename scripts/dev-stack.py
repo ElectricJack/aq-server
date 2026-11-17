@@ -481,22 +481,13 @@ def seed_locked(choice, local_fixture):
         allowed_refs=["refs/heads/" + choice["base_branch"]],
         allowed_targets=["refs/heads/" + choice["base_branch"]])),
         mutation="e0000000-0000-4000-8000-000000000006")
-    # This immutable artifact is generated from the checked-in example catalog.
-    artifact = (ROOT / "scripts/dev-catalog.json").read_text().strip()
-    digest = hashlib.sha256(artifact.encode()).hexdigest()
-    active = http(server + "/api/profiles/catalogs")
-    if active["active_digest"] is None:
-        http(server + "/api/profiles/catalogs/activate", dict(operation_id="e0000000-0000-4000-8000-000000000007",
-             expected_revision=0, artifact_json=artifact))
-    elif active["active_digest"] != digest:
-        raise ValueError("active catalog differs; seed preserves the existing catalog")
+    # Roles and profiles need no seeding: the server installs its default documents at start.
     current = http(server + "/api/projects/" + PROJECT)
     if current is None:
         binding = dict(schema_version=1, project_id=PROJECT, name="Local scratch development", enabled=True,
             repository_id=REPOSITORY, repository_binding_generation=1, repository_adapter_reference="aq.git.configured",
-            graph_adapter_reference="aq.graph.configured", graph_workspace_id=WORKSPACE, catalog_digest=digest,
-            allowed_agent_profiles=["implementer@1"], allowed_intelligence_profiles=["engineering@1"],
-            allowed_execution_profiles=["confined-development@1"], allowed_node_ids=[node_id], allowed_worker_groups=[],
+            graph_adapter_reference="aq.graph.configured", graph_workspace_id=WORKSPACE,
+            allowed_node_ids=[node_id], allowed_worker_groups=[],
             allowed_environments=["confined-worktree"], policy=dict(identity="local-development", revision="1", digest="b" * 64),
             context=[], ceilings=dict(permissions=[dict(operation="task.read", scope_reference="project:example")],
                 context_bytes=8192, wall_time_ms=60000, memory_bytes=268435456, cpu_millis=60000, process_limit=8,
