@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub const AFTER_HELP: &str = "\
 Modes:
   owner    --origin https://aq.example --cf-access-token-file /private/access.jwt
+  local    --local --origin http://127.0.0.1:28080 (uses the server's configured identity)
   channel  AQ_CHANNEL=unix:/aq/channel/aq.sock (inside a sandbox; no credential is sent)
 
 Every registered command runs through `run NAME`; `commands` lists what you may run.
@@ -31,6 +32,9 @@ pub struct Cli {
     /// Absolute path to an owner-only Cloudflare Access JWT file.
     #[arg(long, global = true)]
     pub cf_access_token_file: Option<PathBuf>,
+    /// Connect to a local development server over loopback HTTP using its configured identity.
+    #[arg(long, global = true, conflicts_with = "cf_access_token_file")]
+    pub local: bool,
     /// Print one JSON document: {"schema_version":1,"data"|"error":…}.
     #[arg(long, global = true)]
     pub json: bool,

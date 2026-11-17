@@ -22,8 +22,8 @@ Nothing else changes. Releases publish a static build,
 
 The mode is chosen at startup:
 
-- **Owner mode:** `--origin https://aq.example` and
-  `--cf-access-token-file /absolute/private/access.jwt`, on the admin listener.
+- **Owner mode:** connect to the admin listener over HTTPS with an Access token file,
+  or use `--local` with a loopback HTTP development origin.
 - **Channel mode:** `AQ_CHANNEL=unix:/aq/channel/aq.sock`, inside a sandbox.
   The CLI speaks HTTP/1.1 over that Unix socket and sends no credential: the
   channel proxy behind the socket injects the attempt's credential. With
@@ -213,13 +213,22 @@ What the sandbox runtime bundle ships (the aq-worker template owns the files):
 
 ## Owner mode
 
-Supply `--origin https://aq.example` and
+For an HTTPS deployment, supply `--origin https://aq.example` and
 `--cf-access-token-file /absolute/private/access.jwt`. The token file must be a
-regular owner-only file owned by the current user, with no links. Authentication,
-origin checks, CSRF headers, byte budgets, timeouts and redirect/proxy/retry
-refusals come from `aq-human-http`. The server decides authorization.
+regular owner-only file owned by the current user, with no links.
 
-Examples below omit those two global flags:
+For a local development deployment, supply `--local` and its loopback HTTP
+origin. The server supplies its configured development identity. For example:
+
+```sh
+aqv2 --local --origin http://127.0.0.1:28080 projects list
+```
+
+Authentication, origin checks, CSRF headers, byte budgets, timeouts and
+redirect/proxy/retry rules come from `aq-human-http`. The server decides
+authorization.
+
+The following examples omit the connection flags.
 
 ```text
 aqv2 tasks list

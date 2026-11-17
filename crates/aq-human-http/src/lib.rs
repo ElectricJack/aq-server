@@ -20,6 +20,8 @@ pub enum Authentication {
     CfAccessTokenFile(PathBuf),
     #[cfg(any(test, feature = "loopback-development"))]
     LoopbackDevelopmentEmail(String),
+    #[cfg(any(test, feature = "loopback-development"))]
+    LoopbackDevelopment,
 }
 impl std::fmt::Debug for Authentication {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,6 +29,8 @@ impl std::fmt::Debug for Authentication {
             Self::CfAccessTokenFile(_) => "CfAccessTokenFile(<private>)",
             #[cfg(any(test, feature = "loopback-development"))]
             Self::LoopbackDevelopmentEmail(_) => "LoopbackDevelopmentEmail(<private>)",
+            #[cfg(any(test, feature = "loopback-development"))]
+            Self::LoopbackDevelopment => "LoopbackDevelopment",
         })
     }
 }
@@ -111,6 +115,26 @@ fn loopback(url: &Url) -> bool {
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback())
     })
+}
+#[cfg(any(test, feature = "loopback-development"))]
+fn loopback_builder(
+    builder: reqwest::ClientBuilder,
+    url: &Url,
+) -> Result<reqwest::ClientBuilder, Error> {
+    if url.scheme() != "http" || !loopback(url) {
+        return Err(Error::Configuration);
+    }
+    if url.host_str() == Some("localhost") {
+        let port = url.port_or_known_default().ok_or(Error::Configuration)?;
+        return Ok(builder.resolve_to_addrs(
+            "localhost",
+            &[
+                std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port),
+                std::net::SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), port),
+            ],
+        ));
+    }
+    Ok(builder)
 }
 fn token(path: &std::path::Path) -> Result<HeaderValue, Error> {
     if !path.is_absolute() {
@@ -241,38 +265,26 @@ impl Client {
                     return Err(Error::Configuration);
                 }
                 (
-                    (
+                    Some((
                         HeaderName::from_static("cf-access-jwt-assertion"),
                         token(&path)?,
-                    ),
+                    )),
                     builder,
                 )
             }
             #[cfg(any(test, feature = "loopback-development"))]
+            Authentication::LoopbackDevelopment => (None, loopback_builder(builder, &url)?),
+            #[cfg(any(test, feature = "loopback-development"))]
             Authentication::LoopbackDevelopmentEmail(email) => {
-                if url.scheme() != "http"
-                    || !loopback(&url)
-                    || email.is_empty()
-                    || email.len() > 320
-                    || email.chars().any(char::is_control)
-                {
+                if email.is_empty() || email.len() > 320 || email.chars().any(char::is_control) {
                     return Err(Error::Configuration);
                 }
-                let builder = if url.host_str() == Some("localhost") {
-                    let port = url.port_or_known_default().ok_or(Error::Configuration)?;
-                    builder.resolve_to_addrs(
-                        "localhost",
-                        &[
-                            std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port),
-                            std::net::SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), port),
-                        ],
-                    )
-                } else {
-                    builder
-                };
                 let mut value = HeaderValue::from_str(&email).map_err(|_| Error::Configuration)?;
                 value.set_sensitive(true);
-                ((HeaderName::from_static("x-aq-dev-email"), value), builder)
+                (
+                    Some((HeaderName::from_static("x-aq-dev-email"), value)),
+                    loopback_builder(builder, &url)?,
+                )
             }
         };
         let origin_header = HeaderValue::from_str(&url.origin().ascii_serialization())
@@ -281,7 +293,7 @@ impl Client {
             http: builder.build().map_err(|_| Error::Configuration)?,
             origin: url,
             origin_header: Some(origin_header),
-            auth_header: Some(auth_header),
+            auth_header,
             limits,
         })
     }

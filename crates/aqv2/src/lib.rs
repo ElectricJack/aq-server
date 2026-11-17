@@ -266,6 +266,12 @@ pub fn channel_path(value: &OsString) -> Result<PathBuf> {
 }
 fn connect(cli: &cli::Cli, channel: Option<OsString>) -> Result<Ctx> {
     if let Some(channel) = channel {
+        if cli.local {
+            return Err(error(
+                "invalid_arguments",
+                "AQ_CHANNEL is set: --local is only available on the host",
+            ));
+        }
         if cli.cf_access_token_file.is_some() {
             return Err(error(
                 "invalid_arguments",
@@ -286,16 +292,18 @@ fn connect(cli: &cli::Cli, channel: Option<OsString>) -> Result<Ctx> {
             "--origin is required (or AQ_CHANNEL inside a sandbox)",
         )
     })?;
-    let token = cli
-        .cf_access_token_file
-        .clone()
-        .ok_or_else(|| error("invalid_arguments", "--cf-access-token-file is required"))?;
-    let http = Client::new(
-        origin,
-        aq_human_http::Authentication::CfAccessTokenFile(token),
-        limits(),
-    )
-    .map_err(client::http_error)?;
+    let authentication = if cli.local {
+        aq_human_http::Authentication::LoopbackDevelopment
+    } else {
+        let token = cli.cf_access_token_file.clone().ok_or_else(|| {
+            error(
+                "invalid_arguments",
+                "--cf-access-token-file is required for HTTPS owner mode, or use --local for loopback HTTP",
+            )
+        })?;
+        aq_human_http::Authentication::CfAccessTokenFile(token)
+    };
+    let http = Client::new(origin, authentication, limits()).map_err(client::http_error)?;
     Ok(Ctx {
         http,
         mode: Mode::Owner,
