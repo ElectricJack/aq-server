@@ -323,13 +323,23 @@ cmd_routing() {
     echo "saved the default routing document; the internal work host now authors its playbook (this takes a while: about 20 minutes on the live stack)"
   fi
   deadline=$(( $(date +%s) + ${AQ_LOCAL_ROUTING_TIMEOUT:-3600} ))
+  local status retried=
   while :; do
     state=$(api GET /api/settings/routing)
     [ -n "$(printf '%s' "$state" | field source.active.artifact)" ] && break
+    status=$(printf '%s' "$state" | field source.latest.status)
+    if [ -n "$(printf '%s' "$state" | field source.latest.question)" ]; then
+      die "the authoring agent asks a question; answer it under Settings → Intelligence → Routing, then run: $0 routing"
+    fi
+    if [ "$status" = failed ]; then
+      # One more run: an earlier one may have failed for a cause since fixed
+      # (no login registered yet, no internal work level).
+      [ -z "$retried" ] || die "authoring failed: $(printf '%s' "$state" | field source.latest.refusal)$(printf '%s' "$state" | field source.latest.unable)"
+      echo "the last authoring run failed ($(printf '%s' "$state" | field source.latest.refusal)); starting another"
+      api POST /api/playbooks/sources/routing/runs >/dev/null; retried=1
+    fi
     [ "$(date +%s)" -lt "$deadline" ] || die "no routing playbook yet; see Settings → Intelligence → Routing, then run: $0 routing"
-    printf 'waiting for the routing playbook: %s\n' "$(printf '%s' "$state" | python3 -c 'import json,sys
-s = json.loads(sys.stdin.read(), strict=False).get("source") or {}
-print({k: v for k, v in s.items() if k not in ("active", "document") and not isinstance(v, (dict, list))} or "authoring")')"
+    echo "waiting for the routing playbook (authoring run: ${status:-starting})"
     sleep 30
   done
   if [ "$(printf '%s' "$state" | field enabled)" != true ]; then
