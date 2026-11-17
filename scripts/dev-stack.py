@@ -293,7 +293,36 @@ def enable_settlement_locked(env):
     private_file(vault / "playbook-artifact.json", artifact)
     if (vault / "playbook-artifact.json").read_bytes() != artifact:
         raise ValueError("retained settlement artifact differs; use a fresh development stack")
-    config = (vault / "config.toml").read_text() + f'''
+    if os.environ.get("AQ_DEV_PLAYBOOK_PROFILE") == "host_v9":
+        # The shape a stack needs to route work (scripts/local-stack): the
+        # host_v9 catalog with installation routing and no configured
+        # deployment. Playbooks are authored from Settings documents and
+        # deployed through the owner API (spec 0013).
+        config = (vault / "config.toml").read_text() + f'''
+[playbooks]
+enabled = true
+profile = "host_v9"
+installation_routing = true
+deployments = []
+engine_connection_file = "/run/aq-dev/playbook_dsn"
+socket_owner_uid = {socket_uid}
+engine_keyring_file = "/run/aq-dev/playbook_engine_keys"
+drive_interval_ms = 1000
+[playbooks.namespace]
+namespace_id = "{pins['namespace_id']}"
+generation = 1
+name = "Local routing (host v9)"
+workspace_id = "{WORKSPACE}"
+project_id = "{PROJECT}"
+owner_user_id = "{pins['owner_user_id']}"
+[playbooks.protection]
+active_key_id = "dev-bridge-1"
+[[playbooks.protection.keys]]
+id = "dev-bridge-1"
+file = "/run/aq-dev/playbook_bridge_key"
+'''
+    else:
+        config = (vault / "config.toml").read_text() + f'''
 [playbooks]
 enabled = true
 profile = "human_review_v2"

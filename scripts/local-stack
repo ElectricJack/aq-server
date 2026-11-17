@@ -85,6 +85,8 @@ export AQ_LOCAL_GIT_IMAGE=${AQ_LOCAL_GIT_IMAGE:-agent-q-git:$PROFILE}
 export AQ_SUPERVISOR_HOST_IMAGE=${AQ_SUPERVISOR_HOST_IMAGE:-agent-q-supervisor-host:$PROFILE}
 export AQ_DASHBOARD_BUNDLE=$DASH_SRC/dist
 export AQ_DEV_COMPOSE_FILES=compose.dashboard.yaml:compose.local.yaml
+# Routing needs the host_v9 playbook catalog; the seed writes that shape.
+export AQ_DEV_PLAYBOOK_PROFILE=host_v9
 # scripts/ms1-profiled.py reads these.
 export AQ_MS1_HOME=$BASE AQ_MS1_WORKER_SRC=$WORKER_SRC AQ_MS1_D1=1
 export AQ_DOCKER_LOCAL_SOCKET=${AQ_DOCKER_LOCAL_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/aq-sandbox/podman.sock}
