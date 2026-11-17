@@ -219,6 +219,7 @@ pub async fn setup() -> Case {
         Feature::ArtifactTransferV1,
         Feature::ServerMaterialV1,
         Feature::DurableHostJournalV1,
+        Feature::HostStopEvidenceV1,
     ];
     let harness = &env.input.node.harnesses[0];
     let credential = &env.input.credentials[0];

@@ -750,3 +750,6 @@ async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_ad
         0
     );
 }
+
+#[path = "native_offers/node_slots.rs"]
+mod node_slots;

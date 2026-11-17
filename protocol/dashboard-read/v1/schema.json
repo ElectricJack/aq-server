@@ -3278,7 +3278,7 @@
     },
     "SlotSummary": {
       "additionalProperties": false,
-      "description": "Sandbox slots across online, unrevoked workers. `occupied` counts every\ntask-holding attempt; `total` and `idle` are unknown while any online\nworker advertises no slot total (host-native workers).",
+      "description": "Shared compute slots across online, unrevoked nodes. Occupied includes native\nattempts without stop proof and claimed manual sessions. Historical servers\ncan leave totals unknown; current counts come from server Settings.",
       "properties": {
         "coverage": {
           "$ref": "#/$defs/Coverage"
@@ -3502,7 +3502,7 @@
     },
     "SwarmAgent": {
       "additionalProperties": false,
-      "description": "An attempt that holds a slot on a node: one row per occupied slot.",
+      "description": "A task-holding attempt, including proven-stopped attempts awaiting settlement.",
       "properties": {
         "attempt_id": {
           "format": "uuid",
@@ -3598,6 +3598,16 @@
         "session_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "slot": {
+          "description": "One-based durable node slot; absent only for older servers/legacy attempts.",
+          "format": "uint32",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "started_at": {
           "anyOf": [

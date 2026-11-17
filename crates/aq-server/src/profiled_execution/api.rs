@@ -28,6 +28,17 @@ async fn register(
         ));
     };
     Ok(Json(TransportDocument::Register(
-        super::registration::register(&state, &auth, &request).await?,
+        super::registration::register_slots(
+            &state,
+            &auth,
+            &request,
+            slot_header(&headers, aq_admission::node_slots::SLOTS_HEADER)?,
+        )
+        .await?,
     )))
+}
+
+pub(crate) fn slot_header(headers: &HeaderMap, name: &str) -> Result<Option<u32>, AppError> {
+    aq_machine_control::slots::header(headers.get_all(name).iter().map(|v| v.to_str().ok()))
+        .map_err(crate::machine_api::mapped)
 }

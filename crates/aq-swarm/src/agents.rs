@@ -89,7 +89,18 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
             .transpose()
             .map_err(|_| sqlx::Error::Protocol("time".into()))
     };
-    let mut rows = sqlx::query(SQL)
+    let modern = aq_machine_control::slots::available(conn)
+        .await
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let query = if modern {
+        SQL.replace("SELECT e.attempt_id,", "SELECT x.slot, e.attempt_id,").replace("LEFT JOIN profiled_authority_hot h", "LEFT JOIN execution_attempt_slots x ON x.attempt_id=e.attempt_id LEFT JOIN profiled_authority_hot h")
+    } else {
+        SQL.replace(
+            "SELECT e.attempt_id,",
+            "SELECT NULL::INTEGER AS slot, e.attempt_id,",
+        )
+    };
+    let mut rows = sqlx::query(&query)
         .bind(q.nodes)
         .bind(q.project.map(|p| p.to_string()))
         .bind(i64::try_from(q.limit).unwrap_or(i64::MAX).saturating_add(1))
@@ -131,6 +142,7 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
         let held_since = ms(row, "held_ms");
         let started = ms(row, "started_ms").filter(|_| phase != AgentPhase::Starting);
         let agent = SwarmAgent {
+            slot: row.get::<Option<i32>, _>("slot").map(|v| v as u32),
             session_id: row.get("session_id"),
             attempt_id: attempt,
             task: Some(TitledRef {

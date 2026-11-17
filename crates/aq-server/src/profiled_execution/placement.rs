@@ -1,13 +1,4 @@
-//! C4 placement facts for a B1-registered sandbox node: the activation-time
-//! template pin, the authenticated backend advertisement, node ceilings and
-//! the backend placement preference (docker-local, then boat, then
-//! cloudflare-containers unless the project policy overrides it). A host-native
-//! node without a registration gets no placement facts and is unchanged.
-//!
-//! The preference hold is bounded and explained: a lower-preference node is
-//! refused with `placement_preferred_backend_available` only while a
-//! higher-preference eligible peer has an unexpired capability snapshot and
-//! free capacity, so the hold ends no later than that snapshot's expiry.
+//! Placement facts and backend preference, fenced against current node occupancy.
 use crate::AppState;
 use crate::error::AppError;
 use aq_admission_sandbox::sandbox::{BackendAdvertisement, BackendCapability, BackendKind, Money};
@@ -181,15 +172,9 @@ async fn active(
     nodes: &[Uuid],
     exclude_attempt: Option<Uuid>,
 ) -> Result<Vec<(Uuid, i64)>, AppError> {
-    sqlx::query_as(
-        "SELECT node_id, count(*) FROM execution_attempts WHERE holds_task AND node_id = ANY($1) \
-         AND attempt_id IS DISTINCT FROM $2 GROUP BY node_id",
-    )
-    .bind(nodes)
-    .bind(exclude_attempt)
-    .fetch_all(conn)
-    .await
-    .map_err(db)
+    aq_machine_control::slots::active(conn, nodes, exclude_attempt)
+        .await
+        .map_err(crate::machine_api::mapped)
 }
 fn count(active: &[(Uuid, i64)], node: Uuid) -> u32 {
     active
@@ -204,9 +189,7 @@ struct Registered {
     backend: BackendAdvertisement,
 }
 
-/// One node's slot load for the capacity read model: the advertised slot total
-/// (None for a host-native node), task-holding attempts, and the node ceiling
-/// placement would apply now.
+/// Configured compute occupancy and placement ceiling for one node.
 #[derive(Debug, Clone)]
 pub struct Load {
     pub node_id: Uuid,
@@ -240,7 +223,7 @@ pub async fn loads(
         registered.iter().map(|(n, r)| (*n, &r.backend)).collect();
     let spends = spends(conn, ledger, &advertised, now_ms, None).await;
     let pressured = crate::node_storage::pressured(&mut *conn, nodes).await?;
-    Ok(nodes
+    let mut loads: Vec<Load> = nodes
         .iter()
         .map(|&node| {
             let adv = advertised.iter().find(|(n, _)| *n == node).map(|(_, a)| *a);
@@ -257,7 +240,20 @@ pub async fn loads(
                 }),
             }
         })
-        .collect())
+        .collect();
+    if aq_machine_control::slots::available(conn)
+        .await
+        .map_err(crate::machine_api::mapped)?
+    {
+        for load in &mut loads {
+            let slots = aq_machine_control::slots::view(conn, load.node_id)
+                .await
+                .map_err(crate::machine_api::mapped)?;
+            load.total = Some(slots.total);
+            load.occupied = slots.occupied;
+        }
+    }
+    Ok(loads)
 }
 
 /// Placement facts for selection on `node_id`, or None for a host-native node.
@@ -332,9 +328,7 @@ impl Derivation {
     };
 }
 
-/// First store format carrying every table `derive` reads: `delegated_node_boots`
-/// (migration 50) and
-/// `node_storage_reports` (67).
+/// First store format carrying the placement tables.
 pub const PLACEMENT_FORMAT: u32 = 67;
 
 /// Whether this store carries placement facts. A store held at an earlier
@@ -375,7 +369,7 @@ pub async fn derive(
     let Some(own) = own else {
         return Ok(None);
     };
-    let own: Registered = serde_json::from_value(own).map_err(|_| AppError::Internal)?;
+    let mut own: Registered = serde_json::from_value(own).map_err(|_| AppError::Internal)?;
     let policy = policy.cloned().unwrap_or(PlacementPolicy {
         preference: Vec::new(),
         required_capabilities: Vec::new(),
@@ -414,12 +408,23 @@ pub async fn derive(
         );
     }
     // A malformed peer registration is never a reason to hold.
-    let peers: Vec<(Uuid, Registered)> = peers
+    let mut peers: Vec<(Uuid, Registered)> = peers
         .into_iter()
         .filter_map(|(node, reg)| Some((node, serde_json::from_value(reg).ok()?)))
         .collect();
     let mut nodes: Vec<Uuid> = peers.iter().map(|(n, _)| *n).collect();
     nodes.push(node_id);
+    let counts = aq_machine_control::slots::aware_counts(conn, &nodes)
+        .await
+        .map_err(crate::machine_api::mapped)?;
+    if let Some(count) = counts.get(&node_id) {
+        own.backend.max_concurrent_sandboxes = *count;
+    }
+    for (node, registration) in &mut peers {
+        if let Some(count) = counts.get(node) {
+            registration.backend.max_concurrent_sandboxes = *count;
+        }
+    }
     let active = active(&mut *conn, &nodes, derivation.exclude_attempt).await?;
     let mut advertised: Vec<(Uuid, &BackendAdvertisement)> =
         peers.iter().map(|(n, r)| (*n, &r.backend)).collect();

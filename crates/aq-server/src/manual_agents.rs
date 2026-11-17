@@ -43,6 +43,7 @@ pub(super) fn service(state: &AppState) -> Service {
         sources,
         state.store.manual_runtime.clone(),
     )
+    .compute_witness(crate::profiled_execution::compute::manual_witness)
     .login_materials(logins::delivery(state.clone()))
     .browser_origin(
         config.server.public_origin.clone(),

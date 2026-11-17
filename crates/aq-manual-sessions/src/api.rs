@@ -237,8 +237,8 @@ async fn slots(
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
     valid_id(v.operation_id)?;
-    if v.slots > 8 || v.expected_revision > i64::MAX as u64 {
-        return Err(bad("Slots must be between zero and eight"));
+    if v.slots > 1024 || v.expected_revision > i64::MAX as u64 {
+        return Err(bad("Slots must be between zero and 1024"));
     }
     binding(&s, project).await?;
     let request = json!({"node":node,"project":project,"body":v});

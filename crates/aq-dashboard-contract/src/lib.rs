@@ -483,9 +483,9 @@ pub struct Capacity {
     pub nodes: Vec<NodeCapacity>,
     pub providers: Vec<ProviderAvailability>,
 }
-/// Sandbox slots across online, unrevoked workers. `occupied` counts every
-/// task-holding attempt; `total` and `idle` are unknown while any online
-/// worker advertises no slot total (host-native workers).
+/// Shared compute slots across online, unrevoked nodes. Occupied includes native
+/// attempts without stop proof and claimed manual sessions. Historical servers
+/// can leave totals unknown; current counts come from server Settings.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SlotSummary {

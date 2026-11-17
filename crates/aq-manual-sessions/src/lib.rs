@@ -27,6 +27,10 @@ pub struct Runtime(
 );
 pub type Auth =
     Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
+pub type ComputeWitness = for<'a, 'c> fn(
+    &'a mut sqlx::Transaction<'c, sqlx::Postgres>,
+    Uuid,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub struct Error(pub StatusCode, pub &'static str);
 impl Error {
@@ -80,6 +84,7 @@ pub struct Service {
     host_mode: bool,
     origin: Option<(String, bool)>,
     login_materials: Option<logins::Materials>,
+    compute_witness: Option<ComputeWitness>,
 }
 impl Service {
     pub fn new(
@@ -98,7 +103,12 @@ impl Service {
             host_mode: false,
             origin: None,
             login_materials: None,
+            compute_witness: None,
         }
+    }
+    pub fn compute_witness(mut self, witness: ComputeWitness) -> Self {
+        self.compute_witness = Some(witness);
+        self
     }
     pub fn login_materials(mut self, material: logins::Materials) -> Self {
         self.login_materials = Some(material);

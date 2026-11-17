@@ -146,3 +146,17 @@ pub(crate) async fn for_attempt_locked(
     sqlx::query("INSERT INTO profiled_launch_registrations(attempt_id,registration_id,node_id,boot_id) VALUES($1,$2,$3,$4)").bind(binding.attempt_id).bind(history.id).bind(node_id).bind(boot_id).execute(&mut **tx).await.map_err(database)?;
     Ok(history)
 }
+
+/// A superseded boot supplies terminal evidence only, never current launch authority.
+pub(crate) async fn for_boot_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    boot: Uuid,
+) -> Result<NativeRegistration, AppError> {
+    let rows=sqlx::query("SELECT * FROM profiled_native_registration_history WHERE node_id=$1 AND boot_id=$2 ORDER BY registration_id LIMIT 2 FOR SHARE")
+        .bind(node).bind(boot).fetch_all(&mut **tx).await.map_err(database)?;
+    if rows.len() != 1 {
+        return Err(conflict());
+    }
+    Ok(decode(rows.into_iter().next().ok_or_else(conflict)?)?.metadata)
+}

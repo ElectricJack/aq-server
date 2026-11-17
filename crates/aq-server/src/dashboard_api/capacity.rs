@@ -73,7 +73,7 @@ pub(super) async fn capacity(
     let loads = placement::loads(&mut tx, &ledger, &ids, now).await?;
     let storage = node_storage::latest(&mut tx, &ids).await?;
     let occupied_all: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE holds_task")
+        sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_attempts WHERE native_attempt_holds_compute(attempt_id,node_id))+(SELECT count(*) FROM manual_agent_sessions WHERE stopped_at_ms IS NULL AND status<>'pending')")
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;

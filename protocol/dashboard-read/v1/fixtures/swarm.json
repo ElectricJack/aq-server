@@ -99,7 +99,8 @@
                   "title": "00000000-0000-0000-0000-000000000003",
                   "type": "task"
                 },
-                "terminal": null
+                "terminal": null,
+                "slot": 1
               }
             ],
             "backend_kind": null,

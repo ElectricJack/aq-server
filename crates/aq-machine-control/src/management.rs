@@ -93,16 +93,27 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
     if !available(conn).await? {
         return Ok(result);
     }
-    let row = sqlx::query(
-        "SELECT s.max_agents AS node_max, COALESCE(s.removed,FALSE) AS removed, m.max_agents AS machine_max, \
+    let modern = crate::slots::available(conn).await?;
+    let query = "SELECT s.max_agents AS node_max, COALESCE(s.removed,FALSE) AS removed, m.max_agents AS machine_max, \
          (SELECT count(*) FROM execution_attempts a WHERE a.node_id=n.node_id AND a.holds_task) + \
          (SELECT count(*) FROM manual_agent_sessions a WHERE a.node_id=n.node_id AND a.stopped_at_ms IS NULL AND a.status<>'pending') AS node_used, \
          (SELECT count(*) FROM execution_attempts a JOIN worker_machine_members w ON w.node_id=a.node_id WHERE w.machine_id=n.machine_id AND a.holds_task) + \
          (SELECT count(*) FROM manual_agent_sessions a JOIN worker_machine_members w ON w.node_id=a.node_id WHERE w.machine_id=n.machine_id AND a.stopped_at_ms IS NULL AND a.status<>'pending') AS machine_used \
          FROM worker_machine_members n \
          LEFT JOIN worker_settings s ON s.kind='node' AND s.id=n.node_id::text \
-         LEFT JOIN worker_settings m ON m.kind='machine' AND m.id=n.machine_id WHERE n.node_id=$1"
-    ).bind(node).fetch_optional(&mut *conn).await?;
+         LEFT JOIN worker_settings m ON m.kind='machine' AND m.id=n.machine_id WHERE n.node_id=$1";
+    let query = if modern {
+        query.replace(
+            "a.holds_task",
+            "native_attempt_holds_compute(a.attempt_id,a.node_id)",
+        )
+    } else {
+        query.to_owned()
+    };
+    let row = sqlx::query(&query)
+        .bind(node)
+        .fetch_optional(&mut *conn)
+        .await?;
     if let Some(row) = row {
         result.node_max = row.try_get::<Option<i32>, _>("node_max")?.map(|v| v as u32);
         result.machine_max = row
@@ -111,6 +122,9 @@ pub async fn capacity(conn: &mut PgConnection, node: Uuid) -> Result<Capacity, E
         result.node_used = row.try_get::<i64, _>("node_used")?.max(0) as u32;
         result.machine_used = row.try_get::<i64, _>("machine_used")?.max(0) as u32;
         result.removed = row.try_get("removed")?;
+    }
+    if modern {
+        result.node_max = Some(crate::slots::count(conn, node).await?);
     }
     if at_least(conn, 111).await? {
         // A live receiver reserves the machine while replacing provider configuration.

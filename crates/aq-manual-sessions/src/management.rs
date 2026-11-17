@@ -10,14 +10,19 @@ use sqlx::Row;
 pub(super) fn routes() -> Router<Service> {
     Router::new()
         .route("/api/worker-management", get(list))
-        .route("/api/worker-management/{kind}/{id}", post(save))
+        .route("/api/worker-management/{kind}/{id}", post(save).put(save))
 }
 
 async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value>> {
     (s.owner)(headers).await?;
     let mut conn = s.pool.acquire().await?;
     let settings = control::settings(&mut conn).await.map_err(storage)?;
-    Ok(Json(json!({"settings": settings})))
+    let default: (i32, i64) = sqlx::query_as("SELECT slots,revision FROM node_slot_default")
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(Json(
+        json!({"settings": settings,"node_slot_default":{"slots":default.0,"revision":default.1}}),
+    ))
 }
 
 pub(super) fn storage(error: aq_machine_control::Error) -> Error {
@@ -51,6 +56,8 @@ async fn save(
     valid_id(change.operation_id)?;
     let valid_id = if kind == "node" {
         id.parse::<Uuid>().is_ok()
+    } else if kind == "default" {
+        id == "node-slots"
     } else {
         kind == "machine"
             && (aq_machine_control::valid_machine_key(&id)
@@ -72,7 +79,11 @@ async fn save(
     {
         return Err(bad("Names must be at most 64 characters"));
     }
-    let maximum = if kind == "node" { 8 } else { i32::MAX as u32 };
+    let maximum = if kind == "node" || kind == "default" {
+        1024
+    } else {
+        i32::MAX as u32
+    };
     if change.max_agents.is_some_and(|v| v > maximum) {
         return Err(bad("Agent maximum is outside the supported range"));
     }
@@ -92,6 +103,26 @@ async fn save(
             ));
         }
         return Ok(Json(row.get("receipt")));
+    }
+    if kind == "default" {
+        if change.remove || change.label.is_some() || change.max_agents.is_none() {
+            return Err(bad("Default requires max_agents only"));
+        }
+        let changed = sqlx::query(
+            "UPDATE node_slot_default SET slots=$1,revision=revision+1 WHERE revision=$2",
+        )
+        .bind(change.max_agents.map(|v| v as i32))
+        .bind(change.expected_revision as i64)
+        .execute(&mut *tx)
+        .await?;
+        if changed.rows_affected() != 1 {
+            return Err(conflict("Settings changed. Refresh before saving again."));
+        }
+        let receipt = json!({"kind":kind,"id":id,"max_agents":change.max_agents,"revision":change.expected_revision+1});
+        sqlx::query("INSERT INTO worker_setting_operations(operation_id,actor_id,request,receipt) VALUES($1,$2,$3,$4)")
+            .bind(change.operation_id).bind(actor).bind(request).bind(&receipt).execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Ok(Json(receipt));
     }
     let nodes: Vec<Uuid> = sqlx::query_scalar(
         "SELECT node_id FROM worker_machine_members WHERE ($1='node' AND node_id::text=$2) OR ($1='machine' AND machine_id=$2) ORDER BY node_id"
@@ -115,6 +146,16 @@ async fn save(
             .await?;
     if current.unwrap_or(0) as u64 != change.expected_revision {
         return Err(conflict("Settings changed. Refresh before saving again."));
+    }
+    if kind == "node" && change.max_agents.is_none() {
+        change.max_agents = Some(
+            aq_machine_control::slots::count(
+                &mut tx,
+                Uuid::parse_str(&id).map_err(|_| bad("Invalid node"))?,
+            )
+            .await
+            .map_err(storage)?,
+        );
     }
     let retired = kind == "node" && change.remove;
     let revision = change.expected_revision + 1;

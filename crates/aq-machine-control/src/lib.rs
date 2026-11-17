@@ -14,6 +14,7 @@ pub mod launch;
 pub mod lost;
 pub mod management;
 pub mod offer_assembly;
+pub mod slots;
 
 /// First `state_format_version` with these tables.
 pub const FORMAT: u32 = 101;

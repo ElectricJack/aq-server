@@ -34,11 +34,21 @@ pub async fn apply(pool: &PgPool, mut swarm: Swarm) -> Result<Swarm, sqlx::Error
                         .map(|v| v.saturating_sub(node.slots.occupied));
                 }
             }
+            if aq_machine_control::slots::available(&mut conn)
+                .await
+                .map_err(db)?
+            {
+                let slots = aq_machine_control::slots::view(&mut conn, node.node.id)
+                    .await
+                    .map_err(db)?;
+                node.slots.total = Some(slots.total);
+                node.slots.occupied = slots.occupied;
+                node.slots.idle = Some(slots.idle);
+            }
             let capacity = management::capacity(&mut conn, node.node.id)
                 .await
                 .map_err(db)?;
             if capacity.full() {
-                node.slots.idle = Some(0);
                 node.holding.push(HoldReason {
                     code: HoldCode::AgentMaximumReached,
                     message: "Configured agent maximum reached".into(),

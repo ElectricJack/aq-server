@@ -209,3 +209,11 @@ independent of the quota windows; old clients and snapshots may omit the field.
 The snapshot collector bounds display text and counts and rejects malformed
 metadata without discarding valid windows. Direct legacy HTTP sources omit
 reset metadata.
+
+Spec 0015 adds an optional one-based `slot` to each native Swarm agent row. Node
+`slots.total` is the server's configured shared count; `occupied` counts queued
+attempts whose compute is not proven stopped plus live claimed manual sessions;
+`idle` saturates at zero when the count is lowered. A stopped attempt awaiting
+settlement may remain visible as finishing history without occupying compute.
+Machines retain independent child nodes, each with its own count. These are
+capacity facts, not proof that an unknown attempt stopped or permission to launch.

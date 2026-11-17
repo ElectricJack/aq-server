@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 pub struct Gate {
     maximum: usize,
-    active: Mutex<BTreeSet<Uuid>>,
+    active: Mutex<BTreeSet<(Uuid, u32)>>,
 }
 impl Gate {
     pub fn new(maximum: usize) -> Self {
@@ -14,21 +14,29 @@ impl Gate {
         }
     }
     pub fn enter(&self, node: Uuid) -> Option<Permit<'_>> {
+        self.enter_slot(node, 1)
+    }
+    pub fn enter_slot(&self, node: Uuid, slot: u32) -> Option<Permit<'_>> {
         let mut active = self.active.lock().ok()?;
-        if active.len() >= self.maximum || !active.insert(node) {
+        if active.len() >= self.maximum || !active.insert((node, slot)) {
             return None;
         }
-        Some(Permit { gate: self, node })
+        Some(Permit {
+            gate: self,
+            node,
+            slot,
+        })
     }
 }
 pub struct Permit<'a> {
     gate: &'a Gate,
     node: Uuid,
+    slot: u32,
 }
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
         if let Ok(mut active) = self.gate.active.lock() {
-            active.remove(&self.node);
+            active.remove(&(self.node, self.slot));
         }
     }
 }

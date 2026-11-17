@@ -33,7 +33,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
     let node_path = format!("/api/worker-management/node/{node}");
-    let node_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"label":"Build worker","max_agents":3});
+    let node_change = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Build worker","max_agents":3});
     assert_eq!(
         call(&admin, &node_path, Some(node_change.clone()), None, false)
             .await
@@ -42,7 +42,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
     );
     let (status, receipt) = call(&admin, &node_path, Some(node_change.clone()), None, true).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
-    assert_eq!(receipt["revision"], 1);
+    assert_eq!(receipt["revision"], 2);
     assert_eq!(
         call(&admin, &node_path, Some(node_change), None, true)
             .await
@@ -114,7 +114,7 @@ async fn owner_can_manage_machine_and_node_names_limits_and_removal() {
             .await
             .unwrap();
     assert_eq!(live, 2, "Lowering a limit must keep the running agents");
-    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"label":"Build worker","max_agents":3,"remove":true});
+    let remove = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"label":"Build worker","max_agents":3,"remove":true});
     let (status, receipt) = call(&admin, &node_path, Some(remove.clone()), None, true).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
     assert!(receipt["removed"].as_bool().unwrap());
@@ -2167,11 +2167,13 @@ async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
         .0,
         StatusCode::OK
     );
-    sqlx::query("INSERT INTO worker_settings(kind,id,removed,revision) VALUES('node',$1,true,1)")
-        .bind(f.node.node_id.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE worker_settings SET removed=true,revision=revision+1 WHERE kind='node' AND id=$1",
+    )
+    .bind(f.node.node_id.to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         call(&admin, &read, None, None, false).await.0,
         StatusCode::OK
@@ -2673,4 +2675,31 @@ async fn swarm_provider_ceiling_counts_other_classes_and_unclassified_reservatio
     .unwrap();
     assert_eq!(live, 1, "lowering ceilings preserves existing reservations");
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn node_slot_default_setting_is_revisioned_idempotent_and_does_not_resize_nodes() {
+    let f = common::profiled::fixture().await;
+    let app = build_admin_router(f.state.clone());
+    let path = "/api/worker-management/default/node-slots";
+    let change = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"max_agents":5});
+    let (status, receipt) = call(&app, path, Some(change.clone()), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(call(&app, path, Some(change), None, true).await.1, receipt);
+    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"max_agents":8});
+    assert_eq!(
+        call(&app, path, Some(stale), None, true).await.0,
+        StatusCode::CONFLICT
+    );
+    let (_, list) = call(&app, "/api/worker-management", None, None, false).await;
+    assert_eq!(list["node_slot_default"]["slots"], 5);
+    assert_eq!(list["node_slot_default"]["revision"], 2);
+    let pool = f.db.pool().await;
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, f.node.node_id)
+            .await
+            .unwrap(),
+        2
+    );
 }

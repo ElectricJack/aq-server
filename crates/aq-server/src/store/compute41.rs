@@ -28,6 +28,13 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
             .fetch_optional(&mut **tx).await?;
         // Format 102 admits lost-attempt releases past the incarnation guard (D2 ruling C).
         let body = match (supported >= 102, name) {
+            (_, "native_incarnation_guard") if supported >= 135 => {
+                aq_profiled_state::sql_function_body(
+                    include_str!("../../migrations/0135_node_slots.sql"),
+                    name,
+                )
+                .ok_or_else(corrupt)?
+            }
             (true, "native_incarnation_guard") => {
                 aq_profiled_state::sql_function_body(LOST, name).ok_or_else(corrupt)?
             }
@@ -39,6 +46,11 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
     }
     let guarded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('execution_nodes') AND tgname='native_incarnation_guard' AND NOT tgisinternal AND tgenabled='O' AND tgtype=23 AND tgnargs=0 AND tgqual IS NULL AND tgfoid=to_regprocedure('native_incarnation_guard()'))")
         .fetch_one(&mut **tx).await?;
+    if supported >= 135 {
+        aq_machine_control::slots::validate(tx)
+            .await
+            .map_err(|_| corrupt())?;
+    }
     if !guarded {
         return Err(corrupt());
     }

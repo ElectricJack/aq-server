@@ -32,7 +32,13 @@ fn offers(body: &Value) -> Vec<NativeOffer> {
     page.offers
 }
 /// The offer is accepted, granted and started: the attempt runs (its host later lost).
-async fn running(c: &mut Case, offer: &NativeOffer) -> Uuid {
+pub(super) async fn running(c: &mut Case, offer: &NativeOffer) -> Uuid {
+    running_started(c, offer).await.binding.attempt_id
+}
+pub(super) async fn running_started(
+    c: &mut Case,
+    offer: &NativeOffer,
+) -> aq_admission::started::Request {
     let (_, _, request, _) = native_offer::prepare_request(c, offer).await;
     let state = c.env.env.state.clone();
     let auth = auth(c).await;
@@ -64,9 +70,9 @@ async fn running(c: &mut Case, offer: &NativeOffer) -> Uuid {
     intent.manifest_digest = start.binding.launch_manifest_digest.clone();
     start.observation_digest = start.observation.digest().unwrap();
     started::record(&state, &auth, &start).await.unwrap();
-    g.grant.binding.attempt_id
+    start
 }
-fn crash_request(attempt: Uuid) -> LostAttemptRelease {
+pub(super) fn crash_request(attempt: Uuid) -> LostAttemptRelease {
     LostAttemptRelease {
         schema_version: 1,
         attempt_id: attempt,

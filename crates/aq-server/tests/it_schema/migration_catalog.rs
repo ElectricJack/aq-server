@@ -49,3 +49,46 @@ fn directory_additions_generate_registration_and_state_formats() {
     std::fs::write(directory.path().join("0002_duplicate.sql"), "-- duplicate").unwrap();
     assert!(catalog::discover(directory.path()).is_err());
 }
+
+#[tokio::test]
+async fn node_slots_135_preserves_existing_counts_at_one_and_defaults_new_nodes_to_two() {
+    use aq_server::test_support::{TestDb, migrate_profile};
+    use uuid::Uuid;
+    let db = TestDb::create().await;
+    let pool = db.pool().await;
+    migrate_profile(&pool, 134).await.unwrap();
+    let existing = Uuid::new_v4();
+    let insert = "INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'node',$2,'test',2,now())";
+    sqlx::query(insert)
+        .bind(existing)
+        .bind(existing.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO worker_settings(kind,id,max_agents,revision) VALUES('node',$1,8,1)")
+        .bind(existing.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    migrate_profile(&pool, 135).await.unwrap();
+    let new = Uuid::new_v4();
+    sqlx::query(insert)
+        .bind(new)
+        .bind(new.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, existing)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        aq_machine_control::slots::count(&mut conn, new)
+            .await
+            .unwrap(),
+        2
+    );
+}

@@ -204,10 +204,14 @@ pub enum AgentPhase {
     /// Stopped, cancelled or expired; the slot is not released yet.
     Finishing,
 }
-/// An attempt that holds a slot on a node: one row per occupied slot.
+/// A task-holding attempt, including proven-stopped attempts awaiting settlement.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SwarmAgent {
+    /// One-based durable node slot; absent only for older servers/legacy attempts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1024))]
+    pub slot: Option<u32>,
     pub session_id: Uuid,
     pub attempt_id: Uuid,
     pub task: Option<TitledRef>,

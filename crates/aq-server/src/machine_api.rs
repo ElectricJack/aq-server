@@ -65,7 +65,6 @@ async fn slots(
         .begin()
         .await
         .map_err(|_| AppError::Internal)?;
-    // The machine lock precedes the node lock, as in revocation (review I3).
     let key = &req.machine_key;
     mc::lock_machine(&mut tx, key).await.map_err(mapped)?;
     lock_current_node(&mut tx, &auth).await?;
@@ -105,7 +104,7 @@ async fn control(
     ApiJson(req): ApiJson<ControlRequest>,
 ) -> Result<Json<ControlResponse>, AppError> {
     let auth = authenticate_context(&state, &headers).await?;
-    if req.schema_version != 1 {
+    if ![1, aq_protocol::NODE_SLOTS_SCHEMA_VERSION].contains(&req.schema_version) {
         return Err(AppError::BadRequest("schema_version".into()));
     }
     let node = auth.node();
@@ -126,21 +125,24 @@ async fn control(
     let handoff = mc::pending_handoffs(&mut conn, &key)
         .await
         .map_err(mapped)?;
+    let slots = if req.schema_version == 2 {
+        Some(mc::slots::count(&mut conn, node.id).await.map_err(mapped)?)
+    } else {
+        None
+    };
     drop(conn);
-    // The control poll counts as liveness.
     state
         .store
         .record_heartbeat(node.id, &node.worker_version, node.protocol_version, now)
         .await?;
     Ok(Json(ControlResponse {
-        schema_version: 1,
+        schema_version: req.schema_version,
         machine_key: key,
         desired: c.desired,
         generation: c.generation,
         handoff,
-        // No node is pinned to a measured fact (spec 0014 §8). Slot count: not sent yet (0015).
         qualification: None,
-        slots: None,
+        slots,
     }))
 }
 
@@ -159,7 +161,6 @@ async fn handoffs(
         .acquire()
         .await
         .map_err(|_| AppError::Internal)?;
-    // The answer carries the reason on record (an unrequested owner_stop is a restart).
     let now = (state.clock)();
     req.reason = mc::record_handoff(&mut conn, auth.id(), req.attempt_id, req.reason, now)
         .await
@@ -167,7 +168,6 @@ async fn handoffs(
     Ok(Json(req))
 }
 
-/// D2 ruling C: a restarted node releases an attempt whose host was lost.
 async fn lost_attempts(
     State(state): State<AppState>,
     headers: HeaderMap,

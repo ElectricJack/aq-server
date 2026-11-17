@@ -24,7 +24,9 @@ async fn poll(
     let body = body.map_err(|_| AppError::PayloadTooLarge("native poll body bound".into()))?;
     let request: Poll = serde_json::from_slice(&body)
         .map_err(|_| AppError::BadRequest("invalid native poll document".into()))?;
-    let reply = super::poll(&state, &auth, &request).await?;
+    let slot = super::super::api::slot_header(&headers, aq_admission::node_slots::SLOT_HEADER)?
+        .unwrap_or(1);
+    let reply = super::workflow::poll_slot(&state, &auth, &request, slot).await?;
     let value = ControlReply::Poll(reply);
     if serde_json::to_vec(&value)
         .map_err(|_| AppError::Internal)?

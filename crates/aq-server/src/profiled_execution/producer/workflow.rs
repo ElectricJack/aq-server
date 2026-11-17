@@ -119,9 +119,7 @@ async fn runtime(
             return Err(refused());
         }
     }
-    // The frozen manifest carries exactly one confinement mode (native or
-    // container); the node must qualify at least one of them here, and the
-    // exact mode the built manifest requires is checked after assembly.
+    // Assembly rechecks the confinement mode pinned by the manifest.
     let modes: Vec<&'static str> = [
         aq_selection::ConfinementMode::Native.capability(),
         aq_selection::ConfinementMode::Container.capability(),
@@ -136,7 +134,7 @@ async fn runtime(
     let snapshot: CapabilitySnapshot =
         serde_json::from_value(row.get("snapshot")).map_err(|_| refused())?;
     if row.get::<Uuid, _>("boot_id") != request.identity.boot_id
-        || row.get::<i64, _>("sequence") as u64 != request.inventory_sequence
+        || (row.get::<i64, _>("sequence") as u64) < request.inventory_sequence
         || snapshot.target
             != (ExecutionTarget::Worker {
                 node_id: auth.id(),
@@ -357,6 +355,14 @@ pub async fn poll(
     auth: &AuthenticatedNode,
     request: &Poll,
 ) -> Result<NativePollPage, AppError> {
+    poll_slot(state, auth, request, 1).await
+}
+pub async fn poll_slot(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &Poll,
+    slot: u32,
+) -> Result<NativePollPage, AppError> {
     TransportDocument::Poll(request.clone())
         .validate()
         .map_err(|_| AppError::BadRequest("invalid native poll".into()))?;
@@ -375,11 +381,11 @@ pub async fn poll(
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
     }
-    // Retain one assembler per node across polls; redeliver its published offer.
+    // Retain one assembler per node/slot across polls.
     static ASSEMBLERS: OnceLock<aq_machine_control::offer_assembly::Gate> = OnceLock::new();
     let Some(permit) = ASSEMBLERS
         .get_or_init(|| aq_machine_control::offer_assembly::Gate::new(4))
-        .enter(auth.id())
+        .enter_slot(auth.id(), slot)
     else {
         return Ok(page);
     };
@@ -390,7 +396,7 @@ pub async fn poll(
         let page = page.clone();
         async move {
             let _permit = permit;
-            let result = Box::pin(offers(&state, &auth, &request, page)).await;
+            let result = Box::pin(offers(&state, &auth, &request, page, slot)).await;
             if let Err(error) = &result {
                 tracing::warn!(node_id = %auth.id(), ?error, "background offer assembly refused");
             }
@@ -409,9 +415,19 @@ async fn offers(
     auth: &AuthenticatedNode,
     request: &Poll,
     mut page: NativePollPage,
+    slot: u32,
 ) -> Result<NativePollPage, AppError> {
     let (runtime, snapshot, modes) = on_heap(|| runtime(state, auth, request)).await?;
     if request.available.slots == 0 {
+        return Ok(page);
+    }
+    // Preparing/granted rows are not offers; their control owners fence recovery.
+    if let Some(native) =
+        on_heap(|| super::redelivery::existing(state, auth, request, slot)).await?
+    {
+        page.server_time_ms = native.offered.clock.server_time_ms;
+        page.offers.push(native);
+        page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
     }
     let mut gate = state.store.pool.acquire().await.map_err(|_| refused())?;
@@ -421,23 +437,14 @@ async fn offers(
         return Ok(page);
     }
     drop(gate);
-    // Redelivery precedes new scheduling. Preparing/granted rows are not offers;
-    // those require their independently fenced control/reconciliation owners.
-    if let Some(native) = on_heap(|| super::redelivery::existing(state, auth, request)).await? {
-        page.server_time_ms = native.offered.clock.server_time_ms;
-        page.offers.push(native);
-        page.validate_for(request).map_err(|_| refused())?;
-        return Ok(page);
-    }
     let mut occupancy = state.store.pool.begin().await.map_err(db)?;
     crate::worker_api::lock_current_node(&mut occupancy, auth).await?;
-    let busy = super::super::compute::busy_locked(&mut occupancy, auth.id()).await?;
+    let free = super::super::compute::free_locked(&mut occupancy, auth.id(), slot).await?;
     occupancy.commit().await.map_err(db)?;
-    if busy {
+    if !free {
         return Ok(page);
     }
-    // Spec 0008: one grouped read. A node or server hold ends the poll before any write;
-    // a project hold drops that project from the candidates (it is never charged a turn).
+    // Node/server holds end the poll; a project hold skips that project.
     let config = state
         .config
         .profiled_execution
@@ -713,7 +720,6 @@ async fn offers(
         let policy_record = config
             .project_policy_record(policy.project_id)
             .map_err(|_| refused())?;
-        // Spec 0007: a handed-off predecessor's successor starts from its saved work.
         let handoff = match &replacement {
             Some(r) => {
                 on_heap(|| super::super::handoff::successor_base(state, task.task_id, r)).await?
@@ -723,8 +729,7 @@ async fn offers(
         let (token, fact) = if let Some(replacement) =
             replacement.as_ref().filter(|_| handoff.is_none())
         {
-            // Reuse the original verified export, including its bundle bytes and
-            // operation identity. Never resolve a moving ref or re-export on retry.
+            // Reuse the exact verified export and its operation identity.
             on_heap(|| replacement::retained_source(state, task.task_id, replacement))
                 .await?
                 .into_parts()
@@ -794,7 +799,6 @@ async fn offers(
         if !aq_machine_control::offer_assembly::deliverable(&snapshot, now(state)?) {
             return Ok(page);
         }
-        // Refresh Graph/selection after export; reject a changed original task.
         let ready = on_heap(|| {
             graph.scheduling_ready_current(
                 record.binding.graph_workspace_id,
@@ -890,7 +894,7 @@ async fn offers(
         }
         let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
         let offer =
-            on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection))
+            on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection, slot))
                 .await?;
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         let Some(offer) = offer else { return Ok(page) };
