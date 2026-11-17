@@ -7,7 +7,9 @@ pub(super) fn remove(
     current: &ValidatedCatalog,
     state: &ActivationState,
     old: &Intelligence,
-    choices: &[ModelChoice],
+    // Not read: the router profile takes its candidates from the levels. The
+    // parameter goes with this router-profile code (spec 0014 step 3c).
+    _choices: &[ModelChoice],
     project_uses_profile: bool,
 ) -> Result<Prepared> {
     let old_key = aq_profiles::key(&old.id, old.version);
@@ -24,7 +26,7 @@ pub(super) fn remove(
             .intelligence
             .iter()
             .find(|p| p.automatic_routing == Some(true));
-        let mut router = automatic(current, state, old, choices, existing)?;
+        let mut router = automatic(current, state, old, existing)?;
         let previous_router = existing.map(|p| aq_profiles::key(&p.id, p.version));
         let router_key = aq_profiles::key(&router.id, router.version);
         references.insert(format!("intelligence:{old_key}"), router_key.clone());
@@ -74,7 +76,6 @@ fn automatic(
     current: &ValidatedCatalog,
     state: &ActivationState,
     deleted: &Intelligence,
-    choices: &[ModelChoice],
     existing: Option<&Intelligence>,
 ) -> Result<Intelligence> {
     // The level profiles left in Settings, in the order Settings lists them.
@@ -84,24 +85,10 @@ fn automatic(
             .flat_map(|p| p.candidates.clone())
             .collect()
     };
-    // `any-model`: every model choice is usable, so "not preference-only" no
-    // longer picks the router's own candidates, and the list of all choices has
-    // no order the owner chose. They come from the level profiles instead.
-    let mut candidates: Vec<_> = if cfg!(feature = "any-model") {
-        levels()
-    } else {
-        choices
-            .iter()
-            .filter(|c| !c.preference_only)
-            .map(|c| ModelCandidate {
-                id: String::new(),
-                provider: c.provider.clone(),
-                model: c.model.clone(),
-                reasoning_configuration_reference: c.reasoning_configuration_reference.clone(),
-                harnesses: vec![c.harness.clone()],
-            })
-            .collect()
-    };
+    // Every model choice is usable on an installed harness, so the router's
+    // own candidates are not picked from the choices: they come from the
+    // level profiles.
+    let mut candidates: Vec<_> = levels();
     if candidates.is_empty()
         && let Some(router) = existing
     {

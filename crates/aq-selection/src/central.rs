@@ -92,8 +92,7 @@ pub fn select_central(
         .wall_time_ms
         .min(input.original_expires_at_ms.saturating_sub(input.now_ms));
     let core = evaluate(
-        validated.intelligence,
-        validated.execution,
+        &CoreProfile::catalog(validated.intelligence, validated.execution),
         policy,
         &CoreInputs {
             backend_kind: None,
@@ -111,7 +110,6 @@ pub fn select_central(
             allowed_environments: &allowed,
             placement: None,
             route: None,
-            model_choices: &[],
             now_ms: input.now_ms,
             global,
             environment_denied: "central_environment_denied",

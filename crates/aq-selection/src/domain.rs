@@ -54,18 +54,6 @@ pub struct NativeModelSupport {
     pub reasoning_configuration_reference: String,
     pub native_reasoning: String,
 }
-/// A Settings model choice resolved to the native reasoning one harness
-/// accepts. The owner adapter resolves it before selection; selection only
-/// reads it, so the chosen value is part of the digested inputs.
-#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResolvedModelChoice {
-    pub harness: String,
-    pub provider: String,
-    pub model: String,
-    pub reasoning_configuration_reference: String,
-    pub native_reasoning: String,
-}
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeLimits {
@@ -244,6 +232,19 @@ pub struct PreparedComposition {
     pub digest: Digest,
     pub composition: FrozenComposition,
 }
+/// One startup text an offer could launch with: the role, level and execution
+/// profile of the project snapshot, rendered for one installed harness. The
+/// digest is the server's, over the rendered text and the permissions.
+#[derive(JsonSchema, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedLaunch {
+    pub digest: Digest,
+    pub harness: String,
+    pub environment: String,
+    pub startup_bytes: u64,
+    /// The execution profile's startup byte limit after the project ceiling.
+    pub startup_limit_bytes: u64,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectionInputs {
@@ -266,14 +267,15 @@ pub struct SelectionInputs {
     /// A routed task's harness and provider limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteLimits>,
-    /// Settings model choices a candidate may name on an installed harness
-    /// that does not list the model itself. Empty is omitted, so every
-    /// earlier decision keeps its bytes and digest.
+    /// The startup texts of a launch resolved from a role snapshot, one per
+    /// harness and environment (spec 0014). Empty is omitted, so a selection
+    /// over the old catalog keeps its bytes and digest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub model_choices: Vec<ResolvedModelChoice>,
+    pub launches: Vec<PreparedLaunch>,
 }
 impl SelectionInputs {
-    /// The intelligence profile this selection uses.
+    /// The intelligence profile this selection uses. For a launch from a
+    /// role snapshot it is the level the project snapshot names.
     pub fn intelligence_key(&self) -> &str {
         (self.intelligence_override.as_deref()).unwrap_or(&self.project.intelligence_profile)
     }

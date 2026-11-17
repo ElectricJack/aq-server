@@ -123,13 +123,29 @@ pub fn select(
 ) -> Result<SelectionOutcome> {
     select_native(catalog, input, 2000)
 }
-/// Select for a live native offer, allowing time for poll, proposal and accept.
-/// The historical `select` entrypoint retains its two-second replay behavior.
+/// Select for a live native offer among the candidates of the launch a role
+/// snapshot resolved (spec 0014), on the harnesses the node has installed.
+/// The decision allows time for poll, proposal and accept.
 pub fn select_for_offer(
-    catalog: &aq_profiles::ValidatedCatalog,
+    launch: &aq_profiles::roles::Launch<'_>,
     input: &SelectionInputs,
 ) -> Result<SelectionOutcome> {
-    select_native(catalog, input, OFFER_SELECTION_TTL_MS)
+    crate::validate::validate_launch(launch, input)?;
+    let policy = &launch.selection_policy;
+    policy
+        .validate()
+        .map_err(|e| SelectionError::Invalid(e.to_string()))?;
+    let prepared: Vec<_> = (input.launches.iter())
+        .map(|l| CoreComposition {
+            digest: &l.digest,
+            harness: &l.harness,
+            environment: &l.environment,
+            context_limit_bytes: l.startup_limit_bytes,
+            startup_bytes: l.startup_bytes,
+        })
+        .collect();
+    let profile = CoreProfile::launch(launch);
+    finish(&profile, policy, &prepared, input, OFFER_SELECTION_TTL_MS)
 }
 fn select_native(
     catalog: &aq_profiles::ValidatedCatalog,
@@ -223,6 +239,17 @@ fn select_internal(
                 .sum(),
         })
         .collect();
+    let profile = CoreProfile::catalog(intelligence, execution);
+    finish(&profile, policy, &compositions, input, ttl_ms)
+}
+/// The evaluation and the sealed result, whichever documents named the profile.
+fn finish(
+    profile: &CoreProfile<'_>,
+    policy: &SelectionPolicy,
+    compositions: &[CoreComposition<'_>],
+    input: &SelectionInputs,
+    ttl_ms: u64,
+) -> Result<SelectionOutcome> {
     let delivery = |credential: &AuthorizedCredential| credential_delivery(input, credential);
     let cost_check = |harness: &InstalledHarness, estimate: Option<&CandidateEstimate>| {
         cost(input, policy, harness, estimate)
@@ -235,8 +262,7 @@ fn select_internal(
         ExecutionTarget::Central { .. } => ObservationTarget::CentralInstallation,
     };
     let core = evaluate(
-        intelligence,
-        execution,
+        profile,
         policy,
         &CoreInputs {
             backend_kind: input.node.backend_kind,
@@ -249,12 +275,11 @@ fn select_internal(
             credentials: &input.credentials,
             observations: &input.observations,
             estimates: &input.estimates,
-            compositions: &compositions,
+            compositions,
             ceilings: &input.project.ceilings,
             allowed_environments: &input.project.allowed_environments,
             placement: input.placement.as_ref(),
             route: input.route.as_ref(),
-            model_choices: &input.model_choices,
             now_ms: input.now_ms,
             global: global_budget(input, policy),
             environment_denied: "project_environment_denied",

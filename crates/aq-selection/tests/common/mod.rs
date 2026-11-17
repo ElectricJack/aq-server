@@ -336,7 +336,7 @@ pub fn fixture() -> (ValidatedCatalog, SelectionInputs) {
         placement: None,
         intelligence_override: None,
         route: None,
-        model_choices: vec![],
+        launches: vec![],
     };
     (catalog, input)
 }

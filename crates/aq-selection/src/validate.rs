@@ -103,115 +103,51 @@ pub(crate) fn validate(
     catalog: &aq_profiles::ValidatedCatalog,
     input: &SelectionInputs,
 ) -> Result<()> {
-    lineage(&input.project.lineage)?;
-    target(&input.project.target)?;
-    target(&input.node.target)?;
+    common(input)?;
     ensure(
-        input.project.target == input.node.target && input.project.lineage == input.budget.lineage,
-        "snapshot subject mismatch",
-    )?;
-    ensure(
-        input.now_ms > 0
-            && input.project.revision > 0
-            && input.project.catalog_revision > 0
-            && input.node.revision > 0
-            && input.registry_revision > 0
-            && input.budget.revision > 0,
-        "snapshot revisions",
+        input.launches.is_empty(),
+        "catalog selection takes no launch",
     )?;
     ensure(
         catalog.digest() == input.project.catalog_digest.as_str(),
         "catalog snapshot mismatch",
     )?;
-    if let Some(p) = &input.placement {
-        placement(p)?;
-    }
-    for value in [
-        &input.project.agent_profile,
-        &input.project.intelligence_profile,
-        &input.project.execution_profile,
-    ] {
-        text(value)?;
-    }
-    if let Some(routed) = &input.intelligence_override {
-        text(routed)?;
-    }
-    if let Some(r) = &input.route {
-        for limit in [&r.harnesses, &r.providers, &r.prefer] {
-            bounds(limit, 32)?;
-            limit.iter().try_for_each(|v| text(v))?;
-        }
-    }
-    bounds(&input.project.allowed_environments, 32)?;
+    compositions(catalog, input)
+}
+/// A selection over the launch a role snapshot resolved (spec 0014): the
+/// project names that role, level and execution profile, and each prepared
+/// startup text is for one harness and environment.
+pub(crate) fn validate_launch(
+    launch: &aq_profiles::roles::Launch<'_>,
+    input: &SelectionInputs,
+) -> Result<()> {
+    common(input)?;
     ensure(
-        !input.project.allowed_environments.is_empty()
-            && input
-                .project
-                .allowed_environments
-                .iter()
-                .collect::<BTreeSet<_>>()
-                .len()
-                == input.project.allowed_environments.len(),
-        "project environment allowlist",
+        input.compositions.is_empty() && input.intelligence_override.is_none(),
+        "launch selection takes no catalog composition",
     )?;
-    for environment in &input.project.allowed_environments {
-        text(environment)?;
-    }
-    let c = &input.project.ceilings;
     ensure(
-        c.context_bytes > 0
-            && c.context_bytes <= 1_048_576
-            && c.wall_time_ms > 0
-            && c.memory_bytes > 0
-            && c.cpu_millis > 0
-            && c.process_limit > 0
-            && c.cost_limit_microunits.is_some() == c.currency.is_some(),
-        "project ceilings",
+        input.project.agent_profile == launch.role.id
+            && input.project.intelligence_profile == launch.intelligence.id
+            && input.project.execution_profile == launch.execution.id,
+        "launch differs from the project snapshot",
     )?;
-    if let Some(currency) = &c.currency {
+    let mut seen = BTreeSet::new();
+    for prepared in &input.launches {
+        text(&prepared.harness)?;
+        text(&prepared.environment)?;
         ensure(
-            currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
-            "currency",
+            seen.insert((&prepared.harness, &prepared.environment)),
+            "duplicate launch combination",
+        )?;
+        ensure(
+            prepared.startup_bytes > 0 && prepared.startup_bytes <= prepared.startup_limit_bytes,
+            "launch startup bytes exceed their limit",
         )?;
     }
-    bounds(&input.project.permission_ceiling, 128)?;
-    bounds(&input.node.harnesses, 16)?;
-    bounds(&input.node.credential_bindings, 32)?;
-    bounds(&input.credentials, 32)?;
-    bounds(&input.observations, 128)?;
-    bounds(&input.estimates, 128)?;
-    bounds(&input.compositions, 16)?;
-    // At most what the harness rows themselves may list (16 harnesses of 64 models).
-    bounds(&input.model_choices, 16 * 64)?;
-    let mut choices = BTreeSet::new();
-    for m in &input.model_choices {
-        for value in [
-            &m.harness,
-            &m.provider,
-            &m.model,
-            &m.reasoning_configuration_reference,
-            &m.native_reasoning,
-        ] {
-            text(value)?;
-        }
-        ensure(
-            choices.insert((
-                &m.harness,
-                &m.provider,
-                &m.model,
-                &m.reasoning_configuration_reference,
-            )),
-            "conflicting model choice",
-        )?;
-    }
-    validate_installation(
-        &input.credentials,
-        &input.node.credential_bindings,
-        input.node.material_delivery.as_ref(),
-        &input.node.harnesses,
-        &input.observations,
-        input.now_ms,
-    )?;
+    Ok(())
+}
+fn compositions(catalog: &aq_profiles::ValidatedCatalog, input: &SelectionInputs) -> Result<()> {
     let mut total = 0usize;
     let mut compositions = BTreeSet::new();
     for prepared in &input.compositions {
@@ -312,6 +248,93 @@ pub(crate) fn validate(
             )?;
         }
     }
+    Ok(())
+}
+/// Everything that does not depend on where the profiles come from.
+fn common(input: &SelectionInputs) -> Result<()> {
+    lineage(&input.project.lineage)?;
+    target(&input.project.target)?;
+    target(&input.node.target)?;
+    ensure(
+        input.project.target == input.node.target && input.project.lineage == input.budget.lineage,
+        "snapshot subject mismatch",
+    )?;
+    ensure(
+        input.now_ms > 0
+            && input.project.revision > 0
+            && input.project.catalog_revision > 0
+            && input.node.revision > 0
+            && input.registry_revision > 0
+            && input.budget.revision > 0,
+        "snapshot revisions",
+    )?;
+    if let Some(p) = &input.placement {
+        placement(p)?;
+    }
+    for value in [
+        &input.project.agent_profile,
+        &input.project.intelligence_profile,
+        &input.project.execution_profile,
+    ] {
+        text(value)?;
+    }
+    if let Some(routed) = &input.intelligence_override {
+        text(routed)?;
+    }
+    if let Some(r) = &input.route {
+        for limit in [&r.harnesses, &r.providers, &r.prefer] {
+            bounds(limit, 32)?;
+            limit.iter().try_for_each(|v| text(v))?;
+        }
+    }
+    bounds(&input.project.allowed_environments, 32)?;
+    ensure(
+        !input.project.allowed_environments.is_empty()
+            && input
+                .project
+                .allowed_environments
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == input.project.allowed_environments.len(),
+        "project environment allowlist",
+    )?;
+    for environment in &input.project.allowed_environments {
+        text(environment)?;
+    }
+    let c = &input.project.ceilings;
+    ensure(
+        c.context_bytes > 0
+            && c.context_bytes <= 1_048_576
+            && c.wall_time_ms > 0
+            && c.memory_bytes > 0
+            && c.cpu_millis > 0
+            && c.process_limit > 0
+            && c.cost_limit_microunits.is_some() == c.currency.is_some(),
+        "project ceilings",
+    )?;
+    if let Some(currency) = &c.currency {
+        ensure(
+            currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
+            "currency",
+        )?;
+    }
+    bounds(&input.project.permission_ceiling, 128)?;
+    bounds(&input.node.harnesses, 16)?;
+    bounds(&input.node.credential_bindings, 32)?;
+    bounds(&input.credentials, 32)?;
+    bounds(&input.observations, 128)?;
+    bounds(&input.estimates, 128)?;
+    bounds(&input.compositions, 16)?;
+    bounds(&input.launches, 16)?;
+    validate_installation(
+        &input.credentials,
+        &input.node.credential_bindings,
+        input.node.material_delivery.as_ref(),
+        &input.node.harnesses,
+        &input.observations,
+        input.now_ms,
+    )?;
     if let Some(replacement) = &input.replacement {
         lineage(&replacement.lineage)?;
         ensure(

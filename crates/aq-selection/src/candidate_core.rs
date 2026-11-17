@@ -18,6 +18,98 @@ pub(crate) struct CoreComposition<'a> {
     pub context_limit_bytes: u64,
     pub startup_bytes: u64,
 }
+/// One candidate of an intelligence profile, whatever document it came from.
+pub(crate) struct CoreCandidate<'a> {
+    /// Its identity in decision records.
+    pub id: String,
+    pub provider: &'a str,
+    pub model: &'a str,
+    /// What the choice records as its reasoning configuration.
+    pub reasoning_reference: &'a str,
+    /// The reasoning effort the candidate states itself (spec 0014 §5.2). It
+    /// is used as stated, or the candidate is unsupported on a harness that
+    /// does not accept it. `None` is the old catalog's candidate, whose
+    /// native reasoning is looked up in the harness's model list.
+    pub stated_reasoning: Option<&'a str>,
+    pub harnesses: &'a [String],
+}
+/// Which credential profiles an execution profile names for a harness.
+pub(crate) enum CoreCredentials<'a> {
+    /// The old catalog: one list for every harness.
+    Listed(&'a [String]),
+    /// Spec 0014 §5.3: one credential profile per harness.
+    PerHarness(&'a std::collections::BTreeMap<String, String>),
+}
+impl<'a> CoreProfile<'a> {
+    /// The old catalog's profiles (central work; removed with the catalog).
+    pub fn catalog(
+        intelligence: &'a aq_profiles::Intelligence,
+        execution: &'a aq_profiles::Execution,
+    ) -> Self {
+        Self {
+            candidates: (intelligence.candidates.iter())
+                .map(|c| CoreCandidate {
+                    id: c.id.clone(),
+                    provider: &c.provider,
+                    model: &c.model,
+                    reasoning_reference: &c.reasoning_configuration_reference,
+                    stated_reasoning: None,
+                    harnesses: &c.harnesses,
+                })
+                .collect(),
+            harnesses: &execution.harnesses,
+            environments: &execution.environments,
+            credentials: CoreCredentials::Listed(&execution.credential_profile_references),
+            confinement: execution.confinement.clone(),
+        }
+    }
+    /// The launch a role snapshot resolved: each candidate states its
+    /// reasoning, and the execution profile names one environment and one
+    /// credential profile per harness.
+    pub fn launch(launch: &'a aq_profiles::roles::Launch<'a>) -> Self {
+        Self {
+            candidates: (launch.candidates.iter())
+                .map(|c| CoreCandidate {
+                    id: c.derived_id(),
+                    provider: &c.provider,
+                    model: &c.model,
+                    reasoning_reference: &c.reasoning,
+                    stated_reasoning: Some(&c.reasoning),
+                    harnesses: &c.harnesses,
+                })
+                .collect(),
+            harnesses: &launch.execution.harnesses,
+            environments: std::slice::from_ref(&launch.execution.environment),
+            credentials: CoreCredentials::PerHarness(&launch.execution.credentials),
+            confinement: launch.execution.confinement.execution_confinement(),
+        }
+    }
+}
+impl CoreCredentials<'_> {
+    fn references(&self, harness: &str) -> Vec<String> {
+        let named: Vec<String> = match self {
+            Self::Listed(all) => all.to_vec(),
+            Self::PerHarness(by) => by.get(harness).cloned().into_iter().collect(),
+        };
+        if named.is_empty() {
+            vec!["unconfigured".to_string()]
+        } else {
+            named
+        }
+    }
+}
+/// The candidates in preference order and where they may run.
+pub(crate) struct CoreProfile<'a> {
+    pub candidates: Vec<CoreCandidate<'a>>,
+    pub harnesses: &'a [String],
+    pub environments: &'a [String],
+    pub credentials: CoreCredentials<'a>,
+    pub confinement: aq_profiles::ExecutionConfinement,
+}
+/// A credential profile reference names a profile by `id@version` or by id.
+fn names_profile(reference: &str, profile: &aq_session_protocol::ArtifactRef) -> bool {
+    reference == profile_key(profile) || reference == profile.id.as_str()
+}
 pub(crate) struct CoreInstallation<'a> {
     pub harnesses: &'a [InstalledHarness],
     pub observed_at_ms: u64,
@@ -40,7 +132,6 @@ pub(crate) struct CoreInputs<'a> {
     pub allowed_environments: &'a [String],
     pub placement: Option<&'a Placement>,
     pub route: Option<&'a RouteLimits>,
-    pub model_choices: &'a [ResolvedModelChoice],
     pub now_ms: u64,
     pub global: Option<&'static str>,
     pub environment_denied: &'static str,
@@ -188,7 +279,7 @@ fn fallback(state: CandidateState) -> Option<FallbackReason> {
 }
 fn trace(
     id: String,
-    c: &aq_profiles::ModelCandidate,
+    c: &CoreCandidate<'_>,
     harness: &str,
     environment: &str,
     credential: Option<&AuthorizedCredential>,
@@ -198,8 +289,8 @@ fn trace(
     CandidateTrace {
         candidate_id: id,
         profile_candidate_id: c.id.clone(),
-        provider: c.provider.clone(),
-        model: c.model.clone(),
+        provider: c.provider.into(),
+        model: c.model.into(),
         harness: harness.into(),
         environment: environment.into(),
         credential_profile: credential.map(|c| c.profile.clone()),
@@ -209,11 +300,11 @@ fn trace(
     }
 }
 pub(crate) fn evaluate(
-    intelligence: &aq_profiles::Intelligence,
-    execution: &aq_profiles::Execution,
+    profile: &CoreProfile<'_>,
     policy: &SelectionPolicy,
     input: &CoreInputs<'_>,
 ) -> Result<CoreOutcome> {
+    let execution = profile;
     let global = input.global;
     // The last field: the route excludes the row, recorded once where it is evaluated.
     let mut rows: Vec<(CandidateTrace, Option<ConcreteChoice>, u64, bool)> = Vec::new();
@@ -226,9 +317,9 @@ pub(crate) fn evaluate(
             h.cli_version.clone(),
         )
     });
-    for candidate in &intelligence.candidates {
+    for candidate in &profile.candidates {
         let before = rows.len();
-        for name in &execution.harnesses {
+        for name in execution.harnesses {
             if !candidate.harnesses.contains(name) {
                 continue;
             }
@@ -249,20 +340,15 @@ pub(crate) fn evaluate(
                 }) else {
                     continue;
                 };
-                let references = if execution.credential_profile_references.is_empty() {
-                    vec!["unconfigured".to_string()]
-                } else {
-                    execution.credential_profile_references.clone()
-                };
-                for reference in references {
+                for reference in execution.credentials.references(name) {
                     if input.credentials.iter().any(|c| {
-                        profile_key(&c.profile) == reference && c.provider != candidate.provider
+                        names_profile(&reference, &c.profile) && c.provider != candidate.provider
                     }) {
                         continue;
                     }
                     ensure(rows.len() < 128, "candidate fanout exceeds published bound")?;
                     let credential = input.credentials.iter().find(|c| {
-                        profile_key(&c.profile) == reference && c.provider == candidate.provider
+                        names_profile(&reference, &c.profile) && c.provider == candidate.provider
                     });
                     let id = format!(
                         "choice:{}",
@@ -288,7 +374,7 @@ pub(crate) fn evaluate(
                     // A global refusal outranks the route, so such a row is not route-excluded.
                     let excluded = (input.route)
                         .filter(|_| global.is_none())
-                        .and_then(|r| crate::route::excludes(r, name, &candidate.provider));
+                        .and_then(|r| crate::route::excludes(r, name, candidate.provider));
                     let evaluated =
                         (|| -> std::result::Result<(), (CandidateState, &'static str)> {
                             if let Some(reason) = global {
@@ -362,35 +448,24 @@ pub(crate) fn evaluate(
                                     "required_capability_unsupported",
                                 )
                             })?;
-                            // The harness's own listed model, else the Settings
-                            // choice resolved for this harness; never a default.
-                            let names = |p: &str, m: &str, r: &str| {
-                                p == candidate.provider
-                                    && m == candidate.model
-                                    && r == candidate.reasoning_configuration_reference
-                            };
-                            let listed = (harness.models.iter())
-                                .find(|m| {
-                                    names(
-                                        &m.provider,
-                                        &m.model,
-                                        &m.reasoning_configuration_reference,
-                                    )
-                                })
-                                .map(|m| &m.native_reasoning);
-                            let chosen = || {
-                                (input.model_choices.iter())
+                            // The candidate's stated reasoning, as stated, when the
+                            // harness accepts it; never a substitute. The old
+                            // catalog's candidate is looked up in the harness list.
+                            let native_reasoning = match candidate.stated_reasoning {
+                                Some(stated) => {
+                                    aq_profiles::roles::harness_supports(&harness.harness, stated)
+                                        .then(|| stated.to_string())
+                                }
+                                None => (harness.models.iter())
                                     .find(|m| {
-                                        m.harness == harness.harness
-                                            && names(
-                                                &m.provider,
-                                                &m.model,
-                                                &m.reasoning_configuration_reference,
-                                            )
+                                        m.provider == candidate.provider
+                                            && m.model == candidate.model
+                                            && m.reasoning_configuration_reference
+                                                == candidate.reasoning_reference
                                     })
-                                    .map(|m| &m.native_reasoning)
-                            };
-                            let native_reasoning = listed.or_else(chosen).ok_or((
+                                    .map(|m| m.native_reasoning.clone()),
+                            }
+                            .ok_or((
                                 CandidateState::Unsupported,
                                 "model_or_reasoning_unsupported",
                             ))?;
@@ -433,7 +508,7 @@ pub(crate) fn evaluate(
                             });
                             (input.cost)(harness, estimate)?;
                             let (state, reasons, ids) =
-                                availability(input, credential, &candidate.model, policy).map_err(
+                                availability(input, credential, candidate.model, policy).map_err(
                                     |_| (CandidateState::PolicyDenied, "observation_invalid"),
                                 )?;
                             row.state = state;
@@ -449,12 +524,12 @@ pub(crate) fn evaluate(
                             choice = Some(ConcreteChoice {
                                 candidate_id: row.candidate_id.clone(),
                                 profile_candidate_id: candidate.id.clone(),
-                                provider: candidate.provider.clone(),
-                                model: candidate.model.clone(),
-                                native_reasoning: native_reasoning.clone(),
+                                provider: candidate.provider.into(),
+                                model: candidate.model.into(),
+                                native_reasoning,
                                 reasoning_configuration_reference: candidate
-                                    .reasoning_configuration_reference
-                                    .clone(),
+                                    .reasoning_reference
+                                    .into(),
                                 harness: harness.harness.clone(),
                                 cli_version: harness.cli_version.clone(),
                                 adapter: harness.adapter.clone(),
@@ -489,7 +564,7 @@ pub(crate) fn evaluate(
             );
             // Its harness is unknown: only the route's provider allowlist applies.
             let excluded =
-                (input.route).and_then(|r| crate::route::excludes_provider(r, &candidate.provider));
+                (input.route).and_then(|r| crate::route::excludes_provider(r, candidate.provider));
             let (state, reason) = match excluded {
                 Some(reason) => (CandidateState::PolicyDenied, reason),
                 None => (

@@ -14,7 +14,3 @@ sqlx-postgres.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 axum.workspace = true
-
-[features]
-# Epic flag (compile time): a worker runs any model on an installed harness.
-any-model = []
