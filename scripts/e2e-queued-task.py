@@ -107,7 +107,7 @@ def main():
         print(f"no machine {args.machine}; have {[m['id'] for m in machines]}", file=sys.stderr)
         return 2
     routing = stack.get("/api/settings/routing")["enabled"]
-    others = [m["id"] for m in machines if m["id"] != args.machine and m["control"]["desired"] == "running"]
+    others = [m["id"] for m in machines if m["id"] != args.machine and (m.get("control") or {}).get("desired") == "running"]
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     name = f"notes/{args.note}-{args.machine}-{stamp}.md"
     body = args.body or (f"In the repository, create the file {name} containing exactly one line: "
@@ -153,12 +153,15 @@ def main():
             work = stack.work(args.project, task)
             execution, readiness = work.get("execution") or {}, work.get("readiness") or {}
             now = (execution.get("status"), readiness.get("state"))
-            if execution.get("attempt_id"):
+            # An offer that lapses before it is granted never ran anything.
+            if execution.get("attempt_id") and now[0] != "offered":
                 attempts.add(execution["attempt_id"])
             if now != seen:
                 say(f"execution={now[0]} readiness={now[1]} {[r.get('code') for r in readiness.get('reasons', [])]}")
                 seen = now
-            if now[0] == "finished":
+            # A quick attempt can be settled between two polls: the task is then
+            # completed and its execution is no longer shown.
+            if now[0] == "finished" or now[1] == "completed":
                 break
             if len(attempts) > 1 or now[0] in ("failed", "cancelling", "cancelled"):
                 raise RuntimeError(f"the attempt did not finish (attempts so far: {len(attempts)}, status {now[0]})")

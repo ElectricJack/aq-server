@@ -1,5 +1,9 @@
 # Development
 
+For a complete local AQ that runs real tasks (dashboard, routing, a sandbox
+worker), use [getting-started.md](getting-started.md) and `scripts/local-stack`.
+This page covers the bare server stack, tests, migrations and smoke suites.
+
 ## Prerequisites
 
 - Rust 1.96.1 (pinned by `rust-toolchain.toml`; rustup installs it automatically).

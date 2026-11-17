@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""MS1: profiled-execution configuration for a Claude Code agent in a
-docker-local sandbox on the desktop node (aq-ms1 stack).
+"""Profiled-execution configuration for a Claude Code agent in a docker-local
+sandbox on a local worker (scripts/local-stack; first written for MS1).
 
 Ported from aq-worker scripts/e0-qual/definitions.py (the MS0/I0 Codex
 qualification that ran end to end). Every value is a pinned observed artifact
@@ -13,10 +13,18 @@ Roles, intelligence profiles and execution profiles are not built here (spec
 in Settings. No model is measured or listed; a worker runs the model an offer
 names. Any other project is bound with scripts/bind-project.py.
 
-Commands (paths come from the environment set by scripts/ms1-demo.sh):
+Commands (paths come from the environment set by scripts/local-stack):
   source       central aq-git: sync main, retain the base, record the handle
   configure    write intelligence.toml ([intelligence] + [profiled_execution])
-               and the worker bundle
+               and the worker bundle (native.json and its three definition
+               files). This is the one place the sandbox driver, session host,
+               aq-agent, tmux and template image are pinned: both files come
+               from the same run, so they always name the same digests. When
+               a pinned body changed since the last run, the revision is
+               raised by itself.
+  check        refuse a mismatched pair: the programs in the runtime directory,
+               the worker's native.json, intelligence.toml and the vault the
+               server was started from must all name the same digests
   apply        install the intelligence registry and save the scratch
                project's binding (default role and level, ceilings, nodes)
   observe      owner availability observation for the Claude subscription
@@ -73,9 +81,6 @@ DISK_BYTES = 24 * 1024 * 1024 * 1024
 # (for example a rebuilt aq-worker) once an offer has retained the bodies.
 _REV_FILE = BASE / "revision"
 _REV = int(os.environ.get("AQ_MS1_REVISION") or (_REV_FILE.read_text().strip() if _REV_FILE.exists() else "1"))
-PROFILED_REVISION = _REV
-INTELLIGENCE_REVISION = _REV + 1
-DEFINITION_VERSION = str(_REV)
 LONG_CONTRACT = {"id": "aq.admission.preparation-registry-refresh-v1-contract.interactive-long-v1", "version": "1",
                  "digest": "bd9abe1d9ef02970beb7946c007418de90a6066a146698ac0c075da1c1f2a28f"}
 TERMINAL_CONTRACT = {"id": "aq.phase-terminal.registry-refresh-v1.contract", "version": "1",
@@ -231,17 +236,20 @@ def tmux_pin():
 def build():
     seed = json.loads((STATE / "seed.json").read_text())
     src = json.loads((STATE / "ms1-source.json").read_text())
-    worker = json.loads((BASE / "worker" / "node.json").read_text())
-    node_id = (NODE / "config" / "worker.toml").read_text().split('node_id = "')[1].split('"')[0]
-    # Spare enrollments (worker-*.toml) are allowed too, so a wedged node can
-    # be swapped without a configuration revision.
-    allowed = sorted({node_id} | {f.read_text().split('node_id = "')[1].split('"')[0]
-                                  for f in (NODE / "config").glob("worker-*.toml")})
+    # The template the worker's packaging/local/build-template.py built and pushed.
+    built_template = json.loads((BASE / "template.json").read_text())
+    template = {"image": built_template["image"], "digest": built_template["digest"]}
+    require(template["image"].endswith("@" + template["digest"]), "template.json image is not pinned to its digest")
+    socket = os.environ.get("AQ_DOCKER_LOCAL_SOCKET") or f"/run/user/{os.getuid()}/aq-sandbox/podman.sock"
+    worker = {"docker_local": {"socket": socket, "shared_root_fs": True, "templates": [template]}}
+    # Service machines are allowed by `allow_enrolled_nodes`, so no enrolled
+    # node id is listed. A binding needs one real node identity: the seed's.
+    node_id = seed["node_id"]
+    allowed = [node_id]
     worker_defs = json.loads(subprocess.run([str(RUNTIME / "aq-worker"), "ms1-definitions"], check=True,
                                             capture_output=True, text=True).stdout)
-    template = worker["docker_local"]["templates"][0]
-    scope = (f"aq-ms1 desktop node {node_id} only; docker-local sandbox template {template['digest']} (unadmitted, "
-             f"I4a claude-rust-1); owner Claude subscription login {CREDENTIAL}@1; ElectricJack/aq-scratch main")
+    scope = (f"{STACK} local development workers; docker-local sandbox template {template['digest']} (unadmitted); "
+             f"owner Claude subscription login {CREDENTIAL}@1; the seeded scratch repository")
     aq_worker, host, client = (pin("aq-sandbox-driver", "aq.claude-docker-local-driver"),
                                pin("aq-session-host", "aq.ms1-host/aq-session-host"),
                                pin("aq-agent", "aq.ms1-host/aq-agent"))
@@ -254,18 +262,20 @@ def build():
                                        "omissions": []}))
     b = Builder()
     policy = b.add(f"aq.ms1-project-policy:{PROJECT}", POLICY_BODY)
-    runtime = b.add("aq.ms1-runtime", {"schema_version": 1, "worker": aq_worker, "scope": scope}, DEFINITION_VERSION)
+    runtime = b.add("aq.ms1-runtime", {"schema_version": 1, "worker": aq_worker, "scope": scope}, str(_REV))
     environment = b.add(ENVIRONMENT, {
         "schema_version": 1, "scope": scope, "template": template,
         "images": {"driver": aq_worker, "host": host, "tmux": tmux, "client": client},
-        "premises": ["node programs pinned by SHA-256 on the WSL2 host (not a read-only image)",
+        "premises": ["node programs pinned by SHA-256 on the worker host (not a read-only image)",
                      "Claude runs in a docker-local sandbox created by the C2 fixed launch policy on the dedicated "
                      "rootless Podman daemon (single-UID mode, CapEff 0, no-new-privs)",
                      "container confinement: the sandbox is the boundary (C6a; native unqualified on docker-local)"],
         "primary_image_reservation_bytes": 536870912,
-        "additional_client_image_reservation_bytes": CLIENT_RESERVATION}, DEFINITION_VERSION)
+        "additional_client_image_reservation_bytes": CLIENT_RESERVATION}, str(_REV))
     contract, startup = worker_defs["contract"], worker_defs["startup"]
-    worker_src = Path(os.environ.get("AQ_MS1_WORKER_SRC", "/home/jkern/dev/aq-platform/wt/ms1-worker"))
+    worker_src = Path(os.environ.get("AQ_MS1_WORKER_SRC") or Path(__file__).resolve().parents[2] / "aq-worker")
+    require((worker_src / "crates/aq-agent-result-local/artifacts").is_dir(),
+            f"no aq-worker checkout at {worker_src}; set AQ_MS1_WORKER_SRC")
     contract_body = (worker_src / "crates/aq-agent-result-local/artifacts/contract.json").read_text()
     startup_body = (worker_src / "crates/aq-agent-result-local/artifacts/startup.md").read_text()
     require(sha(contract_body) == contract["digest"] and sha(startup_body) == startup["digest"],
@@ -278,26 +288,26 @@ def build():
                        "contract": contract, "environment": environment,
                        "executable": {"path": client["path"], "artifact": client["artifact"]},
                        "executable_bytes": client["bytes"]}
-    client_ref = b.add("aq.agent-result-client-installation", client_manifest, DEFINITION_VERSION)
+    client_ref = b.add("aq.agent-result-client-installation", client_manifest, str(_REV))
     composite = {"schema_version": 1, "profile": PROFILE, "runtime": runtime, "environment": environment,
                  "client_manifest": client_ref, "client_executable": client["artifact"], "contract": contract,
                  "recipe": recipe, "permission_digest": permission_digest, "reserved_client_bytes": CLIENT_RESERVATION}
-    adapter = b.add("aq.claude-result-local-adapter", composite, DEFINITION_VERSION)
+    adapter = b.add("aq.claude-result-local-adapter", composite, str(_REV))
     qualification = b.add("aq.ms1-runtime-qualification", {
         "schema_version": 1, "runtime": runtime, "adapter": adapter, "environment": environment, "scope": scope,
         "qualification": "pinned host programs, exact public result contract/startup and Claude docker-local recipe "
                          "bodies, owner-approved desktop Claude subscription profile",
         "not_evidence": ["no current node health or inventory", "no successful execution claimed by configuration"]},
-        DEFINITION_VERSION)
+        str(_REV))
     harness_q = b.add("aq.ms1-harness-qualification", {
         "schema_version": 1, "runtime": runtime, "qualification": qualification, "adapter": adapter,
         "environment": environment, "driver": aq_worker, "host": host, "tmux": tmux, "scope": scope,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
-        "max_output_tokens_basis": "AQ planning reservation only; not a Claude Code setting"}, DEFINITION_VERSION)
+        "max_output_tokens_basis": "AQ planning reservation only; not a Claude Code setting"}, str(_REV))
     # Stable body: a credential identity/version can never change its definition.
     credential = b.add(CREDENTIAL, {
         "schema_version": 1, "provider": PROVIDER, "account_reference": ACCOUNT, "endpoint_reference": ENDPOINT,
-        "scope": "aq-ms1 desktop docker-local nodes only (allowed_node_ids in [intelligence])",
+        "scope": "local docker-local nodes only (allowed_node_ids and allow_enrolled_nodes in [intelligence])",
         "attestation": "owner decision 2026-11-04: Claude Code on the owner's Claude subscription (setup-token), "
                        "no API key",
         "secret": "long-lived setup-token delivered by the server material owner, env-only in the sandbox"},
@@ -314,8 +324,8 @@ def build():
     owners = []
     for kind in OWNER_KINDS:
         authority = b.add(f"aq.ms1-owner/{kind}", {
-            "schema_version": 1, "kind": snake(kind), "server_source": "aq-ms1",
-            "scope": "actual authenticated aq-ms1 server owner; read and fenced again at execution"})
+            "schema_version": 1, "kind": snake(kind), "server_source": STACK,
+            "scope": "actual authenticated server owner; read and fenced again at execution"})
         owners.append({"kind": snake(kind), "authority": authority})
     phase_policy = b.add("aq.accepted-preparation-refresh-policy/ms1", {
         "schema_version": 1, "contract": LONG_CONTRACT, "runtime": runtime, "qualification": qualification,
@@ -347,8 +357,8 @@ def build():
                 "maximum_ttl_ms": 30000}
     presence_ref = b.add("aq.scoped-material-presence-qualification/ms1", presence)
     material = b.add("aq.server-material", {
-        "schema_version": 1, "server_source": "aq-ms1", "adapter": "aq.server-material", "version": 1,
-        "scope": "authenticated exact-attempt private material owner; owner Claude login for the desktop node only"})
+        "schema_version": 1, "server_source": STACK, "adapter": "aq.server-material", "version": 1,
+        "scope": "authenticated exact-attempt private material owner; owner Claude login for the local nodes only"})
     definitions = b.definitions
     sizes = [len(d["body"].encode()) for d in definitions]
     require(len(definitions) <= 64 and max(sizes) <= 2 * 1024 * 1024, "definition bounds")
@@ -358,7 +368,7 @@ def build():
                "limits": {"context_bytes": CONTEXT_BYTES, "max_output_tokens": MAX_OUTPUT_TOKENS,
                           "wall_time_ms": EXECUTION_MS, "memory_bytes": MEMORY_BYTES, "cpu_millis": CPU_MILLIS,
                           "process_limit": PROCESS_LIMIT}}
-    profiled = {"revision": PROFILED_REVISION,
+    profiled = {"revision": _REV,
                 "qualified_runtimes": [{"runtime": runtime, "qualification": qualification,
                                         "capabilities": CAPABILITIES, "features": FEATURES,
                                         "material_delivery": {"adapter": material, "version": 1}}],
@@ -368,7 +378,7 @@ def build():
                                          "object": {"format": src["base"]["algorithm"], "hex": src["base"]["hex"]}},
                               "retention_handle": src["retention_handle"]}],
                 "definition_bodies": definitions}
-    intelligence = {"revision": INTELLIGENCE_REVISION, "material_store": "/var/lib/aq/login-material",
+    intelligence = {"revision": _REV + 1, "material_store": "/var/lib/aq/login-material",
                     "credentials": [{
                         "kind": "subscription-login",
                         "credential": {"profile": credential, "provider": PROVIDER, "account_reference": ACCOUNT,
@@ -433,8 +443,22 @@ def binding_rev(built, current):
                 **({"publication": PUBLICATION} if D1 else {}))
 
 
+def definition_digests(built):
+    return [{"id": d["artifact"]["id"], "digest": d["artifact"]["digest"]} for d in built["definitions"]]
+
+
 def configure():
+    global _REV
     built = build()
+    # The server refuses a changed body at a version it has seen, so a pinned
+    # change (rebuilt worker programs, a new template image) takes the next
+    # revision by itself. AQ_MS1_REVISION still forces one.
+    previous = BASE / "configure.json"
+    if previous.exists() and not os.environ.get("AQ_MS1_REVISION"):
+        if json.loads(previous.read_text()).get("definitions") != definition_digests(built):
+            _REV += 1
+            built = build()
+    _REV_FILE.write_text(f"{_REV}\n")
     # Real table headers: this text is appended after other vault tables.
     toml = "# MS1 (generated by scripts/ms1-profiled.py; no secrets). The login enters via import-login.\n"
     for table in ("intelligence", "profiled"):
@@ -444,7 +468,7 @@ def configure():
                 toml += f"{key} = {toml_value(value)}\n"
     # Private result-media store (dashboard Results view: results.media.read
     # and results.media.upload). The root lives on the server's /var/lib/aq
-    # volume (created 0700 by `ms1-demo.sh media`); the storage id is stable.
+    # volume (created 0700 by `local-stack pins`); the storage id is stable.
     media_id = BASE / "state" / "result-media-storage-id"
     if not media_id.exists():
         private_write(media_id, str(uuid.uuid4()) + "\n")
@@ -459,9 +483,12 @@ def configure():
     private_write(target, toml)
     for name, text in built["files"].items():
         private_write(NODE / "config" / name, text)
+    # The worker resolves the template's state_dir and host root when it loads
+    # native.json (each slot then uses its own), so both must exist.
+    for directory in (NODE / "state", NODE / "state" / "host"):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     public = dict(intelligence_sha256=sha(toml),
-                  definitions=[{"id": d["artifact"]["id"], "digest": d["artifact"]["digest"]}
-                               for d in built["definitions"]],
+                  definitions=definition_digests(built), revision=_REV,
                   renderer=built["renderer"], policy=built["policy"], node_id=built["node_id"],
                   worker_files={k: sha(v) for k, v in built["files"].items()})
     (BASE / "configure.json").write_text(json.dumps(public, indent=1, sort_keys=True) + "\n")
@@ -477,14 +504,50 @@ def apply():
     for kind, name in (("roles", DEFAULT_ROLE), ("intelligence-profiles", DEFAULT_INTELLIGENCE)):
         require(http(f"{SERVER}/api/settings/{kind}/{name}") is not None, f"no {kind} document {name!r} exists")
     binding = binding_rev(built, current.get("binding", {}))
-    if current.get("binding") != binding:
+    # The server may return a default role and level explicitly or leave them
+    # out; either way they are the same binding.
+    defaults = {"default_role": "developer", "default_intelligence": "standard-high"}
+    if {**defaults, **current.get("binding", {})} != {**defaults, **binding}:
         http(SERVER + "/api/projects/" + PROJECT, dict(
-            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "ms1-binding-" + sha(canonical(binding)))),
+            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "ms1-binding-" + sha(canonical(binding))
+                                        + "-" + str(current.get("revision")))),
             expected_revision=current.get("revision"), binding=binding))
     after = http(SERVER + "/api/projects/" + PROJECT)
     snapshot = http(SERVER + "/api/settings/profiles/snapshot")
     return dict(profiles={k: snapshot.get(k) for k in ("active_digest", "revision")},
                 binding_revision=after.get("revision"))
+
+
+def check():
+    """Refuse a mismatched pair. The worker's native.json and the server's
+    definitions must come from one `configure` run over the programs that are
+    in the runtime directory now."""
+    recorded = BASE / "configure.json"
+    require(recorded.exists(), "nothing is pinned yet; run `scripts/local-stack pins`")
+    recorded = json.loads(recorded.read_text())
+    built = build()
+    problems = []
+    if definition_digests(built) != recorded["definitions"]:
+        changed = sorted(d["id"] for d in definition_digests(built) if d not in recorded["definitions"])
+        problems.append("the programs or template changed since they were pinned (" + ", ".join(changed[:4]) + ", …)")
+    native = built["files"]["native.json"]
+    for label, path in (("generated native.json", NODE / "config" / "native.json"),
+                        ("the worker's installed native.json", os.environ.get("AQ_LOCAL_WORKER_NATIVE"))):
+        if path and (not Path(path).exists() or Path(path).read_text() != native):
+            problems.append(f"{label} ({path}) does not match the programs in {RUNTIME}")
+    target = Path(os.environ.get("AQ_DEV_INTELLIGENCE_FILE", BASE / "intelligence.toml"))
+    if not target.exists() or sha(target.read_text()) != recorded["intelligence_sha256"]:
+        problems.append(f"{target} is not the file that was pinned")
+    else:
+        vault = Path(os.environ.get("AQ_DEV_STATE_DIR", STATE)) / "vault" / "config.toml"
+        if not vault.exists() or target.read_text() not in vault.read_text():
+            problems.append(f"the server's vault ({vault}) does not hold the pinned definitions")
+    host = json.loads(native)["executor"]["settings"]["host"]
+    require(not problems, "worker and server pins do not match:\n  - " + "\n  - ".join(problems)
+            + "\nrun `scripts/local-stack pins` to pin both again")
+    return dict(ok=True, revision=recorded.get("revision"), template=host["template"],
+                driver=host["driver"]["artifact"]["digest"], session_host=host["helper"]["artifact"]["digest"],
+                tmux=host["tmux"]["artifact"]["digest"])
 
 
 def observe():
@@ -524,7 +587,7 @@ def publication():
 
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else ""
-    commands = dict(source=source, configure=configure, apply=apply, observe=observe, sync=sync,
+    commands = dict(source=source, configure=configure, check=check, apply=apply, observe=observe, sync=sync,
                     publication=publication)
     require(command in commands, f"usage: ms1-profiled.py {'|'.join(commands)}")
     print(json.dumps(commands[command](), indent=1, sort_keys=True))

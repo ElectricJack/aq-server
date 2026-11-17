@@ -33,4 +33,6 @@ Validate the plan with `python3 scripts/check-v2-plan.py`; use `--ready` to list
 
 ## Development
 
-Run the stack with `scripts/dev-up`, a worker with `scripts/dev-worker`, and the container lifecycle check with `scripts/smoke`. See [docs/development.md](docs/development.md).
+**To run a complete local AQ (server, dashboard, routing and a worker that runs real tasks), follow [docs/getting-started.md](docs/getting-started.md).**
+
+For the bare server stack only: run it with `scripts/dev-up`, a worker with `scripts/dev-worker`, and the container lifecycle check with `scripts/smoke`. See [docs/development.md](docs/development.md).

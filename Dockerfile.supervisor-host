@@ -11,7 +11,9 @@ RUN mkdir /pinned && tar -xzf vendor/aq-session-host-0.1.7-source.tar.gz -C /pin
     && diff -r /pinned/crates/aq-session-host/src vendor/aq-session-host-0.1.7/src \
     && diff -r /pinned/crates/aq-codex-mapper/src vendor/aq-codex-mapper-0.1.1/src \
     && diff -r /pinned/crates/aq-responses-transport/src vendor/aq-responses-transport-0.1.0/src
-ENV CARGO_BUILD_JOBS=2
+# Two jobs suit a small CI runner; a developer machine passes more.
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # The target cache is shared by every build of this Dockerfile on the host
 # (other branches and worktrees). Touch the path-crate sources in the same
 # step as the build so cargo's mtime check never reuses another tree's build.

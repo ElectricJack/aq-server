@@ -1,0 +1,49 @@
+# Local development overlay used by scripts/local-stack, on top of compose.yaml
+# and compose.dev.yaml: an aq-git image built from a sibling checkout, and the
+# internal work host (routing classification and playbook authoring run there).
+services:
+  server:
+    environment:
+      # Refusals are logged without their detail unless this target is on.
+      RUST_LOG: ${AQ_LOCAL_RUST_LOG:-info,aq_refusal=debug}
+  aq-git:
+    image: ${AQ_LOCAL_GIT_IMAGE:-${AQ_SERVER_IMAGE:-agent-q-server:dev}}
+  internal-work:
+    profiles: [internal-work]
+    # docs/operations/internal-work.md. The same hardening as the
+    # `internal-work` service of compose.workers.yaml; the inputs are private
+    # named volumes that scripts/local-stack fills as root, because the host
+    # refuses a config, login or executable that root does not own.
+    image: ${AQ_SUPERVISOR_HOST_IMAGE:-agent-q-supervisor-host:dev}
+    user: '0:0'
+    command: [internal, /config/internal.json]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - internal_config:/config:ro
+      - internal_native:/opt/claude:ro
+      - internal_claude_login:/logins/claude:ro
+      - internal_homes:/internal/homes
+      - internal_scratch:/internal/scratch
+    tmpfs: ['/tmp:rw,mode=1777']
+    # The database, and provider egress through the edge network. No Docker socket.
+    networks: [database, edge]
+    depends_on:
+      server: {condition: service_healthy}
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+    cpus: ${AQ_LOCAL_INTERNAL_CPUS:-0.5}
+    mem_limit: ${AQ_LOCAL_INTERNAL_MEMORY:-1024m}
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+volumes:
+  internal_config:
+  internal_native:
+  internal_claude_login:
+  internal_homes:
+  internal_scratch:

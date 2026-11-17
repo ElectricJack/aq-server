@@ -236,9 +236,18 @@ def internal_config(state):
     return dict(AQ_INTERNAL_CONFIG_DIR=str(directory))
 
 
+def compose_files():
+    """compose.yaml and compose.dev.yaml, then any overlays named by
+    AQ_DEV_COMPOSE_FILES (colon-separated paths, relative to the checkout), so
+    a command that recreates a service here keeps the overlays it was started
+    with (scripts/local-stack: the dashboard bundle, local images)."""
+    files = [ROOT / "compose.yaml", ROOT / "compose.dev.yaml"]
+    files += [ROOT / name for name in os.environ.get("AQ_DEV_COMPOSE_FILES", "").split(":") if name]
+    return [part for path in files for part in ("-f", str(path))]
+
+
 def compose(env, *args, capture=True, input=None, timeout=None):
-    result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.yaml"),
-                             "-f", str(ROOT / "compose.dev.yaml"), *args],
+    result = subprocess.run(["docker", "compose", *compose_files(), *args],
                             cwd=ROOT, env=dict(os.environ, **env), text=True,
                             capture_output=capture, input=input, timeout=timeout)
     if result.returncode:
@@ -284,7 +293,36 @@ def enable_settlement_locked(env):
     private_file(vault / "playbook-artifact.json", artifact)
     if (vault / "playbook-artifact.json").read_bytes() != artifact:
         raise ValueError("retained settlement artifact differs; use a fresh development stack")
-    config = (vault / "config.toml").read_text() + f'''
+    if os.environ.get("AQ_DEV_PLAYBOOK_PROFILE") == "host_v9":
+        # The shape a stack needs to route work (scripts/local-stack): the
+        # host_v9 catalog with installation routing and no configured
+        # deployment. Playbooks are authored from Settings documents and
+        # deployed through the owner API (spec 0013).
+        config = (vault / "config.toml").read_text() + f'''
+[playbooks]
+enabled = true
+profile = "host_v9"
+installation_routing = true
+deployments = []
+engine_connection_file = "/run/aq-dev/playbook_dsn"
+socket_owner_uid = {socket_uid}
+engine_keyring_file = "/run/aq-dev/playbook_engine_keys"
+drive_interval_ms = 1000
+[playbooks.namespace]
+namespace_id = "{pins['namespace_id']}"
+generation = 1
+name = "Local routing (host v9)"
+workspace_id = "{WORKSPACE}"
+project_id = "{PROJECT}"
+owner_user_id = "{pins['owner_user_id']}"
+[playbooks.protection]
+active_key_id = "dev-bridge-1"
+[[playbooks.protection.keys]]
+id = "dev-bridge-1"
+file = "/run/aq-dev/playbook_bridge_key"
+'''
+    else:
+        config = (vault / "config.toml").read_text() + f'''
 [playbooks]
 enabled = true
 profile = "human_review_v2"
