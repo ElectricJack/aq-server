@@ -159,7 +159,9 @@ def main():
             if now != seen:
                 say(f"execution={now[0]} readiness={now[1]} {[r.get('code') for r in readiness.get('reasons', [])]}")
                 seen = now
-            if now[0] == "finished":
+            # A quick attempt can be settled between two polls: the task is then
+            # completed and its execution is no longer shown.
+            if now[0] == "finished" or now[1] == "completed":
                 break
             if len(attempts) > 1 or now[0] in ("failed", "cancelling", "cancelled"):
                 raise RuntimeError(f"the attempt did not finish (attempts so far: {len(attempts)}, status {now[0]})")
