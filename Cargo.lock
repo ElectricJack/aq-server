@@ -815,6 +815,7 @@ dependencies = [
  "aq-session-api",
  "aq-session-host",
  "aq-session-protocol",
+ "aq-source-push",
  "aq-stall-ladder",
  "aq-supervisor-control",
  "aq-swarm",
@@ -917,6 +918,24 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "aq-source-push"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aq-worker-protocol",
+ "axum",
+ "hex",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
