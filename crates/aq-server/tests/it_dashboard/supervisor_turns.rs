@@ -6,8 +6,8 @@ use aq_server::{
     agent_access::supervisor_conversation::{
         self as conversation, dispatch, reply,
         reservations::{
-            Cancel, Configure, LocalPolicy, PolicyKind, Preview, PreviewRequest, PreviewStatus,
-            ReservationOwner, ReservationState, Reserve,
+            Cancel, Configure, Disposition, LocalPolicy, PolicyKind, Preview, PreviewRequest,
+            PreviewStatus, ReservationOwner, ReservationState, Reserve,
         },
     },
     config::Config,
@@ -717,21 +717,55 @@ async fn stop_after_handoff(f: &Fixture, p: &CentralPlan) {
 }
 
 #[tokio::test]
-async fn stopped_handed_off_turn_without_reply_consumes_and_never_resends() {
+async fn stopped_turn_without_reply_holds_mail_until_released_and_then_retries_it() {
     let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
     let first = f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;
-    stop_after_handoff(&f, &p).await;
-    f.assert_consumed(r.id).await;
-    let second = f.send().await;
+    let s = f.start(&p).await;
+    f.report(
+        &p,
+        Event::Handoff {
+            evidence: HandoffEvidence {
+                association: s.run.association().unwrap().clone(),
+                disposition: HandoffDisposition::HandedOff,
+                receipt: artifact(),
+            },
+        },
+    )
+    .await;
+    let release = |id| Cancel {
+        operation_id: Uuid::new_v4(),
+        actor_id: f.actor,
+        reservation_id: id,
+        expected_reservation_revision: 1,
+    };
+    let bytes = serde_json::to_vec(&release(r.id)).unwrap();
+    assert!(
+        f.owner().cancel_reservation(&f.user, &bytes).await.is_err(),
+        "a running turn keeps its reservation"
+    );
+    f.report(
+        &p,
+        Event::Stopped {
+            evidence: StopEvidenceRef {
+                host: observation(&p),
+                stopped_writers: artifact(),
+            },
+        },
+    )
+    .await;
+    assert_eq!(
+        f.preview().await.status,
+        PreviewStatus::ReservationOutstanding,
+        "a turn that stopped without a reply holds its mail"
+    );
+    let bytes = serde_json::to_vec(&release(r.id)).unwrap();
+    let released = f.owner().cancel_reservation(&f.user, &bytes).await.unwrap();
+    assert_eq!(released.disposition, Disposition::CancelledBeforePlan);
     let next = f.reserve().await.reservation.unwrap();
     let ids: Vec<_> = next.batch.messages.iter().map(|m| m.message_id).collect();
-    assert_eq!(
-        ids,
-        vec![second],
-        "handed-off input {first} is not sent again"
-    );
+    assert_eq!(ids, vec![first], "released mail is reserved again");
     f.db.store().await;
 }
 

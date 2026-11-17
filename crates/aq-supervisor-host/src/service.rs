@@ -12,8 +12,8 @@ use aq_server::{
     agent_access::supervisor_conversation::{
         dispatch,
         reservations::{
-            Configure, LocalPolicy, PolicyKind, PreviewRequest, PreviewStatus, ReservationOwner,
-            Reserve,
+            Cancel, Configure, LocalPolicy, PolicyKind, PreviewRequest, PreviewStatus,
+            ReservationOwner, Reserve,
         },
     },
     store::{Role, User},
@@ -571,7 +571,7 @@ async fn step(
                 )
             });
             let next = prior.as_ref().map_or(1, |s| s.run.plan().generation + 1);
-            let row=sqlx::query("SELECT a.current_reservation,d.generation,d.session_id FROM central_supervisor_actors a LEFT JOIN central_supervisor_dispatches d ON d.actor_id=a.actor_id AND d.reservation_id=a.current_reservation WHERE a.actor_id=$1").bind(ctl.actor).fetch_one(pool).await?;
+            let row=sqlx::query("SELECT a.current_reservation,d.generation,d.session_id,d.created_at_ms,(SELECT c.updated_at_ms FROM supervisor_controls c WHERE c.actor_id=a.actor_id) AS control_ms FROM central_supervisor_actors a LEFT JOIN central_supervisor_dispatches d ON d.actor_id=a.actor_id AND d.reservation_id=a.current_reservation WHERE a.actor_id=$1").bind(ctl.actor).fetch_one(pool).await?;
             let generation = row
                 .get::<Option<i64>, _>("generation")
                 .map_or(next, |g| g as u64);
@@ -593,6 +593,50 @@ async fn step(
                     session,
                 )
                 .await?;
+            } else if let Some(release) = stopped_turn(
+                closed,
+                generation,
+                next,
+                row.get("created_at_ms"),
+                row.get::<Option<i64>, _>("control_ms").unwrap_or(0),
+            ) {
+                if release {
+                    let reservation = actor
+                        .current_reservation
+                        .as_ref()
+                        .context("retained reservation missing")?;
+                    owner
+                        .cancel_reservation(
+                            &user,
+                            &serde_json::to_vec(&Cancel {
+                                operation_id: Uuid::new_v4(),
+                                actor_id: ctl.actor,
+                                reservation_id: reservation.id,
+                                expected_reservation_revision: reservation.revision,
+                            })?,
+                        )
+                        .await
+                        .map_err(api_error)?;
+                    report(
+                        pool,
+                        config,
+                        instance,
+                        "waiting",
+                        "Retrying the messages of a turn that ended without a reply",
+                        None,
+                    )
+                    .await?;
+                } else {
+                    report(
+                        pool,
+                        config,
+                        instance,
+                        "failed",
+                        "The last turn ended without a reply; stop and start the supervisor to retry its messages",
+                        None,
+                    )
+                    .await?;
+                }
             } else {
                 report(
                     pool,
@@ -618,6 +662,21 @@ async fn step(
         }
     }
     Ok(())
+}
+
+/// The current reservation's own turn ran (its generation is the latest) and
+/// stopped without a reply: `Some(true)` releases its mail for the next turn
+/// because the owner stopped and started the supervisor after the dispatch,
+/// `Some(false)` waits for that. `None` is any other outstanding reservation.
+fn stopped_turn(
+    closed: bool,
+    generation: u64,
+    next: u64,
+    dispatched_ms: Option<i64>,
+    control_ms: i64,
+) -> Option<bool> {
+    let dispatched_ms = dispatched_ms?;
+    (closed && generation + 1 == next).then_some(control_ms > dispatched_ms)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -682,5 +741,22 @@ fn swarm_stage(reason: &str) -> &'static str {
         "Waiting for this provider and intelligence class concurrency limit"
     } else {
         "Waiting for an authoritative intelligence class and configured capacity"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stopped_turn;
+
+    #[test]
+    fn a_stopped_turn_is_released_only_after_an_owner_restart() {
+        // Generation 5 ran for this reservation and stopped; the next would be 6.
+        assert_eq!(stopped_turn(true, 5, 6, Some(1_000), 900), Some(false));
+        assert_eq!(stopped_turn(true, 5, 6, Some(1_000), 1_000), Some(false));
+        assert_eq!(stopped_turn(true, 5, 6, Some(1_000), 1_001), Some(true));
+        // Still running, an older generation, or no dispatch: not this case.
+        assert_eq!(stopped_turn(false, 5, 6, Some(1_000), 2_000), None);
+        assert_eq!(stopped_turn(true, 4, 6, Some(1_000), 2_000), None);
+        assert_eq!(stopped_turn(true, 6, 6, None, 2_000), None);
     }
 }

@@ -22,7 +22,11 @@ pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     let internal = include_str!("../../migrations/0119_internal_work.sql");
     // A handed-off turn that stopped without a reply is terminal.
     let stopped = include_str!("../../migrations/0136_stopped_handoff_consumption.sql");
-    let source = if version >= 136 && stopped.contains(&format!("FUNCTION {name}(")) {
+    // A turn that stopped without a reply holds its mail until it is released.
+    let released = include_str!("../../migrations/0137_release_stopped_turn.sql");
+    let source = if version >= 137 && released.contains(&format!("FUNCTION {name}(")) {
+        released
+    } else if version >= 136 && stopped.contains(&format!("FUNCTION {name}(")) {
         stopped
     } else if version >= 119 && internal.contains(&format!("FUNCTION {name}(")) {
         internal
