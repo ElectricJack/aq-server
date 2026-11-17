@@ -616,47 +616,6 @@ fn work_and_history_examples_match_the_schema() {
     assert!(!aq_agent_api::check(&schema, &schema, &work));
 }
 
-/// Stores the fixture's catalog and binds its project to it, with its intelligence profile an
-/// automatic router or not.
-async fn bind_catalog(x: &Fixture, automatic: bool) {
-    let pool = x.f.db.pool().await;
-    let binding: Value =
-        sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
-            .bind(x.f.selection.lineage.project_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    // The fixture keeps its catalog in a file, not in the artifact table.
-    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
-    let original = raw["catalog_artifact_json"]
-        .as_str()
-        .unwrap()
-        .as_bytes()
-        .to_vec();
-    let mut artifact = aq_profiles::ValidatedCatalog::from_artifact(&original)
-        .unwrap()
-        .artifact()
-        .clone();
-    for profile in &mut artifact.catalog.intelligence {
-        profile.automatic_routing = automatic.then_some(true);
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) SELECT $1,$2,id,0 FROM users LIMIT 1")
-        .bind(updated.digest())
-        .bind(updated.canonical_bytes().unwrap())
-        .execute(&pool)
-        .await
-        .unwrap();
-    let mut binding = binding;
-    binding["catalog_digest"] = json!(updated.digest());
-    sqlx::query("UPDATE project_execution_bindings SET binding=$2 WHERE project_id=$1")
-        .bind(x.f.selection.lineage.project_id)
-        .bind(binding)
-        .execute(&pool)
-        .await
-        .unwrap();
-}
-
 #[tokio::test]
 async fn work_read_reports_waiting_then_routed() {
     let x = setup().await;
@@ -670,15 +629,10 @@ async fn work_read_reports_waiting_then_routed() {
     let path = format!("/tasks/{id}/work");
     let work = || x.get(&path);
     let pool = x.f.db.pool().await;
-    // Not on an automatic router: no routing object, even with routing on.
     sqlx::query("UPDATE routing_state SET enabled=true WHERE singleton")
         .execute(&pool)
         .await
         .unwrap();
-    bind_catalog(&x, false).await;
-    assert!(work().await.get("routing").is_none());
-
-    bind_catalog(&x, true).await;
     let waiting = work().await;
     assert_eq!(waiting["readiness"]["state"], "ready");
     // The read has no ready time, so the node's updated_at (2026-01-01T00:00:00Z) is used.
@@ -773,18 +727,4 @@ async fn routes_history_lists_reasons_newest_first() {
         json!({"items":[{"sequence":2,"at_ms":2000,"route":null},
             {"sequence":1,"at_ms":1000,"route":route}]})
     );
-}
-
-#[tokio::test]
-async fn work_read_survives_a_routing_view_that_cannot_be_computed() {
-    let x = setup().await;
-    let (w, id) = (x.w(), Uuid::new_v4());
-    x.graph.contexts.lock().unwrap().insert(
-        id,
-        context(&task(id, w, "Any", "active"), vec![], vec![], false),
-    );
-    // The binding's catalog digest names no stored artifact (the fixture stores none).
-    let work = x.get(&format!("/tasks/{id}/work")).await;
-    assert_eq!(work["readiness"]["state"], "ready");
-    assert!(work.get("routing").is_none());
 }

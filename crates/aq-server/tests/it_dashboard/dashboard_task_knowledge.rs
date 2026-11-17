@@ -329,50 +329,6 @@ async fn task_reprioritize_preserves_other_metadata() {
     );
 }
 
-/// Activates a catalog with profile `careful` and assigns it to standard-high.
-async fn assign_standard_high(x: &Fixture) {
-    let pool = x.f.db.pool().await;
-    let pool = &pool;
-    let base = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
-    let instructions = base.artifact().instructions.clone();
-    let mut catalog = base.artifact().catalog.clone();
-    let mut careful = catalog.intelligence[0].clone();
-    careful.id = "careful".into();
-    careful.version = 3;
-    catalog.intelligence.push(careful);
-    let validated = aq_profiles::validate(catalog, instructions).unwrap();
-    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,$2,$3,1)")
-        .bind(validated.digest())
-        .bind(validated.canonical_bytes().unwrap())
-        .bind(owner)
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET active_digest=$1 WHERE singleton")
-        .bind(validated.digest())
-        .execute(pool)
-        .await
-        .unwrap();
-    let parents: Vec<Value> = ["simple", "standard", "complex", "deep"]
-        .iter()
-        .map(|id| json!({"id": id, "description": ""}))
-        .collect();
-    sqlx::query(
-        "UPDATE intelligence_structure SET revision=revision+1, document=$1 WHERE singleton",
-    )
-    .bind(json!({"routing_markdown":"","parents":parents,
-            "assignments":[{"profile_id":"careful","parent_id":"standard","effort":"high"}]}))
-    .execute(pool)
-    .await
-    .unwrap();
-}
 fn route_action(kind: &str, task: Uuid, version: &str, x: &Fixture, fields: Value) -> Value {
     let op = Uuid::new_v4();
     let mut payload =
@@ -385,9 +341,8 @@ fn route_action(kind: &str, task: Uuid, version: &str, x: &Fixture, fields: Valu
 }
 
 #[tokio::test]
-async fn task_route_set_writes_an_owner_route_and_is_refused_for_an_unassigned_class() {
+async fn task_route_set_writes_an_owner_route_and_is_refused_for_a_class_without_a_level() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 5));
     x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
@@ -422,21 +377,20 @@ async fn task_route_set_writes_an_owner_route_and_is_refused_for_an_unassigned_c
             task,
             "6",
             &x,
-            json!({"class":"simple-low"}),
+            json!({"class":"deep-max"}),
         ))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(
         x.posts().len(),
         1,
-        "an unassigned class never reaches Graph"
+        "a class with no level document never reaches Graph"
     );
 }
 
 #[tokio::test]
 async fn task_route_clear_removes_it() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 5));
     x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
@@ -474,7 +428,6 @@ async fn task_route_clear_removes_it() {
 #[tokio::test]
 async fn stale_task_version_is_reported_as_stale() {
     let x = setup().await;
-    assign_standard_high(&x).await;
     let task = x.f.selection.lineage.task_id;
     x.put(node(task, x.workspace(), "task", 7));
     for (kind, fields) in [
