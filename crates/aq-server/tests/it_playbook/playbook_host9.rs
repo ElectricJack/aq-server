@@ -345,6 +345,7 @@ mod adapters {
                         vec![offer("anthropic", "claude")],
                     ),
                 ]),
+                described: BTreeMap::new(),
             }),
             writes: Mutex::default(),
         });

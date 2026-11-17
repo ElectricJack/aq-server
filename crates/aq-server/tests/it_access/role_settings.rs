@@ -28,6 +28,10 @@ struct Fixture {
 /// A migrated database with an owner, a viewer and the shipped defaults
 /// installed and active, as after server start.
 async fn started() -> Fixture {
+    started_with("").await
+}
+/// [`started`], with `root` (top-level TOML keys) in the server's config.
+async fn started_with(root: &str) -> Fixture {
     let db = TestDb::create().await;
     let store = db.store().await;
     let time = Utc.timestamp_millis_opt(NOW).unwrap();
@@ -39,8 +43,9 @@ async fn started() -> Fixture {
         .invite_user("viewer@localhost", aq_server::store::Role::Viewer, time)
         .await
         .unwrap();
-    let config: Config = toml::from_str(
-        r#"format_version=1
+    let config: Config = toml::from_str(&format!(
+        r#"{root}
+format_version=1
 environment="development"
 [server]
 admin_bind="127.0.0.1:0"
@@ -52,8 +57,8 @@ dev_email="owner@localhost"
 [bootstrap]
 owner_email="owner@localhost"
 enabled=true
-"#,
-    )
+"#
+    ))
     .unwrap();
     let pool = db.pool().await;
     let owner = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
@@ -882,9 +887,128 @@ async fn an_owner_reads_saves_and_deletes_documents_over_http() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // The catalog's own Intelligence settings route is still mounted.
-    let (status, _) = f
-        .call("GET", "/api/settings/intelligence", None, true, false)
-        .await;
-    assert_ne!(status, StatusCode::NOT_FOUND);
+    // The old catalog's Settings and activation routes are gone.
+    for path in [
+        "/api/settings/intelligence",
+        "/api/settings/intelligence/structure",
+        "/api/settings/intelligence-extra",
+        "/api/profiles/catalogs",
+    ] {
+        let (status, _) = f.call("GET", path, None, true, false).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn the_routing_document_is_saved_replayed_and_fenced_over_http() {
+    const PATH: &str = "/api/settings/routing-document";
+    let f = started().await;
+    let (status, body) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"markdown": "", "revision": "0"}));
+    let (status, _) = f.call("GET", PATH, None, false, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer does not read it");
+
+    let put = json!({"markdown": "Route a one-line fix to simple-low.",
+        "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(put.clone()), false, true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = f.call("PUT", PATH, Some(put.clone()), true, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "csrf_rejected");
+    let before = f.active().await;
+    let (status, saved) = f.call("PUT", PATH, Some(put.clone()), true, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    // Saving it compiles nothing: the same snapshot stays active.
+    assert_eq!(saved["digest"], json!(before.1));
+    assert_eq!(f.active().await.1, before.1);
+    let (_, read) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!(
+        read,
+        json!({"markdown": "Route a one-line fix to simple-low.", "revision": saved["revision"]})
+    );
+
+    // The same operation again answers as the first time and saves nothing.
+    let (status, again) = f.call("PUT", PATH, Some(put.clone()), true, true).await;
+    assert_eq!((status, &again), (StatusCode::OK, &saved));
+    // The operation id with another text is a conflict.
+    let mut other = put.clone();
+    other["markdown"] = json!("Something else.");
+    let (status, body) = f.call("PUT", PATH, Some(other), true, true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    // A save from a stale read is a conflict and changes nothing.
+    let stale =
+        json!({"markdown": "Late.", "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(stale), true, true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(f.call("GET", PATH, None, true, false).await.1, read);
+    // A next save names the revision it read.
+    let next = json!({"markdown": "", "expected_revision": saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(next), true, true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The store reads what the route saved (the authoring host reads this).
+    let (markdown, revision) = settings::routing_document(&f.pool).await.unwrap();
+    assert_eq!(
+        (markdown.as_str(), revision.to_string()),
+        ("", body["revision"].as_str().unwrap().to_owned())
+    );
+    // A document over the store's document limit is refused.
+    let limit = StoreLimits::default().documents.max_document_bytes;
+    let big = json!({"markdown": "x".repeat(limit + 1), "expected_revision": body["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(big), true, true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn model_suggestions_are_read_from_the_discovery_cache_and_never_fail() {
+    const PATH: &str = "/api/settings/model-suggestions";
+    // No cache configured: nothing is suggested.
+    let f = started().await;
+    let (status, body) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!((status, &body), (StatusCode::OK, &json!({"harnesses": []})));
+    let (status, _) = f.call("GET", PATH, None, false, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let directory = tempfile::tempdir().unwrap();
+    let cache = directory.path().join("models.json");
+    let root = format!(
+        "intelligence_preferences_file={:?}",
+        cache.to_str().unwrap()
+    );
+    let f = started_with(&root).await;
+    // Configured but absent, and malformed: still an empty answer.
+    for text in [None, Some("not json")] {
+        if let Some(text) = text {
+            std::fs::write(&cache, text).unwrap();
+        }
+        let (status, body) = f.call("GET", PATH, None, true, false).await;
+        assert_eq!((status, &body), (StatusCode::OK, &json!({"harnesses": []})));
+    }
+    std::fs::write(
+        &cache,
+        json!([
+            {"provider":"openai","model":"gpt-x","harness":"codex","source":"Codex CLI","observed_at":"2026-11-16T00:00:00Z"},
+            {"provider":"anthropic","model":"claude-y","harness":"claude"},
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let (status, body) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"harnesses": [
+            {"harness":"claude","models":[{"provider":"anthropic","model":"claude-y","source":null,"observed_at":null}]},
+            {"harness":"codex","models":[{"provider":"openai","model":"gpt-x","source":"Codex CLI","observed_at":"2026-11-16T00:00:00Z"}]},
+        ]})
+    );
+    // A suggestion is not a gate: a level may name a model that is not listed.
+    let level = "---\nid: standard-high\nname: Standard, high\ndescription: Ordinary work.\n---\n\
+        ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n\
+        | anthropic | a-model-nobody-suggested | high | claude |\n";
+    f.save(Kind::Intelligence, "standard-high", level)
+        .await
+        .unwrap();
 }

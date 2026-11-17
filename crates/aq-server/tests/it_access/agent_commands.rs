@@ -363,7 +363,7 @@ async fn owner_commands_reach_the_same_handlers() {
         ),
         (
             "intelligence.list",
-            "/api/settings/intelligence".to_string(),
+            "/api/settings/intelligence-profiles".to_string(),
             json!({}),
             false,
         ),
@@ -374,15 +374,9 @@ async fn owner_commands_reach_the_same_handlers() {
             false,
         ),
         (
-            "profile.catalog.active",
-            "/api/profiles/catalogs".to_string(),
+            "routing.document.show",
+            "/api/settings/routing-document".to_string(),
             json!({}),
-            false,
-        ),
-        (
-            "profile.catalog.show",
-            format!("/api/profiles/catalogs/{}", "0".repeat(64)),
-            json!({"digest":"0".repeat(64)}),
             false,
         ),
     ] {
@@ -627,14 +621,14 @@ async fn owner_commands_reach_the_same_handlers() {
         (
             "routing.show",
             "GET",
-            "/api/settings/intelligence/routing".to_string(),
+            "/api/settings/routing".to_string(),
             json!({}),
             None,
         ),
         (
             "routing.set",
             "POST",
-            "/api/settings/intelligence/routing".to_string(),
+            "/api/settings/routing".to_string(),
             json!({"enabled":false}),
             None,
         ),

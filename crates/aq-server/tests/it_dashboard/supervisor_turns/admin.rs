@@ -1,6 +1,6 @@
 //! Supervisor authority over Intelligence settings and internal runs (spec 0012
 //! §8): the `/v1/supervisor/admin` nest on the machine listener, its `settings`
-//! scope, its three path prefixes, and the owner CSRF guard it leaves alone.
+//! scope, its path prefixes, and the owner CSRF guard it leaves alone.
 use super::Fixture;
 use aq_internal_work::{Affected, AnswerShape, Purpose, Request as Work, store};
 use aq_server::{InternalWork, agent_access::supervisor_conversation::reply};
@@ -12,20 +12,17 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use tower::ServiceExt;
 use uuid::Uuid;
 
 const NEST: &str = "/v1/supervisor/admin";
 const INTERNAL: &str = "/api/settings/internal-work";
-const STRUCTURE: &str = "/api/settings/intelligence/structure";
-const PROFILES: &str = "/api/settings/intelligence";
+const DOCUMENT: &str = "/api/settings/routing-document";
+const LEVEL: &str = "/api/settings/intelligence-profiles/standard-high";
 const FIVE: [&str; 5] = [
     "graph.read",
     "graph.write",
@@ -129,19 +126,6 @@ impl Admin {
     async fn as_owner(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
         call(&self.owner, method, path, As::Owner { csrf: true }, body).await
     }
-    /// Activates the example catalog through the owner router, as the owner would.
-    async fn activate(&self) -> aq_profiles::ValidatedCatalog {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog");
-        let catalog = aq_profiles::load(&dir).unwrap();
-        let artifact = String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap();
-        let body =
-            json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"artifact_json":artifact});
-        let (status, out) = self
-            .as_owner("POST", "/api/profiles/catalogs/activate", Some(body))
-            .await;
-        assert_eq!(status, StatusCode::OK, "{out}");
-        catalog
-    }
     /// Replaces the live credential with one issued before `settings` existed:
     /// same generation and session, the original five scopes.
     async fn reissue_with_five_scopes(&mut self) {
@@ -205,7 +189,6 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
             "settings"
         ]
     );
-    let catalog = a.activate().await;
 
     // The internal work default, saved without the CSRF header.
     let (status, snapshot) = a.supervisor("GET", INTERNAL, None).await;
@@ -237,28 +220,34 @@ async fn supervisor_with_settings_scope_can_save_internal_work_settings_and_the_
     .unwrap();
     assert_eq!(actor, a.f.user.id);
 
-    // The routing policy (the structure document's Markdown).
-    let (status, structure) = a.supervisor("GET", STRUCTURE, None).await;
-    assert_eq!(status, StatusCode::OK, "{structure}");
-    let policy = json!({"operation_id":Uuid::new_v4(),"expected_revision":structure["revision"],
-        "expected_catalog_revision":structure["catalog_revision"],
-        "routing_markdown":"Route a one-line fix to simple.",
-        "parents":structure["parents"],"assignments":structure["assignments"]});
-    let (status, saved) = a.supervisor("POST", STRUCTURE, Some(policy)).await;
+    // The routing document, saved with PUT as the owner saves it.
+    let (status, document) = a.supervisor("GET", DOCUMENT, None).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(document, json!({"markdown": "", "revision": "0"}));
+    let policy = json!({"operation_id":Uuid::new_v4(),"expected_revision":document["revision"],
+        "markdown":"Route a one-line fix to simple."});
+    let (status, saved) = a.supervisor("PUT", DOCUMENT, Some(policy)).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    let (_, read) = a.as_owner("GET", STRUCTURE, None).await;
-    assert_eq!(read["routing_markdown"], "Route a one-line fix to simple.");
+    let (_, read) = a.as_owner("GET", DOCUMENT, None).await;
+    assert_eq!(read["markdown"], "Route a one-line fix to simple.");
+    assert_eq!(read["revision"], saved["revision"]);
 
-    // A profile.
-    let (status, settings) = a.supervisor("GET", PROFILES, None).await;
-    assert_eq!(status, StatusCode::OK, "{settings}");
-    let profile = &catalog.artifact().catalog.intelligence[0];
-    let edit = json!({"operation_id":Uuid::new_v4(),"expected_revision":settings["revision"],
-        "profile_id":profile.id,"profile_version":profile.version,"name":"Supervisor engineering",
-        "description":"Edited by a supervisor","candidates":profile.candidates});
-    let (status, saved) = a.supervisor("POST", PROFILES, Some(edit)).await;
+    // A level document.
+    let (status, level) = a.supervisor("GET", LEVEL, None).await;
+    assert_eq!(status, StatusCode::OK, "{level}");
+    let markdown = level["markdown"].as_str().unwrap();
+    let name = level["fields"]["name"].as_str().unwrap();
+    let edited = markdown.replacen(&format!("name: {name}"), "name: Supervisor standard", 1);
+    assert_ne!(edited, markdown);
+    let edit = json!({"operation_id":Uuid::new_v4(),"expected_revision":level["revision"],
+        "markdown":edited});
+    let (status, saved) = a.supervisor("PUT", LEVEL, Some(edit)).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    assert_eq!(saved["profile"]["name"], "Supervisor engineering");
+    let (_, read) = a.as_owner("GET", LEVEL, None).await;
+    assert_eq!(read["fields"]["name"], "Supervisor standard");
+    // Roles and execution profiles are not a supervisor's to change.
+    let (status, _) = a.supervisor("GET", "/api/settings/roles", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // The owner paths keep their CSRF guard: a browser-style request without
     // the header is refused, and a supervisor bearer does not stand in for it.
@@ -318,7 +307,7 @@ async fn supervisor_without_settings_scope_gets_403_on_the_admin_nest() {
             INTERNAL.to_string(),
             Some(internal_save(&snapshot, Value::Null)),
         ),
-        ("GET", STRUCTURE.to_string(), None),
+        ("GET", DOCUMENT.to_string(), None),
         ("GET", "/api/internal-work/runs".to_string(), None),
         (
             "POST",
@@ -350,10 +339,11 @@ async fn admin_nest_refuses_paths_outside_settings_and_internal_work() {
     let a = admin().await;
     for (method, path) in [
         ("GET", "/api/worker-logins"),
-        ("POST", "/api/profiles/catalogs/activate"),
-        ("GET", "/api/profiles/catalogs"),
+        ("GET", "/api/settings/roles"),
+        ("GET", "/api/settings/execution-profiles"),
+        ("GET", "/api/settings/model-suggestions"),
         ("GET", "/api/settings/swarm"),
-        ("GET", "/api/settings/intelligence-extra"),
+        ("GET", "/api/settings/routing-document-extra"),
         ("GET", "/api/human/projects"),
     ] {
         let (status, out) = a.supervisor(method, path, None).await;
@@ -364,8 +354,8 @@ async fn admin_nest_refuses_paths_outside_settings_and_internal_work() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 
     // The gate itself, over an inner router that serves more than it may
-    // forward: an outside path is 404 and a method other than GET, HEAD and
-    // POST is 403, both before the inner router is reached.
+    // forward: an outside path is 404, and PUT, DELETE or PATCH on a path
+    // that takes none is 403, both before the inner router is reached.
     let reached = Arc::new(AtomicUsize::new(0));
     let hit = |reached: Arc<AtomicUsize>| {
         any(move || async move {
@@ -375,14 +365,14 @@ async fn admin_nest_refuses_paths_outside_settings_and_internal_work() {
     };
     let inner = Router::new()
         .route("/api/worker-logins", hit(reached.clone()))
-        .route("/api/settings/intelligence-extra", hit(reached.clone()))
+        .route("/api/settings/routing-document-extra", hit(reached.clone()))
         .route("/api/internal-work", hit(reached.clone()))
         .route("/api/internal-work/runs", hit(reached.clone()));
     let gate =
         aq_supervisor_control::admin::routes(inner, a.f.pool.clone(), Arc::new(|| 1_000_000));
     for path in [
         "/api/worker-logins",
-        "/api/settings/intelligence-extra",
+        "/api/settings/routing-document-extra",
         "/api/internal-work",
     ] {
         let (status, _) = call(
@@ -475,7 +465,7 @@ async fn supervisor_can_list_and_retry_internal_runs() {
 
 #[tokio::test]
 async fn supervisor_reads_and_switches_routing_through_the_admin_nest() {
-    const ROUTING: &str = "/api/settings/intelligence/routing";
+    const ROUTING: &str = "/api/settings/routing";
     let a = admin().await;
     let (status, body) = a.supervisor("GET", ROUTING, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");

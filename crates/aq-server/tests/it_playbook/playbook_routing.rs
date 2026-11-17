@@ -48,17 +48,15 @@ async fn on_the_router(c: &mut Case) {
 
 /// The owner's Settings: the routing document.
 async fn save_structure(pool: &sqlx::PgPool, markdown: &str) {
-    let (mut document, _, _) = aq_profile_settings::structure::document(pool)
+    let actor: uuid::Uuid = sqlx::query_scalar("SELECT id FROM users ORDER BY created_at LIMIT 1")
+        .fetch_one(pool)
         .await
         .unwrap();
-    document.routing_markdown = markdown.into();
-    sqlx::query(
-        "UPDATE intelligence_structure SET revision=revision+1,document=$1 WHERE singleton",
-    )
-    .bind(serde_json::to_value(&document).unwrap())
-    .execute(pool)
-    .await
-    .unwrap();
+    let (_, revision) = aq_role_settings::routing_document(pool).await.unwrap();
+    let id = uuid::Uuid::new_v4();
+    aq_role_settings::save_routing_document(pool, actor, markdown, revision, id, 1)
+        .await
+        .unwrap();
 }
 
 /// Answers every field `medium` (or its first choice) and no flag.
@@ -268,7 +266,7 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
 
     // (4) The switch turns on, and the read shows the source.
     let app = aq_server::build_admin_router(state.clone());
-    let path = "/api/settings/intelligence/routing";
+    let path = "/api/settings/routing";
     let on = Some(json!({"enabled": true}));
     let (status, view) = crate::common::selection::call(&app, path, on, "owner@localhost").await;
     assert_eq!(status, 200, "{view}");

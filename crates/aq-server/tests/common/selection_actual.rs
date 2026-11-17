@@ -225,20 +225,11 @@ enabled=true
         "actual base must not seed synthetic model/runtime configuration"
     );
     let app = aq_server::build_admin_router(state.clone());
-    let (status,activation)=call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"artifact_json":input.catalog_artifact_json})),"owner@localhost").await;
-    ensure!(
-        status == StatusCode::OK,
-        "actual catalog activation refused: {activation}"
-    );
-    let (catalog_revision, active): (i64, Option<String>) = sqlx::query_as(
-        "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton",
-    )
-    .fetch_one(&pool)
-    .await?;
-    ensure!(
-        catalog_revision == 1 && active.as_deref() == Some(catalog.digest()),
-        "actual catalog activation identity mismatch"
-    );
+    // Not converted to roles and profiles (spec 0014): the old catalog has
+    // no activation route. The actual fixtures run only when their
+    // environment inputs are given.
+    let _ = &catalog;
+    let catalog_revision = 0_i64;
     let body = serde_json::to_value(&input.project)?;
     let path = format!("/api/projects/{}", input.project.project_id);
     let (status, put) = call(

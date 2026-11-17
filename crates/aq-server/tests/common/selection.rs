@@ -317,8 +317,6 @@ enabled=true
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
     )
     .unwrap();
-    let activated=call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"artifact_json":String::from_utf8(catalog.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
-    assert_eq!(activated.0, StatusCode::OK, "{}", activated.1);
     let body = json!({"schema_version":1,"project_id":Uuid::from_u128(1),"name":"Example project","enabled":true,"repository_id":repository,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":workspace,"catalog_digest":catalog.digest(),"allowed_agent_profiles":["implementer@1"],"allowed_intelligence_profiles":["engineering@1"],"allowed_execution_profiles":["confined-development@1"],"allowed_node_ids":[],"allowed_worker_groups":["engineering"],"allowed_environments":["confined-worktree"],"policy":{"identity":"policy","revision":"1","digest":"b".repeat(64)},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":"project:example"}],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
     Env {
         app,
@@ -381,8 +379,6 @@ pub async fn selection_fixture() -> SelectionFixture {
     let fixture: Value =
         serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
     let mut input: SelectionInputs = serde_json::from_value(fixture["inputs"].clone()).unwrap();
-    let activation=call(&env.app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"artifact_json":fixture["catalog_artifact_json"]})),"owner@localhost").await;
-    assert_eq!(activation.0, StatusCode::OK, "{}", activation.1);
     env.body["catalog_digest"] = json!(input.project.catalog_digest);
     env.body["allowed_agent_profiles"] = json!(["implementer@2"]);
     env.body["allowed_intelligence_profiles"] = json!(["engineering@2"]);

@@ -357,7 +357,7 @@ async fn clear_removes_the_key_and_records_a_cleared_entry() {
     assert_eq!(history[1].route, Some(first));
 }
 
-const ROUTING: &str = "/api/settings/intelligence/routing";
+const ROUTING: &str = "/api/settings/routing";
 
 /// Bootstraps the owner, so the admin router admits the dev login.
 async fn owner(e: &Env) {
@@ -515,8 +515,47 @@ async fn options_offer_each_level_every_pair_its_candidates_list() {
         provider: provider.into(),
         harness: roles::HARNESS.into(),
     };
+    let options = routing::options(&e.state).await.unwrap();
     assert_eq!(
-        routing::options(&e.state).await.unwrap().classes[&class("standard-high")],
+        options.classes[&class("standard-high")],
         ["fixture-a", "fixture-b"].map(offer)
     );
+    // What the routing document's author is told about a level is its
+    // document: the id, the name and the description.
+    let saved = roles::active(&e.pool).await;
+    let document = saved.intelligence("standard-high").unwrap();
+    let facts = options.facts();
+    assert!(
+        facts["levels"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("standard-high"))
+    );
+    assert_eq!(
+        facts["level_descriptions"]["standard-high"],
+        json!({"name": document.name, "description": document.description})
+    );
+    assert!(!document.description.is_empty());
+    let levels = facts["levels"].as_array().unwrap().len();
+    assert_eq!(
+        facts["level_descriptions"].as_object().unwrap().len(),
+        levels
+    );
+
+    // The authoring host reads the routing document the owner saved.
+    use aq_playbook_authoring::{Host, builtin};
+    let read = Host::markdown(&e.state, &builtin::routing()).await.unwrap();
+    assert_eq!(read, (String::new(), 0));
+    let id = Uuid::new_v4();
+    let receipt =
+        aq_role_settings::save_routing_document(&e.pool, actor, "Reviews go to deep.", 0, id, 1)
+            .await
+            .unwrap();
+    let read = Host::markdown(&e.state, &builtin::routing()).await.unwrap();
+    assert_eq!(
+        read,
+        ("Reviews go to deep.".to_owned(), receipt.revision as u64)
+    );
+    let facts = Host::facts(&e.state, &builtin::routing()).await.unwrap();
+    assert!(facts.contains_key("level_descriptions"));
 }

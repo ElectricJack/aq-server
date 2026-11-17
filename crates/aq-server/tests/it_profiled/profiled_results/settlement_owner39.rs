@@ -116,13 +116,6 @@ async fn setup() -> Case {
     let mut profile = fixture["proposal_profiles"][0]["profile"].clone();
     profile["capabilities"] = json!(["read.get", "read.context"]);
     let mut env = Box::pin(review_env_options(16, Some(profile.clone()), true)).await;
-    // Activate the real immutable fixture catalog through its authenticated owner,
-    // rather than assigning a digest-shaped pointer in SQL.
-    use tower::ServiceExt;
-    let selection: Value =
-        serde_json::from_str(include_str!("../../fixtures/selection-v2.json")).unwrap();
-    let response=aq_server::build_admin_router(env.f.state.clone()).oneshot(axum::http::Request::builder().method("POST").uri("/api/profiles/catalogs/activate").header("content-type","application/json").header("X-AQ-Request","1").body(axum::body::Body::from(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"artifact_json":selection["catalog_artifact_json"]}).to_string())).unwrap()).await.unwrap();
-    assert_eq!(response.status(), 200);
     let r = {
         let mut tx = env.f.db.pool().await.begin().await.unwrap();
         let r = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
