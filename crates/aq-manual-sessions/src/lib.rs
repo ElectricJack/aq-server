@@ -1,6 +1,7 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
 mod archive;
+mod conversation;
 mod diagnostics;
 mod host;
 pub mod intelligence;
@@ -127,6 +128,7 @@ impl Service {
     pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         api::routes()
             .merge(archive::human_routes())
+            .merge(conversation::human_routes())
             .merge(management::routes())
             .merge(logins::human_routes())
             .merge(diagnostics::human_routes())
@@ -137,6 +139,7 @@ impl Service {
     pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         worker::routes()
             .merge(archive::worker_routes())
+            .merge(conversation::worker_routes())
             .merge(stream::worker_routes())
             .merge(logins::worker_routes())
             .merge(diagnostics::worker_routes())
