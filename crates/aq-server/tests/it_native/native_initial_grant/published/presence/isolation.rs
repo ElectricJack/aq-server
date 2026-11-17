@@ -42,8 +42,11 @@ async fn occupy(
 async fn held_inventory_admission_does_not_consume_report_or_renewal_capacity() {
     let f = setup_presence().await;
     let bytes = serde_json::to_vec(&f.inventory_request).unwrap();
-    let (a, ra) = occupy(&f.c, "/v1/worker/profiled/inventory-v2", bytes.clone()).await;
-    let (b, rb) = occupy(&f.c, "/v1/worker/profiled/inventory-v2", bytes).await;
+    // The inventory class admits `inventory_requests` at once ([workers.limits]).
+    let mut held = Vec::new();
+    for _ in 0..aq_machine_control::limits::LaunchLimits::DEFAULT.inventory_requests {
+        held.push(occupy(&f.c, "/v1/worker/profiled/inventory-v2", bytes.clone()).await);
+    }
     let (status, body) = json_post(
         &f.c,
         "/v1/worker/profiled/inventory-v2",
@@ -55,10 +58,10 @@ async fn held_inventory_admission_does_not_consume_report_or_renewal_capacity() 
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, reply) = renew(&f.c, &f.initial).await;
     assert_eq!(status, StatusCode::OK, "{reply:?}");
-    ra.send(()).unwrap();
-    rb.send(()).unwrap();
-    assert_eq!(a.await.unwrap().status(), StatusCode::OK);
-    assert_eq!(b.await.unwrap().status(), StatusCode::OK);
+    for (request, release) in held {
+        release.send(()).unwrap();
+        assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+    }
 }
 #[tokio::test]
 async fn held_report_admission_preserves_inventory_and_renewal_progress() {
@@ -67,7 +70,7 @@ async fn held_report_admission_preserves_inventory_and_renewal_progress() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let bytes = serde_json::to_vec(&f.report).unwrap();
     let mut held = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..aq_machine_control::limits::LaunchLimits::DEFAULT.presence_requests {
         held.push(occupy(&f.c, "/v1/worker/profiled/material-presence", bytes.clone()).await);
     }
     let (status, body) = send_presence(&f.c, &f.report).await;
