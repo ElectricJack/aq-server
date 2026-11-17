@@ -3,6 +3,16 @@
 **Status:** written 2026-11-13 on `feat/internal-work` at `be84c01a`. **Not
 executed.** Nothing in this document has been run against `aq-ms1`.
 
+**Changed by [spec 0014](../specs/0014-roles-and-profiles.md) (2026-11-16).**
+The Settings routes named below moved: the routing text is read and saved at
+`GET`/`PUT /api/settings/routing-document` (`{markdown, revision}`, with
+`expected_revision` and `operation_id`); `/api/settings/intelligence/structure`
+with its `parents` and `assignments` is gone, and no save takes an
+`expected_catalog_revision`. A level's id is the router's class and its
+`description` is what authoring reads. Internal-work profile ids are
+intelligence profile ids (`simple-low` … `deep-high`). Steps 1.7, 5.1, 5.2 and
+5.3 must be re-derived before this runbook is executed.
+
 **Do not start yet.** At `be84c01a` the branch still vendors the interim
 engine `aq-playbooks-e7df379`, which must not reach a live playbook namespace
 ([note](../implementation/playbook-authoring-B1-interim-vendor.md),

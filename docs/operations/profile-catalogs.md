@@ -1,79 +1,121 @@
-# Profile catalog administration
+# Roles and profiles: operator's guide
 
-2026-11-13: aligned with the rolling-records principle
-([architecture 0006](../architecture/0006-records-are-rolling.md));
-implementation pending. The storage paragraph changed.
+This replaces the profile catalog administration that this file used to
+describe. [Spec 0014](../specs/0014-roles-and-profiles.md) removed the catalog,
+its activation routes (`/api/profiles/*`), modules, per-project agents and the
+context qualification. The file keeps its name so existing links still work.
 
-The editable profile catalog is a `catalog.toml` file and its referenced Markdown
-files in the configuration vault. The independently tested `aq-profiles` crate
-validates those files and composes their versioned identities. The daemon stores
-immutable validated exports and one central activation pointer. There is no
-second editable profile database or worker-local activation authority.
+## The three documents
 
-Build the inspection CLI with `cargo build -p aq-profiles --bin aq`. Run
-`target/debug/aq profile --help` for the validate and explain commands. The
-[crate README](../../crates/aq-profiles/README.md) describes catalog fields,
-composition snapshots, canonicalization, permission intersections and limits.
-The example recipes are composition examples: a valid composition still needs
-AQ-20 to choose and authorize a concrete model, account, environment and budget.
-An inspection never grants permissions or launches an agent.
+A task's agent is described by three independent choices. Each is one Markdown
+document; the grammar is in the
+[`aq-profiles` README](../../crates/aq-profiles/README.md).
 
-All routes below use the human listener, require the current owner role, and
-require `X-AQ-Request: 1` for POST requests. They inherit the normal same-origin
-and maintenance controls. Worker credentials cannot call these endpoints.
+| Document | Says | Chosen by |
+| --- | --- | --- |
+| Role (`developer`, `reviewer`) | The prompt (`## Role`, `## Rules`), the AQ operations the agent may use, and the execution profile it runs under. | The task. A task that names none gets its project's `default_role`. |
+| Intelligence profile (`simple-low` … `deep-high`) | An ordered list of candidates: provider, model, reasoning effort, harnesses. Its id is the class the router assigns, and its `description` is what the router reads. | The router. A task that was not routed uses its project's `default_intelligence`. |
+| Execution profile (`sandbox`) | Harnesses, sandbox environment, confinement, credential profile per harness, limits. | The role. |
 
-| Route | Behavior |
-| --- | --- |
-| `GET /api/profiles/catalogs` | Return the central revision and active digest; initially revision zero and no catalog. |
-| `GET /api/profiles/catalogs/{digest}` | Return an exact retained validated artifact and its digest. |
-| `POST /api/profiles/catalogs/activate` | Atomically validate, retain and activate a catalog with expected-revision fencing and an operation receipt. |
-| `POST /api/profiles/validate` | Inspect an explicit exported catalog and optional composition snapshot. |
-| `POST /api/profiles/explain` | Require and explain an explicit composition snapshot without admitting execution. |
+None of them names a project, a repository or a node. Adding a project adds
+nothing here.
 
-Activation accepts exactly `operation_id` (a non-nil UUID), `expected_revision`
-(the current revision), and `artifact_json` (the exact exported JSON string).
-It never accepts a filesystem path, fetch URL, executable hook or caller-selected
-principal. Export bytes are revalidated, including their identity hashes.
-The success receipt contains `operation_id`, the new `revision`, `active_digest`
-and `disposition: "activated"`.
+## Editing
 
-Retry an uncertain activation with the same operation ID and exact payload.
-The retained receipt is returned even if later activations have advanced the
-revision. Changing the payload under that operation ID conflicts, including
-changing whitespace inside `artifact_json`. A new operation with an outdated
-expected revision conflicts. Artifact publication, the activation pointer,
-immutable identity history and the operation receipt commit in one transaction.
+The documents are Settings documents, stored by the server. Edit them on the
+Settings pages or through the owner API (human listener, owner role; writes
+need `X-AQ-Request: 1`):
 
-Reusing a definition's identity/version with different metadata or Markdown
-conflicts. Publish a new version for changed definitions and update the recipes
-that reference them. Removing a definition from a later catalog does not erase
-its identity history. Rollback is another expected-revision activation of the
-retained old artifact. Invalid edits and failed transactions preserve the last
-good active catalog.
+| Path under `/api/settings` | GET | PUT | DELETE |
+| --- | --- | --- | --- |
+| `/roles`, `/intelligence-profiles`, `/execution-profiles` | every document of that kind | | |
+| `/<one of those>/{id}` | one document: `markdown`, parsed `fields`, `revision` | create or replace | delete |
+| `/selection-defaults` | the selection policy every intelligence profile starts from | replace | |
+| `/profiles/limits` | document sizes, snapshots and save receipts kept | replace | |
+| `/profiles/snapshot` | the active snapshot digest and the store revision | | |
 
-Artifacts are at most 2 MiB each (a limit on one input). Old catalogs are a
-rolling set: the adapter keeps the active catalog, every catalog a live attempt
-pins, and the most recent 128 others within 64 MiB of artifact bytes; activation
-receipts are the most recent 4,096 **(proposed defaults)**. An activation deletes
-the oldest unpinned catalogs and receipts beyond these, in the same transaction,
-and is never refused because storage is full. An exact retry inside the receipt
-set returns its receipt; an older one is a new request and conflicts on its
-expected revision. Rollback works to any catalog still kept. Identity history
-(definition identities and versions) stays; whether its 4 MiB bound may still
-refuse an activation is an open question (architecture 0006 §6). The core repository interface
-also provides exact-reference retention/release; attempt integration must retain
-the frozen catalog and must not resolve an old attempt through the active pointer.
+- A PUT sends `{"markdown": "...", "expected_revision": "<n>", "operation_id": "<uuid>"}`.
+  `expected_revision` is the revision last read (`"0"` for a new document).
+  Repeating a request with the same `operation_id` returns the first answer.
+- Every save validates all documents together. A valid save activates a new
+  immutable snapshot, identified by its content digest, in the same
+  transaction. An invalid save changes nothing and returns every problem.
+- A document that something else names (a role's execution profile, a
+  project's default role or level) cannot be deleted while it is named.
 
-Inspection requests contain `artifact_json`, optionally `composition` and
-`graph_access_profile_digest` together. Explain requires both optional fields.
-The response explicitly reports `authority_admission: false` and
-`selection_pending: true`. Caller-supplied ceilings and available capabilities
-are explanatory snapshots. AQ-19/AQ-20 must resolve current trusted project and
-provider state before those values can influence admission. The published
-CON-02 context-resolving `/api/v1/profiles/*` contracts remain separate from these
-explicit-snapshot inspection endpoints.
+## Defaults
 
-Catalogs and prompts must contain credential profile references, never secret
-values. The inspection API does not read provider credentials or expose catalog
-contents to viewers. Concrete provider/CLI compatibility, token estimation,
-budget enforcement and running-session activation remain separate milestones.
+The server installs its shipped documents (`crates/aq-profiles/defaults`) at
+start. Each is installed once: a default the owner deletes does not come back
+at the next start, and a default added by a later release is installed at the
+first start of that release. An edited default is never overwritten.
+
+## Snapshots and what an attempt ran with
+
+An attempt launches from the snapshot that was active when it was offered and
+stays pinned to it. Two things are kept, both bounded:
+
+- A summary on every attempt (`ran_with`: role, level, provider, model,
+  reasoning, harness, execution profile, snapshot digest). It lasts as long as
+  the attempt's record.
+- The full text of each snapshot, once per digest, as a rolling set: the
+  active snapshot, snapshots that live attempts are pinned to, and the most
+  recent N others (`snapshots_kept` in `/profiles/limits`, default 20).
+  Storage never refuses a save or a launch.
+
+There is no rollback route: to go back, save the earlier text again.
+
+## Models
+
+Any model an intelligence profile names may be offered on a harness a worker
+has installed. There is no list of qualified models and no measurement. A
+candidate that cannot launch fails its attempt with the harness's own error,
+and the profile's fallback applies. `GET /api/settings/model-suggestions`
+lists models that discovery has seen per harness; they are suggestions for the
+editor and never a gate.
+
+## Binding a project
+
+A project takes work when it has an enabled binding and an entry in
+`[profiled_execution] projects`. For any project the server already holds a
+binding record for (repository onboarding or the development seed created it):
+
+```sh
+scripts/bind-project.py PROJECT_ID                 # show what would change
+scripts/bind-project.py PROJECT_ID --apply
+scripts/bind-project.py PROJECT_ID --default-role reviewer --default-intelligence complex-high --apply
+scripts/bind-project.py PROJECT_ID --pin COMMIT --apply      # or --branch refs/heads/main
+```
+
+It checks that the role and level exist, saves the binding (enabled,
+`default_role`, `default_intelligence`, ceilings that hold the role's
+operations for this project and repository, the execution profile's
+environment), and, when the config has no entry for the project or the source
+changes, retains the starting commit in central aq-git and prints the entry to
+add. The binding has no `catalog_digest` and no `allowed_*_profiles` lists; a
+binding that still sends them is refused.
+
+The config entry stays an operator edit, because it is part of the server's
+configuration digest:
+
+```toml
+[[profiled_execution.projects]]
+project_id = "…"
+enabled = true
+priority = 0
+source = {kind = "immutable", object = {format = "sha1", hex = "…"}}
+retention_handle = "…"
+```
+
+Add it, raise `[profiled_execution] revision` by one and restart the server.
+`scripts/ms1-repin-project.py` moves an existing pinned entry of an aq-ms1
+stack to the repository's current main.
+
+Per-project instructions go in the binding's `role_notes` (Markdown per role
+id, added after the role's prompt), not in a role.
+
+## Removed configuration
+
+`[profiled_execution] context_qualifications` and
+`[intelligence] qualified_harnesses[].models` no longer exist. A config that
+still has either fails to load with a message naming the key.
