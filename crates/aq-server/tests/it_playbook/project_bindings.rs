@@ -540,6 +540,66 @@ async fn final_local_fence_rechecks_node_revocation_after_lock_wait() {
     assert_eq!(response.1["eligible"], false);
     assert!(response.1["frozen_binding"].is_null());
 }
+/// A launch names the active role snapshot: after a document is saved, a
+/// request that still names the earlier snapshot is refused, and one that
+/// names the new snapshot is eligible on the same project revision.
+#[tokio::test]
+async fn a_saved_role_document_refuses_a_launch_that_names_the_earlier_snapshot() {
+    use aq_profiles::roles::Kind;
+    use common::roles;
+    let mut env = setup(false).await;
+    bind(&env).await;
+    let eligibility = format!("{}/eligibility", path());
+    let earlier = admission(&env);
+    let old = call(
+        &env.app,
+        &eligibility,
+        Some(earlier.clone()),
+        "owner@localhost",
+    )
+    .await
+    .1;
+    assert_eq!(old["eligible"], true, "{old}");
+    let owner: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    let level = roles::level("standard-high", &[("fixture-a", "model-b", "low")]);
+    roles::save(
+        &env.pool,
+        owner,
+        Kind::Intelligence,
+        "standard-high",
+        &level,
+    )
+    .await;
+    let decision = call(&env.app, &eligibility, Some(earlier), "owner@localhost")
+        .await
+        .1;
+    assert_eq!(decision["eligible"], false);
+    assert_eq!(decision["reasons"], json!(["role_snapshot_changed"]));
+    assert!(decision["frozen_binding"].is_null());
+    env.snapshot = roles::active(&env.pool).await;
+    let current = call(
+        &env.app,
+        &eligibility,
+        Some(admission(&env)),
+        "owner@localhost",
+    )
+    .await
+    .1;
+    assert_eq!(current["eligible"], true, "{current}");
+    assert_eq!(current["frozen_binding"]["project"]["revision"], 1);
+    assert_eq!(
+        current["frozen_binding"]["snapshot_digest"],
+        env.snapshot.digest()
+    );
+    assert_ne!(
+        old["frozen_binding"]["snapshot_digest"],
+        current["frozen_binding"]["snapshot_digest"]
+    );
+}
+
 #[tokio::test]
 async fn exact_replay_survives_group_configuration_changes_but_new_mutations_do_not() {
     let env = setup(false).await;
